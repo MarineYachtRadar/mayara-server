@@ -1,6 +1,10 @@
 export { render_webgpu };
 
 import { RANGE_SCALE, formatRangeValue, is_metric } from "./viewer.js";
+import { BlobDetector } from "./blob_detector.js";
+import { ContourTracer, PolygonSimplifier, ConvexHullExtractor, SectorExtractor } from "./contour_tracer.js";
+import { Triangulator } from "./triangulator.js";
+import { PolygonRenderer } from "./polygon_renderer.js";
 
 class render_webgpu {
   // The constructor gets two canvases, the real drawing one and one for background data
@@ -26,7 +30,21 @@ class render_webgpu {
       gamma: 1.6,                 // Color gamma correction
       edgeSoftness: 0.06,         // Edge anti-aliasing width
       sampleCount: 10,            // Number of angular samples (increased for more fill)
+      // Polygon mode settings
+      usePolygons: true,          // Enable polygon-based rendering
+      blobThreshold: 15,          // Threshold for blob detection
+      minBlobSize: 30,            // Minimum blob size in pixels
+      simplifyTolerance: 0.001,   // Douglas-Peucker tolerance (lower = more detail)
     };
+
+    // Polygon processing state
+    this.blobDetector = null;
+    this.contourTracer = null;
+    this.hullExtractor = null;
+    this.sectorExtractor = null;
+    this.polygonRenderer = null;
+    this.lastPolygonUpdate = 0;
+    this.polygonUpdateInterval = 50; // ms between polygon updates
 
     // Create settings panel
     this.#createSettingsPanel();
@@ -79,6 +97,30 @@ class render_webgpu {
           Edge Soft: <span id="edge_val">${this.settings.edgeSoftness.toFixed(2)}</span>
           <input type="range" id="webgpu_edge" min="0" max="20" value="${this.settings.edgeSoftness * 100}" style="width: 100%;">
         </label>
+
+        <div style="margin-top: 15px; padding-top: 10px; border-top: 1px solid #444;">
+          <div style="font-weight: bold; margin-bottom: 10px; color: #0ff;">Polygon Mode</div>
+
+          <label style="display: block; margin: 5px 0; color: #ccc; font-size: 12px;">
+            <input type="checkbox" id="webgpu_use_polygons" ${this.settings.usePolygons ? 'checked' : ''}>
+            Enable Polygon Rendering
+          </label>
+
+          <label style="display: block; margin: 5px 0; color: #ccc; font-size: 12px;">
+            Blob Threshold: <span id="blob_thresh_val">${this.settings.blobThreshold}</span>
+            <input type="range" id="webgpu_blob_threshold" min="1" max="100" value="${this.settings.blobThreshold}" style="width: 100%;">
+          </label>
+
+          <label style="display: block; margin: 5px 0; color: #ccc; font-size: 12px;">
+            Min Blob Size: <span id="min_blob_val">${this.settings.minBlobSize}</span>
+            <input type="range" id="webgpu_min_blob" min="5" max="200" value="${this.settings.minBlobSize}" style="width: 100%;">
+          </label>
+
+          <label style="display: block; margin: 5px 0; color: #ccc; font-size: 12px;">
+            Simplify: <span id="simplify_val">${this.settings.simplifyTolerance.toFixed(4)}</span>
+            <input type="range" id="webgpu_simplify" min="1" max="100" value="${this.settings.simplifyTolerance * 10000}" style="width: 100%;">
+          </label>
+        </div>
       </div>
     `;
     controller.appendChild(settingsDiv);
@@ -124,6 +166,26 @@ class render_webgpu {
       this.settings.edgeSoftness = parseInt(e.target.value) / 100;
       document.getElementById("edge_val").textContent = this.settings.edgeSoftness.toFixed(2);
       this.#updateSettingsBuffer();
+    });
+
+    // Polygon mode event listeners
+    document.getElementById("webgpu_use_polygons").addEventListener("change", (e) => {
+      this.settings.usePolygons = e.target.checked;
+    });
+
+    document.getElementById("webgpu_blob_threshold").addEventListener("input", (e) => {
+      this.settings.blobThreshold = parseInt(e.target.value);
+      document.getElementById("blob_thresh_val").textContent = this.settings.blobThreshold;
+    });
+
+    document.getElementById("webgpu_min_blob").addEventListener("input", (e) => {
+      this.settings.minBlobSize = parseInt(e.target.value);
+      document.getElementById("min_blob_val").textContent = this.settings.minBlobSize;
+    });
+
+    document.getElementById("webgpu_simplify").addEventListener("input", (e) => {
+      this.settings.simplifyTolerance = parseInt(e.target.value) / 10000;
+      document.getElementById("simplify_val").textContent = this.settings.simplifyTolerance.toFixed(4);
     });
   }
 
@@ -204,6 +266,9 @@ class render_webgpu {
     });
     this.device.queue.writeBuffer(this.vertexBuffer, 0, vertices);
 
+    // Initialize polygon renderer
+    this.polygonRenderer = new PolygonRenderer(this.device, this.context, this.canvasFormat);
+
     this.ready = true;
     this.redrawCanvas();
 
@@ -237,6 +302,17 @@ class render_webgpu {
 
     // CPU-side buffer for spoke data
     this.data = new Uint8Array(spokesPerRevolution * max_spoke_len);
+
+    // Initialize polygon detection components
+    this.blobDetector = new BlobDetector(
+      max_spoke_len,
+      spokesPerRevolution,
+      this.settings.blobThreshold,
+      this.settings.minBlobSize
+    );
+    this.contourTracer = new ContourTracer(max_spoke_len, spokesPerRevolution);
+    this.hullExtractor = new ConvexHullExtractor(max_spoke_len, spokesPerRevolution);
+    this.sectorExtractor = new SectorExtractor(max_spoke_len, spokesPerRevolution);
 
     // Create polar data texture
     this.polarTexture = this.device.createTexture({
@@ -391,7 +467,7 @@ class render_webgpu {
       return;
     }
 
-    // Upload spoke data to GPU
+    // Upload spoke data to GPU (always needed for shader-based rendering)
     this.device.queue.writeTexture(
       { texture: this.polarTexture },
       this.data,
@@ -399,7 +475,22 @@ class render_webgpu {
       { width: this.max_spoke_len, height: this.spokesPerRevolution }
     );
 
-    // Create command encoder and render pass
+    // Polygon-based rendering
+    if (this.settings.usePolygons && this.blobDetector && this.polygonRenderer) {
+      const now = performance.now();
+
+      // Throttle polygon updates for performance
+      if (now - this.lastPolygonUpdate > this.polygonUpdateInterval) {
+        this.lastPolygonUpdate = now;
+        this.#updatePolygons();
+      }
+
+      // Render polygons
+      this.#renderPolygons();
+      return;
+    }
+
+    // Traditional shader-based rendering
     const encoder = this.device.createCommandEncoder();
     const pass = encoder.beginRenderPass({
       colorAttachments: [
@@ -419,6 +510,189 @@ class render_webgpu {
     pass.end();
 
     this.device.queue.submit([encoder.finish()]);
+  }
+
+  // Process spoke data into polygons
+  #updatePolygons() {
+    if (!this.blobDetector || !this.sectorExtractor || !this.data) return;
+
+    // Update blob detector settings
+    this.blobDetector.setThreshold(this.settings.blobThreshold);
+    this.blobDetector.setMinBlobSize(this.settings.minBlobSize);
+
+    // Detect blobs in spoke data
+    const blobs = this.blobDetector.detect(this.data);
+
+    // Debug: log blob detection results periodically
+    if (!this._lastBlobLog || performance.now() - this._lastBlobLog > 2000) {
+      this._lastBlobLog = performance.now();
+      // Check if there's any data above threshold
+      let maxVal = 0, countAbove = 0;
+      for (let i = 0; i < this.data.length; i++) {
+        if (this.data[i] > maxVal) maxVal = this.data[i];
+        if (this.data[i] >= this.settings.blobThreshold) countAbove++;
+      }
+      console.log(`Polygon debug: maxVal=${maxVal}, countAbove=${countAbove}, blobs=${blobs.length}, threshold=${this.settings.blobThreshold}`);
+
+      // Log blob sizes
+      if (blobs.length > 0) {
+        const blobSizes = blobs.slice(0, 5).map(b => b.pixelCount);
+        console.log(`  Top blob sizes: ${blobSizes.join(', ')}`);
+      }
+    }
+
+    if (blobs.length === 0) {
+      this.polygonRenderer.updatePolygons([], [], []);
+      return;
+    }
+
+    // Extract filled sectors for each blob
+    // This creates pie/wedge shapes that properly fill the radar returns
+    const sectors = this.sectorExtractor.extractAll(blobs);
+
+    // Debug: show sector details
+    if (!this._lastSectorLog || performance.now() - this._lastSectorLog > 2000) {
+      this._lastSectorLog = performance.now();
+      if (sectors.length > 0) {
+        const sample = sectors[0];
+        console.log(`Sectors extracted: ${sectors.length} from ${blobs.length} blobs. First sector: ${sample.cartesianVertices.length} vertices`);
+        if (sample.bounds) {
+          const { minR, maxR, angularSpanRad, spokeSpan } = sample.bounds;
+          const angularSpanDeg = (angularSpanRad || 0) * (180 / Math.PI);
+          console.log(`  Sector bounds: R=[${minR.toFixed(3)}, ${maxR.toFixed(3)}], angular span: ${angularSpanDeg.toFixed(1)}° (${spokeSpan || 0} spokes)`);
+        }
+        if (sample.cartesianVertices.length > 0) {
+          // Calculate bounding box
+          let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+          for (const v of sample.cartesianVertices) {
+            minX = Math.min(minX, v.x);
+            maxX = Math.max(maxX, v.x);
+            minY = Math.min(minY, v.y);
+            maxY = Math.max(maxY, v.y);
+          }
+          console.log(`  Cartesian bounds: [${minX.toFixed(4)}, ${maxX.toFixed(4)}] x [${minY.toFixed(4)}, ${maxY.toFixed(4)}]`);
+        }
+      } else {
+        console.log(`Sectors extracted: 0 from ${blobs.length} blobs`);
+      }
+    }
+
+    if (sectors.length === 0) {
+      this.polygonRenderer.updatePolygons([], [], []);
+      return;
+    }
+
+    // Collect polygons from sectors
+    const polygons = [];
+    const colors = [];
+
+    for (const sector of sectors) {
+      // Skip sectors with too few vertices
+      if (sector.cartesianVertices.length < 3) {
+        continue;
+      }
+
+      polygons.push(sector.cartesianVertices);
+
+      // Color based on intensity (orange to red gradient)
+      const intensity = sector.blob.avgIntensity / 255;
+      colors.push({
+        r: 1.0,
+        g: 0.5 * (1 - intensity),
+        b: 0.0,
+        a: 0.8 + 0.2 * intensity
+      });
+    }
+
+    // Log polygon sizes
+    if (!this._lastPolyLog || performance.now() - this._lastPolyLog > 2000) {
+      this._lastPolyLog = performance.now();
+      if (polygons.length > 0) {
+        const totalVerts = polygons.reduce((sum, p) => sum + p.length, 0);
+        const avgVerts = (totalVerts / polygons.length).toFixed(1);
+        const maxVerts = Math.max(...polygons.map(p => p.length));
+        const minVerts = Math.min(...polygons.map(p => p.length));
+        console.log(`Polygons: ${polygons.length}, total vertices: ${totalVerts}, avg: ${avgVerts}, range: ${minVerts}-${maxVerts}`);
+      }
+    }
+
+    // Triangulate all polygons
+    if (polygons.length > 0) {
+      const triangulation = Triangulator.triangulateAll(polygons, colors);
+      if (!this._lastTriLog || performance.now() - this._lastTriLog > 2000) {
+        this._lastTriLog = performance.now();
+        console.log(`Triangulation result: ${triangulation.vertexCount} vertices, ${triangulation.triangleCount} triangles`);
+      }
+      this.polygonRenderer.updateFromTriangulation(triangulation);
+    } else {
+      this.polygonRenderer.updatePolygons([], [], []);
+    }
+  }
+
+  // Render the polygons to the canvas
+  #renderPolygons() {
+    if (!this.polygonRenderer) return;
+
+    // Set transformation matrix for polygon renderer
+    this.polygonRenderer.setTransform(this.#getPolygonTransformMatrix());
+
+    // Render using standalone method (creates own encoder)
+    this.polygonRenderer.renderStandalone();
+  }
+
+  // Get transformation matrix for polygon rendering
+  #getPolygonTransformMatrix() {
+    // Polygons are in Cartesian coordinates [-1, 1] from contour tracer
+    // WebGPU clip space is also [-1, 1], so we just need aspect ratio and rotation
+
+    // Aspect ratio correction to maintain circular shape
+    const aspectRatio = this.width && this.height ? this.width / this.height : 1.0;
+
+    // Scale to fit in viewport
+    let scaleX = 1.0;
+    let scaleY = 1.0;
+
+    if (aspectRatio > 1.0) {
+      // Wider than tall - shrink X
+      scaleX = 1.0 / aspectRatio;
+    } else {
+      // Taller than wide - shrink Y
+      scaleY = aspectRatio;
+    }
+
+    // Rotation by 90 degrees (radar north-up)
+    const angle = Math.PI / 2;
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+
+    // Combined rotation and scaling matrix (column-major for WebGPU)
+    // Column-major means we store columns consecutively:
+    // [ m00, m10, m20, m30,   // Column 0
+    //   m01, m11, m21, m31,   // Column 1
+    //   m02, m12, m22, m32,   // Column 2
+    //   m03, m13, m23, m33 ]  // Column 3
+    //
+    // For 2D rotation R(θ) applied then scale S:
+    // Result = S * R
+    // [ sx*cos  -sy*sin   0   0 ]
+    // [ sx*sin   sy*cos   0   0 ]
+    // [   0        0      1   0 ]
+    // [   0        0      0   1 ]
+    const matrix = new Float32Array([
+      scaleX * cos,   scaleX * sin, 0.0, 0.0,   // Column 0: transforms x input
+     -scaleY * sin,   scaleY * cos, 0.0, 0.0,   // Column 1: transforms y input
+      0.0, 0.0, 1.0, 0.0,                        // Column 2
+      0.0, 0.0, 0.0, 1.0,                        // Column 3
+    ]);
+
+    // Debug: log matrix values periodically
+    if (!this._lastMatrixLog || performance.now() - this._lastMatrixLog > 5000) {
+      this._lastMatrixLog = performance.now();
+      console.log(`Polygon transform: scaleX=${scaleX.toFixed(4)}, scaleY=${scaleY.toFixed(4)}, aspect=${aspectRatio.toFixed(2)}, width=${this.width}, height=${this.height}`);
+      console.log(`  Matrix: [${matrix[0].toFixed(3)}, ${matrix[1].toFixed(3)}, ..., ${matrix[4].toFixed(3)}, ${matrix[5].toFixed(3)}, ...]`);
+    }
+
+    return matrix;
   }
 
   // Called on initial setup and whenever the canvas size changes.

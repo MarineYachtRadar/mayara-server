@@ -143,14 +143,14 @@ div.myr_ppi {
 }
 
 #myr_canvas, #myr_canvas_webgl, #myr_canvas_webgpu {
-    z-index: 1;
+    z-index: 2;
     position: absolute;
     left: 0;
     top: 0;
 }
 
 #myr_canvas_background {
-    z-index: 2;
+    z-index: 1;
     position: absolute;
     left: 0;
     top: 0;

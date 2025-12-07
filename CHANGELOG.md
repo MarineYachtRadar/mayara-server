@@ -2,6 +2,33 @@
 
 All notable changes to the Mayara project.
 
+## [0.1.4] - 2024-12-07
+
+### Added
+
+- **Polygon-Based Radar Rendering**: New rendering approach that creates filled polygons from radar returns instead of pixel-based sampling
+  - **Blob Detection** (`blob_detector.js`): Connected Component Labeling with Union-Find algorithm to find contiguous radar returns
+  - **Contour Tracing** (`contour_tracer.js`): Moore Neighborhood algorithm to extract polygon boundaries from blobs
+  - **Polygon Simplification**: Douglas-Peucker algorithm to reduce vertex count while preserving shape
+  - **Triangulation** (`triangulator.js`): Ear Clipping algorithm to convert polygons into GPU-renderable triangles
+  - **WebGPU Polygon Renderer** (`polygon_renderer.js`): Efficient indexed triangle rendering with dynamic vertex/index buffers
+
+### Changed
+
+- **WebGPU Settings Panel**: Added "Polygon Mode" section with controls:
+  - Toggle to enable/disable polygon rendering
+  - Blob Threshold slider (1-100) - minimum intensity for blob detection
+  - Min Blob Size slider (5-200) - minimum pixel count for valid blobs
+  - Simplify Tolerance slider - Douglas-Peucker simplification level
+
+### Technical Details
+
+The polygon approach addresses the fundamental issue of radar display: instead of treating spoke data as samples to be interpolated, it treats contiguous radar returns as objects to be outlined and filled. This produces cleaner, more defined radar targets.
+
+Pipeline: Spoke Data → Blob Detection → Contour Tracing → Simplification → Triangulation → GPU Rendering
+
+---
+
 ## [0.1.1] - 2024-12-06
 
 ### Fixed
