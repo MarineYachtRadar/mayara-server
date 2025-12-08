@@ -1,15 +1,8 @@
 export { render_webgpu };
 
 import { RANGE_SCALE, formatRangeValue, is_metric } from "./viewer.js";
-import { BlobDetector } from "./blob_detector.js";
-import { ContourTracer, PolygonSimplifier, ConvexHullExtractor, SectorExtractor } from "./contour_tracer.js";
-import { Triangulator } from "./triangulator.js";
-import { PolygonRenderer } from "./polygon_renderer.js";
-import { SpokeRenderer } from "./spoke_renderer.js";
 
 class render_webgpu {
-  // The constructor gets two canvases, the real drawing one and one for background data
-  // such as range circles etc.
   constructor(canvas_dom, canvas_background_dom, drawBackground) {
     this.dom = canvas_dom;
     this.background_dom = canvas_background_dom;
@@ -21,215 +14,16 @@ class render_webgpu {
     this.pendingLegend = null;
     this.pendingSpokes = null;
 
-    // Tunable settings (can be adjusted via settings panel)
-    this.settings = {
-      transparencyThreshold: 11,  // Values below this are transparent (0-255)
-      fillMultiplier: 3.0,        // Angular fill multiplier (increased for better patch connection)
-      radialFill: 4.0,            // Radial fill expansion (increased for better patch connection)
-      spokeCount: 2048,           // Number of spokes
-      interpolation: 0.3,         // 0=max only, 1=mix+max
-      gamma: 1.6,                 // Color gamma correction
-      edgeSoftness: 0.06,         // Edge anti-aliasing width
-      sampleCount: 10,            // Number of angular samples (increased for more fill)
-      // Render mode: 'shader' (fragment shader), 'polygons' (blob detection), 'spokes' (raw spoke lines)
-      renderMode: 'spokes',       // Default to spoke-based rendering (like Furuno)
-      spokeThreshold: 5,          // Minimum value to render in spoke mode
-      // Polygon mode settings (legacy)
-      usePolygons: false,         // Enable polygon-based rendering (legacy)
-      blobThreshold: 15,          // Threshold for blob detection
-      minBlobSize: 30,            // Minimum blob size in pixels
-      simplifyTolerance: 0.001,   // Douglas-Peucker tolerance (lower = more detail)
-    };
+    // Accumulation settings
+    this.decay = 0.985;           // Temporal persistence (lower = faster fade)
+    this.accumGain = 0.4;         // How much new data adds to accumulation
+    this.accumulationSize = 1024; // Cartesian accumulation texture size
 
-    // Polygon processing state
-    this.blobDetector = null;
-    this.contourTracer = null;
-    this.hullExtractor = null;
-    this.sectorExtractor = null;
-    this.polygonRenderer = null;
-    this.lastPolygonUpdate = 0;
-    this.polygonUpdateInterval = 50; // ms between polygon updates
-
-    // Spoke renderer (like signalk-radar / Furuno)
-    this.spokeRenderer = null;
-
-    // Create settings panel
-    this.#createSettingsPanel();
+    // Ping-pong texture index (0 or 1)
+    this.pingPongIndex = 0;
 
     // Start async initialization
     this.initPromise = this.#initWebGPU();
-  }
-
-  #createSettingsPanel() {
-    const controller = document.getElementById("myr_controller");
-    if (!controller) return;
-
-    const settingsDiv = document.createElement("div");
-    settingsDiv.id = "myr_webgpu_settings";
-    settingsDiv.innerHTML = `
-      <div style="margin-top: 20px; padding: 10px; border-top: 1px solid #555;">
-        <div style="font-weight: bold; margin-bottom: 10px; color: #0f0;">WebGPU Settings</div>
-
-        <label style="display: block; margin: 5px 0; color: #ccc; font-size: 12px;">
-          Transparency: <span id="thresh_val">${this.settings.transparencyThreshold}</span>
-          <input type="range" id="webgpu_threshold" min="0" max="50" value="${this.settings.transparencyThreshold}" style="width: 100%;">
-        </label>
-
-        <label style="display: block; margin: 5px 0; color: #ccc; font-size: 12px;">
-          Angular Fill: <span id="fill_val">${this.settings.fillMultiplier.toFixed(1)}</span>
-          <input type="range" id="webgpu_fill" min="0" max="200" value="${this.settings.fillMultiplier * 10}" style="width: 100%;">
-        </label>
-
-        <label style="display: block; margin: 5px 0; color: #ccc; font-size: 12px;">
-          Radial Fill: <span id="radial_val">${this.settings.radialFill.toFixed(1)}</span>
-          <input type="range" id="webgpu_radial" min="0" max="100" value="${this.settings.radialFill * 10}" style="width: 100%;">
-        </label>
-
-        <label style="display: block; margin: 5px 0; color: #ccc; font-size: 12px;">
-          Samples: <span id="samples_val">${this.settings.sampleCount}</span>
-          <input type="range" id="webgpu_samples" min="1" max="15" value="${this.settings.sampleCount}" style="width: 100%;">
-        </label>
-
-        <label style="display: block; margin: 5px 0; color: #ccc; font-size: 12px;">
-          Interpolation: <span id="interp_val">${this.settings.interpolation.toFixed(1)}</span>
-          <input type="range" id="webgpu_interp" min="0" max="10" value="${this.settings.interpolation * 10}" style="width: 100%;">
-        </label>
-
-        <label style="display: block; margin: 5px 0; color: #ccc; font-size: 12px;">
-          Gamma: <span id="gamma_val">${this.settings.gamma.toFixed(1)}</span>
-          <input type="range" id="webgpu_gamma" min="1" max="30" value="${this.settings.gamma * 10}" style="width: 100%;">
-        </label>
-
-        <label style="display: block; margin: 5px 0; color: #ccc; font-size: 12px;">
-          Edge Soft: <span id="edge_val">${this.settings.edgeSoftness.toFixed(2)}</span>
-          <input type="range" id="webgpu_edge" min="0" max="20" value="${this.settings.edgeSoftness * 100}" style="width: 100%;">
-        </label>
-
-        <div style="margin-top: 15px; padding-top: 10px; border-top: 1px solid #444;">
-          <div style="font-weight: bold; margin-bottom: 10px; color: #0ff;">Render Mode</div>
-
-          <label style="display: block; margin: 5px 0; color: #ccc; font-size: 12px;">
-            Mode:
-            <select id="webgpu_render_mode" style="width: 100%; margin-top: 3px; background: #333; color: #fff; border: 1px solid #555; padding: 3px;">
-              <option value="spokes" ${this.settings.renderMode === 'spokes' ? 'selected' : ''}>Spoke Lines (Furuno-style)</option>
-              <option value="shader" ${this.settings.renderMode === 'shader' ? 'selected' : ''}>Fragment Shader</option>
-              <option value="polygons" ${this.settings.renderMode === 'polygons' ? 'selected' : ''}>Polygons (legacy)</option>
-            </select>
-          </label>
-
-          <label style="display: block; margin: 5px 0; color: #ccc; font-size: 12px;">
-            Spoke Threshold: <span id="spoke_thresh_val">${this.settings.spokeThreshold}</span>
-            <input type="range" id="webgpu_spoke_threshold" min="1" max="50" value="${this.settings.spokeThreshold}" style="width: 100%;">
-          </label>
-        </div>
-
-        <div style="margin-top: 15px; padding-top: 10px; border-top: 1px solid #444;">
-          <div style="font-weight: bold; margin-bottom: 10px; color: #888;">Polygon Mode (legacy)</div>
-
-          <label style="display: block; margin: 5px 0; color: #ccc; font-size: 12px;">
-            Blob Threshold: <span id="blob_thresh_val">${this.settings.blobThreshold}</span>
-            <input type="range" id="webgpu_blob_threshold" min="1" max="100" value="${this.settings.blobThreshold}" style="width: 100%;">
-          </label>
-
-          <label style="display: block; margin: 5px 0; color: #ccc; font-size: 12px;">
-            Min Blob Size: <span id="min_blob_val">${this.settings.minBlobSize}</span>
-            <input type="range" id="webgpu_min_blob" min="5" max="200" value="${this.settings.minBlobSize}" style="width: 100%;">
-          </label>
-
-          <label style="display: block; margin: 5px 0; color: #ccc; font-size: 12px;">
-            Simplify: <span id="simplify_val">${this.settings.simplifyTolerance.toFixed(4)}</span>
-            <input type="range" id="webgpu_simplify" min="1" max="100" value="${this.settings.simplifyTolerance * 10000}" style="width: 100%;">
-          </label>
-        </div>
-      </div>
-    `;
-    controller.appendChild(settingsDiv);
-
-    // Event listeners for all sliders
-    document.getElementById("webgpu_threshold").addEventListener("input", (e) => {
-      this.settings.transparencyThreshold = parseInt(e.target.value);
-      document.getElementById("thresh_val").textContent = this.settings.transparencyThreshold;
-      this.#updateSettingsBuffer();
-    });
-
-    document.getElementById("webgpu_fill").addEventListener("input", (e) => {
-      this.settings.fillMultiplier = parseInt(e.target.value) / 10;
-      document.getElementById("fill_val").textContent = this.settings.fillMultiplier.toFixed(1);
-      this.#updateSettingsBuffer();
-    });
-
-    document.getElementById("webgpu_radial").addEventListener("input", (e) => {
-      this.settings.radialFill = parseInt(e.target.value) / 10;
-      document.getElementById("radial_val").textContent = this.settings.radialFill.toFixed(1);
-      this.#updateSettingsBuffer();
-    });
-
-    document.getElementById("webgpu_samples").addEventListener("input", (e) => {
-      this.settings.sampleCount = parseInt(e.target.value);
-      document.getElementById("samples_val").textContent = this.settings.sampleCount;
-      this.#updateSettingsBuffer();
-    });
-
-    document.getElementById("webgpu_interp").addEventListener("input", (e) => {
-      this.settings.interpolation = parseInt(e.target.value) / 10;
-      document.getElementById("interp_val").textContent = this.settings.interpolation.toFixed(1);
-      this.#updateSettingsBuffer();
-    });
-
-    document.getElementById("webgpu_gamma").addEventListener("input", (e) => {
-      this.settings.gamma = parseInt(e.target.value) / 10;
-      document.getElementById("gamma_val").textContent = this.settings.gamma.toFixed(1);
-      this.#updateSettingsBuffer();
-    });
-
-    document.getElementById("webgpu_edge").addEventListener("input", (e) => {
-      this.settings.edgeSoftness = parseInt(e.target.value) / 100;
-      document.getElementById("edge_val").textContent = this.settings.edgeSoftness.toFixed(2);
-      this.#updateSettingsBuffer();
-    });
-
-    // Render mode event listeners
-    document.getElementById("webgpu_render_mode").addEventListener("change", (e) => {
-      this.settings.renderMode = e.target.value;
-      this.settings.usePolygons = (e.target.value === 'polygons');
-      console.log(`Render mode changed to: ${this.settings.renderMode}`);
-    });
-
-    document.getElementById("webgpu_spoke_threshold").addEventListener("input", (e) => {
-      this.settings.spokeThreshold = parseInt(e.target.value);
-      document.getElementById("spoke_thresh_val").textContent = this.settings.spokeThreshold;
-    });
-
-    // Polygon mode event listeners (legacy)
-    document.getElementById("webgpu_blob_threshold").addEventListener("input", (e) => {
-      this.settings.blobThreshold = parseInt(e.target.value);
-      document.getElementById("blob_thresh_val").textContent = this.settings.blobThreshold;
-    });
-
-    document.getElementById("webgpu_min_blob").addEventListener("input", (e) => {
-      this.settings.minBlobSize = parseInt(e.target.value);
-      document.getElementById("min_blob_val").textContent = this.settings.minBlobSize;
-    });
-
-    document.getElementById("webgpu_simplify").addEventListener("input", (e) => {
-      this.settings.simplifyTolerance = parseInt(e.target.value) / 10000;
-      document.getElementById("simplify_val").textContent = this.settings.simplifyTolerance.toFixed(4);
-    });
-  }
-
-  #updateSettingsBuffer() {
-    if (!this.ready || !this.settingsBuffer) return;
-    const settingsData = new Float32Array([
-      this.settings.transparencyThreshold / 255.0,
-      this.settings.fillMultiplier,
-      this.settings.radialFill,
-      this.settings.sampleCount,
-      this.settings.interpolation,
-      this.settings.gamma,
-      this.settings.edgeSoftness,
-      this.spokesPerRevolution || 2048.0  // Actual spoke count (was padding)
-    ]);
-    this.device.queue.writeBuffer(this.settingsBuffer, 0, settingsData);
   }
 
   async #initWebGPU() {
@@ -252,11 +46,6 @@ class render_webgpu {
       alphaMode: "premultiplied",
     });
 
-    // Create shader module
-    this.shaderModule = this.device.createShaderModule({
-      code: shaderCode,
-    });
-
     // Create sampler
     this.sampler = this.device.createSampler({
       magFilter: "linear",
@@ -267,21 +56,12 @@ class render_webgpu {
 
     // Create uniform buffer for transformation matrix
     this.uniformBuffer = this.device.createBuffer({
-      size: 64, // 4x4 matrix = 16 floats = 64 bytes
+      size: 64,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
-
-    // Create settings buffer for shader parameters
-    this.settingsBuffer = this.device.createBuffer({
-      size: 32, // 8 floats = 32 bytes
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-    this.#updateSettingsBuffer();
 
     // Create vertex buffer for fullscreen quad
-    // TexCoords match WebGL: [0,0], [1,0], [0,1], [1,1]
     const vertices = new Float32Array([
-      // Position (x, y), TexCoord (u, v)
       -1.0, -1.0, 0.0, 0.0,
        1.0, -1.0, 1.0, 0.0,
       -1.0,  1.0, 0.0, 1.0,
@@ -294,13 +74,32 @@ class render_webgpu {
     });
     this.device.queue.writeBuffer(this.vertexBuffer, 0, vertices);
 
-    // Initialize polygon renderer
-    this.polygonRenderer = new PolygonRenderer(this.device, this.context, this.canvasFormat);
+    // Create ping-pong accumulation textures (rgba8unorm supports render target)
+    this.accumTextures = [
+      this.device.createTexture({
+        size: [this.accumulationSize, this.accumulationSize],
+        format: "rgba8unorm",
+        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+      }),
+      this.device.createTexture({
+        size: [this.accumulationSize, this.accumulationSize],
+        format: "rgba8unorm",
+        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+      }),
+    ];
+
+    // Create accumulation parameters buffer [decay, gain, spokesPerRev, maxSpokeLen]
+    this.accumParamsBuffer = this.device.createBuffer({
+      size: 16,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+
+    // Create accumulation pipeline (renders polar data into cartesian accumulation texture)
+    await this.#createAccumulationPipeline();
 
     this.ready = true;
     this.redrawCanvas();
 
-    // Apply pending calls if they were made before init completed
     if (this.pendingSpokes) {
       this.setSpokes(this.pendingSpokes.spokesPerRevolution, this.pendingSpokes.max_spoke_len);
       this.pendingSpokes = null;
@@ -309,16 +108,86 @@ class render_webgpu {
       this.setLegend(this.pendingLegend);
       this.pendingLegend = null;
     }
-    console.log("WebGPU initialized successfully");
+    console.log("WebGPU initialized with ping-pong accumulation");
   }
 
-  // This is called as soon as it is clear what the number of spokes and their max length is
+  async #createAccumulationPipeline() {
+    // Accumulation shader - combines previous accumulation with new polar data
+    const accumShaderModule = this.device.createShaderModule({
+      code: accumulationShaderCode,
+    });
+
+    this.accumBindGroupLayout = this.device.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } }, // previous accum
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } }, // polar data
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } },
+        { binding: 3, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },      // params
+      ],
+    });
+
+    this.accumPipeline = this.device.createRenderPipeline({
+      layout: this.device.createPipelineLayout({ bindGroupLayouts: [this.accumBindGroupLayout] }),
+      vertex: {
+        module: accumShaderModule,
+        entryPoint: "vertexMain",
+        buffers: [{
+          arrayStride: 16,
+          attributes: [
+            { shaderLocation: 0, offset: 0, format: "float32x2" },
+            { shaderLocation: 1, offset: 8, format: "float32x2" },
+          ],
+        }],
+      },
+      fragment: {
+        module: accumShaderModule,
+        entryPoint: "fragmentMain",
+        targets: [{ format: "rgba8unorm" }],
+      },
+      primitive: { topology: "triangle-strip" },
+    });
+
+    // Final render shader - displays accumulation with color lookup
+    const renderShaderModule = this.device.createShaderModule({
+      code: finalRenderShaderCode,
+    });
+
+    this.renderBindGroupLayout = this.device.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } }, // accumulation
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } }, // color table
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } },
+        { binding: 3, visibility: GPUShaderStage.VERTEX, buffer: { type: "uniform" } },
+      ],
+    });
+
+    this.renderPipeline = this.device.createRenderPipeline({
+      layout: this.device.createPipelineLayout({ bindGroupLayouts: [this.renderBindGroupLayout] }),
+      vertex: {
+        module: renderShaderModule,
+        entryPoint: "vertexMain",
+        buffers: [{
+          arrayStride: 16,
+          attributes: [
+            { shaderLocation: 0, offset: 0, format: "float32x2" },
+            { shaderLocation: 1, offset: 8, format: "float32x2" },
+          ],
+        }],
+      },
+      fragment: {
+        module: renderShaderModule,
+        entryPoint: "fragmentMain",
+        targets: [{ format: this.canvasFormat }],
+      },
+      primitive: { topology: "triangle-strip" },
+    });
+  }
+
   setSpokes(spokesPerRevolution, max_spoke_len) {
     console.log("WebGPU setSpokes:", spokesPerRevolution, max_spoke_len, "ready:", this.ready);
 
     if (!this.ready) {
       this.pendingSpokes = { spokesPerRevolution, max_spoke_len };
-      // Still create CPU buffer for data accumulation
       this.spokesPerRevolution = spokesPerRevolution;
       this.max_spoke_len = max_spoke_len;
       this.data = new Uint8Array(spokesPerRevolution * max_spoke_len);
@@ -327,30 +196,7 @@ class render_webgpu {
 
     this.spokesPerRevolution = spokesPerRevolution;
     this.max_spoke_len = max_spoke_len;
-
-    // CPU-side buffer for spoke data
     this.data = new Uint8Array(spokesPerRevolution * max_spoke_len);
-
-    // Initialize polygon detection components
-    this.blobDetector = new BlobDetector(
-      max_spoke_len,
-      spokesPerRevolution,
-      this.settings.blobThreshold,
-      this.settings.minBlobSize
-    );
-    this.contourTracer = new ContourTracer(max_spoke_len, spokesPerRevolution);
-    this.hullExtractor = new ConvexHullExtractor(max_spoke_len, spokesPerRevolution);
-    this.sectorExtractor = new SectorExtractor(max_spoke_len, spokesPerRevolution);
-
-    // Initialize spoke renderer (Furuno-style line rendering)
-    this.spokeRenderer = new SpokeRenderer(
-      this.device,
-      this.context,
-      this.canvasFormat,
-      spokesPerRevolution,
-      max_spoke_len
-    );
-    console.log("SpokeRenderer initialized");
 
     // Create polar data texture
     this.polarTexture = this.device.createTexture({
@@ -359,10 +205,13 @@ class render_webgpu {
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
     });
 
-    // Update settings buffer with actual spoke count
-    this.#updateSettingsBuffer();
+    // Update accumulation params
+    this.device.queue.writeBuffer(
+      this.accumParamsBuffer, 0,
+      new Float32Array([this.decay, this.accumGain, spokesPerRevolution, max_spoke_len])
+    );
 
-    this.#createPipelineAndBindGroup();
+    this.#createBindGroups();
   }
 
   setRange(range) {
@@ -370,7 +219,6 @@ class render_webgpu {
     this.redrawCanvas();
   }
 
-  // A new "legend" of what each byte means in terms of suggested color and meaning.
   setLegend(l) {
     console.log("WebGPU setLegend, ready:", this.ready);
     if (!this.ready) {
@@ -386,7 +234,6 @@ class render_webgpu {
       colorTableData[i * 4 + 3] = l[i][3];
     }
 
-    // Create color table texture
     this.colorTexture = this.device.createTexture({
       size: [256, 1],
       format: "rgba8unorm",
@@ -400,95 +247,61 @@ class render_webgpu {
       { width: 256, height: 1 }
     );
 
-    // Also update spoke renderer legend
-    if (this.spokeRenderer) {
-      this.spokeRenderer.setLegend(l);
-    }
-
     if (this.polarTexture) {
-      this.#createPipelineAndBindGroup();
+      this.#createBindGroups();
     }
   }
 
-  #createPipelineAndBindGroup() {
+  #createBindGroups() {
     if (!this.polarTexture || !this.colorTexture) return;
 
-    // Create bind group layout
-    const bindGroupLayout = this.device.createBindGroupLayout({
-      entries: [
-        {
-          binding: 0,
-          visibility: GPUShaderStage.FRAGMENT,
-          texture: { sampleType: "float" },
-        },
-        {
-          binding: 1,
-          visibility: GPUShaderStage.FRAGMENT,
-          texture: { sampleType: "float" },
-        },
-        {
-          binding: 2,
-          visibility: GPUShaderStage.FRAGMENT,
-          sampler: { type: "filtering" },
-        },
-        {
-          binding: 3,
-          visibility: GPUShaderStage.VERTEX,
-          buffer: { type: "uniform" },
-        },
-        {
-          binding: 4,
-          visibility: GPUShaderStage.FRAGMENT,
-          buffer: { type: "uniform" },
-        },
-      ],
-    });
-
-    // Create pipeline layout
-    const pipelineLayout = this.device.createPipelineLayout({
-      bindGroupLayouts: [bindGroupLayout],
-    });
-
-    // Create render pipeline
-    this.pipeline = this.device.createRenderPipeline({
-      layout: pipelineLayout,
-      vertex: {
-        module: this.shaderModule,
-        entryPoint: "vertexMain",
-        buffers: [
-          {
-            arrayStride: 16, // 4 floats * 4 bytes
-            attributes: [
-              { shaderLocation: 0, offset: 0, format: "float32x2" },  // position
-              { shaderLocation: 1, offset: 8, format: "float32x2" },  // texCoord
-            ],
-          },
+    // Create bind groups for both ping-pong directions
+    this.accumBindGroups = [
+      // Read from texture 0, write to texture 1
+      this.device.createBindGroup({
+        layout: this.accumBindGroupLayout,
+        entries: [
+          { binding: 0, resource: this.accumTextures[0].createView() },
+          { binding: 1, resource: this.polarTexture.createView() },
+          { binding: 2, resource: this.sampler },
+          { binding: 3, resource: { buffer: this.accumParamsBuffer } },
         ],
-      },
-      fragment: {
-        module: this.shaderModule,
-        entryPoint: "fragmentMain",
-        targets: [{ format: this.canvasFormat }],
-      },
-      primitive: {
-        topology: "triangle-strip",
-      },
-    });
+      }),
+      // Read from texture 1, write to texture 0
+      this.device.createBindGroup({
+        layout: this.accumBindGroupLayout,
+        entries: [
+          { binding: 0, resource: this.accumTextures[1].createView() },
+          { binding: 1, resource: this.polarTexture.createView() },
+          { binding: 2, resource: this.sampler },
+          { binding: 3, resource: { buffer: this.accumParamsBuffer } },
+        ],
+      }),
+    ];
 
-    // Create bind group
-    this.bindGroup = this.device.createBindGroup({
-      layout: bindGroupLayout,
-      entries: [
-        { binding: 0, resource: this.polarTexture.createView() },
-        { binding: 1, resource: this.colorTexture.createView() },
-        { binding: 2, resource: this.sampler },
-        { binding: 3, resource: { buffer: this.uniformBuffer } },
-        { binding: 4, resource: { buffer: this.settingsBuffer } },
-      ],
-    });
+    // Create render bind groups for both textures
+    this.renderBindGroups = [
+      this.device.createBindGroup({
+        layout: this.renderBindGroupLayout,
+        entries: [
+          { binding: 0, resource: this.accumTextures[1].createView() }, // After writing to 1
+          { binding: 1, resource: this.colorTexture.createView() },
+          { binding: 2, resource: this.sampler },
+          { binding: 3, resource: { buffer: this.uniformBuffer } },
+        ],
+      }),
+      this.device.createBindGroup({
+        layout: this.renderBindGroupLayout,
+        entries: [
+          { binding: 0, resource: this.accumTextures[0].createView() }, // After writing to 0
+          { binding: 1, resource: this.colorTexture.createView() },
+          { binding: 2, resource: this.sampler },
+          { binding: 3, resource: { buffer: this.uniformBuffer } },
+        ],
+      }),
+    ];
   }
 
-  // A new spoke has been received.
   drawSpoke(spoke) {
     if (!this.data) return;
 
@@ -504,31 +317,12 @@ class render_webgpu {
     }
   }
 
-  // Render accumulated spokes to screen
   render() {
-    if (!this.ready || !this.data) {
+    if (!this.ready || !this.data || !this.accumBindGroups || !this.renderBindGroups) {
       return;
     }
 
-    // Spoke-based rendering (Furuno-style)
-    if (this.settings.renderMode === 'spokes' && this.spokeRenderer) {
-      // Update spoke renderer with current data
-      this.spokeRenderer.updateFromSpokeData(this.data, this.settings.spokeThreshold);
-
-      // Set transformation matrix
-      this.spokeRenderer.setTransform(this.#getSpokeTransformMatrix());
-
-      // Render
-      this.spokeRenderer.renderStandalone();
-      return;
-    }
-
-    // Need pipeline for shader and polygon modes
-    if (!this.pipeline) {
-      return;
-    }
-
-    // Upload spoke data to GPU (needed for shader-based and polygon rendering)
+    // Upload spoke data to GPU
     this.device.queue.writeTexture(
       { texture: this.polarTexture },
       this.data,
@@ -536,261 +330,44 @@ class render_webgpu {
       { width: this.max_spoke_len, height: this.spokesPerRevolution }
     );
 
-    // Polygon-based rendering
-    if (this.settings.renderMode === 'polygons' && this.blobDetector && this.polygonRenderer) {
-      const now = performance.now();
-
-      // Throttle polygon updates for performance
-      if (now - this.lastPolygonUpdate > this.polygonUpdateInterval) {
-        this.lastPolygonUpdate = now;
-        this.#updatePolygons();
-      }
-
-      // Render polygons
-      this.#renderPolygons();
-      return;
-    }
-
-    // Traditional shader-based rendering (default)
     const encoder = this.device.createCommandEncoder();
-    const pass = encoder.beginRenderPass({
-      colorAttachments: [
-        {
-          view: this.context.getCurrentTexture().createView(),
-          clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 0.0 },  // Transparent background
-          loadOp: "clear",
-          storeOp: "store",
-        },
-      ],
-    });
 
-    pass.setPipeline(this.pipeline);
-    pass.setBindGroup(0, this.bindGroup);
-    pass.setVertexBuffer(0, this.vertexBuffer);
-    pass.draw(4);
-    pass.end();
+    // Pass 1: Accumulation - read from texture[pingPongIndex], write to texture[1-pingPongIndex]
+    const writeIndex = 1 - this.pingPongIndex;
+    const accumPass = encoder.beginRenderPass({
+      colorAttachments: [{
+        view: this.accumTextures[writeIndex].createView(),
+        loadOp: "load",  // Keep previous data for decay
+        storeOp: "store",
+      }],
+    });
+    accumPass.setPipeline(this.accumPipeline);
+    accumPass.setBindGroup(0, this.accumBindGroups[this.pingPongIndex]);
+    accumPass.setVertexBuffer(0, this.vertexBuffer);
+    accumPass.draw(4);
+    accumPass.end();
+
+    // Pass 2: Final render to screen
+    const renderPass = encoder.beginRenderPass({
+      colorAttachments: [{
+        view: this.context.getCurrentTexture().createView(),
+        clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 0.0 },
+        loadOp: "clear",
+        storeOp: "store",
+      }],
+    });
+    renderPass.setPipeline(this.renderPipeline);
+    renderPass.setBindGroup(0, this.renderBindGroups[this.pingPongIndex]);
+    renderPass.setVertexBuffer(0, this.vertexBuffer);
+    renderPass.draw(4);
+    renderPass.end();
 
     this.device.queue.submit([encoder.finish()]);
+
+    // Swap ping-pong index
+    this.pingPongIndex = writeIndex;
   }
 
-  // Get transformation matrix for spoke rendering
-  #getSpokeTransformMatrix() {
-    // Similar to polygon transform, but spoke vertices are already in [-1, 1] range
-
-    const aspectRatio = this.width && this.height ? this.width / this.height : 1.0;
-
-    let scaleX = 1.0;
-    let scaleY = 1.0;
-
-    if (aspectRatio > 1.0) {
-      scaleX = 1.0 / aspectRatio;
-    } else {
-      scaleY = aspectRatio;
-    }
-
-    // Apply range scaling if needed
-    const range = this.range || this.actual_range || 1500;
-    const rangeScale = this.actual_range > 0 ? this.actual_range / range : 1.0;
-    scaleX *= rangeScale;
-    scaleY *= rangeScale;
-
-    // No rotation needed - spoke renderer already outputs in correct orientation
-    // (0 = north/up, clockwise)
-
-    const matrix = new Float32Array([
-      scaleX, 0.0, 0.0, 0.0,
-      0.0, scaleY, 0.0, 0.0,
-      0.0, 0.0, 1.0, 0.0,
-      0.0, 0.0, 0.0, 1.0,
-    ]);
-
-    return matrix;
-  }
-
-  // Process spoke data into polygons
-  #updatePolygons() {
-    if (!this.blobDetector || !this.sectorExtractor || !this.data) return;
-
-    // Update blob detector settings
-    this.blobDetector.setThreshold(this.settings.blobThreshold);
-    this.blobDetector.setMinBlobSize(this.settings.minBlobSize);
-
-    // Detect blobs in spoke data
-    const blobs = this.blobDetector.detect(this.data);
-
-    // Debug: log blob detection results periodically
-    if (!this._lastBlobLog || performance.now() - this._lastBlobLog > 2000) {
-      this._lastBlobLog = performance.now();
-      // Check if there's any data above threshold
-      let maxVal = 0, countAbove = 0;
-      for (let i = 0; i < this.data.length; i++) {
-        if (this.data[i] > maxVal) maxVal = this.data[i];
-        if (this.data[i] >= this.settings.blobThreshold) countAbove++;
-      }
-      console.log(`Polygon debug: maxVal=${maxVal}, countAbove=${countAbove}, blobs=${blobs.length}, threshold=${this.settings.blobThreshold}`);
-
-      // Log blob sizes
-      if (blobs.length > 0) {
-        const blobSizes = blobs.slice(0, 5).map(b => b.pixelCount);
-        console.log(`  Top blob sizes: ${blobSizes.join(', ')}`);
-      }
-    }
-
-    if (blobs.length === 0) {
-      this.polygonRenderer.updatePolygons([], [], []);
-      return;
-    }
-
-    // Extract filled sectors for each blob
-    // This creates pie/wedge shapes that properly fill the radar returns
-    const sectors = this.sectorExtractor.extractAll(blobs);
-
-    // Debug: show sector details
-    if (!this._lastSectorLog || performance.now() - this._lastSectorLog > 2000) {
-      this._lastSectorLog = performance.now();
-      if (sectors.length > 0) {
-        const sample = sectors[0];
-        console.log(`Sectors extracted: ${sectors.length} from ${blobs.length} blobs. First sector: ${sample.cartesianVertices.length} vertices`);
-        if (sample.bounds) {
-          const { minR, maxR, angularSpanRad, spokeSpan } = sample.bounds;
-          const angularSpanDeg = (angularSpanRad || 0) * (180 / Math.PI);
-          console.log(`  Sector bounds: R=[${minR.toFixed(3)}, ${maxR.toFixed(3)}], angular span: ${angularSpanDeg.toFixed(1)}° (${spokeSpan || 0} spokes)`);
-        }
-        if (sample.cartesianVertices.length > 0) {
-          // Calculate bounding box
-          let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-          for (const v of sample.cartesianVertices) {
-            minX = Math.min(minX, v.x);
-            maxX = Math.max(maxX, v.x);
-            minY = Math.min(minY, v.y);
-            maxY = Math.max(maxY, v.y);
-          }
-          console.log(`  Cartesian bounds: [${minX.toFixed(4)}, ${maxX.toFixed(4)}] x [${minY.toFixed(4)}, ${maxY.toFixed(4)}]`);
-        }
-      } else {
-        console.log(`Sectors extracted: 0 from ${blobs.length} blobs`);
-      }
-    }
-
-    if (sectors.length === 0) {
-      this.polygonRenderer.updatePolygons([], [], []);
-      return;
-    }
-
-    // Collect polygons from sectors
-    const polygons = [];
-    const colors = [];
-
-    for (const sector of sectors) {
-      // Skip sectors with too few vertices
-      if (sector.cartesianVertices.length < 3) {
-        continue;
-      }
-
-      polygons.push(sector.cartesianVertices);
-
-      // Color based on intensity (orange to red gradient)
-      const intensity = sector.blob.avgIntensity / 255;
-      colors.push({
-        r: 1.0,
-        g: 0.5 * (1 - intensity),
-        b: 0.0,
-        a: 0.8 + 0.2 * intensity
-      });
-    }
-
-    // Log polygon sizes
-    if (!this._lastPolyLog || performance.now() - this._lastPolyLog > 2000) {
-      this._lastPolyLog = performance.now();
-      if (polygons.length > 0) {
-        const totalVerts = polygons.reduce((sum, p) => sum + p.length, 0);
-        const avgVerts = (totalVerts / polygons.length).toFixed(1);
-        const maxVerts = Math.max(...polygons.map(p => p.length));
-        const minVerts = Math.min(...polygons.map(p => p.length));
-        console.log(`Polygons: ${polygons.length}, total vertices: ${totalVerts}, avg: ${avgVerts}, range: ${minVerts}-${maxVerts}`);
-      }
-    }
-
-    // Triangulate all polygons
-    if (polygons.length > 0) {
-      const triangulation = Triangulator.triangulateAll(polygons, colors);
-      if (!this._lastTriLog || performance.now() - this._lastTriLog > 2000) {
-        this._lastTriLog = performance.now();
-        console.log(`Triangulation result: ${triangulation.vertexCount} vertices, ${triangulation.triangleCount} triangles`);
-      }
-      this.polygonRenderer.updateFromTriangulation(triangulation);
-    } else {
-      this.polygonRenderer.updatePolygons([], [], []);
-    }
-  }
-
-  // Render the polygons to the canvas
-  #renderPolygons() {
-    if (!this.polygonRenderer) return;
-
-    // Set transformation matrix for polygon renderer
-    this.polygonRenderer.setTransform(this.#getPolygonTransformMatrix());
-
-    // Render using standalone method (creates own encoder)
-    this.polygonRenderer.renderStandalone();
-  }
-
-  // Get transformation matrix for polygon rendering
-  #getPolygonTransformMatrix() {
-    // Polygons are in Cartesian coordinates [-1, 1] from contour tracer
-    // WebGPU clip space is also [-1, 1], so we just need aspect ratio and rotation
-
-    // Aspect ratio correction to maintain circular shape
-    const aspectRatio = this.width && this.height ? this.width / this.height : 1.0;
-
-    // Scale to fit in viewport
-    let scaleX = 1.0;
-    let scaleY = 1.0;
-
-    if (aspectRatio > 1.0) {
-      // Wider than tall - shrink X
-      scaleX = 1.0 / aspectRatio;
-    } else {
-      // Taller than wide - shrink Y
-      scaleY = aspectRatio;
-    }
-
-    // Rotation by 90 degrees (radar north-up)
-    const angle = Math.PI / 2;
-    const cos = Math.cos(angle);
-    const sin = Math.sin(angle);
-
-    // Combined rotation and scaling matrix (column-major for WebGPU)
-    // Column-major means we store columns consecutively:
-    // [ m00, m10, m20, m30,   // Column 0
-    //   m01, m11, m21, m31,   // Column 1
-    //   m02, m12, m22, m32,   // Column 2
-    //   m03, m13, m23, m33 ]  // Column 3
-    //
-    // For 2D rotation R(θ) applied then scale S:
-    // Result = S * R
-    // [ sx*cos  -sy*sin   0   0 ]
-    // [ sx*sin   sy*cos   0   0 ]
-    // [   0        0      1   0 ]
-    // [   0        0      0   1 ]
-    const matrix = new Float32Array([
-      scaleX * cos,   scaleX * sin, 0.0, 0.0,   // Column 0: transforms x input
-     -scaleY * sin,   scaleY * cos, 0.0, 0.0,   // Column 1: transforms y input
-      0.0, 0.0, 1.0, 0.0,                        // Column 2
-      0.0, 0.0, 0.0, 1.0,                        // Column 3
-    ]);
-
-    // Debug: log matrix values periodically
-    if (!this._lastMatrixLog || performance.now() - this._lastMatrixLog > 5000) {
-      this._lastMatrixLog = performance.now();
-      console.log(`Polygon transform: scaleX=${scaleX.toFixed(4)}, scaleY=${scaleY.toFixed(4)}, aspect=${aspectRatio.toFixed(2)}, width=${this.width}, height=${this.height}`);
-      console.log(`  Matrix: [${matrix[0].toFixed(3)}, ${matrix[1].toFixed(3)}, ..., ${matrix[4].toFixed(3)}, ${matrix[5].toFixed(3)}, ...]`);
-    }
-
-    return matrix;
-  }
-
-  // Called on initial setup and whenever the canvas size changes.
   redrawCanvas() {
     var parent = this.dom.parentNode,
       styles = getComputedStyle(parent),
@@ -810,7 +387,7 @@ class render_webgpu {
       Math.max(this.center_x, this.center_y) * RANGE_SCALE
     );
 
-    this.drawBackgroundCallback(this, "MAYARA (WebGPU)");
+    this.drawBackgroundCallback(this, "MAYARA (WebGPU Accum)");
 
     if (this.ready) {
       this.context.configure({
@@ -830,7 +407,6 @@ class render_webgpu {
     const scaleX = scale * ((2 * this.beam_length) / this.width);
     const scaleY = scale * ((2 * this.beam_length) / this.height);
 
-    // Combined rotation and scaling matrix (column-major for WebGPU)
     const cos = Math.cos(angle);
     const sin = Math.sin(angle);
 
@@ -845,154 +421,104 @@ class render_webgpu {
 
     this.background_ctx.fillStyle = "lightgreen";
     this.background_ctx.fillText("Beamlength " + this.beam_length, 5, 40);
-    this.background_ctx.fillText(
-      "Range " + formatRangeValue(is_metric(range), range),
-      5,
-      60
-    );
+    this.background_ctx.fillText("Range " + formatRangeValue(is_metric(range), range), 5, 60);
     this.background_ctx.fillText("Spoke " + this.actual_range, 5, 80);
+    this.background_ctx.fillText("Decay " + this.decay.toFixed(3), 5, 100);
   }
 }
 
-const shaderCode = `
-const PI: f32 = 3.14159265359;
-
+// Accumulation shader - converts polar to cartesian and accumulates
+const accumulationShaderCode = `
 struct VertexOutput {
   @builtin(position) position: vec4<f32>,
   @location(0) texCoord: vec2<f32>,
 }
 
-struct Settings {
-  transparencyThreshold: f32,
-  fillMultiplier: f32,
-  radialFill: f32,
-  sampleCount: f32,
-  interpolation: f32,
-  gamma: f32,
-  edgeSoftness: f32,
-  spokeCount: f32,
+@vertex
+fn vertexMain(@location(0) pos: vec2<f32>, @location(1) texCoord: vec2<f32>) -> VertexOutput {
+  var output: VertexOutput;
+  output.position = vec4<f32>(pos, 0.0, 1.0);
+  output.texCoord = texCoord;
+  return output;
+}
+
+@group(0) @binding(0) var prevAccum: texture_2d<f32>;
+@group(0) @binding(1) var polarData: texture_2d<f32>;
+@group(0) @binding(2) var texSampler: sampler;
+@group(0) @binding(3) var<uniform> params: vec4<f32>;  // [decay, gain, spokesPerRev, maxSpokeLen]
+
+const PI: f32 = 3.14159265359;
+
+@fragment
+fn fragmentMain(@location(0) texCoord: vec2<f32>) -> @location(0) vec4<f32> {
+  let decay = params.x;
+  let gain = params.y;
+
+  // Previous accumulated value (decayed)
+  let prevValue = textureSample(prevAccum, texSampler, texCoord).r * decay;
+
+  // Convert cartesian (texCoord) to polar for sampling radar data
+  // Accumulation texture is square [0,1]x[0,1], center at (0.5, 0.5)
+  // Final render applies 90° rotation, so pre-rotate by -90°
+  let centered = texCoord - vec2<f32>(0.5, 0.5);
+
+  // Pre-rotate to compensate for final render transformation
+  let rotated = vec2<f32>(centered.y, centered.x);
+  let r = length(rotated) * 2.0;
+  let theta = atan2(rotated.y, rotated.x);
+
+  // Normalize theta to [0, 1] range
+  let normalizedTheta = 1.0 - (theta + PI) / (2.0 * PI);
+
+  // Sample polar data (new radar return)
+  let newValue = textureSample(polarData, texSampler, vec2<f32>(r, normalizedTheta)).r;
+
+  // Accumulate: add new value (scaled) to decayed previous
+  // Use max to prevent washing out strong returns
+  var accumulated = max(prevValue, prevValue + newValue * gain);
+  accumulated = clamp(accumulated, 0.0, 1.0);
+
+  // Mask outside circle
+  let insideCircle = step(r, 1.0);
+  accumulated *= insideCircle;
+
+  return vec4<f32>(accumulated, accumulated, accumulated, 1.0);
+}
+`;
+
+// Final render shader - applies color lookup to accumulated data
+const finalRenderShaderCode = `
+struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+  @location(0) texCoord: vec2<f32>,
 }
 
 @group(0) @binding(3) var<uniform> u_transform: mat4x4<f32>;
-@group(0) @binding(4) var<uniform> settings: Settings;
 
 @vertex
-fn vertexMain(
-  @location(0) pos: vec2<f32>,
-  @location(1) texCoord: vec2<f32>
-) -> VertexOutput {
+fn vertexMain(@location(0) pos: vec2<f32>, @location(1) texCoord: vec2<f32>) -> VertexOutput {
   var output: VertexOutput;
   output.position = u_transform * vec4<f32>(pos, 0.0, 1.0);
   output.texCoord = texCoord;
   return output;
 }
 
-@group(0) @binding(0) var polarData: texture_2d<f32>;
+@group(0) @binding(0) var accumTex: texture_2d<f32>;
 @group(0) @binding(1) var colorTable: texture_2d<f32>;
 @group(0) @binding(2) var texSampler: sampler;
 
 @fragment
 fn fragmentMain(@location(0) texCoord: vec2<f32>) -> @location(0) vec4<f32> {
-  // Convert texture coordinates to polar coordinates
-  let centered = texCoord - vec2<f32>(0.5, 0.5);
-  let r = length(centered) * 2.0;
+  // Sample accumulated energy
+  let energy = textureSample(accumTex, texSampler, texCoord).r;
 
-  // Outside radar circle -> transparent
-  let insideCircle = step(r, 1.0);
+  // Look up color from table
+  let color = textureSample(colorTable, texSampler, vec2<f32>(energy, 0.0));
 
-  // Calculate angle, normalize to [0, 1]
-  var theta = atan2(centered.y, centered.x);
-  if (theta < 0.0) {
-    theta = theta + 2.0 * PI;
-  }
-  let normalizedTheta = theta / (2.0 * PI);
+  // Threshold for visibility
+  let hasData = step(0.01, energy);
+  let alpha = hasData * color.a;
 
-  // Angular interpolation between adjacent spokes
-  let spokeCount = settings.spokeCount;
-  let spoke_f = normalizedTheta * spokeCount;
-  let spoke0 = floor(spoke_f);
-  let spoke1 = spoke0 + 1.0;
-  let t = fract(spoke_f);
-
-  // Sample two adjacent spokes for interpolation
-  let uv0 = vec2<f32>(r, spoke0 / spokeCount);
-  let uv1 = vec2<f32>(r, spoke1 / spokeCount);
-  let idx0 = textureSample(polarData, texSampler, uv0).r;
-  let idx1 = textureSample(polarData, texSampler, uv1).r;
-
-  // Interpolated value between spokes
-  let interpIndex = mix(idx0, idx1, t);
-
-  // Angular fill expansion sampling
-  // Scale angular step with radius (arc length correction: gaps grow with distance)
-  let angularStep = settings.fillMultiplier / spokeCount * max(1.0, r * 2.0);
-  // Radial step: scale to be meaningful relative to spoke data resolution
-  // With 883 pixels over r=0..1, each pixel is ~0.00113, so 0.003 covers ~2-3 pixels
-  let radialStep = settings.radialFill * 0.003;
-
-  // Sample grid around the pixel for better fill
-  // Angular samples at different offsets
-  var maxIndex = interpIndex * settings.interpolation;
-
-  // Sample 1: center
-  let s0 = textureSample(polarData, texSampler, vec2<f32>(r, normalizedTheta)).r;
-  maxIndex = max(maxIndex, s0);
-
-  // Sample 2-3: angular +/-
-  let s1 = textureSample(polarData, texSampler, vec2<f32>(r, normalizedTheta + angularStep)).r;
-  let s2 = textureSample(polarData, texSampler, vec2<f32>(r, normalizedTheta - angularStep)).r;
-  maxIndex = max(maxIndex, max(s1, s2));
-
-  // Sample radial +/- (always active - critical for connecting patches)
-  let sr1 = textureSample(polarData, texSampler, vec2<f32>(r + radialStep, normalizedTheta)).r;
-  let sr2 = textureSample(polarData, texSampler, vec2<f32>(r - radialStep, normalizedTheta)).r;
-  maxIndex = max(maxIndex, max(sr1, sr2));
-
-  // Sample 4-5: angular +/- x2 (if sampleCount > 3)
-  let s3 = textureSample(polarData, texSampler, vec2<f32>(r, normalizedTheta + angularStep * 2.0)).r;
-  let s4 = textureSample(polarData, texSampler, vec2<f32>(r, normalizedTheta - angularStep * 2.0)).r;
-  let use45 = step(3.0, settings.sampleCount);
-  maxIndex = max(maxIndex, max(s3, s4) * use45);
-
-  // Sample 6-7: angular +/- x3 (if sampleCount > 5)
-  let s5 = textureSample(polarData, texSampler, vec2<f32>(r, normalizedTheta + angularStep * 3.0)).r;
-  let s6 = textureSample(polarData, texSampler, vec2<f32>(r, normalizedTheta - angularStep * 3.0)).r;
-  let use67 = step(5.0, settings.sampleCount);
-  maxIndex = max(maxIndex, max(s5, s6) * use67);
-
-  // Sample 8-9: radial +/- (if sampleCount > 7)
-  let s7 = textureSample(polarData, texSampler, vec2<f32>(r + radialStep, normalizedTheta)).r;
-  let s8 = textureSample(polarData, texSampler, vec2<f32>(r - radialStep, normalizedTheta)).r;
-  let use89 = step(7.0, settings.sampleCount);
-  maxIndex = max(maxIndex, max(s7, s8) * use89);
-
-  // Sample 10-13: diagonal radial+angular (if sampleCount > 9)
-  let s9 = textureSample(polarData, texSampler, vec2<f32>(r + radialStep, normalizedTheta + angularStep)).r;
-  let s10 = textureSample(polarData, texSampler, vec2<f32>(r + radialStep, normalizedTheta - angularStep)).r;
-  let s11 = textureSample(polarData, texSampler, vec2<f32>(r - radialStep, normalizedTheta + angularStep)).r;
-  let s12 = textureSample(polarData, texSampler, vec2<f32>(r - radialStep, normalizedTheta - angularStep)).r;
-  let useDiag = step(9.0, settings.sampleCount);
-  maxIndex = max(maxIndex, max(max(s9, s10), max(s11, s12)) * useDiag);
-
-  // Sample 14-15: angular +/- x4 (if sampleCount > 13)
-  let s13 = textureSample(polarData, texSampler, vec2<f32>(r, normalizedTheta + angularStep * 4.0)).r;
-  let s14 = textureSample(polarData, texSampler, vec2<f32>(r, normalizedTheta - angularStep * 4.0)).r;
-  let use1415 = step(13.0, settings.sampleCount);
-  maxIndex = max(maxIndex, max(s13, s14) * use1415);
-
-  // Apply gamma correction
-  let finalIndex = pow(maxIndex, 1.0 / settings.gamma);
-
-  // Look up color from color table
-  let color = textureSample(colorTable, texSampler, vec2<f32>(finalIndex, 0.0));
-
-  // Soft edge anti-aliasing at radar boundary
-  let edgeFade = smoothstep(1.0, 1.0 - settings.edgeSoftness, r);
-
-  // Threshold check
-  let aboveThreshold = step(settings.transparencyThreshold, finalIndex);
-  let alpha = insideCircle * aboveThreshold * color.a * edgeFade;
-
-  return vec4<f32>(color.rgb * alpha, alpha);
+  return vec4<f32>(color.rgb, alpha);
 }
 `;
