@@ -561,23 +561,28 @@ Reference specifications from official Furuno documentation.
 Used in protocol commands and WASM plugin:
 
 ```rust
-pub const RANGE_TABLE: [u32; 16] = [
-    231,    // 0: 1/8 nm
-    463,    // 1: 1/4 nm
-    926,    // 2: 1/2 nm
-    1389,   // 3: 3/4 nm
-    1852,   // 4: 1 nm
-    2778,   // 5: 1.5 nm
-    3704,   // 6: 2 nm
-    5556,   // 7: 3 nm
-    7408,   // 8: 4 nm
-    11112,  // 9: 6 nm
-    14816,  // 10: 8 nm
-    22224,  // 11: 12 nm
-    29632,  // 12: 16 nm
-    44448,  // 13: 24 nm
-    66672,  // 14: 36 nm
-    88896,  // 15: 48 nm (max)
+/// Furuno range table (wire_index -> meters)
+/// Verified via Wireshark captures from TimeZero ↔ DRS4D-NXT
+/// Note: Wire indices are non-sequential (21 is min, 19 is out of order)
+pub const RANGE_TABLE: [(i32, i32); 18] = [
+    (21, 116),   // 1/16 nm = 116m (minimum range)
+    (0, 231),    // 1/8 nm = 231m
+    (1, 463),    // 1/4 nm = 463m
+    (2, 926),    // 1/2 nm = 926m
+    (3, 1389),   // 3/4 nm = 1389m
+    (4, 1852),   // 1 nm = 1852m
+    (5, 2778),   // 1.5 nm = 2778m
+    (6, 3704),   // 2 nm = 3704m
+    (7, 5556),   // 3 nm = 5556m
+    (8, 7408),   // 4 nm = 7408m
+    (9, 11112),  // 6 nm = 11112m
+    (10, 14816), // 8 nm = 14816m
+    (11, 22224), // 12 nm = 22224m
+    (12, 29632), // 16 nm = 29632m
+    (13, 44448), // 24 nm = 44448m
+    (14, 59264), // 32 nm = 59264m
+    (19, 66672), // 36 nm = 66672m (out of sequence!)
+    (15, 88896), // 48 nm = 88896m (maximum range)
 ];
 ```
 
