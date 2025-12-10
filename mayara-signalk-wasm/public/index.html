@@ -8,13 +8,34 @@
     <script type="module" src="mayara.js"></script>
 </head>
 <body>
-    <h1>Mayara Radar</h1>
-    <div id="radars">
-      <div>Detecting radars...</div>
-    </div>
-    <div id="interfaces" style="margin-top: 20px;">
-    </div>
-    <div id="info">
+    <div class="myr_discovery_container">
+        <div class="myr_discovery_header">
+            <div class="myr_radar_icon">
+                <svg viewBox="0 0 100 100" class="myr_radar_sweep">
+                    <circle cx="50" cy="50" r="45" fill="none" stroke="currentColor" stroke-width="1" opacity="0.3"/>
+                    <circle cx="50" cy="50" r="30" fill="none" stroke="currentColor" stroke-width="1" opacity="0.3"/>
+                    <circle cx="50" cy="50" r="15" fill="none" stroke="currentColor" stroke-width="1" opacity="0.3"/>
+                    <line x1="50" y1="50" x2="50" y2="5" stroke="currentColor" stroke-width="2" class="myr_sweep_line"/>
+                </svg>
+            </div>
+            <h1>Mayara Radar</h1>
+        </div>
+
+        <div id="webgpu_warning" class="myr_webgpu_warning" style="display: none;">
+        </div>
+
+        <div id="radars" class="myr_discovery_section">
+            <div class="myr_detecting">
+                <span class="myr_pulse"></span>
+                Detecting radars...
+            </div>
+        </div>
+
+        <div id="interfaces" class="myr_discovery_section">
+        </div>
+
+        <div id="info" class="myr_discovery_section">
+        </div>
     </div>
 </body>
 </html>

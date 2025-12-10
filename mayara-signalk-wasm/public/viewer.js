@@ -10,9 +10,6 @@ import {
 } from "./control.js";
 import "./protobuf/protobuf.min.js";
 
-import { render_2d } from "./render_2d.js";
-import { render_webgl } from "./render_webgl.js";
-import { render_webgl_alt } from "./render_webgl_alt.js";
 import { render_webgpu } from "./render_webgpu.js";
 
 var webSocket;
@@ -78,70 +75,27 @@ const RANGE_SCALE = 0.9; // Factor by which we fill the (w,h) canvas with the ou
 registerRadarCallback(radarLoaded);
 registerControlCallback(controlUpdate);
 
-window.onload = function () {
+window.onload = async function () {
   const urlParams = new URLSearchParams(window.location.search);
   const id = urlParams.get("id");
-  const draw = urlParams.get("draw");
+
+  // Check WebGPU availability
+  const webgpuAvailable = await checkWebGPU();
+  if (!webgpuAvailable) {
+    return; // Error message already shown
+  }
 
   protobuf.load("./proto/RadarMessage.proto", function (err, root) {
     if (err) throw err;
-
     RadarMessage = root.lookupType(".RadarMessage");
   });
 
-  try {
-    if (draw == "2d") {
-      renderer = new render_2d(
-        document.getElementById("myr_canvas"),
-        document.getElementById("myr_canvas_background"),
-        drawBackground
-      );
-    } else if (draw == "webgl") {
-      // Polar framebuffer approach - texture sampling
-      renderer = new render_webgl(
-        document.getElementById("myr_canvas_webgl"),
-        document.getElementById("myr_canvas_background"),
-        drawBackground
-      );
-    } else if (draw == "webgpu") {
-      // WebGPU - texture-based polar rendering
-      renderer = new render_webgpu(
-        document.getElementById("myr_canvas_webgl"),
-        document.getElementById("myr_canvas_background"),
-        drawBackground
-      );
-    } else if (draw == "alt") {
-      // WebGL with line-pairs for filled areas
-      renderer = new render_webgl_alt(
-        document.getElementById("myr_canvas_webgl"),
-        document.getElementById("myr_canvas_background"),
-        drawBackground
-      );
-    } else {
-      // Default: WebGPU if available, else WebGL
-      if (navigator.gpu) {
-        renderer = new render_webgpu(
-          document.getElementById("myr_canvas_webgl"),
-          document.getElementById("myr_canvas_background"),
-          drawBackground
-        );
-      } else {
-        renderer = new render_webgl(
-          document.getElementById("myr_canvas_webgl"),
-          document.getElementById("myr_canvas_background"),
-          drawBackground
-        );
-      }
-    }
-  } catch (e) {
-    console.log(e);
-    console.log("Falling back on 2d context");
-    renderer = new render_2d(
-      document.getElementById("myr_canvas"),
-      document.getElementById("myr_canvas_background"),
-      drawBackground
-    );
-  }
+  // WebGPU only
+  renderer = new render_webgpu(
+    document.getElementById("myr_canvas_webgl"),
+    document.getElementById("myr_canvas_background"),
+    drawBackground
+  );
 
   loadRadar(id);
 
@@ -149,6 +103,322 @@ window.onload = function () {
     renderer.redrawCanvas();
   };
 };
+
+// Check WebGPU and show error if not available
+async function checkWebGPU() {
+  const hasWebGPUApi = !!navigator.gpu;
+  const isSecure = window.isSecureContext;
+
+  if (!hasWebGPUApi) {
+    showWebGPUError("no-api", hasWebGPUApi, isSecure);
+    return false;
+  }
+
+  try {
+    const adapter = await navigator.gpu.requestAdapter();
+    if (!adapter) {
+      showWebGPUError("no-adapter", hasWebGPUApi, isSecure);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    showWebGPUError("adapter-error", hasWebGPUApi, isSecure);
+    return false;
+  }
+}
+
+function showWebGPUError(failureReason, hasWebGPUApi, isSecure) {
+  const container = document.querySelector('.myr_container');
+  if (!container) return;
+
+  const os = detectOS();
+  const browser = detectBrowser();
+  const hostname = window.location.hostname;
+  const port = window.location.port || '80';
+
+  // Build error message based on failure reason
+  let errorMessage = '';
+  if (failureReason === 'no-api' && !isSecure) {
+    errorMessage = 'WebGPU API not available - likely due to insecure context.';
+  } else if (failureReason === 'no-api') {
+    errorMessage = 'WebGPU API not available in this browser.';
+  } else if (failureReason === 'no-adapter') {
+    errorMessage = 'No WebGPU adapter found. Your GPU may not support WebGPU.';
+  } else {
+    errorMessage = 'WebGPU initialization failed.';
+  }
+
+  container.innerHTML = `
+    <div class="myr_webgpu_error">
+      <h2>WebGPU Required</h2>
+      <p class="myr_error_message">${errorMessage}</p>
+
+      ${!isSecure ? `
+        <div class="myr_error_section">
+          <h3>Secure Context Required</h3>
+          <p>WebGPU requires a secure context. You are accessing via HTTP on "${hostname}".</p>
+          ${getSecureContextOptionsHTML(browser, os, port)}
+        </div>
+      ` : ''}
+
+      <div class="myr_error_section">
+        <h3>Enable WebGPU / Hardware Acceleration</h3>
+        ${getBrowserInstructionsHTML(browser, os)}
+      </div>
+
+      <div class="myr_error_actions">
+        <a href="index.html" class="myr_back_link">Back to Radar List</a>
+        <button onclick="location.reload()" class="myr_retry_button">Retry</button>
+      </div>
+    </div>
+  `;
+}
+
+function detectOS() {
+  const ua = navigator.userAgent.toLowerCase();
+  const platform = navigator.platform?.toLowerCase() || '';
+
+  // Check mobile/tablet FIRST (iPadOS reports as macOS in Safari)
+  if (ua.includes('iphone') || ua.includes('ipad')) return 'ios';
+  // Also detect iPad via touch + macOS combination (iPadOS 13+ desktop mode)
+  if (navigator.maxTouchPoints > 1 && (ua.includes('mac') || platform.includes('mac'))) return 'ios';
+  if (ua.includes('android')) return 'android';
+
+  // Desktop OS detection
+  if (ua.includes('win') || platform.includes('win')) return 'windows';
+  if (ua.includes('mac') || platform.includes('mac')) return 'macos';
+  if (ua.includes('linux') || platform.includes('linux')) return 'linux';
+  return 'unknown';
+}
+
+function detectBrowser() {
+  const ua = navigator.userAgent.toLowerCase();
+  if (ua.includes('edg/')) return 'edge';
+  if (ua.includes('chrome')) return 'chrome';
+  if (ua.includes('firefox')) return 'firefox';
+  if (ua.includes('safari') && !ua.includes('chrome')) return 'safari';
+  return 'unknown';
+}
+
+function getSecureContextOptionsHTML(browser, os, port) {
+  const origin = window.location.origin;
+  const isMobile = (os === 'ios' || os === 'android');
+
+  let options = '';
+
+  // Only show localhost option for desktop
+  if (!isMobile) {
+    options += `
+      <p><strong>Option 1 (easiest):</strong> Access via localhost instead:</p>
+      <div class="myr_code_instructions">
+        <p><code>http://localhost:${port}</code> or <code>http://127.0.0.1:${port}</code></p>
+        <p class="myr_note">Browsers treat localhost as a secure context</p>
+      </div>
+    `;
+  }
+
+  const optNum = isMobile ? 1 : 2;
+  options += `
+    <p><strong>Option ${optNum}:</strong> Add this site to browser exceptions:</p>
+    ${getInsecureOriginHTML(browser, os)}
+    <p><strong>Option ${optNum + 1}:</strong> Use HTTPS (requires server configuration)</p>
+  `;
+
+  return options;
+}
+
+function getInsecureOriginHTML(browser, os) {
+  const origin = window.location.origin;
+  const hostname = window.location.hostname;
+
+  // iOS Safari has no way to add insecure origin exceptions
+  if (os === 'ios') {
+    return `
+      <div class="myr_code_instructions">
+        <p>Safari on iOS/iPadOS does not support insecure origin exceptions.</p>
+        <p>Alternatives:</p>
+        <p>• Configure HTTPS on your SignalK server</p>
+        <p>• Use a tunneling service (e.g., ngrok) to get an HTTPS URL</p>
+        <p>• Access from a desktop browser where you can set the flag</p>
+      </div>
+    `;
+  }
+
+  // Android Chrome
+  if (os === 'android' && browser === 'chrome') {
+    return `
+      <div class="myr_code_instructions">
+        <p>1. Open Chrome on your Android device</p>
+        <p>2. Go to: <code>chrome://flags/#unsafely-treat-insecure-origin-as-secure</code></p>
+        <p>3. Add: <code>${origin}</code></p>
+        <p>4. Set to "Enabled"</p>
+        <p>5. Tap "Relaunch"</p>
+      </div>
+    `;
+  }
+
+  if (browser === 'chrome' || browser === 'edge') {
+    const flagPrefix = browser === 'edge' ? 'edge' : 'chrome';
+    const flagUrl = `${flagPrefix}://flags/#unsafely-treat-insecure-origin-as-secure`;
+    return `
+      <div class="myr_code_instructions">
+        <p>1. Copy and paste this into your address bar:</p>
+        <p><a href="${flagUrl}" class="myr_flag_link"><code>${flagUrl}</code></a></p>
+        <p>2. In the text field, add: <code>${origin}</code></p>
+        <p>3. Set dropdown to "Enabled"</p>
+        <p>4. Click "Relaunch" at the bottom</p>
+      </div>
+    `;
+  }
+  if (browser === 'firefox') {
+    return `
+      <div class="myr_code_instructions">
+        <p>1. Open: <a href="about:config" class="myr_flag_link"><code>about:config</code></a></p>
+        <p>2. Click "Accept the Risk and Continue"</p>
+        <p>3. Search for: <code>dom.securecontext.allowlist</code></p>
+        <p>4. Click the + button to add: <code>${hostname}</code></p>
+        <p>5. Restart Firefox</p>
+      </div>
+    `;
+  }
+  return `<p>Check your browser settings for allowing insecure origins.</p>`;
+}
+
+function getBrowserInstructionsHTML(browser, os) {
+  // iOS/iPadOS Safari
+  if (browser === 'safari' && os === 'ios') {
+    return `
+      <div class="myr_code_instructions">
+        <p>Safari on iOS/iPadOS 17+:</p>
+        <p>1. Open the <strong>Settings</strong> app</p>
+        <p>2. Scroll down and tap <strong>Safari</strong></p>
+        <p>3. Scroll down and tap <strong>Advanced</strong></p>
+        <p>4. Tap <strong>Feature Flags</strong></p>
+        <p>5. Enable <strong>WebGPU</strong></p>
+        <p>6. Return to Safari and reload this page</p>
+        <p class="myr_note">Note: Requires iOS/iPadOS 17 or later.</p>
+      </div>
+    `;
+  }
+
+  switch (browser) {
+    case 'chrome':
+      return `
+        <div class="myr_code_instructions">
+          <p>Chrome should have WebGPU enabled by default (v113+).</p>
+          <p>If not working:</p>
+          <p>1. Open: <code>chrome://flags/#enable-unsafe-webgpu</code></p>
+          <p>2. Set to "Enabled"</p>
+          <p>3. Relaunch Chrome</p>
+          ${os === 'linux' ? '<p class="myr_note">Linux: Vulkan drivers required.</p>' : ''}
+        </div>
+      `;
+    case 'edge':
+      return `
+        <div class="myr_code_instructions">
+          <p>Edge should have WebGPU enabled by default.</p>
+          <p>If not working:</p>
+          <p>1. Open: <code>edge://flags/#enable-unsafe-webgpu</code></p>
+          <p>2. Set to "Enabled"</p>
+          <p>3. Relaunch Edge</p>
+        </div>
+      `;
+    case 'firefox':
+      return `
+        <div class="myr_code_instructions">
+          <p>Firefox WebGPU (experimental):</p>
+          <p>1. Open: <code>about:config</code></p>
+          <p>2. Search: <code>dom.webgpu.enabled</code></p>
+          <p>3. Set to: <code>true</code></p>
+          <p>4. Restart Firefox</p>
+        </div>
+      `;
+    case 'safari':
+      return `
+        <div class="myr_code_instructions">
+          <p>Safari WebGPU (macOS 14+):</p>
+          <p>1. Open Safari menu > Settings</p>
+          <p>2. Go to Advanced tab</p>
+          <p>3. Check "Show features for web developers"</p>
+          <p>4. Go to Feature Flags tab</p>
+          <p>5. Enable "WebGPU"</p>
+          <p>6. Restart Safari</p>
+        </div>
+      `;
+    default:
+      return `
+        <div class="myr_code_instructions">
+          <p>WebGPU requires:</p>
+          <p>- Chrome 113+ (recommended)</p>
+          <p>- Edge 113+</p>
+          <p>- Safari 17+</p>
+          <p>- Firefox (experimental)</p>
+        </div>
+      `;
+  }
+}
+
+function getHardwareAccelerationHTML(browser, os) {
+  // iOS/iPadOS - no hardware acceleration toggle
+  if (os === 'ios') {
+    return `
+      <div class="myr_code_instructions">
+        <p>On iOS/iPadOS, hardware acceleration cannot be disabled.</p>
+        <p>If WebGPU is not working:</p>
+        <p>• Ensure you have iOS/iPadOS 17 or later</p>
+        <p>• Try closing and reopening Safari</p>
+        <p>• Restart your device</p>
+      </div>
+    `;
+  }
+
+  switch (browser) {
+    case 'chrome':
+      return `
+        <div class="myr_code_instructions">
+          <p>1. Open: <code>chrome://settings/system</code></p>
+          <p>2. Enable "Use graphics acceleration when available"</p>
+          <p>3. Relaunch Chrome</p>
+        </div>
+      `;
+    case 'edge':
+      return `
+        <div class="myr_code_instructions">
+          <p>1. Open: <code>edge://settings/system</code></p>
+          <p>2. Enable "Use graphics acceleration when available"</p>
+          <p>3. Relaunch Edge</p>
+        </div>
+      `;
+    case 'firefox':
+      return `
+        <div class="myr_code_instructions">
+          <p>1. Open: <code>about:preferences</code></p>
+          <p>2. Scroll to "Performance"</p>
+          <p>3. Uncheck "Use recommended performance settings"</p>
+          <p>4. Check "Use hardware acceleration when available"</p>
+          <p>5. Restart Firefox</p>
+        </div>
+      `;
+    case 'safari':
+      return `
+        <div class="myr_code_instructions">
+          <p>Safari uses hardware acceleration by default on macOS.</p>
+          <p>If WebGPU is not working:</p>
+          <p>• Ensure you have macOS 14 (Sonoma) or later</p>
+          <p>• Check that WebGPU is enabled in Feature Flags</p>
+          <p>• Try restarting Safari</p>
+        </div>
+      `;
+    default:
+      return `
+        <div class="myr_code_instructions">
+          <p>Check your browser settings for "Hardware acceleration"</p>
+          <p>or "Use GPU" and ensure it is enabled.</p>
+          <p>Then restart the browser.</p>
+        </div>
+      `;
+  }
+}
 
 function restart(id) {
   setTimeout(loadRadar, 15000, id);
