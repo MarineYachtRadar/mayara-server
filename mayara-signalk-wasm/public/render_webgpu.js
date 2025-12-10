@@ -390,9 +390,10 @@ class render_webgpu {
     this.device.queue.writeBuffer(this.uniformBuffer, 0, uniforms);
 
     this.background_ctx.fillStyle = "lightgreen";
-    this.background_ctx.fillText("Beamlength " + this.beam_length, 5, 40);
-    this.background_ctx.fillText("Range " + formatRangeValue(is_metric(range), range), 5, 60);
-    this.background_ctx.fillText("Spoke range " + this.actual_range, 5, 80);
+    this.background_ctx.fillText("Beam length: " + this.beam_length + " px", 5, 40);
+    this.background_ctx.fillText("Display range: " + formatRangeValue(is_metric(range), range), 5, 60);
+    this.background_ctx.fillText("Radar range: " + formatRangeValue(is_metric(this.actual_range), this.actual_range), 5, 80);
+    this.background_ctx.fillText("Spoke length: " + (this.max_spoke_len || 0) + " px", 5, 100);
   }
 }
 
