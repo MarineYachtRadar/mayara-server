@@ -80,22 +80,14 @@ class render_webgl_alt {
       "u_transform"
     );
 
-    // Bind vertex buffer object
-    gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
-    // Get the attribute location
-    var coordAttr = gl.getAttribLocation(shaderProgram, "coordinates");
-    // Point an attribute to the currently bound VBO
-    gl.vertexAttribPointer(coordAttr, 3, gl.FLOAT, false, 0, 0);
-    // Enable the attribute
-    gl.enableVertexAttribArray(coordAttr);
-    // bind the color buffer
-    gl.bindBuffer(gl.ARRAY_BUFFER, colorBuffer);
-    // get the attribute location
-    var colorAttr = gl.getAttribLocation(shaderProgram, "color");
-    // point attribute to the color buffer object
-    gl.vertexAttribPointer(colorAttr, 4, gl.FLOAT, false, 0, 0);
-    // enable the color attribute
-    gl.enableVertexAttribArray(colorAttr);
+    // Store attribute locations as class properties
+    this.coordAttr = gl.getAttribLocation(shaderProgram, "coordinates");
+    this.colorAttr = gl.getAttribLocation(shaderProgram, "color");
+
+    // Enable the attributes
+    gl.enableVertexAttribArray(this.coordAttr);
+    gl.enableVertexAttribArray(this.colorAttr);
+
     gl.clearColor(0.0, 0.0, 0.0, 0.0);
     gl.clear(gl.COLOR_BUFFER_BIT);
 
@@ -237,20 +229,25 @@ class render_webgl_alt {
 
     let gl = this.gl;
 
-    // Draw buffer
+    // Upload vertex positions and rebind attribute
     gl.bindBuffer(gl.ARRAY_BUFFER, this.vertexBuffer);
     gl.bufferData(
       gl.ARRAY_BUFFER,
       new Float32Array(this.vertices),
       gl.STATIC_DRAW
     );
+    gl.vertexAttribPointer(this.coordAttr, 3, gl.FLOAT, false, 0, 0);
+
+    // Upload colors and rebind attribute
     gl.bindBuffer(gl.ARRAY_BUFFER, this.colorBuffer);
     gl.bufferData(
       gl.ARRAY_BUFFER,
       new Float32Array(this.verticeColors),
       gl.STATIC_DRAW
     );
-    gl.bindBuffer(gl.ARRAY_BUFFER, null);
+    gl.vertexAttribPointer(this.colorAttr, 4, gl.FLOAT, false, 0, 0);
+
+    // Draw
     gl.drawArrays(gl.LINES, 0, this.vertices.length / 3);
 
     this.vertices = [];

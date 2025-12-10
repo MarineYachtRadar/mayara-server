@@ -76,6 +76,7 @@ class render_webgl {
     this.spokesPerRevolution = spokesPerRevolution;
     this.max_spoke_len = max_spoke_len;
     this.data = loadTexture(this.gl, spokesPerRevolution, max_spoke_len);
+    console.log(`render_webgl: setSpokes(${spokesPerRevolution}, ${max_spoke_len}) - buffer size: ${this.data.length}`);
   }
 
   setRange(range) {
@@ -115,12 +116,27 @@ class render_webgl {
       this.actual_range = spoke.range;
       this.redrawCanvas();
     }
+
+    // Bounds check to prevent buffer overflow
+    if (spoke.angle >= this.spokesPerRevolution) {
+      console.warn(`Spoke angle ${spoke.angle} >= spokesPerRevolution ${this.spokesPerRevolution}`);
+      return;
+    }
+
     let offset = spoke.angle * this.max_spoke_len;
-    this.data.set(spoke.data, offset);
-    if (spoke.data.length < this.max_spoke_len) {
+    let dataLen = Math.min(spoke.data.length, this.max_spoke_len);
+
+    // Additional bounds check
+    if (offset + dataLen > this.data.length) {
+      console.warn(`Buffer overflow: offset=${offset}, dataLen=${dataLen}, bufferSize=${this.data.length}`);
+      return;
+    }
+
+    this.data.set(spoke.data.subarray(0, dataLen), offset);
+    if (dataLen < this.max_spoke_len) {
       this.data.fill(
         0,
-        offset + spoke.data.length,
+        offset + dataLen,
         offset + this.max_spoke_len
       );
     }
@@ -260,7 +276,8 @@ const fragmentShaderSource = `#version 300 es
     // Normalize theta to be in the range [0, 1] for texture sampling
     float normalizedTheta = 1.0 - (theta + 3.14159265) / (2.0 * 3.14159265); // Map [-π, π] to [0, 1]
 
-     // Sample the index from the polar data texture
+    // Sample directly - NEAREST filtering on the texture will snap to correct spoke
+    // The texture stores spokes as rows, so theta maps to Y coordinate
     float index = texture(u_polarIndexData, vec2(r, normalizedTheta)).r;
 
     // Use the index to look up the color in the color table (1D texture)
@@ -314,6 +331,8 @@ function loadTexture(gl, spokesPerRevolution, max_spoke_len) {
 
 function updateTexture(gl, data, spokesPerRevolution, max_spoke_len) {
   gl.activeTexture(gl.TEXTURE0);
+  // Set UNPACK_ALIGNMENT to 1 because row width (max_spoke_len=883) is not divisible by 4
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
   gl.texImage2D(
     gl.TEXTURE_2D,
     0,
@@ -325,7 +344,8 @@ function updateTexture(gl, data, spokesPerRevolution, max_spoke_len) {
     gl.UNSIGNED_BYTE,
     data
   );
-  // Don't use mipmaps with R8 format - use LINEAR filtering directly
+  // Use LINEAR filtering like original - interpolates between spokes for smooth appearance
+  gl.generateMipmap(gl.TEXTURE_2D);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -349,11 +369,12 @@ function loadColorTableTexture(gl, legend) {
     legend
   );
 
-  // Set texture parameters - don't use mipmaps for 1D-like lookup texture
+  // Set texture parameters - use LINEAR like original for smooth color transitions
+  gl.generateMipmap(gl.TEXTURE_2D);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
 
   return texture;
 }
