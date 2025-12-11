@@ -389,6 +389,52 @@ range = range_meters * returns_per_line / returns_per_range;
 
 Commands are sent to the command address from the 36-byte beacon.
 
+### Stay-Alive Messages
+
+Raymarine radars require periodic keep-alive messages to maintain connection.
+
+#### RD/E120 Series Stay-Alive
+
+**1-Second Interval (12 bytes):**
+```
+00 80 01 00 52 41 44 41 52 00 00 00
+         R  A  D  A  R
+```
+Contains the ASCII string "RADAR" at offset 4.
+
+**5-Second Interval (36 bytes):**
+```
+03 89 01 00 00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00 68 01 00 00
+9E 03 00 00 B4 00 00 00 00 00 00 00
+```
+
+#### Quantum Series Stay-Alive
+
+**1-Second Interval (12 bytes):**
+```
+00 00 28 00 52 61 64 61 72 00 00 00
+         R  a  d  a  r
+```
+Note: Quantum uses lowercase "Radar" vs uppercase "RADAR" for E120.
+
+**5-Second Interval (36 bytes):**
+```
+03 89 28 00 00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00 00 00 00 00
+9E 03 00 00 B4 00 00 00 00 00 00 00
+```
+Note: Third byte is `0x28` for Quantum vs `0x01` for E120.
+
+#### Stay-Alive Timing
+
+| Message | Interval | Purpose |
+|---------|----------|---------|
+| 1-second | Every 1s | Primary keep-alive |
+| 5-second | Every 5s | Extended status/config |
+
+Missing keep-alive messages may cause the radar to stop sending spoke data.
+
 ### RD Series Commands
 
 Commands are variable-length, starting with a 2-byte opcode.

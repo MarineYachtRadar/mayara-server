@@ -587,6 +587,51 @@ send(&[0x01, 0xC2]);  // Request multiple reports
 send(&[0xA0, 0xC1]);  // Stay on A (dual-range)
 ```
 
+### Complete Stay-Alive Sequence
+
+For robust operation, send the full stay-alive sequence periodically:
+
+| Command | Bytes | Purpose |
+|---------|-------|---------|
+| Stay Alive A | `A0 C1` | Keep radar A active (dual-range) |
+| Request Reports | `03 C2` | Request reports 02 and 08 |
+| Request Model | `04 C2` | Request report 03 (model info) |
+| Request All | `05 C2` | Request additional reports |
+| Request Install | `0A C2` | Request installation settings |
+
+**Timing:**
+- HALO radars: Send every 50-100ms for responsive operation
+- BR24/3G/4G: Every 1-5 seconds is sufficient
+
+### Dual-Range Stay-Alive
+
+For dual-range radars (4G, HALO), both radar channels need keep-alive:
+
+```rust
+// Radar A (short range)
+send_to_addr_a(&[0xA0, 0xC1]);
+
+// Radar B (long range) - if using dual range
+send_to_addr_b(&[0xA0, 0xC1]);
+```
+
+### TX On/Off Sequence
+
+Transmit commands require a two-part sequence:
+
+```
+// Transmit OFF (Standby)
+00 C1 01        // Prepare
+01 C1 00        // Execute standby
+
+// Transmit ON
+00 C1 01        // Prepare
+01 C1 01        // Execute transmit
+```
+
+Both parts must be sent; the prepare command (0x00 C1 01) primes the radar
+for a state change.
+
 ## Detailed Beacon Structure (from signalk-radar)
 
 The full 01B2 beacon packet (222+ bytes) contains multiple address pairs:

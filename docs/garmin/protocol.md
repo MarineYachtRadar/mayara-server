@@ -388,23 +388,114 @@ async fn send_command(&self, packet_type: u32, value: u32) -> Result<()> {
 }
 ```
 
+## Garmin HD (Legacy) Protocol
+
+The older Garmin HD series (pre-xHD) uses different packet type codes while maintaining
+the same basic packet structure.
+
+### HD vs xHD Packet Type Comparison
+
+| Function | HD Type | xHD Type | Notes |
+|----------|---------|----------|-------|
+| TX Off | 0x02B2 | 0x0919 | HD: parm1=1, xHD: parm1=0 |
+| TX On | 0x02B2 | 0x0919 | HD: parm1=2, xHD: parm1=1 |
+| Range | 0x02B3 | 0x091E | HD: meters-1, xHD: meters |
+| Gain Mode | 0x02B4 | 0x0924 | HD: 344=auto, xHD: 0=manual/2=auto |
+| Gain Value | 0x02B4 | 0x0925 | HD combined, xHD separate |
+| Sea Clutter | 0x02B5 | 0x0939/093A | HD combined, xHD mode+value |
+| Rain Clutter | 0x02B6 | 0x0933/0934 | HD combined, xHD mode+value |
+| Bearing | 0x02B7 | 0x0930 | Same encoding (×32) |
+| FTC | 0x02B8 | - | HD only |
+| Interference | 0x02B9 | 0x0920 | Same values |
+| Scan Speed | 0x02BE | 0x0932 | Same values |
+
+### HD Packet Structures
+
+HD uses packed C structs:
+
+**9-byte packet (1-byte parameter):**
+```c
+struct rad_ctl_pkt_9 {
+  uint32_t packet_type;  // e.g., 0x02B9
+  uint32_t len1;         // Always 1
+  uint8_t parm1;         // Value
+};
+```
+
+**10-byte packet (2-byte parameter):**
+```c
+struct rad_ctl_pkt_10 {
+  uint32_t packet_type;
+  uint32_t len1;         // Always 2
+  uint16_t parm1;        // Value (little-endian)
+};
+```
+
+**12-byte packet (4-byte parameter):**
+```c
+struct rad_ctl_pkt_12 {
+  uint32_t packet_type;
+  uint32_t len1;         // Always 4
+  uint32_t parm1;        // Value (little-endian)
+};
+```
+
+### HD Gain Control
+
+HD handles auto gain differently than xHD:
+
+```
+// Auto gain
+packet_type = 0x02B4
+parm1 = 344            // Magic value indicating auto mode
+
+// Manual gain
+packet_type = 0x02B4
+parm1 = <value>        // 0-255 gain value
+```
+
+### HD Sea Clutter
+
+HD sea clutter uses a multi-parameter packet:
+
+```c
+struct sea_clutter_pkt {
+  uint32_t packet_type;  // 0x02B5
+  uint32_t len1;
+  uint16_t value;        // Sea clutter value
+  uint16_t mode;         // 0=off, 1=calm, 2=medium/rough
+  uint16_t parm3;        // Additional flag
+  uint16_t parm4;        // Additional flag
+};
+```
+
+### HD FTC (Fast Time Constant)
+
+HD has FTC control not present in xHD:
+
+```
+packet_type = 0x02B8
+parm1 = <value>        // FTC level
+```
+
 ## Comparison with Other Brands
 
-| Feature | Garmin xHD | Navico | Raymarine |
-|---------|-----------|--------|-----------|
-| Spokes/revolution | 1440 | 2048 | 2048/250 |
-| Spoke resolution | 0.25° | 0.176° | 0.176°/1.44° |
-| Pixel depth | 8-bit (255) | 4-bit (16) | 7-bit (128) |
-| Samples/spoke | ~705 | 512 | 252-1024 |
-| Doppler | No | HALO only | Q24D/Cyclone |
-| Discovery | Implicit | Beacon | Two-phase beacon |
-| Keep-alive | None | Required | None |
+| Feature | Garmin xHD | Garmin HD | Navico | Raymarine |
+|---------|-----------|-----------|--------|-----------|
+| Spokes/revolution | 1440 | 1440 | 2048 | 2048/250 |
+| Spoke resolution | 0.25° | 0.25° | 0.176° | 0.176°/1.44° |
+| Pixel depth | 8-bit (255) | 8-bit (255) | 4-bit (16) | 7-bit (128) |
+| Samples/spoke | ~705 | ~705 | 512 | 252-1024 |
+| Doppler | No | No | HALO only | Q24D/Cyclone |
+| Discovery | Implicit | Implicit | Beacon | Two-phase beacon |
+| Keep-alive | None | None | Required | None |
+| FTC Control | No | Yes | No | Yes |
 
 ## References
 
 - mayara-lib source: `src/brand/garmin/`
 - mayara-core protocol: `src/protocol/garmin.rs`
 - signalk-radar Go implementation: `radar-server/radar/garminxhd/`
-- OpenCPN radar_pi plugin (GarminHD implementation)
+- OpenCPN radar_pi plugin (GarminHD and GarminxHD implementations)
 - Network captures from Garmin xHD radar installations
 - Sample PCAP: `signalk-radar/demo/samples/garmin_xhd.pcap`

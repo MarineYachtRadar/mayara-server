@@ -1,4 +1,4 @@
-# SignalK Radar API v3 Proposal
+# SignalK Radar API v4 Proposal
 
 ## Overview
 
@@ -146,7 +146,26 @@ PUT /radars/{id}/range
 
 ### Navico Dual Range
 
-HALO radars support dual range display with similar per-screen controls.
+Both 4G and HALO radars support dual range display with two independent views.
+
+| Model | Dual Range | Max Range per Screen |
+|-------|------------|---------------------|
+| BR24 | No | - |
+| 3G | No | - |
+| 4G | Yes | Full range |
+| HALO | Yes | Full range |
+
+| Control | Behavior |
+|---------|----------|
+| Range | Per-screen (via separate multicast addresses) |
+| Power/Status | Per-screen |
+| Gain | Universal (affects both) |
+| Sea Clutter | Universal (affects both) |
+| Rain Clutter | Universal (affects both) |
+| Mode Preset | Universal (affects both) |
+| Doppler | Universal (HALO only) |
+
+**Note:** Navico dual range uses separate multicast addresses for each radar channel (A and B), discovered via the beacon packet. Each channel requires its own keep-alive messages.
 
 ---
 
@@ -226,8 +245,26 @@ PUT /radars/{id}/furuno/autoAcquire
 | Noise Rejection | `PUT /navico/noiseRejection` | Digital noise filtering |
 | Sidelobe Suppression | `PUT /navico/sidelobeSuppression` | Reduces antenna side lobes |
 | Sea State | `PUT /navico/seaState` | Auto sea clutter calibration |
-| Accent Light | `PUT /navico/accentLight` | Scanner status LED |
+| Accent Light | `PUT /navico/accentLight` | Scanner status LED (HALO) |
 | Local IR | `PUT /navico/localInterferenceRejection` | Nearby radar filtering |
+| Antenna Size | `PUT /navico/antennaSize` | Antenna size setting (HALO) |
+| Parking Angle | `PUT /navico/parkingAngle` | Standby antenna position (HALO) |
+
+#### Antenna Size Schema (HALO only)
+```json
+PUT /radars/{id}/navico/antennaSize
+{
+  "value": 3  // Antenna size index (model-dependent)
+}
+```
+
+#### Parking Angle Schema (HALO only)
+```json
+PUT /radars/{id}/navico/parkingAngle
+{
+  "value": 180  // Degrees (0-359), where antenna stops in standby
+}
+```
 
 #### Doppler Mode Schema
 ```json
@@ -249,11 +286,40 @@ PUT /radars/{id}/navico/mode
 
 | Control | Endpoint | Description |
 |---------|----------|-------------|
-| Doppler | `PUT /raymarine/doppler` | Motion detection (Quantum 2, Cyclone) |
-| Color Gain | `PUT /raymarine/colorGain` | Echo color intensity |
-| Display Timing | `PUT /raymarine/displayTiming` | Radar timing adjustment |
+| Doppler | `PUT /raymarine/doppler` | Motion detection (Q24D, Cyclone) |
+| Color Gain | `PUT /raymarine/colorGain` | Echo color intensity (Quantum) |
+| Mode Preset | `PUT /raymarine/mode` | Harbor/Coastal/Offshore/Weather |
+| Display Timing | `PUT /raymarine/displayTiming` | Radar timing adjustment (RD series) |
 | Fast Scan | `PUT /raymarine/fastScan` | High-speed rotation mode |
-| Sector Blanking | `PUT /raymarine/sectorBlanking` | Mast/structure blanking |
+| FTC | `PUT /raymarine/ftc` | Fast Time Constant (RD series) |
+| Tune | `PUT /raymarine/tune` | Magnetron tuning (RD series) |
+| Main Bang | `PUT /raymarine/mainBang` | Transmitter pulse suppression (RD series) |
+
+#### Mode Preset Schema (Quantum)
+```json
+PUT /radars/{id}/raymarine/mode
+{
+  "value": "harbor"  // "harbor" | "coastal" | "offshore" | "weather"
+}
+```
+
+#### FTC Schema (RD series only)
+```json
+PUT /radars/{id}/raymarine/ftc
+{
+  "enabled": true,
+  "value": 50  // 0-100
+}
+```
+
+#### Tune Schema (RD series magnetron radars)
+```json
+PUT /radars/{id}/raymarine/tune
+{
+  "mode": "auto",  // "manual" | "auto"
+  "value": 50      // 0-100 (manual mode only)
+}
+```
 
 ### Garmin-Specific Controls
 
@@ -262,6 +328,16 @@ PUT /radars/{id}/navico/mode
 | Crosstalk Rejection | `PUT /garmin/crosstalkRejection` | Multi-radar interference |
 | Timed Idle | `PUT /garmin/timedIdle` | Power-saving transmit cycling |
 | Auto Gain Level | `PUT /garmin/autoGainLevel` | High/Low auto sensitivity |
+| FTC | `PUT /garmin/ftc` | Fast Time Constant (HD series only) |
+
+#### FTC Schema (Garmin HD only, not xHD)
+```json
+PUT /radars/{id}/garmin/ftc
+{
+  "value": 50  // 0-100
+}
+```
+Note: FTC is only available on legacy Garmin HD radars, not the xHD series.
 
 #### Timed Idle Schema
 ```json
@@ -303,7 +379,17 @@ GET /radars/{id}/capabilities
     "maxRange": 66672,        // meters (36nm)
     "maxDualScanRange": 22224, // meters (12nm)
     "antennaSize": "24inch",
-    "power": "4kW"
+    "power": "4kW",
+    "noTransmitZoneCount": 2,  // Furuno: 2, Navico: 4, Garmin: 1
+    "hasFTC": false,           // Garmin HD, Raymarine RD have it
+    "hasTuning": false,        // Raymarine magnetron radars only
+    "hasAntennaParking": false // HALO only
+  },
+
+  "connection": {
+    "keepAliveRequired": false,     // Furuno uses TCP with its own keep-alive
+    "keepAliveIntervalMs": 5000,    // Furuno: 5000ms, Navico HALO: 100ms, Raymarine: 1000ms
+    "protocol": "tcp"               // "tcp" | "udp"
   },
 
   "controls": {
@@ -714,16 +800,37 @@ Detection: beacon_type + dual_range + serial_prefix → infer "HALO24" → looku
 
 **Note**: Doppler capability can be detected from report packets, not beacon. Full model identification may require initial communication.
 
-#### Raymarine (UDP multicast 224.0.0.1:5800) ⚠️ Partial Model
+#### Raymarine (UDP multicast 224.0.0.1:5800) ✅ Part Number Detection
 - **56-byte beacon**: Contains subtype and model name field
 - **Subtype**: Indicates model family (0x01=RD/HD, 0x66=Quantum, 0x4D=Quantum WiFi)
-- **Model name**: Present for Quantum (`QuantumRadar`), empty for RD series
-- RD series model must be **inferred** from capabilities
+- **Info Report**: Contains **part number** for precise model identification
+- Part number is more reliable than inferring from capabilities
 
 ```
-Detection: subtype + model_name → "Quantum Q24D" → lookup
-           subtype=0x01 + spoke_format → infer "RD424HD" → lookup
+Detection: info_report.part_number → "E70498" → lookup "Quantum Q24D"
 ```
+
+**Part Number to Model Mapping:**
+
+| Part Number | Model | Family | Doppler |
+|-------------|-------|--------|---------|
+| E70210 | Quantum Q24 | Quantum | No |
+| E70344 | Quantum Q24C | Quantum | No |
+| E70498 | Quantum Q24D | Quantum | Yes |
+| E70620 | Cyclone | Quantum | Yes |
+| E70621 | Cyclone Pro | Quantum | Yes |
+| E70484 | Magnum 4kW | RD | No |
+| E70487 | Magnum 12kW | RD | No |
+| E52069 | Open Array HD 4kW | RD | No |
+| E92160 | Open Array HD 12kW | RD | No |
+| E52081 | Open Array SHD 4kW | RD | No |
+| E52082 | Open Array SHD 12kW | RD | No |
+| E92142 | RD418HD | RD | No |
+| E92143 | RD424HD | RD | No |
+| E92130 | RD418D | RD | No |
+| E92132 | RD424D | RD | No |
+
+**Fallback Detection (if part number unavailable):**
 
 | Subtype | Model Name | Inferred Model |
 |---------|------------|----------------|
