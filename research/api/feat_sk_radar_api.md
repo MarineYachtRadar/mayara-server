@@ -45,11 +45,13 @@ These are supported by most (but not all) radars:
 | Control | Endpoint | Supported By |
 |---------|----------|--------------|
 | Interference Rejection | `PUT /interferenceRejection` | Furuno, Navico, Raymarine, Garmin |
-| Target Expansion | `PUT /targetExpansion` | Furuno, Navico, Raymarine |
+| Target Expansion | `PUT /targetExpansion` | Navico, Raymarine |
 | Bearing Alignment | `PUT /bearingAlignment` | All |
 | Antenna Height | `PUT /antennaHeight` | Furuno, Navico |
 | No Transmit Zones | `PUT /noTransmitZones` | Furuno, Navico, Garmin |
 | Scan Speed | `PUT /scanSpeed` | Furuno, Navico |
+
+**Note**: Features listed are based on protocol analysis. Some may require further verification.
 
 ### Common Control Schemas
 
@@ -65,7 +67,7 @@ PUT /radars/{id}/power
 ```json
 PUT /radars/{id}/range
 {
-  "value": 5000  // meters
+  "value": 5000  // meters (API always uses meters, plugin converts to vendor-specific indices)
 }
 ```
 
@@ -108,12 +110,7 @@ PUT /radars/{id}/noTransmitZones
   ]
 }
 ```
-Note: Number of zones varies by vendor (Furuno: 2, Navico: 2-4, Garmin: 1)
-
-**Important for Furuno**: Sector blanking uses **width** not end angle. To convert:
-```
-width = (end_angle - start_angle + 360) mod 360
-```
+Note: Number of zones varies by vendor (Furuno: 2, Navico: 2-4, Garmin: 1). The API always uses start/end angles; the plugin handles any vendor-specific conversions internally.
 
 ---
 
@@ -123,7 +120,7 @@ Some radars support displaying two independent range views simultaneously. The A
 
 ### Furuno Dual Scan
 
-DRS-NXT radars support dual scan mode with two independent displays (up to 12nm each range).
+DRS-NXT radars support dual scan mode with two independent displays (max 12nm / 22224m each).
 
 | Control | Behavior |
 |---------|----------|
@@ -172,10 +169,9 @@ GET /radars/{id}/{vendor}/{control}
 | Target Analyzer | `PUT /furuno/targetAnalyzer` | Doppler-based threat highlighting (target/rain modes) |
 | TX Channel | `PUT /furuno/txChannel` | Transmit frequency channel (auto, 1-3) |
 | Auto Acquire | `PUT /furuno/autoAcquire` | ARPA auto target acquisition by Doppler |
-| Fast Target Tracking | `PUT /furuno/fastTargetTracking` | Quick target acquisition |
-| Echo Trail | `PUT /furuno/echoTrail` | Historical echo persistence |
 | Main Bang | `PUT /furuno/mainBang` | Suppresses transmitter pulse (0-100%) |
-| Near/Middle/Far STC | `PUT /furuno/stc` | Range-based sensitivity control |
+| Echo Trail | `PUT /furuno/echoTrail` | Historical echo persistence (unverified) |
+| Fast Target Tracking | `PUT /furuno/fastTargetTracking` | Quick target acquisition (unverified) |
 
 #### RezBoost Schema
 ```json
@@ -292,17 +288,22 @@ GET /radars/{id}/capabilities
 ```json
 {
   "id": "radar-0",
-  "vendor": "navico",
-  "model": "HALO24",
-  "serialNumber": "1234567890",
-  "firmwareVersion": "2.1.0",
+  "vendor": "furuno",
+  "model": "DRS4D-NXT",
+  "modelFamily": "DRS-NXT",
+  "serialNumber": "6424",
+  "firmwareVersion": "01.01:01.01:01.05:01.05",
 
   "characteristics": {
     "spokesPerRevolution": 2048,
-    "maxSpokeLength": 1024,
+    "maxSpokeLength": 512,
     "pixelDepth": 4,
     "hasDoppler": true,
-    "maxRange": 72000
+    "hasDualScan": true,
+    "maxRange": 66672,        // meters (36nm)
+    "maxDualScanRange": 22224, // meters (12nm)
+    "antennaSize": "24inch",
+    "power": "4kW"
   },
 
   "controls": {
@@ -313,30 +314,27 @@ GET /radars/{id}/capabilities
       "sea",
       "rain",
       "interferenceRejection",
-      "targetExpansion",
       "bearingAlignment",
       "noTransmitZones",
       "scanSpeed"
     ],
     "vendor": [
-      "doppler",
-      "dopplerSpeed",
-      "mode",
-      "targetBoost",
-      "targetSeparation",
-      "noiseRejection",
-      "sidelobeSuppression",
-      "seaState",
-      "accentLight"
+      "rezboost",
+      "birdMode",
+      "targetAnalyzer",
+      "txChannel",
+      "autoAcquire"
     ]
   },
 
   "ranges": [
-    125, 250, 500, 750, 1000, 1500, 2000, 3000, 4000, 6000,
-    8000, 12000, 16000, 24000, 36000, 48000, 72000
+    231, 463, 926, 1389, 1852, 2778, 3704, 5556, 7408, 11112,
+    14816, 22224, 29632, 44448, 59264, 66672, 88896
   ]
 }
 ```
+
+Note: Ranges in meters. Furuno DRS4D-NXT example: 1/8nm (231m) to 48nm (88896m).
 
 ---
 
@@ -678,21 +676,141 @@ router.ws('/radars/:id/state', ...);
 
 ---
 
+## Model-Specific Capabilities
+
+Radar capabilities vary significantly by model, even within the same vendor. The API uses the **model name** from device discovery to determine available features.
+
+### How Model Detection Works
+
+During discovery, radars broadcast identifying information. The quality and explicitness of model identification varies by vendor:
+
+#### Furuno (UDP beacon on port 10010) ✅ Explicit Model
+- **Model name**: Explicit in 170-byte response (e.g., `DRS4D-NXT`, `DRS6A-NXT`)
+- Firmware version: `01.01:01.01:01.05:01.05`
+- Serial number: `6424`
+- MAC address (Furuno OUI: `00:d0:1d:xx:xx:xx`)
+
+```
+Detection: beacon.model_name → "DRS4D-NXT" → lookup capabilities
+```
+
+#### Navico (UDP multicast 236.6.7.x) ⚠️ Inferred Model
+- **Serial number**: 16 bytes ASCII in beacon
+- **Beacon structure**: Differs by generation (BR24 unique, 3G/4G/HALO different)
+- **Dual-range capability**: Indicates 4G or HALO vs older models
+- Model must be **inferred** from beacon type + capabilities
+
+```
+Detection: beacon_type + dual_range + serial_prefix → infer "HALO24" → lookup
+```
+
+| Beacon Type | Dual Range | Doppler | Inferred Model |
+|-------------|------------|---------|----------------|
+| BR24 format | No | No | BR24 |
+| Single-range | No | No | 3G |
+| Single-range | No | Yes | HALO20 |
+| Dual-range | Yes | No | 4G |
+| Dual-range | Yes | Yes | HALO20+, HALO24, HALO3/4/6 |
+
+**Note**: Doppler capability can be detected from report packets, not beacon. Full model identification may require initial communication.
+
+#### Raymarine (UDP multicast 224.0.0.1:5800) ⚠️ Partial Model
+- **56-byte beacon**: Contains subtype and model name field
+- **Subtype**: Indicates model family (0x01=RD/HD, 0x66=Quantum, 0x4D=Quantum WiFi)
+- **Model name**: Present for Quantum (`QuantumRadar`), empty for RD series
+- RD series model must be **inferred** from capabilities
+
+```
+Detection: subtype + model_name → "Quantum Q24D" → lookup
+           subtype=0x01 + spoke_format → infer "RD424HD" → lookup
+```
+
+| Subtype | Model Name | Inferred Model |
+|---------|------------|----------------|
+| 0x01 | (empty) | RD series (check HD vs non-HD from spoke format) |
+| 0x66 | QuantumRadar | Quantum (check Doppler for Q24D vs Q24C) |
+| 0x4D | QuantumRadar | Quantum WiFi |
+
+#### Garmin (UDP multicast 239.254.2.0) ✅ Explicit Model
+- **ScannerMessage (0x099b)**: Contains 64-byte model info string
+- Model name is explicit (e.g., `GMR 24 xHD`, `GMR Fantom 24`)
+
+```
+Detection: scanner_msg.model_info → "GMR 24 xHD" → lookup capabilities
+```
+
+### Model Capability Database
+
+The plugin maintains a model database mapping detected models to their capabilities:
+
+```json
+{
+  "furuno": {
+    "DRS4D-NXT": {
+      "family": "DRS-NXT",
+      "power": "4kW",
+      "antenna": "24inch",
+      "maxRange": 66672,
+      "hasDoppler": true,
+      "hasDualScan": true,
+      "maxDualScanRange": 22224,
+      "controls": ["rezboost", "birdMode", "targetAnalyzer", "txChannel", "autoAcquire"]
+    },
+    "DRS6A-NXT": {
+      "family": "DRS-NXT",
+      "power": "6kW",
+      "antenna": "open-array",
+      "maxRange": 133344,
+      "hasDoppler": true,
+      "hasDualScan": true,
+      "maxDualScanRange": 22224,
+      "controls": ["rezboost", "birdMode", "targetAnalyzer", "txChannel", "autoAcquire"]
+    }
+  },
+  "navico": {
+    "HALO24": {
+      "family": "HALO",
+      "hasDoppler": true,
+      "hasDualRange": true,
+      "controls": ["doppler", "dopplerSpeed", "mode", "targetBoost", "targetSeparation"]
+    }
+  }
+}
+```
+
+### Unknown Models
+
+When an unknown model is detected:
+1. Return `"modelFamily": "unknown"` in capabilities
+2. Enable only common controls (power, range, gain, sea, rain)
+3. Allow vendor-specific controls to be attempted (may fail gracefully)
+4. Log the unknown model for future database updates
+
+### Firmware-Dependent Features
+
+Some features may depend on firmware version, not just model:
+- Check `firmwareVersion` in capabilities response
+- Plugin can gate features based on minimum firmware versions if known
+- Firmware requirements need to be documented as they are discovered
+
+---
+
 ## Vendor Feature Glossary
 
 ### Furuno
 
-| Feature | Marketing Name | Technical Description |
-|---------|---------------|----------------------|
-| RezBoost™ | Beam Sharpening | Signal processing that narrows effective beam width for improved target separation. Per-screen setting in dual scan. |
-| Target Analyzer™ | Doppler Threat Detection | Dual-mode analysis: Target mode highlights approaching threats, Rain mode identifies precipitation. Universal setting. |
-| Bird Mode | Fish Finder Aid | 4-level sensitivity (Off/Low/Med/High) for detecting bird flocks indicating fish schools. Universal setting. |
-| TX Channel | Frequency Selection | Select transmission channel (Auto/1/2/3) to avoid interference with nearby radars |
-| Auto Acquire | Doppler ARPA | Automatic ARPA target acquisition using Doppler motion detection |
-| Dual Scan | Dual Range Display | Two independent radar displays with different ranges (up to 12nm each), sharing antenna rotation |
-| Fast Target Tracking™ | Rapid ARPA | Generates target vectors in seconds vs traditional ARPA delay |
-| Echo Trail | Target History | Displays historical echo positions showing target movement |
-| Sector Blanking | No-Transmit Zones | Up to 2 configurable sectors where radar won't transmit (start angle + width) |
+| Feature | Marketing Name | Technical Description | Status |
+|---------|---------------|----------------------|--------|
+| RezBoost™ | Beam Sharpening | Signal processing that narrows effective beam width for improved target separation. Per-screen setting in dual scan. | ✅ Verified |
+| Target Analyzer™ | Doppler Threat Detection | Dual-mode analysis: Target mode highlights approaching threats, Rain mode identifies precipitation. Universal setting. | ✅ Verified |
+| Bird Mode | Fish Finder Aid | 4-level sensitivity (Off/Low/Med/High) for detecting bird flocks indicating fish schools. Universal setting. | ✅ Verified |
+| TX Channel | Frequency Selection | Select transmission channel (Auto/1/2/3) to avoid interference with nearby radars | ✅ Verified |
+| Auto Acquire | Doppler ARPA | Automatic ARPA target acquisition using Doppler motion detection | ✅ Verified |
+| Dual Scan | Dual Range Display | Two independent radar displays with different ranges (up to 12nm each), sharing antenna rotation | ✅ Verified |
+| Sector Blanking | No-Transmit Zones | Up to 2 configurable sectors where radar won't transmit (start angle + width) | ✅ Verified |
+| Main Bang | Pulse Suppression | Suppresses transmitter pulse reflection (0-100%) | ⚠️ Protocol known |
+| Fast Target Tracking™ | Rapid ARPA | Generates target vectors in seconds vs traditional ARPA delay | ❓ Unverified |
+| Echo Trail | Target History | Displays historical echo positions showing target movement | ❓ Unverified |
 
 ### Navico (Simrad/Lowrance/B&G)
 
