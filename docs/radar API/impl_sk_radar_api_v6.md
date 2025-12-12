@@ -1,7 +1,9 @@
-# SignalK Radar API v5 - Implementation Plan
+# SignalK Radar API v6 - Implementation Plan
 
-> This document details the implementation steps for the v5 Radar API.
+> This document details the implementation steps for the v6 Radar API.
 > See [feat_sk_radar_api.md](./feat_sk_radar_api.md) for the full specification.
+>
+> **v6 adds:** ARPA target tracking, SignalK notifications, guard zone alerts.
 
 ## Overview
 
@@ -1321,3 +1323,316 @@ router.put('/radars/:id/power', (req, res) => {
 3. Add constraint validation on server side
 4. Update web UI to use capability-driven rendering
 5. Document API for SignalK maintainers
+
+---
+
+## v6 Additions: ARPA Targets and SignalK Notifications
+
+### Overview
+
+v6 extends the API with:
+1. **ARPA target endpoints** - List and stream tracked targets with CPA/TCPA
+2. **SignalK notifications** - Collision warnings integrated into SignalK notification system
+3. **Guard zone alerts** - Zone intrusion notifications
+
+### New Endpoints
+
+```
+GET  /radars/{id}/targets           - List tracked ARPA targets
+WS   /radars/{id}/targets           - Stream target updates
+POST /radars/{id}/targets           - Manual target acquisition
+DELETE /radars/{id}/targets/{tid}   - Cancel target tracking
+```
+
+### ARPA Target Data Model
+
+```typescript
+interface ArpaTarget {
+  id: number;                    // Target ID (1-99 typically)
+  status: "tracking" | "lost" | "acquiring";
+  position: {
+    bearing: number;             // Degrees true
+    distance: number;            // Meters from own vessel
+    latitude?: number;           // Calculated lat (if heading available)
+    longitude?: number;          // Calculated lon (if heading available)
+  };
+  motion: {
+    course: number;              // Computed COG (degrees true)
+    speed: number;               // Computed SOG (m/s)
+  };
+  danger: {
+    cpa: number;                 // Closest Point of Approach (meters)
+    tcpa: number;                // Time to CPA (seconds, negative = past)
+  };
+  acquisition: "manual" | "auto";
+  firstSeen: string;             // ISO timestamp
+  lastSeen: string;              // ISO timestamp
+}
+```
+
+### Target List Response
+
+```json
+GET /radars/furuno-1/targets
+
+{
+  "radarId": "furuno-1",
+  "timestamp": "2025-12-13T10:30:00Z",
+  "targets": [
+    {
+      "id": 1,
+      "status": "tracking",
+      "position": {
+        "bearing": 45.2,
+        "distance": 1852
+      },
+      "motion": {
+        "course": 180.0,
+        "speed": 6.5
+      },
+      "danger": {
+        "cpa": 150,
+        "tcpa": 324
+      },
+      "acquisition": "auto",
+      "firstSeen": "2025-12-13T10:25:00Z",
+      "lastSeen": "2025-12-13T10:30:00Z"
+    }
+  ]
+}
+```
+
+### Manual Target Acquisition
+
+```json
+POST /radars/furuno-1/targets
+{
+  "bearing": 45.0,
+  "distance": 2000
+}
+
+Response:
+{
+  "success": true,
+  "targetId": 5,
+  "status": "acquiring"
+}
+```
+
+### Target WebSocket Stream
+
+```
+WS /radars/{id}/targets
+
+// Server sends on each update:
+{
+  "type": "target_update",
+  "target": { ... ArpaTarget ... }
+}
+
+{
+  "type": "target_lost",
+  "targetId": 3,
+  "reason": "no_return",        // or "manual_cancel"
+  "lastPosition": {
+    "bearing": 120.5,
+    "distance": 3500
+  }
+}
+
+{
+  "type": "target_acquired",
+  "target": { ... ArpaTarget ... }
+}
+```
+
+### SignalK Notifications
+
+ARPA targets publish to the SignalK notification system, enabling chart plotters
+to display collision warnings alongside AIS alerts.
+
+#### Notification Paths
+
+```
+notifications.navigation.closestApproach.radar:{radarId}:target:{targetId}
+notifications.navigation.radarGuardZone.radar:{radarId}:zone:{zoneId}
+notifications.navigation.radarTargetLost.radar:{radarId}:target:{targetId}
+```
+
+#### Closest Approach Notification
+
+Published when target CPA/TCPA crosses threshold. States follow SignalK convention:
+- `normal` - Target tracked, no danger
+- `alert` - CPA < 1000m
+- `warn` - CPA < 500m
+- `alarm` - CPA < 200m
+- `emergency` - CPA < 100m (imminent collision)
+
+```json
+{
+  "path": "notifications.navigation.closestApproach.radar:furuno-1:target:3",
+  "value": {
+    "state": "warn",
+    "method": ["visual", "sound"],
+    "message": "ARPA target 3: CPA 320m in 5m 24s",
+    "timestamp": "2025-12-13T10:30:00Z",
+    "data": {
+      "cpa": 320,
+      "tcpa": 324,
+      "bearing": 45.2,
+      "distance": 1852,
+      "targetCourse": 180,
+      "targetSpeed": 6.5
+    }
+  }
+}
+```
+
+#### Guard Zone Alert Notification
+
+Published when a target enters a guard zone.
+
+```json
+{
+  "path": "notifications.navigation.radarGuardZone.radar:furuno-1:zone:1",
+  "value": {
+    "state": "alarm",
+    "method": ["visual", "sound"],
+    "message": "Target in guard zone 1",
+    "timestamp": "2025-12-13T10:30:00Z",
+    "data": {
+      "zoneId": 1,
+      "zoneName": "Starboard sector",
+      "targetBearing": 45.2,
+      "targetDistance": 500
+    }
+  }
+}
+```
+
+#### Target Lost Notification
+
+Published when tracking is lost on a manually-acquired target.
+Auto-acquired targets silently drop without notification.
+
+```json
+{
+  "path": "notifications.navigation.radarTargetLost.radar:furuno-1:target:5",
+  "value": {
+    "state": "warn",
+    "method": ["visual"],
+    "message": "ARPA target 5 lost",
+    "timestamp": "2025-12-13T10:30:00Z",
+    "data": {
+      "targetId": 5,
+      "lastBearing": 120.5,
+      "lastDistance": 3500,
+      "trackedDuration": 324
+    }
+  }
+}
+```
+
+### Target Grace Period
+
+When a target temporarily disappears (behind waves, rain clutter, etc.),
+the tracker maintains prediction for a configurable grace period (default: 30-60 seconds)
+before marking it as lost.
+
+Configuration via state:
+```json
+PUT /radars/furuno-1/state
+{
+  "arpaSettings": {
+    "targetLostTimeout": 45,     // seconds
+    "cpaAlertThreshold": 500,    // meters
+    "tcpaAlertThreshold": 600    // seconds (10 minutes)
+  }
+}
+```
+
+### SignalK Data Model (Optional)
+
+Beyond notifications, targets can also appear in the SignalK data model
+for chart plotters to display:
+
+```
+radar.{id}.targets.{targetId}.position.bearing
+radar.{id}.targets.{targetId}.position.distance
+radar.{id}.targets.{targetId}.courseOverGround
+radar.{id}.targets.{targetId}.speedOverGround
+radar.{id}.targets.{targetId}.closestApproach.distance
+radar.{id}.targets.{targetId}.closestApproach.timeTo
+```
+
+### Implementation in mayara-core
+
+ARPA logic lives in `mayara-core/src/arpa/` (shared by WASM, Standalone, mayara_opencpn):
+
+```
+mayara-core/src/arpa/
+├── mod.rs           # ArpaTracker struct, public API
+├── detector.rs      # Blob/contour detection from spoke data
+├── tracker.rs       # Kalman filter for position/velocity estimation
+├── correlator.rs    # Match detections to existing targets
+└── cpa.rs           # CPA/TCPA calculation
+```
+
+### Implementation in WASM Plugin
+
+```rust
+// In poll() function:
+
+// 1. Feed spokes to ARPA tracker
+for spoke in &received_spokes {
+    arpa_tracker.process_spoke(spoke, vessel_position, heading);
+}
+
+// 2. Get updated targets
+let targets = arpa_tracker.get_targets();
+
+// 3. Publish SignalK notifications for dangerous targets
+for target in &targets {
+    if target.tcpa > 0.0 {
+        let state = match target.cpa {
+            cpa if cpa < 100.0 => "emergency",
+            cpa if cpa < 200.0 => "alarm",
+            cpa if cpa < 500.0 => "warn",
+            cpa if cpa < 1000.0 => "alert",
+            _ => "normal",
+        };
+
+        publish_notification(
+            &format!("navigation.closestApproach.radar:{}:target:{}",
+                     radar_id, target.id),
+            state,
+            &target,
+        );
+    }
+}
+
+// 4. Publish lost target notifications (manual acquisition only)
+for lost in arpa_tracker.get_lost_targets() {
+    if lost.acquisition == Acquisition::Manual {
+        publish_notification(
+            &format!("navigation.radarTargetLost.radar:{}:target:{}",
+                     radar_id, lost.id),
+            "warn",
+            &lost,
+        );
+    }
+}
+```
+
+### v6 Testing Checklist
+
+- [ ] `GET /radars/{id}/targets` returns target list
+- [ ] `POST /radars/{id}/targets` acquires target at bearing/distance
+- [ ] `DELETE /radars/{id}/targets/{tid}` cancels tracking
+- [ ] WebSocket `/radars/{id}/targets` streams updates
+- [ ] SignalK notification published when CPA crosses threshold
+- [ ] SignalK notification state changes as CPA decreases
+- [ ] Guard zone entry triggers notification
+- [ ] Lost target notification for manual acquisitions
+- [ ] Target maintained during grace period (30-60s)
+- [ ] mayara_opencpn receives targets via `/targets` endpoint
