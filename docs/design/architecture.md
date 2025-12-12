@@ -978,18 +978,78 @@ mayara_opencpn only needs to implement:
 - HTTP/WebSocket client
 - Protobuf parsing
 
-### Open Questions
+### Rendering Strategy
 
-1. **Rendering approach:**
-   - OpenGL shaders (like radar_pi)?
-   - Share WebGL approach with web GUI?
+**Decision:** Use OpenGL/GLES with shader-based polar rendering (same approach as radar_pi).
 
-2. **Discovery:**
+#### Why Not WebGPU?
+
+OpenCPN has **no WebGPU support** - it's a native desktop application using OpenGL/GLES.
+The plugin API expects rendering via `wxGLCanvas` and native OpenGL calls.
+
+#### Shader-Based PPI Rendering
+
+Based on radar_pi's proven implementation:
+
+1. **Spoke texture:** Store all spokes in a 2D texture
+   - Width = radial samples (spoke length)
+   - Height = angular slices (spokes per revolution)
+
+2. **Fragment shader:** Rectangular → polar coordinate conversion
+   ```glsl
+   uniform sampler2D spokeTex;
+   void main() {
+       float d = length(gl_TexCoord[0].xy);  // distance from center
+       if (d >= 1.0) discard;                 // outside PPI circle
+       float a = atan(gl_TexCoord[0].y, gl_TexCoord[0].x) / 6.28318;
+       gl_FragColor = texture2D(spokeTex, vec2(d, a));
+   }
+   ```
+
+3. **Efficient updates:** Only changed spoke rows updated via `glTexSubImage2D`
+
+#### Platform Compatibility
+
+| Platform | Graphics API | Notes |
+|----------|--------------|-------|
+| Desktop (Linux/macOS/Windows) | OpenGL 2.0+ | Full GLSL shader support |
+| Raspberry Pi 5 | OpenGL ES 2.0 (GLESv2) | Native hardware acceleration |
+| Raspberry Pi 3/4 | GLESv2 or GLShim | OpenCPN's compatibility layer |
+
+#### Code Sharing with Web GUI
+
+- **No direct code sharing** - different languages (C++ vs TypeScript)
+- **Share the algorithm** - same GLSL shader logic, same polar conversion math
+- **Share via mayara-core** - ARPA/trails/guard zones compiled to both WASM and native
+- Document algorithms so implementations stay in sync
+
+### What mayara_opencpn Implements
+
+| Component | Description |
+|-----------|-------------|
+| wxGLCanvas setup | OpenGL context, double buffering |
+| Shader management | Compile, link, uniform handling |
+| Texture streaming | Protobuf spokes → GPU texture |
+| PPI overlays | Range rings, heading line, EBL/VRM |
+| Target display | Fetch from `/targets` API, render symbols |
+| Guard zone visualization | Fetch zones, render as sectors |
+| Control panel | wxWidgets UI for radar settings |
+
+### What mayara_opencpn Does NOT Implement
+
+- **ARPA processing** - uses Mayara Standalone's `/targets` endpoint
+- **Trails computation** - trails stored server-side, fetched via API
+- **Guard zone alerting** - logic runs in Mayara Standalone, plugin displays results
+- **Radar protocol handling** - all hardware communication via Mayara Standalone
+
+### Open Questions (Remaining)
+
+1. **Discovery:**
    - mDNS/Bonjour for automatic Mayara discovery?
    - Manual configuration (host:port)?
    - Both?
 
-3. **Multiple radars:**
+2. **Multiple radars:**
    - One mayara_opencpn panel per radar?
    - Single panel with radar selector?
 

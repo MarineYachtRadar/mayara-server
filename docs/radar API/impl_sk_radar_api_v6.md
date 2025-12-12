@@ -1624,6 +1624,159 @@ for lost in arpa_tracker.get_lost_targets() {
 }
 ```
 
+---
+
+## Critical: SignalK Server FFI Requirements
+
+> ⚠️ **The SignalK WASM plugin currently has NO way to publish notifications.**
+> The `sk_publish_notification` FFI function does NOT exist yet and must be added to signalk-server.
+
+### Current WASM FFI Functions (signalk_ffi.rs)
+
+```rust
+// EXISTING functions:
+extern "C" {
+    fn sk_debug(ptr: *const u8, len: usize);
+    fn sk_set_status(ptr: *const u8, len: usize);
+    fn sk_set_error(ptr: *const u8, len: usize);
+    fn sk_handle_message(ptr: *const u8, len: usize, out_ptr: *mut u8, out_len: usize) -> i32;
+    fn sk_radar_emit_spokes(ptr: *const u8, len: usize);
+
+    // Socket FFI
+    fn sk_udp_bind(port: u16) -> i32;
+    fn sk_udp_send(socket_id: i32, host_ptr: *const u8, host_len: usize, port: u16, data_ptr: *const u8, data_len: usize) -> i32;
+    fn sk_udp_recv(socket_id: i32, out_ptr: *mut u8, out_len: usize) -> i32;
+    fn sk_tcp_connect(host_ptr: *const u8, host_len: usize, port: u16) -> i32;
+    fn sk_tcp_send(socket_id: i32, data_ptr: *const u8, data_len: usize) -> i32;
+    fn sk_tcp_recv(socket_id: i32, out_ptr: *mut u8, out_len: usize) -> i32;
+    fn sk_socket_close(socket_id: i32);
+
+    // Config
+    fn sk_read_config(ptr: *const u8, len: usize) -> i32;
+    fn sk_save_config(ptr: *const u8, len: usize) -> i32;
+}
+```
+
+### REQUIRED: New FFI Function for v6
+
+```rust
+// NEW - must be added to signalk-server WASM bindings:
+extern "C" {
+    /// Publish a SignalK notification
+    ///
+    /// path: The notification path (e.g., "notifications.navigation.closestApproach.radar:foo:target:1")
+    /// value: JSON notification value with state, method, message, data
+    ///
+    /// Returns: 0 on success, -1 on error
+    fn sk_publish_notification(
+        path_ptr: *const u8,
+        path_len: usize,
+        value_ptr: *const u8,
+        value_len: usize,
+    ) -> i32;
+}
+```
+
+### signalk-server Implementation Required
+
+In the signalk-server codebase, the WASM host must implement:
+
+```typescript
+// In signalk-server WASM host bindings
+
+// Import the notification handler from SignalK
+import { publishNotification } from '../notifications';
+
+// Host function implementation
+function sk_publish_notification(
+  pathPtr: number,
+  pathLen: number,
+  valuePtr: number,
+  valueLen: number
+): number {
+  const memory = wasmInstance.exports.memory as WebAssembly.Memory;
+  const path = new TextDecoder().decode(
+    new Uint8Array(memory.buffer, pathPtr, pathLen)
+  );
+  const valueJson = new TextDecoder().decode(
+    new Uint8Array(memory.buffer, valuePtr, valueLen)
+  );
+
+  try {
+    const value = JSON.parse(valueJson);
+    publishNotification(path, value);
+    return 0;
+  } catch (e) {
+    console.error('Failed to publish notification:', e);
+    return -1;
+  }
+}
+
+// Register in WASM imports
+const imports = {
+  env: {
+    // ... existing imports ...
+    sk_publish_notification,
+  }
+};
+```
+
+### New REST Endpoints Required
+
+signalk-server must route these to the WASM plugin:
+
+```
+GET  /radars/{id}/targets           → radar_get_targets()
+POST /radars/{id}/targets           → radar_acquire_target()
+DELETE /radars/{id}/targets/{tid}   → radar_cancel_target()
+```
+
+### New WebSocket Route Required
+
+```
+WS /radars/{id}/targets             → radar_targets_stream() (or similar)
+```
+
+### New WASM Exports Required
+
+```rust
+// mayara-signalk-wasm/src/lib.rs
+
+#[no_mangle]
+pub extern "C" fn radar_get_targets(
+    request_ptr: *const u8,
+    request_len: usize,
+    out_ptr: *mut u8,
+    out_max_len: usize,
+) -> i32 {
+    // Return JSON array of ArpaTarget
+}
+
+#[no_mangle]
+pub extern "C" fn radar_acquire_target(
+    request_ptr: *const u8,
+    request_len: usize,
+    out_ptr: *mut u8,
+    out_max_len: usize,
+) -> i32 {
+    // Request: { radarId, bearing, distance }
+    // Response: { success, targetId, status }
+}
+
+#[no_mangle]
+pub extern "C" fn radar_cancel_target(
+    request_ptr: *const u8,
+    request_len: usize,
+    out_ptr: *mut u8,
+    out_max_len: usize,
+) -> i32 {
+    // Request: { radarId, targetId }
+    // Response: { success }
+}
+```
+
+---
+
 ### v6 Testing Checklist
 
 - [ ] `GET /radars/{id}/targets` returns target list
