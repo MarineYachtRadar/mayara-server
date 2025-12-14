@@ -152,9 +152,8 @@ pub struct SharedControls {
 }
 
 mod arc_rwlock_serde {
-    use serde::de::Deserializer;
     use serde::ser::Serializer;
-    use serde::{Deserialize, Serialize};
+    use serde::Serialize;
     use std::sync::{Arc, RwLock};
 
     pub fn serialize<S, T>(val: &Arc<RwLock<T>>, s: S) -> Result<S::Ok, S::Error>
@@ -163,15 +162,6 @@ mod arc_rwlock_serde {
         T: Serialize,
     {
         T::serialize(&*val.read().unwrap(), s)
-    }
-
-    #[allow(dead_code)]
-    pub fn deserialize<'de, D, T>(d: D) -> Result<Arc<RwLock<T>>, D::Error>
-    where
-        D: Deserializer<'de>,
-        T: Deserialize<'de>,
-    {
-        Ok(Arc::new(RwLock::new(T::deserialize(d)?)))
     }
 }
 
@@ -569,17 +559,6 @@ impl SharedControls {
         } else {
             Ok(None)
         }
-    }
-
-    #[allow(dead_code)]
-    fn get_description(control: &Control) -> Option<String> {
-        if let (Some(value), Some(descriptions)) = (control.value, &control.item().descriptions) {
-            let value = value as i32;
-            if value >= 0 && value < (descriptions.len() as i32) {
-                return descriptions.get(&value).cloned();
-            }
-        }
-        return None;
     }
 
     pub fn set_user_name(&self, name: String) {

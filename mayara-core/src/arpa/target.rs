@@ -16,10 +16,6 @@ pub const MAX_LOST_COUNT: i32 = 12;
 /// Maximum detection speed in knots (for search radius calculation)
 pub const MAX_DETECTION_SPEED_KN: f64 = 40.0;
 
-/// Knots to m/s conversion (for external use)
-#[allow(dead_code)]
-pub const KN_TO_MS: f64 = 1852.0 / 3600.0;
-
 /// Target tracking status
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

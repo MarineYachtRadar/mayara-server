@@ -12,7 +12,7 @@ use crate::network::create_udp_multicast_listen;
 use crate::radar::range::Ranges;
 use crate::radar::trail::TrailBuffer;
 use crate::radar::{Legend, RadarError, RadarInfo, SharedRadars, Statistics, BYTE_LOOKUP_LENGTH};
-use crate::settings::{ControlUpdate, ControlValue, DataUpdate};
+use crate::settings::{ControlUpdate, ControlValue};
 use crate::tokio_io::TokioIoProvider;
 use crate::Session;
 
@@ -73,11 +73,7 @@ pub(crate) struct RaymarineReportReceiver {
     controller: Option<RaymarineController>,
     /// I/O provider for the controller
     io: TokioIoProvider,
-    #[allow(dead_code)]
-    data_update_tx: broadcast::Sender<DataUpdate>,
     control_update_rx: broadcast::Receiver<ControlUpdate>,
-    #[allow(dead_code)]
-    info_request_timeout: Instant,
     report_request_timeout: Instant,
     reported_unknown: HashMap<u32, bool>,
 
@@ -111,12 +107,10 @@ impl RaymarineReportReceiver {
         let io = TokioIoProvider::new();
 
         let control_update_rx = info.controls.control_update_subscribe();
-        let data_update_tx = info.controls.get_data_update_tx();
 
         let pixel_to_blob = pixel_to_blob(&info.legend);
         let trails = TrailBuffer::new(session.clone(), &info);
 
-        let now = Instant::now();
         RaymarineReportReceiver {
             replay,
             key,
@@ -128,9 +122,7 @@ impl RaymarineReportReceiver {
             base_model: None,
             controller,
             io,
-            info_request_timeout: now,
-            report_request_timeout: now,
-            data_update_tx,
+            report_request_timeout: Instant::now(),
             control_update_rx,
             reported_unknown: HashMap::new(),
             statistics: Statistics::new(),
