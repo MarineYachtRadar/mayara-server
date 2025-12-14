@@ -19,6 +19,7 @@ use crate::settings::{AutomaticValue, Control, HAS_AUTO_NOT_ADJUSTABLE};
 /// Build a server Control from a mayara-core ControlDefinition.
 /// The control ID is taken from the core definition.
 /// The core definition is attached to the Control for enum value lookups.
+#[inline(never)]
 pub fn build_control(core_def: &CoreControlDefinition) -> Control {
     let core_arc = Arc::new(core_def.clone());
     let control = match core_def.control_type {
@@ -32,6 +33,7 @@ pub fn build_control(core_def: &CoreControlDefinition) -> Control {
 }
 
 /// Build a numeric control from core definition
+#[inline(never)]
 fn build_numeric_control(def: &CoreControlDefinition) -> Control {
     let range = def.range.as_ref();
     let min = range.map(|r| r.min as f32).unwrap_or(0.0);
@@ -60,6 +62,7 @@ fn build_numeric_control(def: &CoreControlDefinition) -> Control {
 }
 
 /// Build an enum/list control from core definition
+#[inline(never)]
 fn build_enum_control(def: &CoreControlDefinition) -> Control {
     let labels: Vec<&str> = def
         .values
@@ -83,6 +86,7 @@ fn build_enum_control(def: &CoreControlDefinition) -> Control {
 }
 
 /// Build a boolean control from core definition (as 2-value list)
+#[inline(never)]
 fn build_boolean_control(def: &CoreControlDefinition) -> Control {
     let mut control = Control::new_list(&def.id, &["Off", "On"]);
 
@@ -100,6 +104,7 @@ fn build_boolean_control(def: &CoreControlDefinition) -> Control {
 }
 
 /// Build a compound control (auto/manual with value) from core definition
+#[inline(never)]
 fn build_compound_control(def: &CoreControlDefinition) -> Control {
     // For compound controls like gain/sea/rain, extract the value property's range
     let (min, max) = if let Some(props) = &def.properties {
@@ -165,6 +170,7 @@ fn build_compound_control(def: &CoreControlDefinition) -> Control {
 }
 
 /// Build a string control from core definition
+#[inline(never)]
 fn build_string_control(def: &CoreControlDefinition) -> Control {
     let control = Control::new_string(&def.id);
     if def.read_only {

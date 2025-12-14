@@ -18,6 +18,7 @@ use super::{
 ///
 /// The `supported_features` parameter declares which optional API features
 /// the provider implements (e.g., ARPA, guard zones, trails).
+#[inline(never)]
 pub fn build_capabilities(
     discovery: &RadarDiscovery,
     radar_id: &str,
@@ -62,6 +63,7 @@ pub fn build_capabilities(
 ///
 /// The `supported_features` parameter declares which optional API features
 /// the provider implements (e.g., ARPA, guard zones, trails).
+#[inline(never)]
 pub fn build_capabilities_from_model(
     model_info: &ModelInfo,
     radar_id: &str,
@@ -97,6 +99,7 @@ pub fn build_capabilities_from_model(
 ///
 /// Useful when you don't have a RadarDiscovery but know the model and have
 /// runtime information about spoke characteristics.
+#[inline(never)]
 pub fn build_capabilities_from_model_with_spokes(
     model_info: &ModelInfo,
     radar_id: &str,
@@ -131,18 +134,24 @@ pub fn build_capabilities_from_model_with_spokes(
 }
 
 /// Build the list of controls for a radar model
+///
+/// NOTE: Controls are pushed one by one to avoid creating large stack frames.
+/// The vec![] macro would create all ControlDefinition structs (~328 bytes each)
+/// on the stack simultaneously before moving them to the heap.
+#[inline(never)]
 fn build_controls(model: &ModelInfo, has_serial_number: bool) -> Vec<ControlDefinition> {
-    let mut controls = vec![
-        // Base controls (all radars)
-        control_power(),
-        control_range(model.range_table),
-        control_gain(),
-        control_sea(),
-        control_rain(),
-        // Info controls (read-only)
-        control_firmware_version(),
-        control_operating_hours(),
-    ];
+    let mut controls = Vec::with_capacity(20);
+
+    // Base controls (all radars) - push individually to avoid stack allocation
+    controls.push(control_power());
+    controls.push(control_range(model.range_table));
+    controls.push(control_gain());
+    controls.push(control_sea());
+    controls.push(control_rain());
+
+    // Info controls (read-only)
+    controls.push(control_firmware_version());
+    controls.push(control_operating_hours());
 
     // Only include serial number control if we have the data
     if has_serial_number {
@@ -177,6 +186,7 @@ fn build_controls(model: &ModelInfo, has_serial_number: bool) -> Vec<ControlDefi
 }
 
 /// Build constraints for a radar model
+#[inline(never)]
 fn build_constraints(model: &ModelInfo) -> Vec<ControlConstraint> {
     let mut constraints = vec![];
 

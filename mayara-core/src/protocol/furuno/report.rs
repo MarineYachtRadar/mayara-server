@@ -322,6 +322,7 @@ pub fn firmware_to_model(firmware_code: &str) -> Model {
 ///     _ => panic!("Expected Status report"),
 /// }
 /// ```
+#[inline(never)]
 pub fn parse_report(line: &str) -> Result<FurunoReport, ParseError> {
     // Find the start of the report ($ character)
     let line = match line.find('$') {

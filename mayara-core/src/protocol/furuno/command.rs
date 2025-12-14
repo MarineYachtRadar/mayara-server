@@ -461,6 +461,7 @@ pub fn format_antenna_height_command(meters: i32) -> String {
 ///
 /// # Returns
 /// Tuple of (CommandMode, command_id, Vec<args>) if valid
+#[inline(never)]
 pub fn parse_response(line: &str) -> Option<(CommandMode, u8, Vec<i32>)> {
     let line = line.trim();
     if !line.starts_with('$') || line.len() < 3 {
@@ -500,6 +501,7 @@ pub fn parse_response(line: &str) -> Option<(CommandMode, u8, Vec<i32>)> {
 ///
 /// # Returns
 /// true if transmitting, false if standby, None if invalid
+#[inline(never)]
 pub fn parse_status_response(line: &str) -> Option<bool> {
     let (mode, cmd_id, args) = parse_response(line)?;
     if mode != CommandMode::New || cmd_id != CommandId::Status.as_hex() {
@@ -523,6 +525,7 @@ pub struct ControlValue {
 ///
 /// # Returns
 /// ControlValue with auto mode and value
+#[inline(never)]
 pub fn parse_gain_response(line: &str) -> Option<ControlValue> {
     let (mode, cmd_id, args) = parse_response(line)?;
     if mode != CommandMode::New || cmd_id != CommandId::Gain.as_hex() {
@@ -546,6 +549,7 @@ pub fn parse_gain_response(line: &str) -> Option<ControlValue> {
 ///
 /// # Returns
 /// ControlValue with auto mode and value
+#[inline(never)]
 pub fn parse_sea_response(line: &str) -> Option<ControlValue> {
     let (mode, cmd_id, args) = parse_response(line)?;
     if mode != CommandMode::New || cmd_id != CommandId::Sea.as_hex() {
@@ -569,6 +573,7 @@ pub fn parse_sea_response(line: &str) -> Option<ControlValue> {
 ///
 /// # Returns
 /// ControlValue with auto mode and value
+#[inline(never)]
 pub fn parse_rain_response(line: &str) -> Option<ControlValue> {
     let (mode, cmd_id, args) = parse_response(line)?;
     if mode != CommandMode::New || cmd_id != CommandId::Rain.as_hex() {
@@ -591,6 +596,7 @@ pub fn parse_rain_response(line: &str) -> Option<ControlValue> {
 ///
 /// # Returns
 /// Range index (use range_index_to_meters to convert)
+#[inline(never)]
 pub fn parse_range_response(line: &str) -> Option<i32> {
     let (mode, cmd_id, args) = parse_response(line)?;
     if mode != CommandMode::New || cmd_id != CommandId::Range.as_hex() {
@@ -691,6 +697,7 @@ pub struct SignalProcessingState {
 ///
 /// # Returns
 /// Tuple of (feature, value) if this is a $N67 response
+#[inline(never)]
 pub fn parse_signal_processing_response(line: &str) -> Option<(i32, i32)> {
     let (mode, cmd_id, args) = parse_response(line)?;
     if mode != CommandMode::New || cmd_id != CommandId::SignalProcessing.as_hex() {
@@ -728,6 +735,7 @@ pub fn format_request_rezboost() -> String {
 ///
 /// # Returns
 /// level value (0-3)
+#[inline(never)]
 pub fn parse_rezboost_response(line: &str) -> Option<i32> {
     let (mode, cmd_id, args) = parse_response(line)?;
     if mode != CommandMode::New || cmd_id != CommandId::RezBoost.as_hex() {
@@ -753,6 +761,7 @@ pub fn format_request_bird_mode() -> String {
 ///
 /// # Returns
 /// level value (0-3)
+#[inline(never)]
 pub fn parse_bird_mode_response(line: &str) -> Option<i32> {
     let (mode, cmd_id, args) = parse_response(line)?;
     if mode != CommandMode::New || cmd_id != CommandId::BirdMode.as_hex() {
@@ -788,6 +797,7 @@ pub struct TargetAnalyzerState {
 ///
 /// # Returns
 /// TargetAnalyzerState with enabled and mode
+#[inline(never)]
 pub fn parse_target_analyzer_response(line: &str) -> Option<TargetAnalyzerState> {
     let (mode, cmd_id, args) = parse_response(line)?;
     if mode != CommandMode::New || cmd_id != CommandId::TargetAnalyzer.as_hex() {
@@ -820,6 +830,7 @@ pub fn format_request_scan_speed() -> String {
 ///
 /// # Returns
 /// mode value (0 or 2)
+#[inline(never)]
 pub fn parse_scan_speed_response(line: &str) -> Option<i32> {
     let (mode, cmd_id, args) = parse_response(line)?;
     if mode != CommandMode::New || cmd_id != CommandId::ScanSpeed.as_hex() {
@@ -845,6 +856,7 @@ pub fn format_request_main_bang() -> String {
 ///
 /// # Returns
 /// Percentage value (0-100)
+#[inline(never)]
 pub fn parse_main_bang_response(line: &str) -> Option<i32> {
     let (mode, cmd_id, args) = parse_response(line)?;
     if mode != CommandMode::New || cmd_id != CommandId::MainBangSize.as_hex() {
@@ -871,6 +883,7 @@ pub fn format_request_tx_channel() -> String {
 ///
 /// # Returns
 /// channel value (0-3)
+#[inline(never)]
 pub fn parse_tx_channel_response(line: &str) -> Option<i32> {
     let (mode, cmd_id, args) = parse_response(line)?;
     if mode != CommandMode::New || cmd_id != CommandId::TxChannel.as_hex() {
@@ -935,6 +948,7 @@ impl BlindSectorState {
 ///
 /// # Returns
 /// BlindSectorState with all zone parameters
+#[inline(never)]
 pub fn parse_blind_sector_response(line: &str) -> Option<BlindSectorState> {
     let (mode, cmd_id, args) = parse_response(line)?;
     if mode != CommandMode::New || cmd_id != CommandId::BlindSector.as_hex() {

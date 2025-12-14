@@ -12,8 +12,19 @@ mod web;
 
 use mayara_server::{network, Cli, Session, VERSION};
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    // Build tokio runtime with larger stack size for worker threads
+    // to avoid stack overflow when building complex capability manifests
+    // 16MB is needed for debug builds with many control definitions
+    tokio::runtime::Builder::new_multi_thread()
+        .thread_stack_size(16 * 1024 * 1024) // 16MB stack
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async_main())
+}
+
+async fn async_main() -> Result<()> {
     let args = Cli::parse();
 
     let log_level = args.verbose.log_level_filter();

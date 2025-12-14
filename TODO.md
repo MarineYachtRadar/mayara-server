@@ -1,5 +1,6 @@
-### TODO.md
+# TODO.md
 
+### Kees
 Working:
 
 * Start, logging
@@ -26,30 +27,4 @@ TODO:
 
 ### dirkwa
 
-files the same? WASM/Standalone?
-- locator rs
-- Build rs
-- command rs?
-
-Does the model database have the functions?
-PARTIALLY - The ModelInfo struct in mayara-core has:
-✅ Range tables, spokes, characteristics
-✅ Feature flags (has_doppler, has_dual_range)
-✅ Control IDs list (controls: &'static [&'static str])
-❌ NO actual control command implementations - those are in mayara-lib only
-3. Same registration to SignalK?
-NO - They are different:
-mayara-lib + mayara-server: Uses its own REST API (/v1/api/radars), not SignalK
-mayara-signalk-wasm: Registers via sk_register_radar_provider FFI, uses SignalK's radar API
-They don't share registration code - they're two different architectures.
-
-- raymarin, halo, etc just stubs by now in core. 
-- rest api same as SignalK? for standalone?
-
-
-- build warnings?
-- Add WebGPU view for standalone
-- Update all docs
-- Update Readme
--- Link Wasm readme
-
+- FULL REFACTOR IN PROGRESS

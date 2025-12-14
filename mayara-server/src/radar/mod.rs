@@ -72,10 +72,12 @@ pub enum RadarError {
     OSError(String),
 }
 
-// Tell axum how to convert `AppError` into a response.
+// Tell axum how to convert `RadarError` into a response.
 impl IntoResponse for RadarError {
     fn into_response(self) -> Response {
-        (StatusCode::INTERNAL_SERVER_ERROR, self).into_response()
+        // Convert error to string to avoid infinite recursion
+        // (the tuple impl calls into_response on self, which would recurse)
+        (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()).into_response()
     }
 }
 

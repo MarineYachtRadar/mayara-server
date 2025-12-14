@@ -290,6 +290,7 @@ impl FurunoReportReceiver {
     }
 
     /// Process a TCP report line using mayara-core parsing
+    #[inline(never)]
     fn process_report(&mut self, line: &str) -> Result<(), Error> {
         // First try dispatch parsing for extended controls (beamSharpening, birdMode, etc.)
         // These are $NEE, $NED, $NEF, $N67 format responses
@@ -315,6 +316,7 @@ impl FurunoReportReceiver {
     }
 
     /// Apply a parsed FurunoReport to server state
+    #[inline(never)]
     fn apply_report(&mut self, report: FurunoReport) -> Result<(), Error> {
         match report {
             FurunoReport::Status(s) => {
@@ -421,6 +423,7 @@ impl FurunoReportReceiver {
     }
 
     /// Apply a control update from dispatch parsing (for extended controls)
+    #[inline(never)]
     fn apply_control_update(&mut self, update: CoreControlUpdate) {
         match update {
             CoreControlUpdate::Power(transmitting) => {

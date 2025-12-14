@@ -70,6 +70,7 @@ pub fn new(session: Session) -> SharedControls {
     SharedControls::new(session, controls)
 }
 
+#[inline(never)]
 pub fn update_when_model_known(info: &mut RadarInfo, model: RadarModel, version: &str) {
     let model_name = model.to_str();
     log::debug!("update_when_model_known: {}", model_name);

@@ -83,6 +83,7 @@ pub fn control_range(supported_ranges: &[u32]) -> ControlDefinition {
 }
 
 /// Gain control: signal amplification with auto/manual mode
+#[inline(never)]
 pub fn control_gain() -> ControlDefinition {
     let mut properties = HashMap::new();
 
@@ -140,6 +141,7 @@ pub fn control_gain() -> ControlDefinition {
 }
 
 /// Sea clutter control: suppresses returns from waves
+#[inline(never)]
 pub fn control_sea() -> ControlDefinition {
     let mut properties = HashMap::new();
 
@@ -197,6 +199,7 @@ pub fn control_sea() -> ControlDefinition {
 }
 
 /// Rain clutter control: suppresses returns from precipitation
+#[inline(never)]
 pub fn control_rain() -> ControlDefinition {
     let mut properties = HashMap::new();
 
@@ -371,6 +374,7 @@ pub fn control_beam_sharpening() -> ControlDefinition {
 /// Furuno: Target Analyzer
 /// Navico: VelocityTrack
 /// Raymarine: Doppler
+#[inline(never)]
 pub fn control_doppler_mode() -> ControlDefinition {
     let mut properties = HashMap::new();
 
@@ -981,6 +985,7 @@ pub fn control_sea_state() -> ControlDefinition {
 /// Sidelobe suppression: reduces sidelobe artifacts
 ///
 /// Navico: Sidelobe Suppression (0x06 C1 subtype 0x05)
+#[inline(never)]
 pub fn control_sidelobe_suppression() -> ControlDefinition {
     let mut properties = HashMap::new();
 
@@ -1115,6 +1120,7 @@ pub fn control_crosstalk_rejection() -> ControlDefinition {
 ///
 /// Raymarine: FTC
 /// Garmin HD: FTC (0x02B8)
+#[inline(never)]
 pub fn control_ftc() -> ControlDefinition {
     let mut properties = HashMap::new();
 
@@ -1163,6 +1169,7 @@ pub fn control_ftc() -> ControlDefinition {
 /// Tune: receiver tuning control
 ///
 /// Raymarine: Tune (auto/manual)
+#[inline(never)]
 pub fn control_tune() -> ControlDefinition {
     let mut properties = HashMap::new();
 
@@ -1222,6 +1229,7 @@ pub fn control_tune() -> ControlDefinition {
 /// Color gain: adjusts color intensity
 ///
 /// Raymarine Quantum: Color Gain
+#[inline(never)]
 pub fn control_color_gain() -> ControlDefinition {
     let mut properties = HashMap::new();
 
@@ -1394,6 +1402,7 @@ pub fn control_local_interference_rejection() -> ControlDefinition {
 // =============================================================================
 
 /// Get an extended control definition by its semantic ID
+#[inline(never)]
 pub fn get_extended_control(id: &str) -> Option<ControlDefinition> {
     match id {
         // Signal processing
@@ -1435,6 +1444,7 @@ pub fn get_extended_control(id: &str) -> Option<ControlDefinition> {
 }
 
 /// Get extended control with customization for no-transmit zones
+#[inline(never)]
 pub fn get_extended_control_with_zones(id: &str, zone_count: u8) -> Option<ControlDefinition> {
     if id == "noTransmitZones" {
         Some(control_no_transmit_zones(zone_count))
@@ -1451,6 +1461,7 @@ pub fn get_extended_control_with_zones(id: &str, zone_count: u8) -> Option<Contr
 // based on brand-specific wire encoding requirements.
 
 /// Gain control with brand-specific wire hints
+#[inline(never)]
 pub fn control_gain_for_brand(brand: Brand) -> ControlDefinition {
     let mut def = control_gain();
     def.wire_hints = Some(match brand {
@@ -1469,6 +1480,7 @@ pub fn control_gain_for_brand(brand: Brand) -> ControlDefinition {
 }
 
 /// Sea clutter control with brand-specific wire hints
+#[inline(never)]
 pub fn control_sea_for_brand(brand: Brand) -> ControlDefinition {
     let mut def = control_sea();
     def.wire_hints = Some(match brand {
@@ -1482,6 +1494,7 @@ pub fn control_sea_for_brand(brand: Brand) -> ControlDefinition {
 }
 
 /// Rain clutter control with brand-specific wire hints
+#[inline(never)]
 pub fn control_rain_for_brand(brand: Brand) -> ControlDefinition {
     let mut def = control_rain();
     def.wire_hints = Some(match brand {
@@ -1614,6 +1627,7 @@ pub fn control_doppler_speed_for_brand(brand: Brand) -> ControlDefinition {
 }
 
 /// Get base control with brand-specific wire hints
+#[inline(never)]
 pub fn get_base_control_for_brand(id: &str, brand: Brand) -> Option<ControlDefinition> {
     match id {
         "power" => Some(control_power()),
@@ -1628,6 +1642,7 @@ pub fn get_base_control_for_brand(id: &str, brand: Brand) -> Option<ControlDefin
 }
 
 /// Get extended control with brand-specific wire hints
+#[inline(never)]
 pub fn get_extended_control_for_brand(id: &str, brand: Brand) -> Option<ControlDefinition> {
     match id {
         // Controls with brand-specific wire hints
@@ -1644,6 +1659,7 @@ pub fn get_extended_control_for_brand(id: &str, brand: Brand) -> Option<ControlD
 }
 
 /// Get any control (base or extended) with brand-specific wire hints
+#[inline(never)]
 pub fn get_control_for_brand(id: &str, brand: Brand) -> Option<ControlDefinition> {
     get_base_control_for_brand(id, brand).or_else(|| get_extended_control_for_brand(id, brand))
 }

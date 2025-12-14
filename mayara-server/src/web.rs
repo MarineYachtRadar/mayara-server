@@ -336,39 +336,63 @@ async fn get_radar_capabilities(
 ) -> Response {
     debug!("Capabilities request for radar {}", params.radar_id);
 
-    let session = state.session.read().unwrap();
-    let radars = session.radars.as_ref().unwrap();
+    // Extract data from session inside a block to drop the lock before await
+    let build_args = {
+        let session = state.session.read().unwrap();
+        let radars = session.radars.as_ref().unwrap();
 
-    match radars.get_by_id(&params.radar_id) {
-        Some(info) => {
-            let core_brand = to_core_brand(info.brand);
-            let model_name = info.controls.model_name();
+        match radars.get_by_id(&params.radar_id) {
+            Some(info) => {
+                let core_brand = to_core_brand(info.brand);
+                let model_name = info.controls.model_name();
 
-            // Look up model in mayara-core database
-            let model_info = model_name
-                .as_deref()
-                .and_then(|m| models::get_model(core_brand, m))
-                .unwrap_or(&models::UNKNOWN_MODEL);
+                // Look up model in mayara-core database
+                let model_info = model_name
+                    .as_deref()
+                    .and_then(|m| models::get_model(core_brand, m))
+                    .unwrap_or(&models::UNKNOWN_MODEL);
 
-            // Declare supported features for standalone server
-            let mut supported_features = vec![
-                SupportedFeature::Arpa,
-                SupportedFeature::GuardZones,
-                SupportedFeature::Trails,
-            ];
+                // Declare supported features for standalone server
+                let mut supported_features = vec![
+                    SupportedFeature::Arpa,
+                    SupportedFeature::GuardZones,
+                    SupportedFeature::Trails,
+                ];
 
-            // Add DualRange if the radar supports it
-            if model_info.has_dual_range {
-                supported_features.push(SupportedFeature::DualRange);
+                // Add DualRange if the radar supports it
+                if model_info.has_dual_range {
+                    supported_features.push(SupportedFeature::DualRange);
+                }
+
+                Some((
+                    model_info.clone(),
+                    params.radar_id.clone(),
+                    supported_features,
+                    info.spokes_per_revolution,
+                    info.max_spoke_len,
+                ))
             }
+            None => None,
+        }
+    }; // session lock released here
 
-            let capabilities = build_capabilities_from_model_with_spokes(
-                model_info,
-                &params.radar_id,
-                supported_features,
-                info.spokes_per_revolution,
-                info.max_spoke_len,
-            );
+    match build_args {
+        Some((model_info, radar_id, supported_features, spokes_per_revolution, max_spoke_len)) => {
+            // Use spawn_blocking to run capability building on a thread with larger stack
+            // This avoids stack overflow in debug builds where ControlDefinition structs
+            // (328 bytes each) can overflow the default 2MB async task stack
+            let capabilities = tokio::task::spawn_blocking(move || {
+                build_capabilities_from_model_with_spokes(
+                    &model_info,
+                    &radar_id,
+                    supported_features,
+                    spokes_per_revolution,
+                    max_spoke_len,
+                )
+            })
+            .await
+            .expect("spawn_blocking task failed");
+
             Json(capabilities).into_response()
         }
         None => RadarError::NoSuchRadar(params.radar_id.to_string()).into_response(),
