@@ -15,7 +15,12 @@ use crate::Brand;
 // Base Controls (Required - All Radars)
 // =============================================================================
 
-/// Power control: off, standby, transmit
+/// Power control: off, standby, transmit, warming
+///
+/// All states are readable, but settable states vary by brand:
+/// - Furuno: Only standby (1) and transmit (2) are settable
+/// - Navico/Raymarine/Garmin: standby and transmit are settable
+/// - off (0) and warming (3) are read-only states reported by radar
 pub fn control_power() -> ControlDefinition {
     ControlDefinition {
         id: "power".into(),
@@ -53,6 +58,28 @@ pub fn control_power() -> ControlDefinition {
         default: Some("standby".into()),
         wire_hints: None,
     }
+}
+
+/// Power control with brand-specific settable values
+///
+/// Returns a ControlDefinition with wire_hints indicating which values are settable.
+/// All brands can only set standby and transmit; off and warming are read-only.
+pub fn control_power_for_brand(brand: Brand) -> ControlDefinition {
+    let mut def = control_power();
+    def.wire_hints = Some(match brand {
+        // All brands: only standby (index 1) and transmit (index 2) are settable
+        // off (0) and warming (3) are read-only states reported by radar
+        Brand::Furuno => WireProtocolHint {
+            settable_indices: Some(vec![1, 2]), // standby, transmit
+            send_always: true, // Furuno needs power commands sent always
+            ..Default::default()
+        },
+        Brand::Navico | Brand::Raymarine | Brand::Garmin => WireProtocolHint {
+            settable_indices: Some(vec![1, 2]), // standby, transmit
+            ..Default::default()
+        },
+    });
+    def
 }
 
 /// Range control: detection range in meters
@@ -320,6 +347,127 @@ pub fn control_operating_hours() -> ControlDefinition {
         default: None,
         wire_hints: None,
     }
+}
+
+/// Rotation speed: current antenna rotation speed (read-only)
+pub fn control_rotation_speed() -> ControlDefinition {
+    ControlDefinition {
+        id: "rotationSpeed".into(),
+        name: "Rotation Speed".into(),
+        description: "Current antenna rotation speed in RPM.".into(),
+        category: ControlCategory::Base,
+        control_type: ControlType::Number,
+        range: Some(RangeSpec {
+            min: 0.0,
+            max: 99.0,
+            step: Some(0.1),
+            unit: Some("RPM".into()),
+        }),
+        values: None,
+        properties: None,
+        modes: None,
+        default_mode: None,
+        read_only: true,
+        default: None,
+        wire_hints: None,
+    }
+}
+
+/// Rotation speed with brand-specific wire encoding
+pub fn control_rotation_speed_for_brand(brand: Brand) -> ControlDefinition {
+    let mut def = control_rotation_speed();
+    def.wire_hints = Some(match brand {
+        // All brands with rotation speed use the same 0.1 RPM precision wire encoding
+        Brand::Furuno | Brand::Navico | Brand::Raymarine => WireProtocolHint {
+            scale_factor: Some(990.0), // 99.0 RPM * 10 = 990 (0.1 RPM precision)
+            step: Some(0.1),
+            ..Default::default()
+        },
+        Brand::Garmin => WireProtocolHint {
+            ..Default::default()
+        },
+    });
+    def
+}
+
+/// No-transmit zone start angle: start bearing of a no-transmit sector
+///
+/// Used by server for flat control model. The compound noTransmitZones control
+/// is used in the v5 API but server internally tracks start/end separately.
+pub fn control_no_transmit_start(zone_number: u8) -> ControlDefinition {
+    ControlDefinition {
+        id: format!("noTransmitStart{}", zone_number),
+        name: format!("No-Transmit Zone {} Start", zone_number),
+        description: format!("Start angle of no-transmit zone {} in degrees.", zone_number),
+        category: ControlCategory::Installation,
+        control_type: ControlType::Number,
+        range: Some(RangeSpec {
+            min: -180.0,
+            max: 180.0,
+            step: Some(0.1),
+            unit: Some("degrees".into()),
+        }),
+        values: None,
+        properties: None,
+        modes: None,
+        default_mode: None,
+        read_only: false,
+        default: None,
+        wire_hints: None,
+    }
+}
+
+/// No-transmit zone end angle: end bearing of a no-transmit sector
+pub fn control_no_transmit_end(zone_number: u8) -> ControlDefinition {
+    ControlDefinition {
+        id: format!("noTransmitEnd{}", zone_number),
+        name: format!("No-Transmit Zone {} End", zone_number),
+        description: format!("End angle of no-transmit zone {} in degrees.", zone_number),
+        category: ControlCategory::Installation,
+        control_type: ControlType::Number,
+        range: Some(RangeSpec {
+            min: -180.0,
+            max: 180.0,
+            step: Some(0.1),
+            unit: Some("degrees".into()),
+        }),
+        values: None,
+        properties: None,
+        modes: None,
+        default_mode: None,
+        read_only: false,
+        default: None,
+        wire_hints: None,
+    }
+}
+
+/// No-transmit zone angle control with brand-specific wire encoding
+pub fn control_no_transmit_angle_for_brand(id: &str, zone_number: u8, is_start: bool, brand: Brand) -> ControlDefinition {
+    let mut def = if is_start {
+        control_no_transmit_start(zone_number)
+    } else {
+        control_no_transmit_end(zone_number)
+    };
+    // Override ID to match what was passed
+    def.id = id.to_string();
+
+    def.wire_hints = Some(match brand {
+        Brand::Furuno => WireProtocolHint {
+            offset: Some(-1.0), // Values > max map to negative
+            ..Default::default()
+        },
+        Brand::Navico => WireProtocolHint {
+            scale_factor: Some(1800.0), // 0.1 degree precision: 180.0 * 10 = 1800
+            offset: Some(-1.0),
+            step: Some(0.1),
+            has_enabled: true,
+            ..Default::default()
+        },
+        Brand::Raymarine | Brand::Garmin => WireProtocolHint {
+            ..Default::default()
+        },
+    });
+    def
 }
 
 // =============================================================================
@@ -1630,13 +1778,14 @@ pub fn control_doppler_speed_for_brand(brand: Brand) -> ControlDefinition {
 #[inline(never)]
 pub fn get_base_control_for_brand(id: &str, brand: Brand) -> Option<ControlDefinition> {
     match id {
-        "power" => Some(control_power()),
+        "power" => Some(control_power_for_brand(brand)),
         "gain" => Some(control_gain_for_brand(brand)),
         "sea" => Some(control_sea_for_brand(brand)),
         "rain" => Some(control_rain_for_brand(brand)),
         "serialNumber" => Some(control_serial_number()),
         "firmwareVersion" => Some(control_firmware_version()),
         "operatingHours" => Some(control_operating_hours()),
+        "rotationSpeed" => Some(control_rotation_speed_for_brand(brand)),
         _ => None,
     }
 }
@@ -1653,6 +1802,15 @@ pub fn get_extended_control_for_brand(id: &str, brand: Brand) -> Option<ControlD
         "colorGain" => Some(control_color_gain_for_brand(brand)),
         "ftc" => Some(control_ftc_for_brand(brand)),
         "dopplerSpeed" => Some(control_doppler_speed_for_brand(brand)),
+        // No-transmit zone angle controls
+        "noTransmitStart1" => Some(control_no_transmit_angle_for_brand(id, 1, true, brand)),
+        "noTransmitEnd1" => Some(control_no_transmit_angle_for_brand(id, 1, false, brand)),
+        "noTransmitStart2" => Some(control_no_transmit_angle_for_brand(id, 2, true, brand)),
+        "noTransmitEnd2" => Some(control_no_transmit_angle_for_brand(id, 2, false, brand)),
+        "noTransmitStart3" => Some(control_no_transmit_angle_for_brand(id, 3, true, brand)),
+        "noTransmitEnd3" => Some(control_no_transmit_angle_for_brand(id, 3, false, brand)),
+        "noTransmitStart4" => Some(control_no_transmit_angle_for_brand(id, 4, true, brand)),
+        "noTransmitEnd4" => Some(control_no_transmit_angle_for_brand(id, 4, false, brand)),
         // Controls without brand-specific hints (use generic)
         _ => get_extended_control(id),
     }

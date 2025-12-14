@@ -23,17 +23,27 @@ use crate::io::{IoProvider, UdpSocketHandle};
 use crate::protocol::navico;
 
 /// Navico radar model
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum NavicoModel {
+    /// Unknown model - will be detected from Report 03
+    /// Behaves like Gen4 for command compatibility
+    #[default]
+    Unknown,
     BR24,
     Gen3,
     Gen4,
     Halo,
 }
 
-impl Default for NavicoModel {
-    fn default() -> Self {
-        NavicoModel::Gen4
+impl NavicoModel {
+    /// Check if this is a HALO model (has Doppler, accent light, etc.)
+    pub fn is_halo(&self) -> bool {
+        matches!(self, NavicoModel::Halo)
+    }
+
+    /// Check if model is known (not Unknown)
+    pub fn is_known(&self) -> bool {
+        !matches!(self, NavicoModel::Unknown)
     }
 }
 
@@ -288,7 +298,7 @@ impl NavicoController {
     /// Set sea clutter (0-255 scale)
     pub fn set_sea<I: IoProvider>(&mut self, io: &mut I, value: u8, auto: bool) {
         // Different command for HALO vs older models
-        if self.model == NavicoModel::Halo {
+        if self.model.is_halo() {
             let auto_val: u32 = if auto { 1 } else { 0 };
             let mut cmd = vec![0x11, 0xC1];
             cmd.extend_from_slice(&auto_val.to_le_bytes());
@@ -320,7 +330,7 @@ impl NavicoController {
 
     /// Set target expansion (0-2)
     pub fn set_target_expansion<I: IoProvider>(&mut self, io: &mut I, level: u8) {
-        let cmd_id = if self.model == NavicoModel::Halo { 0x12 } else { 0x09 };
+        let cmd_id = if self.model.is_halo() { 0x12 } else { 0x09 };
         let cmd = [cmd_id, 0xC1, level];
         self.send_command(io, &cmd);
         io.debug(&format!("[{}] Set target expansion: {}", self.radar_id, level));
@@ -359,7 +369,7 @@ impl NavicoController {
 
     /// Set doppler mode (HALO only, 0=off, 1=normal, 2=approaching)
     pub fn set_doppler_mode<I: IoProvider>(&mut self, io: &mut I, mode: u8) {
-        if self.model == NavicoModel::Halo {
+        if self.model.is_halo() {
             let cmd = [0x23, 0xC1, mode];
             self.send_command(io, &cmd);
             io.debug(&format!("[{}] Set doppler mode: {}", self.radar_id, mode));
@@ -368,7 +378,7 @@ impl NavicoController {
 
     /// Set doppler speed threshold (HALO only)
     pub fn set_doppler_speed<I: IoProvider>(&mut self, io: &mut I, speed: u16) {
-        if self.model == NavicoModel::Halo {
+        if self.model.is_halo() {
             let mut cmd = vec![0x24, 0xC1];
             cmd.extend_from_slice(&speed.to_le_bytes());
             self.send_command(io, &cmd);
@@ -378,7 +388,7 @@ impl NavicoController {
 
     /// Set mode (HALO only, 0-3)
     pub fn set_mode<I: IoProvider>(&mut self, io: &mut I, mode: u8) {
-        if self.model == NavicoModel::Halo {
+        if self.model.is_halo() {
             let cmd = [0x10, 0xC1, mode];
             self.send_command(io, &cmd);
             io.debug(&format!("[{}] Set mode: {}", self.radar_id, mode));
@@ -423,7 +433,7 @@ impl NavicoController {
 
     /// Set accent light (HALO only, 0-3)
     pub fn set_accent_light<I: IoProvider>(&mut self, io: &mut I, level: u8) {
-        if self.model == NavicoModel::Halo {
+        if self.model.is_halo() {
             let cmd = [0x31, 0xC1, level];
             self.send_command(io, &cmd);
             io.debug(&format!("[{}] Set accent light: {}", self.radar_id, level));

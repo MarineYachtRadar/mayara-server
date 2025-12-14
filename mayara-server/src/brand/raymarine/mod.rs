@@ -9,13 +9,18 @@ use crate::{Brand, Session};
 mod report;
 mod settings;
 
-const RD_SPOKES_PER_REVOLUTION: usize = 2048;
+// Use constants from core (single source of truth)
+use mayara_core::protocol::raymarine::{
+    RD_SPOKES_PER_REVOLUTION as RD_SPOKES_U16,
+    RD_SPOKE_LEN as RD_SPOKE_LEN_U16,
+    QUANTUM_SPOKES_PER_REVOLUTION as QUANTUM_SPOKES_U16,
+    QUANTUM_SPOKE_LEN as QUANTUM_SPOKE_LEN_U16,
+};
 
-// Length of a spoke in pixels. Every pixel is 4 bits (one nibble.)
-const RD_SPOKE_LEN: usize = 1024;
-
-const QUANTUM_SPOKES_PER_REVOLUTION: usize = 250;
-const QUANTUM_SPOKE_LEN: usize = 252;
+const RD_SPOKES_PER_REVOLUTION: usize = RD_SPOKES_U16 as usize;
+const RD_SPOKE_LEN: usize = RD_SPOKE_LEN_U16 as usize;
+const QUANTUM_SPOKES_PER_REVOLUTION: usize = QUANTUM_SPOKES_U16 as usize;
+const QUANTUM_SPOKE_LEN: usize = QUANTUM_SPOKE_LEN_U16 as usize;
 
 const NON_HD_PIXEL_VALUES: u8 = 16; // Old radars have one nibble
 #[allow(dead_code)]
@@ -528,7 +533,7 @@ pub fn create_locator(session: Session) -> Box<dyn RadarLocator + Send> {
 // New unified discovery processing (used by CoreLocatorAdapter)
 // =============================================================================
 
-use mayara_core::radar::RadarDiscovery;
+use mayara_core::radar::{ParsedAddress, RadarDiscovery};
 
 /// Process a radar discovery from the core locator.
 ///
@@ -543,8 +548,11 @@ pub fn process_discovery(
     radars: &SharedRadars,
     subsys: &SubsystemHandle,
 ) -> Result<(), io::Error> {
-    // Parse address from discovery
-    let radar_addr = parse_radar_address(&discovery.address)?;
+    // Parse address from discovery using core's parser
+    let parsed = ParsedAddress::parse(&discovery.address)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+    let radar_ip = Ipv4Addr::from(parsed.ip);
+    let radar_addr = SocketAddrV4::new(radar_ip, if parsed.port > 0 { parsed.port } else { 5800 });
 
     // Determine model from discovery
     let model = if let Some(ref model_name) = discovery.model {
@@ -564,9 +572,9 @@ pub fn process_discovery(
     let pixel_values = if model.hd { HD_PIXEL_VALUES } else { NON_HD_PIXEL_VALUES };
 
     // For simplified discovery, use basic addresses
-    let report_addr: SocketAddrV4 = SocketAddrV4::new(*radar_addr.ip(), discovery.command_port);
-    let data_addr: SocketAddrV4 = SocketAddrV4::new(*radar_addr.ip(), discovery.data_port);
-    let send_addr: SocketAddrV4 = SocketAddrV4::new(*radar_addr.ip(), discovery.command_port);
+    let report_addr: SocketAddrV4 = SocketAddrV4::new(radar_ip, discovery.command_port);
+    let data_addr: SocketAddrV4 = SocketAddrV4::new(radar_ip, discovery.data_port);
+    let send_addr: SocketAddrV4 = SocketAddrV4::new(radar_ip, discovery.command_port);
 
     let info: RadarInfo = RadarInfo::new(
         session.clone(),
@@ -619,26 +627,6 @@ pub fn process_discovery(
         discovery.name
     );
     Ok(())
-}
-
-/// Parse address string "ip:port" into SocketAddrV4
-fn parse_radar_address(addr: &str) -> Result<SocketAddrV4, io::Error> {
-    if let Some(colon_pos) = addr.rfind(':') {
-        let ip_str = &addr[..colon_pos];
-        let port_str = &addr[colon_pos + 1..];
-        let ip: Ipv4Addr = ip_str.parse().map_err(|e| {
-            io::Error::new(io::ErrorKind::InvalidInput, format!("Invalid IP: {}", e))
-        })?;
-        let port: u16 = port_str.parse().map_err(|e| {
-            io::Error::new(io::ErrorKind::InvalidInput, format!("Invalid port: {}", e))
-        })?;
-        Ok(SocketAddrV4::new(ip, port))
-    } else {
-        let ip: Ipv4Addr = addr.parse().map_err(|e| {
-            io::Error::new(io::ErrorKind::InvalidInput, format!("Invalid IP: {}", e))
-        })?;
-        Ok(SocketAddrV4::new(ip, 5800)) // Default Raymarine beacon port
-    }
 }
 
 // =============================================================================

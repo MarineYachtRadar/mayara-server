@@ -59,10 +59,7 @@ pub fn new(session: Session, model: Option<&str>) -> SharedControls {
 
     controls.insert(
         "rotationSpeed".to_string(),
-        Control::new_numeric("rotationSpeed", 0., 99.)
-            .wire_scale_factor(990., true)
-            .read_only(true)
-            .unit("RPM"),
+        control_factory::rotation_speed_control_for_brand(Brand::Navico),
     );
 
     controls.insert(
@@ -129,22 +126,16 @@ pub fn update_when_model_known(controls: &SharedControls, model: Model, radar_in
             control_factory::accent_light_control(),
         );
 
-        for (_, start_id, end_id) in super::BLANKING_SETS {
+        // No-transmit zones use core definitions for consistent metadata
+        for (zone_idx, start_id, end_id) in super::BLANKING_SETS {
+            let zone_number = (zone_idx + 1) as u8;
             controls.insert(
                 start_id,
-                Control::new_numeric(start_id, -180., 180.)
-                    .unit("Deg")
-                    .wire_scale_factor(1800., true)
-                    .wire_offset(-1.)
-                    .has_enabled(),
+                control_factory::no_transmit_angle_control_for_brand(start_id, zone_number, true, Brand::Navico),
             );
             controls.insert(
                 end_id,
-                Control::new_numeric(end_id, -180., 180.)
-                    .unit("Deg")
-                    .wire_scale_factor(1800., true)
-                    .wire_offset(-1.)
-                    .has_enabled(),
+                control_factory::no_transmit_angle_control_for_brand(end_id, zone_number, false, Brand::Navico),
             );
         }
 
@@ -208,13 +199,13 @@ pub fn update_when_model_known(controls: &SharedControls, model: Model, radar_in
             },
         ),
     );
-    if model == Model::HALO || model == Model::Gen4 {
+    if model.has_dual_range() {
         controls.insert(
             "targetSeparation",
             control_factory::target_separation_control(),
         );
     }
-    if model == Model::HALO {
+    if model.has_doppler() {
         controls.insert(
             "dopplerMode",
             Control::new_list("dopplerMode", &["Off", "Normal", "Approaching"]),

@@ -198,6 +198,16 @@ fn apply_wire_hints(mut control: Control, hints: &WireProtocolHint) -> Control {
         control = control.has_enabled();
     }
 
+    // Apply settable indices (for enum controls with read-only values)
+    if let Some(ref indices) = hints.settable_indices {
+        control.set_valid_values(indices.clone());
+    }
+
+    // Apply send_always flag
+    if hints.send_always {
+        control = control.send_always();
+    }
+
     control
 }
 
@@ -265,6 +275,18 @@ pub fn doppler_speed_control_for_brand(brand: Brand) -> Control {
     build_control(&core_def)
 }
 
+/// Build rotation speed control for a specific brand
+pub fn rotation_speed_control_for_brand(brand: Brand) -> Control {
+    let core_def = controls::control_rotation_speed_for_brand(brand);
+    build_control(&core_def)
+}
+
+/// Build no-transmit zone angle control for a specific brand
+pub fn no_transmit_angle_control_for_brand(id: &str, zone_number: u8, is_start: bool, brand: Brand) -> Control {
+    let core_def = controls::control_no_transmit_angle_for_brand(id, zone_number, is_start, brand);
+    build_control(&core_def)
+}
+
 // =============================================================================
 // Generic control builders (no brand-specific wire hints)
 // =============================================================================
@@ -272,6 +294,12 @@ pub fn doppler_speed_control_for_brand(brand: Brand) -> Control {
 /// Build power control (off, standby, transmit, warming)
 pub fn power_control() -> Control {
     let core_def = controls::control_power();
+    build_control(&core_def)
+}
+
+/// Build power control with brand-specific settable values
+pub fn power_control_for_brand(brand: Brand) -> Control {
+    let core_def = controls::control_power_for_brand(brand);
     build_control(&core_def)
 }
 

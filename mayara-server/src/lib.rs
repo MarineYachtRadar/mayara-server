@@ -253,11 +253,15 @@ impl std::fmt::Display for Brand {
     }
 }
 
+// Note: InterfaceApi and related types are still used by web.rs for the /api/interface endpoint
+// The RadarInterfaceApi.ip field and some impl methods are unused since the legacy locator
+// was removed, but we keep them for the interface API endpoint functionality.
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct RadarInterfaceApi {
     #[serde(skip_serializing_if = "Option::is_none")]
     status: Option<String>,
+    #[allow(dead_code)] // deprecated_marked_for_delete: only used by legacy locator response
     #[serde(skip)]
     ip: Option<Ipv4Addr>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -268,6 +272,7 @@ struct RadarInterfaceApi {
 struct InterfaceId {
     name: String,
 }
+
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct InterfaceApi {
@@ -275,6 +280,8 @@ pub struct InterfaceApi {
     interfaces: HashMap<InterfaceId, RadarInterfaceApi>,
 }
 
+// deprecated_marked_for_delete: RadarInterfaceApi::new() and InterfaceId::new() are only used by legacy locator
+#[allow(dead_code)]
 impl RadarInterfaceApi {
     fn new(
         status: Option<String>,
@@ -289,6 +296,7 @@ impl RadarInterfaceApi {
     }
 }
 
+#[allow(dead_code)]
 impl InterfaceId {
     fn new(name: &str, address: Option<&IpAddr>) -> Self {
         Self {

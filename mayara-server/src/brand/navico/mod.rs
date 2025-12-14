@@ -1,5 +1,5 @@
 use std::net::{Ipv4Addr, SocketAddrV4};
-use std::{fmt, io};
+use std::io;
 use tokio_graceful_shutdown::{SubsystemBuilder, SubsystemHandle};
 
 use crate::locator::LocatorId;
@@ -11,16 +11,22 @@ mod info;
 mod report;
 mod settings;
 
-const NAVICO_SPOKES: usize = 2048;
+// Re-export core's Model type for compatibility
+pub use mayara_core::protocol::navico::Model;
 
-// Length of a spoke in pixels. Every pixel is 4 bits (one nibble.)
-const NAVICO_SPOKE_LEN: usize = 1024;
+// Use constants from core (single source of truth)
+use mayara_core::protocol::navico::{
+    SPOKES_PER_REVOLUTION as NAVICO_SPOKES_U16,
+    MAX_SPOKE_LEN as NAVICO_SPOKE_LEN_U16,
+    SPOKES_PER_FRAME,
+};
+
+const NAVICO_SPOKES: usize = NAVICO_SPOKES_U16 as usize;
+const NAVICO_SPOKE_LEN: usize = NAVICO_SPOKE_LEN_U16 as usize;
 
 // Spoke numbers go from [0..4096>, but only half of them are used.
 // The actual image is 2048 x 1024 x 4 bits
 const NAVICO_BITS_PER_PIXEL: usize = BITS_PER_NIBBLE;
-
-const SPOKES_PER_FRAME: usize = 32;
 const BITS_PER_BYTE: usize = 8;
 const BITS_PER_NIBBLE: usize = 4;
 const NAVICO_PIXELS_PER_BYTE: usize = BITS_PER_BYTE / NAVICO_BITS_PER_PIXEL;
@@ -58,42 +64,6 @@ Not definitive list for
 // deprecated_marked_for_delete: BR24 beacon comes from a different multicast address
 // const NAVICO_BR24_BEACON_ADDRESS: SocketAddr =
 //     SocketAddr::new(IpAddr::V4(Ipv4Addr::new(236, 6, 7, 4)), 6768);
-
-#[derive(Copy, Clone, PartialEq, Debug)]
-pub enum Model {
-    Unknown,
-    BR24,
-    Gen3,
-    Gen4,
-    HALO,
-}
-
-const BR24_MODEL_NAME: &str = "BR24";
-
-impl fmt::Display for Model {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let s = match self {
-            Model::Unknown => "",
-            Model::BR24 => BR24_MODEL_NAME,
-            Model::Gen3 => "3G",
-            Model::Gen4 => "4G",
-            Model::HALO => "HALO",
-        };
-        write!(f, "{}", s)
-    }
-}
-
-impl Model {
-    pub fn new(s: &str) -> Self {
-        match s {
-            BR24_MODEL_NAME => Model::BR24,
-            "3G" => Model::Gen3,
-            "4G" => Model::Gen4,
-            "HALO" => Model::HALO,
-            _ => Model::Unknown,
-        }
-    }
-}
 
 // =============================================================================
 // DEPRECATED LEGACY CODE - COMMENTED OUT FOR BUILD VERIFICATION
@@ -367,7 +337,7 @@ const BLANKING_SETS: [(usize, &str, &str); 4] = [
 // New unified discovery processing (used by CoreLocatorAdapter)
 // =============================================================================
 
-use mayara_core::radar::RadarDiscovery;
+use mayara_core::radar::{ParsedAddress, RadarDiscovery};
 
 /// Process a radar discovery from the core locator.
 ///
@@ -382,13 +352,16 @@ pub fn process_discovery(
     radars: &SharedRadars,
     subsys: &SubsystemHandle,
 ) -> Result<(), io::Error> {
-    // Parse address from discovery
-    let radar_addr = parse_radar_address(&discovery.address)?;
+    // Parse address from discovery using core's parser
+    let parsed = ParsedAddress::parse(&discovery.address)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+    let radar_ip = Ipv4Addr::from(parsed.ip);
+    let radar_addr = SocketAddrV4::new(radar_ip, parsed.port);
 
     // For simplified discovery, use the same address for data/report/send with different ports
-    let data_addr: SocketAddrV4 = SocketAddrV4::new(*radar_addr.ip(), discovery.data_port);
-    let report_addr: SocketAddrV4 = SocketAddrV4::new(*radar_addr.ip(), discovery.command_port);
-    let send_addr: SocketAddrV4 = SocketAddrV4::new(*radar_addr.ip(), discovery.command_port);
+    let data_addr: SocketAddrV4 = SocketAddrV4::new(radar_ip, discovery.data_port);
+    let report_addr: SocketAddrV4 = SocketAddrV4::new(radar_ip, discovery.command_port);
+    let send_addr: SocketAddrV4 = SocketAddrV4::new(radar_ip, discovery.command_port);
 
     // Determine locator ID and model
     let is_br24 = discovery.model.as_deref() == Some("BR24");
@@ -428,14 +401,14 @@ pub fn process_discovery(
 
     // Apply model-specific settings if known
     let model = match model_name {
-        Some(name) => Model::new(name),
+        Some(name) => Model::from_name(name),
         None => Model::Unknown,
     };
 
     if model != Model::Unknown {
         let info2 = info.clone();
         settings::update_when_model_known(&mut info.controls, model, &info2);
-        info.set_doppler(model == Model::HALO);
+        info.set_doppler(model.has_doppler());
         radars.update(&info);
     }
 
@@ -471,24 +444,4 @@ pub fn process_discovery(
         discovery.name
     );
     Ok(())
-}
-
-/// Parse address string "ip:port" into SocketAddrV4
-fn parse_radar_address(addr: &str) -> Result<SocketAddrV4, io::Error> {
-    if let Some(colon_pos) = addr.rfind(':') {
-        let ip_str = &addr[..colon_pos];
-        let port_str = &addr[colon_pos + 1..];
-        let ip: Ipv4Addr = ip_str.parse().map_err(|e| {
-            io::Error::new(io::ErrorKind::InvalidInput, format!("Invalid IP: {}", e))
-        })?;
-        let port: u16 = port_str.parse().map_err(|e| {
-            io::Error::new(io::ErrorKind::InvalidInput, format!("Invalid port: {}", e))
-        })?;
-        Ok(SocketAddrV4::new(ip, port))
-    } else {
-        let ip: Ipv4Addr = addr.parse().map_err(|e| {
-            io::Error::new(io::ErrorKind::InvalidInput, format!("Invalid IP: {}", e))
-        })?;
-        Ok(SocketAddrV4::new(ip, 0))
-    }
 }

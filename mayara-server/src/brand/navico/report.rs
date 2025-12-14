@@ -32,7 +32,6 @@ use mayara_core::protocol::navico::{
     parse_report_06_68, parse_report_06_74, parse_report_08,
     HaloHeadingPacket, HaloNavigationPacket, HaloSpeedPacket,
     INFO_ADDR, INFO_PORT, SPEED_ADDR_A, SPEED_PORT_A,
-    Model as CoreModel,
 };
 
 pub struct NavicoReportReceiver {
@@ -108,7 +107,7 @@ impl NavicoReportReceiver {
             Model::Gen3 => NavicoModel::Gen3,
             Model::Gen4 => NavicoModel::Gen4,
             Model::HALO => NavicoModel::Halo,
-            Model::Unknown => NavicoModel::Gen4, // Default
+            Model::Unknown => NavicoModel::Unknown,
         };
 
         // If we are in replay mode, we don't need a controller
@@ -879,14 +878,8 @@ impl NavicoReportReceiver {
         let model_raw = report.model_byte;
         let hours = report.operating_hours as i32;
 
-        // Convert CoreModel to server Model
-        let model = match report.model {
-            CoreModel::HALO => Model::HALO,
-            CoreModel::Gen4 => Model::Gen4,
-            CoreModel::Gen3 => Model::Gen3,
-            CoreModel::BR24 => Model::BR24,
-            CoreModel::Unknown => Model::Unknown,
-        };
+        // Model is already the core Model type (now used directly)
+        let model = report.model;
 
         match model {
             Model::Unknown => {
@@ -908,7 +901,7 @@ impl NavicoReportReceiver {
                             Model::Gen3 => NavicoModel::Gen3,
                             Model::Gen4 => NavicoModel::Gen4,
                             Model::HALO => NavicoModel::Halo,
-                            Model::Unknown => NavicoModel::Gen4,
+                            Model::Unknown => NavicoModel::Unknown,
                         };
                         controller.set_model(core_model);
                     }
@@ -918,7 +911,7 @@ impl NavicoReportReceiver {
                         model,
                         &info2,
                     );
-                    self.info.set_doppler(model == Model::HALO);
+                    self.info.set_doppler(model.has_doppler());
 
                     self.radars.update(&self.info);
 
@@ -1075,7 +1068,7 @@ impl NavicoReportReceiver {
             sidelobe_suppression_auto,
         );
         self.set_value("noiseRejection", noise_reduction as f32);
-        if self.model == Model::HALO || self.model == Model::Gen4 {
+        if self.model.has_dual_range() {
             self.set_value("targetSeparation", target_sep as f32);
         } else if target_sep > 0 {
             log::trace!(

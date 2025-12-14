@@ -139,6 +139,25 @@ impl Model {
             Model::DRS25ANXT => "DRS25A-NXT",
         }
     }
+
+    /// Parse model from name string (as returned by `as_str()` or from radar)
+    pub fn from_name(s: &str) -> Self {
+        match s {
+            "DRS4D-NXT" => Model::DRS4DNXT,
+            "DRS6A-NXT" => Model::DRS6ANXT,
+            "DRS12A-NXT" => Model::DRS12ANXT,
+            "DRS25A-NXT" => Model::DRS25ANXT,
+            "DRS6A-XCLASS" | "DRS6AXCLASS" => Model::DRS6AXCLASS,
+            "FAR-21x7" | "FAR21x7" => Model::FAR21x7,
+            "FAR-14x7" | "FAR14x7" => Model::FAR14x7,
+            "FAR-3000" | "FAR3000" => Model::FAR3000,
+            "FAR-15x3" | "FAR15x3" => Model::FAR15x3,
+            "FAR-14x6" | "FAR14x6" => Model::FAR14x6,
+            "DRS4DL" => Model::DRS4DL,
+            "DRS" => Model::DRS,
+            _ => Model::Unknown,
+        }
+    }
 }
 
 impl std::fmt::Display for Model {

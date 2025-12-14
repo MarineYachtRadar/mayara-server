@@ -21,9 +21,11 @@ pub fn new(session: Session) -> SharedControls {
     );
 
     // Power control - from mayara-core (single source of truth)
-    let mut power_control = control_factory::power_control();
-    power_control.set_valid_values(vec![1, 2]); // Only Standby and Transmit are settable
-    controls.insert("power".to_string(), power_control.send_always());
+    // Furuno: only standby (1) and transmit (2) are settable, send_always=true
+    controls.insert(
+        "power".to_string(),
+        control_factory::power_control_for_brand(Brand::Furuno),
+    );
 
     // Range control - valid values will be set when model is known from mayara-core
     let max_value = 120. * NAUTICAL_MILE as f32;
@@ -52,10 +54,7 @@ pub fn new(session: Session) -> SharedControls {
 
     controls.insert(
         "rotationSpeed".to_string(),
-        Control::new_numeric("rotationSpeed", 0., 99.)
-            .wire_scale_factor(990., true)
-            .read_only(true)
-            .unit("RPM"),
+        control_factory::rotation_speed_control_for_brand(Brand::Furuno),
     );
 
     if log::log_enabled!(log::Level::Debug) {
@@ -72,7 +71,7 @@ pub fn new(session: Session) -> SharedControls {
 
 #[inline(never)]
 pub fn update_when_model_known(info: &mut RadarInfo, model: RadarModel, version: &str) {
-    let model_name = model.to_str();
+    let model_name = model.as_str();
     log::debug!("update_when_model_known: {}", model_name);
     info.controls.set_model_name(model_name.to_string());
 
@@ -122,29 +121,22 @@ pub fn update_when_model_known(info: &mut RadarInfo, model: RadarModel, version:
         .expect("FirmwareVersion");
 
     // Add no-transmit zone controls (for radars that support them)
+    // Uses core definitions for consistent metadata across server and WASM
     info.controls.insert(
         "noTransmitStart1",
-        Control::new_numeric("noTransmitStart1", -180., 180.)
-            .unit("Deg")
-            .wire_offset(-1.),
+        control_factory::no_transmit_angle_control_for_brand("noTransmitStart1", 1, true, Brand::Furuno),
     );
     info.controls.insert(
         "noTransmitEnd1",
-        Control::new_numeric("noTransmitEnd1", -180., 180.)
-            .unit("Deg")
-            .wire_offset(-1.),
+        control_factory::no_transmit_angle_control_for_brand("noTransmitEnd1", 1, false, Brand::Furuno),
     );
     info.controls.insert(
         "noTransmitStart2",
-        Control::new_numeric("noTransmitStart2", -180., 180.)
-            .unit("Deg")
-            .wire_offset(-1.),
+        control_factory::no_transmit_angle_control_for_brand("noTransmitStart2", 2, true, Brand::Furuno),
     );
     info.controls.insert(
         "noTransmitEnd2",
-        Control::new_numeric("noTransmitEnd2", -180., 180.)
-            .unit("Deg")
-            .wire_offset(-1.),
+        control_factory::no_transmit_angle_control_for_brand("noTransmitEnd2", 2, false, Brand::Furuno),
     );
 
     // Dynamically add extended controls from mayara-core based on model capabilities

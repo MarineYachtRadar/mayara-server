@@ -364,6 +364,16 @@ pub struct WireProtocolHint {
     /// Whether this control has an enabled/disabled toggle
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_enabled: bool,
+
+    /// For enum controls: indices of values that can be set (others are read-only)
+    /// e.g., [1, 2] for power control means only standby (1) and transmit (2) are settable
+    /// If None, all values are settable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub settable_indices: Option<Vec<i32>>,
+
+    /// Whether commands should always be sent, even if value hasn't changed
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub send_always: bool,
 }
 
 /// Radar state returned by GET /radars/{id}/state

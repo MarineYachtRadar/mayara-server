@@ -314,17 +314,20 @@ pub fn find_nic_for_radar(radar_ip: &Ipv4Addr) -> Option<Ipv4Addr> {
     None
 }
 
-#[cfg(target_os = "macos")]
-pub(crate) use macos::is_wireless_interface;
-#[cfg(target_os = "macos")]
-pub(crate) use macos::wait_for_ip_addr_change;
+// deprecated_marked_for_delete: All platform-specific re-exports below are dead code
+// Only used by legacy locator which has been removed. Will be deleted in a future cleanup.
 
-#[cfg(target_os = "linux")]
-pub(crate) use linux::is_wireless_interface;
-#[cfg(target_os = "linux")]
-pub(crate) use linux::wait_for_ip_addr_change;
+// #[cfg(target_os = "macos")]
+// pub(crate) use macos::is_wireless_interface;
+// #[cfg(target_os = "macos")]
+// pub(crate) use macos::wait_for_ip_addr_change;
 
-#[cfg(target_os = "windows")]
-pub(crate) use windows::is_wireless_interface;
-#[cfg(target_os = "windows")]
-pub(crate) use windows::wait_for_ip_addr_change;
+// #[cfg(target_os = "linux")]
+// pub(crate) use linux::is_wireless_interface;
+// #[cfg(target_os = "linux")]
+// pub(crate) use linux::wait_for_ip_addr_change;
+
+// #[cfg(target_os = "windows")]
+// pub(crate) use windows::is_wireless_interface;
+// #[cfg(target_os = "windows")]
+// pub(crate) use windows::wait_for_ip_addr_change;

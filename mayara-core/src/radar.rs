@@ -147,3 +147,39 @@ impl std::fmt::Display for RadarStatus {
         }
     }
 }
+
+/// Parsed IPv4 address with port
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParsedAddress {
+    pub ip: [u8; 4],
+    pub port: u16,
+}
+
+impl ParsedAddress {
+    /// Parse address string "ip:port" or just "ip" (port defaults to 0)
+    pub fn parse(addr: &str) -> Result<Self, &'static str> {
+        if let Some(colon_pos) = addr.rfind(':') {
+            let ip_str = &addr[..colon_pos];
+            let port_str = &addr[colon_pos + 1..];
+            let ip = Self::parse_ipv4(ip_str)?;
+            let port: u16 = port_str.parse().map_err(|_| "Invalid port")?;
+            Ok(ParsedAddress { ip, port })
+        } else {
+            let ip = Self::parse_ipv4(addr)?;
+            Ok(ParsedAddress { ip, port: 0 })
+        }
+    }
+
+    /// Parse IPv4 address string into bytes
+    fn parse_ipv4(s: &str) -> Result<[u8; 4], &'static str> {
+        let parts: Vec<&str> = s.split('.').collect();
+        if parts.len() != 4 {
+            return Err("Invalid IPv4 format");
+        }
+        let mut ip = [0u8; 4];
+        for (i, part) in parts.iter().enumerate() {
+            ip[i] = part.parse().map_err(|_| "Invalid IPv4 octet")?;
+        }
+        Ok(ip)
+    }
+}

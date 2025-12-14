@@ -571,6 +571,8 @@ impl SharedRadars {
         }
     }
 
+    // deprecated_marked_for_delete: Only used by legacy locator (reply_with_interface_state)
+    #[allow(dead_code)]
     pub(crate) fn is_active_radar(&self, brand: &Brand, ip: &Ipv4Addr) -> bool {
         let radars = self.radars.read().unwrap();
         for (_, info) in radars.info.iter() {

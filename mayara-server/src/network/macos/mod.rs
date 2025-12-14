@@ -1,3 +1,7 @@
+// deprecated_marked_for_delete: This entire module is dead code - only used by legacy locator
+// which has been removed. Will be deleted in a future cleanup.
+
+/*
 use std::ptr;
 
 use core_foundation::runloop::{
@@ -90,3 +94,4 @@ pub fn is_wireless_interface(interface_name: &str) -> bool {
     }
     false
 }
+*/

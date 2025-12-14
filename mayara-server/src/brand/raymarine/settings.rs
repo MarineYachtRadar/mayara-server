@@ -50,10 +50,7 @@ pub fn new(session: Session, model: BaseModel) -> SharedControls {
 
     controls.insert(
         "rotationSpeed".to_string(),
-        Control::new_numeric("rotationSpeed", 0., 99.)
-            .wire_scale_factor(990., true) // 0.1 RPM
-            .read_only(true)
-            .unit("RPM"),
+        control_factory::rotation_speed_control_for_brand(Brand::Raymarine),
     );
     controls.insert(
         "operatingHours".to_string(),

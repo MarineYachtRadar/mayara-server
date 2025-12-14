@@ -15,7 +15,7 @@ use tokio::time::sleep;
 use tokio_graceful_shutdown::SubsystemHandle;
 use trail::TrailBuffer;
 
-use super::{FURUNO_DATA_BROADCAST_ADDRESS, FURUNO_SPOKE_LEN};
+use super::{furuno_broadcast_addr, FURUNO_SPOKE_LEN};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum ReceiveAddressType {
@@ -103,13 +103,13 @@ impl FurunoDataReceiver {
     }
 
     async fn start_broadcast_socket(&mut self) -> io::Result<()> {
-        match network::create_udp_listen(&FURUNO_DATA_BROADCAST_ADDRESS, &self.info.nic_addr, true)
-        {
+        let broadcast_addr = furuno_broadcast_addr();
+        match network::create_udp_listen(&broadcast_addr, &self.info.nic_addr, true) {
             Ok(sock) => {
                 self.broadcast_socket = Some(sock);
                 log::debug!(
                     "{} via {}: listening for spoke data",
-                    &FURUNO_DATA_BROADCAST_ADDRESS,
+                    broadcast_addr,
                     &self.info.nic_addr
                 );
             }
@@ -117,7 +117,7 @@ impl FurunoDataReceiver {
                 sleep(Duration::from_millis(1000)).await;
                 log::debug!(
                     "{} via {}: listen broadcast failed: {}",
-                    &FURUNO_DATA_BROADCAST_ADDRESS,
+                    broadcast_addr,
                     &self.info.nic_addr,
                     e
                 );
