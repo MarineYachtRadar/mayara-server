@@ -15,6 +15,27 @@ use mayara_core::io::{IoError, IoProvider, TcpSocketHandle, UdpSocketHandle};
 use socket2::{Domain, Protocol, Socket, Type};
 use tokio::net::UdpSocket;
 
+/// Find the interface name for a given IPv4 address.
+#[cfg(target_os = "linux")]
+fn find_interface_name_for_ip(ip: &Ipv4Addr) -> Option<String> {
+    use network_interface::{NetworkInterface, NetworkInterfaceConfig};
+    use std::net::IpAddr;
+
+    let interfaces = NetworkInterface::show().ok()?;
+
+    for itf in &interfaces {
+        for addr in &itf.addr {
+            if let IpAddr::V4(nic_ip) = addr.ip() {
+                if &nic_ip == ip {
+                    return Some(itf.name.clone());
+                }
+            }
+        }
+    }
+
+    None
+}
+
 /// Internal state for a UDP socket
 struct UdpSocketState {
     socket: UdpSocket,
@@ -308,13 +329,45 @@ impl IoProvider for TokioIoProvider {
             .set_broadcast(true)
             .map_err(|e| IoError::new(-1, format!("Failed to set broadcast: {}", e)))?;
 
-        // Bind to the specific interface IP (not 0.0.0.0)
-        let bind_addr = SocketAddrV4::new(interface_ip, current_port);
+        // IMPORTANT: Bind to 0.0.0.0:port to receive broadcast responses
+        // (binding to interface_ip:port would prevent receiving broadcasts)
+        // We use IP_MULTICAST_IF to control OUTGOING packets only
+        let bind_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, current_port);
         new_socket
             .bind(&bind_addr.into())
             .map_err(|e| IoError::new(-1, format!("Failed to bind to {}: {}", bind_addr, e)))?;
 
-        log::debug!("UDP socket rebound to interface {} port {}", interface_ip, current_port);
+        // Set the outgoing interface for multicast/broadcast packets
+        // This ensures broadcasts go out on the correct NIC without affecting receive
+        new_socket
+            .set_multicast_if_v4(&interface_ip)
+            .map_err(|e| IoError::new(-1, format!("Failed to set multicast interface: {}", e)))?;
+
+        // On Linux, also bind to the device to ensure proper routing
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::io::AsRawFd;
+            // Find the interface name for this IP
+            if let Some(iface_name) = find_interface_name_for_ip(&interface_ip) {
+                unsafe {
+                    let iface_bytes = iface_name.as_bytes();
+                    let ret = libc::setsockopt(
+                        new_socket.as_raw_fd(),
+                        libc::SOL_SOCKET,
+                        libc::SO_BINDTODEVICE,
+                        iface_bytes.as_ptr() as *const libc::c_void,
+                        iface_bytes.len() as libc::socklen_t,
+                    );
+                    if ret == 0 {
+                        log::debug!("Bound socket to device {}", iface_name);
+                    } else {
+                        log::debug!("SO_BINDTODEVICE failed (may need CAP_NET_RAW): {}", std::io::Error::last_os_error());
+                    }
+                }
+            }
+        }
+
+        log::debug!("UDP socket configured for interface {} port {}", interface_ip, current_port);
 
         let std_socket: std::net::UdpSocket = new_socket.into();
         let tokio_socket = UdpSocket::from_std(std_socket)
