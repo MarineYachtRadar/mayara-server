@@ -261,36 +261,49 @@ impl FurunoController {
     pub fn set_rezboost<I: IoProvider>(&mut self, io: &mut I, level: i32) {
         let cmd = format_rezboost_command(level, 0);
         self.queue_command(io, cmd.trim());
+        // Update local state immediately for responsive UI
+        self.radar_state.beam_sharpening = level;
     }
 
     /// Set interference rejection
     pub fn set_interference_rejection<I: IoProvider>(&mut self, io: &mut I, enabled: bool) {
         let cmd = format_interference_rejection_command(enabled);
         self.queue_command(io, cmd.trim());
+        // Update local state immediately for responsive UI
+        self.radar_state.interference_rejection = enabled;
     }
 
     /// Set noise reduction
     pub fn set_noise_reduction<I: IoProvider>(&mut self, io: &mut I, enabled: bool) {
         let cmd = format_noise_reduction_command(enabled);
         self.queue_command(io, cmd.trim());
+        // Update local state immediately for responsive UI
+        self.radar_state.noise_reduction = enabled;
     }
 
     /// Set scan speed
     pub fn set_scan_speed<I: IoProvider>(&mut self, io: &mut I, speed: i32) {
         let cmd = format_scan_speed_command(speed);
         self.queue_command(io, cmd.trim());
+        // Update local state immediately for responsive UI
+        self.radar_state.scan_speed = speed;
     }
 
     /// Set bird mode
     pub fn set_bird_mode<I: IoProvider>(&mut self, io: &mut I, level: i32) {
         let cmd = format_bird_mode_command(level, 0);
         self.queue_command(io, cmd.trim());
+        // Update local state immediately for responsive UI
+        self.radar_state.bird_mode = level;
     }
 
     /// Set target analyzer (Doppler mode)
     pub fn set_target_analyzer<I: IoProvider>(&mut self, io: &mut I, enabled: bool, mode: i32) {
         let cmd = format_target_analyzer_command(enabled, mode, 0);
         self.queue_command(io, cmd.trim());
+        // Update local state immediately for responsive UI
+        self.radar_state.doppler_mode.enabled = enabled;
+        self.radar_state.doppler_mode.mode = if mode == 0 { "target".into() } else { "rain".into() };
     }
 
     /// Set bearing alignment (heading offset)
@@ -304,12 +317,16 @@ impl FurunoController {
     pub fn set_main_bang_suppression<I: IoProvider>(&mut self, io: &mut I, percent: i32) {
         let cmd = format_main_bang_command(percent);
         self.queue_command(io, cmd.trim());
+        // Update local state immediately for responsive UI
+        self.radar_state.main_bang_suppression = percent;
     }
 
     /// Set TX channel
     pub fn set_tx_channel<I: IoProvider>(&mut self, io: &mut I, channel: i32) {
         let cmd = format_tx_channel_command(channel);
         self.queue_command(io, cmd.trim());
+        // Update local state immediately for responsive UI
+        self.radar_state.tx_channel = channel;
     }
 
     /// Set auto acquire (ARPA by Doppler)

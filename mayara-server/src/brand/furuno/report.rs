@@ -254,6 +254,13 @@ impl FurunoReportReceiver {
                             self.radars.update(&self.info);
                             log::debug!("{}: Updated {} = {} auto={}", self.key, cv.id, num_value, auto);
                         }
+                        // Extended controls - update immediately for responsive UI
+                        "beamSharpening" | "birdMode" | "scanSpeed" | "mainBangSuppression"
+                        | "txChannel" | "interferenceRejection" | "noiseReduction" => {
+                            self.set_value(&cv.id, num_value);
+                            self.radars.update(&self.info);
+                            log::debug!("{}: Updated extended control {} = {}", self.key, cv.id, num_value);
+                        }
                         _ => {}
                     }
                 }
