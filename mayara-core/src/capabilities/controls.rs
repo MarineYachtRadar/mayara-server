@@ -844,9 +844,9 @@ pub fn control_bearing_alignment() -> ControlDefinition {
         category: ControlCategory::Installation,
         control_type: ControlType::Number,
         range: Some(RangeSpec {
-            min: -180.0,
-            max: 180.0,
-            step: Some(0.1),
+            min: -179.0,
+            max: 179.0,
+            step: Some(1.0),
             unit: Some("degrees".into()),
         }),
         values: None,
@@ -855,7 +855,10 @@ pub fn control_bearing_alignment() -> ControlDefinition {
         default_mode: None,
         read_only: false,
         default: Some(0.0.into()),
-        wire_hints: None,
+        wire_hints: Some(WireProtocolHint {
+            write_only: true, // Cannot reliably read from hardware
+            ..Default::default()
+        }),
     }
 }
 
@@ -871,7 +874,7 @@ pub fn control_antenna_height() -> ControlDefinition {
         control_type: ControlType::Number,
         range: Some(RangeSpec {
             min: 0.0,
-            max: 100.0,
+            max: 99.0,
             step: Some(1.0),
             unit: Some("m".into()),
         }),
@@ -881,7 +884,10 @@ pub fn control_antenna_height() -> ControlDefinition {
         default_mode: None,
         read_only: false,
         default: Some(5.into()),
-        wire_hints: None,
+        wire_hints: Some(WireProtocolHint {
+            write_only: true, // Cannot reliably read from hardware
+            ..Default::default()
+        }),
     }
 }
 
@@ -984,7 +990,7 @@ pub fn control_auto_acquire() -> ControlDefinition {
         id: "autoAcquire".into(),
         name: "Auto Acquire".into(),
         description: "Automatically acquires and tracks moving targets using Doppler detection.".into(),
-        category: ControlCategory::Extended,
+        category: ControlCategory::Installation,
         control_type: ControlType::Boolean,
         range: None,
         values: None,
@@ -993,7 +999,10 @@ pub fn control_auto_acquire() -> ControlDefinition {
         default_mode: None,
         read_only: false,
         default: Some(false.into()),
-        wire_hints: None,
+        wire_hints: Some(WireProtocolHint {
+            write_only: true, // Cannot read from hardware ($S87 only, no $R87)
+            ..Default::default()
+        }),
     }
 }
 
@@ -1686,16 +1695,18 @@ pub fn control_bearing_alignment_for_brand(brand: Brand) -> ControlDefinition {
     let mut def = control_bearing_alignment();
     def.wire_hints = Some(match brand {
         Brand::Furuno => WireProtocolHint {
-            // Furuno: no-transmit zones use -1.0 offset, bearing alignment unknown
+            write_only: true, // Cannot reliably read from hardware
             ..Default::default()
         },
         Brand::Navico | Brand::Raymarine => WireProtocolHint {
             scale_factor: Some(1800.0), // 0.1 degree precision
             offset: Some(-1.0),
             step: Some(0.1),
+            write_only: true, // Cannot reliably read from hardware
             ..Default::default()
         },
         Brand::Garmin => WireProtocolHint {
+            write_only: true, // Cannot reliably read from hardware
             ..Default::default()
         },
     });
@@ -1708,9 +1719,11 @@ pub fn control_antenna_height_for_brand(brand: Brand) -> ControlDefinition {
     def.wire_hints = Some(match brand {
         Brand::Navico => WireProtocolHint {
             scale_factor: Some(99000.0), // cm to mm conversion
+            write_only: true, // Cannot reliably read from hardware
             ..Default::default()
         },
         Brand::Furuno | Brand::Raymarine | Brand::Garmin => WireProtocolHint {
+            write_only: true, // Cannot reliably read from hardware
             ..Default::default()
         },
     });

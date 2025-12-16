@@ -33,6 +33,7 @@ pub fn build_capabilities(
 
     CapabilityManifest {
         id: radar_id.to_string(),
+        key: None, // WASM sets this via state
         make: discovery.brand.as_str().to_string(),
         model: model_info.model.to_string(),
         model_family: Some(model_info.family.to_string()),
@@ -71,6 +72,7 @@ pub fn build_capabilities_from_model(
 ) -> CapabilityManifest {
     CapabilityManifest {
         id: radar_id.to_string(),
+        key: None, // No persistent key in basic builder
         make: model_info.brand.as_str().to_string(),
         model: model_info.model.to_string(),
         model_family: Some(model_info.family.to_string()),
@@ -107,8 +109,30 @@ pub fn build_capabilities_from_model_with_spokes(
     spokes_per_revolution: u16,
     max_spoke_length: u16,
 ) -> CapabilityManifest {
+    build_capabilities_from_model_with_key(
+        model_info,
+        radar_id,
+        None, // No persistent key
+        supported_features,
+        spokes_per_revolution,
+        max_spoke_length,
+    )
+}
+
+/// Build capabilities with a persistent key for installation settings storage.
+/// The key is used by GUI to store/retrieve settings via Application Data API.
+#[inline(never)]
+pub fn build_capabilities_from_model_with_key(
+    model_info: &ModelInfo,
+    radar_id: &str,
+    radar_key: Option<&str>,
+    supported_features: Vec<SupportedFeature>,
+    spokes_per_revolution: u16,
+    max_spoke_length: u16,
+) -> CapabilityManifest {
     CapabilityManifest {
         id: radar_id.to_string(),
+        key: radar_key.map(|k| k.to_string()),
         make: model_info.brand.as_str().to_string(),
         model: model_info.model.to_string(),
         model_family: Some(model_info.family.to_string()),

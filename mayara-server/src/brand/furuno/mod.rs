@@ -4,6 +4,7 @@ use tokio_graceful_shutdown::{SubsystemBuilder, SubsystemHandle};
 
 use crate::locator::LocatorId;
 use crate::radar::{RadarInfo, SharedRadars};
+use crate::storage::load_installation_settings;
 use crate::{Brand, Session};
 
 // Modules - command.rs removed, now using unified controller from mayara-core
@@ -42,6 +43,49 @@ fn furuno_data_multicast_addr() -> SocketAddrV4 {
 
 // Beacon packet structures are now in mayara-core
 // TCP login is handled by FurunoController in mayara-core
+
+/// Restore persisted installation settings from Application Data API.
+/// These are write-only controls that cannot be read from the radar hardware.
+/// Called during initial discovery when model is known from persistence.
+fn restore_installation_settings(radar_key: &str, info: &mut RadarInfo, _radars: &SharedRadars) {
+    if let Some(settings) = load_installation_settings(radar_key) {
+        log::info!("{}: Restoring installation settings: {:?}", radar_key, settings);
+
+        let mut restored_any = false;
+
+        // Restore bearing alignment
+        if let Some(degrees) = settings.bearing_alignment {
+            info.controls
+                .set("bearingAlignment", degrees as f32, None)
+                .ok();
+            log::info!("{}: Restored bearingAlignment = {}°", radar_key, degrees);
+            restored_any = true;
+        }
+
+        // Restore antenna height
+        if let Some(meters) = settings.antenna_height {
+            info.controls
+                .set("antennaHeight", meters as f32, None)
+                .ok();
+            log::info!("{}: Restored antennaHeight = {}m", radar_key, meters);
+            restored_any = true;
+        }
+
+        // Restore auto acquire (ARPA)
+        if let Some(enabled) = settings.auto_acquire {
+            info.controls
+                .set("autoAcquire", if enabled { 1.0 } else { 0.0 }, None)
+                .ok();
+            log::info!("{}: Restored autoAcquire = {}", radar_key, enabled);
+            restored_any = true;
+        }
+
+        if restored_any {
+            // Note: radars.update() is called by the caller after this function
+            log::info!("{}: Installation settings restored from storage", radar_key);
+        }
+    }
+}
 
 // =============================================================================
 // DEPRECATED LEGACY CODE - COMMENTED OUT FOR BUILD VERIFICATION
@@ -410,6 +454,11 @@ pub fn process_discovery(
             if discovery.model.is_some() { "discovery" } else { "persistence" }
         );
         settings::update_when_model_known(&mut info, model, version);
+
+        // Restore persisted installation settings (write-only controls like bearingAlignment)
+        // These must be restored here since ModelDetected event won't fire if model is from persistence
+        restore_installation_settings(&info.key(), &mut info, &radars);
+
         radars.update(&info);
     }
 

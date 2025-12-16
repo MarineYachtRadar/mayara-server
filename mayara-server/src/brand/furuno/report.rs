@@ -18,6 +18,7 @@ use super::settings;
 use super::RadarModel;
 use crate::radar::{RadarError, RadarInfo, SharedRadars, Status};
 use crate::settings::ControlUpdate;
+use crate::storage::load_installation_settings;
 use crate::tokio_io::TokioIoProvider;
 use crate::Session;
 
@@ -141,6 +142,9 @@ impl FurunoReportReceiver {
                     self.key,
                     self.info.ranges.len()
                 );
+
+                // Restore persisted installation settings (write-only controls)
+                self.restore_installation_settings();
             }
             ControllerEvent::OperatingHoursUpdated { hours } => {
                 self.set_value("operatingHours", hours as f32);
@@ -226,6 +230,16 @@ impl FurunoReportReceiver {
 
         match result {
             Ok(()) => {
+                // For write-only controls (Installation category), update the local state
+                // since the radar won't report these values back
+                if matches!(cv.id.as_str(), "bearingAlignment" | "antennaHeight" | "autoAcquire") {
+                    if let Ok(num_value) = cv.value.parse::<f32>() {
+                        self.set_value(&cv.id, num_value);
+                        // Push to SharedRadars so REST API reflects the new value
+                        self.radars.update(&self.info);
+                        log::debug!("{}: Updated write-only control {} = {}", self.key, cv.id, num_value);
+                    }
+                }
                 self.info.controls.set_refresh(&cv.id);
                 Ok(())
             }
@@ -353,5 +367,45 @@ impl FurunoReportReceiver {
             }
             Ok(None) => {}
         };
+    }
+
+    /// Restore persisted installation settings from Application Data API.
+    /// These are write-only controls that cannot be read from the radar hardware.
+    fn restore_installation_settings(&mut self) {
+        if let Some(settings) = load_installation_settings(&self.key) {
+            log::info!("{}: Restoring installation settings: {:?}", self.key, settings);
+
+            let mut restored_any = false;
+
+            // Restore bearing alignment
+            if let Some(degrees) = settings.bearing_alignment {
+                self.controller.set_bearing_alignment(&mut self.io, degrees as f64);
+                self.set_value("bearingAlignment", degrees as f32);
+                log::info!("{}: Restored bearingAlignment = {}°", self.key, degrees);
+                restored_any = true;
+            }
+
+            // Restore antenna height
+            if let Some(meters) = settings.antenna_height {
+                self.controller.set_antenna_height(&mut self.io, meters);
+                self.set_value("antennaHeight", meters as f32);
+                log::info!("{}: Restored antennaHeight = {}m", self.key, meters);
+                restored_any = true;
+            }
+
+            // Restore auto acquire (ARPA)
+            if let Some(enabled) = settings.auto_acquire {
+                self.controller.set_auto_acquire(&mut self.io, enabled);
+                self.set_value("autoAcquire", if enabled { 1.0 } else { 0.0 });
+                log::info!("{}: Restored autoAcquire = {}", self.key, enabled);
+                restored_any = true;
+            }
+
+            // CRITICAL: Push updated values to SharedRadars so REST API reflects them
+            if restored_any {
+                self.radars.update(&self.info);
+                log::info!("{}: Updated SharedRadars with restored installation settings", self.key);
+            }
+        }
     }
 }

@@ -40,6 +40,11 @@ pub struct CapabilityManifest {
     /// Radar ID (e.g., "1", "2")
     pub id: String,
 
+    /// Persistent key for this radar (e.g., "Furuno-RD003212")
+    /// Used for storing installation settings via Application Data API
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+
     /// Radar manufacturer (e.g., "Furuno")
     pub make: String,
 
@@ -374,6 +379,12 @@ pub struct WireProtocolHint {
     /// Whether commands should always be sent, even if value hasn't changed
     #[serde(default, skip_serializing_if = "is_false")]
     pub send_always: bool,
+
+    /// Whether this control is write-only (cannot be read from hardware)
+    /// Installation settings like bearingAlignment, antennaHeight, autoAcquire
+    /// must be persisted by the client and restored on startup.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub write_only: bool,
 }
 
 /// Radar state returned by GET /radars/{id}/state

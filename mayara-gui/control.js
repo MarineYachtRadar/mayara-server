@@ -10,7 +10,7 @@
 export { loadRadar, registerRadarCallback, registerControlCallback, setCurrentRange, getPowerState, getOperatingHours, hasHoursCapability };
 
 import van from "./van-1.5.2.js";
-import { fetchRadarIds, fetchCapabilities, fetchState, setControl, detectMode, isStandaloneMode } from "./api.js";
+import { fetchRadarIds, fetchCapabilities, fetchState, setControl, detectMode, isStandaloneMode, saveInstallationSetting } from "./api.js";
 
 const { div, label, input, button, span } = van.tags;
 
@@ -660,6 +660,13 @@ async function sendControlValue(controlId, value) {
     // Notify callbacks
     const control = capabilities?.controls?.find(c => c.id === controlId);
     controlCallbacks.forEach(cb => cb(control, { id: controlId, value }));
+
+    // Persist Installation category controls (write-only settings like bearingAlignment)
+    // Use capabilities.key (e.g., "Furuno-RD003212") for storage - compatible with WASM SignalK plugin
+    if (control?.category === 'installation') {
+      const storageKey = capabilities?.key || radarId;
+      saveInstallationSetting(storageKey, controlId, value);
+    }
   }
 }
 

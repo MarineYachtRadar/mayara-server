@@ -10,6 +10,10 @@ const SIGNALK_RADARS_API = "/signalk/v2/api/vessels/self/radars";
 const STANDALONE_RADARS_API = "/v1/api/radars";
 const STANDALONE_INTERFACES_API = "/v1/api/interfaces";
 
+// Application Data API path - aligned with WASM SignalK plugin
+// Uses same path so settings are shared between standalone and SignalK modes
+const APPDATA_PATH = "/signalk/v1/applicationData/global/@mayara/signalk-radar";
+
 // Detected mode (null = not detected yet)
 let detectedMode = null;
 
@@ -258,6 +262,65 @@ export async function setControl(radarId, controlId, value) {
     }
   } catch (e) {
     console.error(`Control command error: ${e}`);
+    return false;
+  }
+}
+
+/**
+ * Get installation settings for a radar from Application Data API
+ * Uses same path as WASM SignalK plugin: @mayara/signalk-radar/1.0.0
+ * Structure: { "radars": { "radar-id": { "bearingAlignment": ..., ... } } }
+ * @param {string} radarId - The radar ID
+ * @returns {Promise<Object>} Installation settings object for this radar
+ */
+export async function getInstallationSettings(radarId) {
+  const url = `${APPDATA_PATH}/1.0.0`;
+  try {
+    const response = await fetch(url);
+    if (!response.ok) return {};
+    const data = await response.json();
+    return data?.radars?.[radarId] || {};
+  } catch (e) {
+    console.warn('Failed to load installation settings:', e.message);
+    return {};
+  }
+}
+
+/**
+ * Save an installation setting to Application Data API
+ * Preserves the nested structure used by WASM SignalK plugin
+ * @param {string} radarId - The radar ID
+ * @param {string} key - The setting key (e.g., "bearingAlignment")
+ * @param {any} value - The value to save
+ * @returns {Promise<boolean>} True if successful
+ */
+export async function saveInstallationSetting(radarId, key, value) {
+  const url = `${APPDATA_PATH}/1.0.0`;
+  try {
+    // Load full structure (preserve other radars' settings)
+    const getResponse = await fetch(url);
+    const data = getResponse.ok ? await getResponse.json() : { radars: {} };
+
+    // Update nested value
+    if (!data.radars) data.radars = {};
+    if (!data.radars[radarId]) data.radars[radarId] = {};
+    data.radars[radarId][key] = value;
+
+    // Save back
+    const putResponse = await fetch(url, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    if (putResponse.ok) {
+      console.log(`Installation setting '${key}' saved for ${radarId}`);
+      return true;
+    } else {
+      console.error(`Failed to save installation setting: ${putResponse.status}`);
+      return false;
+    }
+  } catch (e) {
+    console.error('Failed to save installation setting:', e);
     return false;
   }
 }

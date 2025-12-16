@@ -50,7 +50,7 @@ use mayara_core::trails::{TrailData, TrailSettings, TrailStore};
 use mayara_core::dual_range::{DualRangeConfig, DualRangeController, DualRangeState as CoreDualRangeState};
 
 // Capability types from mayara-core for v5 API
-use mayara_core::capabilities::{builder::build_capabilities_from_model_with_spokes, RadarStateV5, SupportedFeature};
+use mayara_core::capabilities::{builder::build_capabilities_from_model_with_key, RadarStateV5, SupportedFeature};
 use mayara_core::models;
 
 // Standalone Radar API v1 paths (matches SignalK Radar API structure for GUI compatibility)
@@ -401,6 +401,7 @@ async fn get_radar_capabilities(
                 Some((
                     model_info.clone(),
                     params.radar_id.clone(),
+                    info.key(), // Persistent key for installation settings
                     supported_features,
                     info.spokes_per_revolution,
                     info.max_spoke_len,
@@ -411,14 +412,15 @@ async fn get_radar_capabilities(
     }; // session lock released here
 
     match build_args {
-        Some((model_info, radar_id, supported_features, spokes_per_revolution, max_spoke_len)) => {
+        Some((model_info, radar_id, radar_key, supported_features, spokes_per_revolution, max_spoke_len)) => {
             // Use spawn_blocking to run capability building on a thread with larger stack
             // This avoids stack overflow in debug builds where ControlDefinition structs
             // (328 bytes each) can overflow the default 2MB async task stack
             let capabilities = tokio::task::spawn_blocking(move || {
-                build_capabilities_from_model_with_spokes(
+                build_capabilities_from_model_with_key(
                     &model_info,
                     &radar_id,
+                    Some(&radar_key), // Persistent key for installation settings storage
                     supported_features,
                     spokes_per_revolution,
                     max_spoke_len,

@@ -210,6 +210,67 @@ pub fn create_shared_storage() -> SharedStorage {
     Arc::new(RwLock::new(LocalStorage::new()))
 }
 
+/// Installation settings for a single radar
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallationSettings {
+    pub auto_acquire: Option<bool>,
+    pub bearing_alignment: Option<i32>,
+    pub antenna_height: Option<i32>,
+}
+
+/// Full application data structure (matches WASM SignalK plugin format)
+/// Structure: { "radars": { "radar-id": { "bearingAlignment": ..., ... } } }
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct AppDataRadars {
+    pub radars: Option<std::collections::HashMap<String, InstallationSettings>>,
+}
+
+/// Load installation settings for a radar directly from disk.
+/// Uses same path as WASM SignalK plugin: @mayara/signalk-radar/1.0.0
+/// This is used by report receivers to restore write-only settings on startup.
+pub fn load_installation_settings(radar_id: &str) -> Option<InstallationSettings> {
+    let project_dirs = get_project_dirs();
+    let mut path = project_dirs.data_dir().to_owned();
+    path.push("applicationData");
+    path.push("@mayara");
+    path.push("signalk-radar");
+    path.push("1.0.0.json");
+
+    info!("Loading installation settings for {} from {}", radar_id, path.display());
+
+    if !path.exists() {
+        info!("No installation settings file found at {}", path.display());
+        return None;
+    }
+
+    match std::fs::File::open(&path) {
+        Ok(file) => {
+            let reader = std::io::BufReader::new(file);
+            match serde_json::from_reader::<_, AppDataRadars>(reader) {
+                Ok(data) => {
+                    if let Some(radars) = data.radars {
+                        if let Some(settings) = radars.get(radar_id) {
+                            info!("Loaded installation settings for {}: {:?}", radar_id, settings);
+                            return Some(settings.clone());
+                        }
+                    }
+                    debug!("No installation settings for radar {} in {}", radar_id, path.display());
+                    None
+                }
+                Err(e) => {
+                    warn!("Failed to parse installation settings {}: {}", path.display(), e);
+                    None
+                }
+            }
+        }
+        Err(e) => {
+            warn!("Failed to open installation settings {}: {}", path.display(), e);
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
