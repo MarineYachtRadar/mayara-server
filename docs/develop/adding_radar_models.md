@@ -6,7 +6,7 @@ This guide explains how to add support for new radar models in Mayara.
 
 Adding a new radar model involves three steps:
 
-1. **Document the protocol** in `docs/radar protocols/{brand}/protocol.md`
+1. **Document the protocol** in `docs/radar-protocols/{brand}/protocol.md`
 2. **Add the model** to the database in `mayara-core/src/models/{brand}.rs`
 3. **Add any new controls** to `mayara-core/src/capabilities/controls.rs`
 
@@ -17,7 +17,7 @@ Before adding code, document the radar's network protocol in the appropriate pro
 ### Location
 
 ```
-mayara/docs/radar protocols/
+mayara/docs/radar-protocols/
 ├── furuno/protocol.md
 ├── navico/protocol.md
 ├── raymarine/protocol.md
@@ -163,7 +163,7 @@ If the radar has controls not already defined in the system, add them.
 
 Before creating a new control, check if an equivalent semantic ID exists in:
 - `mayara-core/src/capabilities/controls.rs`
-- `docs/radar API/signalk_radar_api_naming.md`
+- `docs/radar-API/signalk_radar_api_naming.md`
 
 ### Naming Convention
 
@@ -175,7 +175,7 @@ Use **semantic naming** - name the control by what it **does**, not the vendor's
 | Navico "VelocityTrack" | `dopplerMode` |
 | Furuno "Target Analyzer" | `dopplerMode` |
 
-See `docs/radar API/signalk_radar_api_naming.md` for the full naming guide.
+See `docs/radar-API/signalk_radar_api_naming.md` for the full naming guide.
 
 ### Adding a New Control
 
@@ -215,9 +215,10 @@ pub fn control_my_new_feature() -> ControlDefinition {
 }
 ```
 
-2. **Register in `get_extended_control()`**:
+2. **Register in `get_extended_control()`** (or `get_extended_control_for_brand()` if the control needs brand-specific wire hints):
 
 ```rust
+// In get_extended_control() for brand-independent controls:
 pub fn get_extended_control(id: &str) -> Option<ControlDefinition> {
     match id {
         // ... existing controls ...
@@ -225,9 +226,18 @@ pub fn get_extended_control(id: &str) -> Option<ControlDefinition> {
         _ => None,
     }
 }
+
+// OR in get_extended_control_for_brand() for brand-specific wire hints:
+pub fn get_extended_control_for_brand(id: &str, brand: Brand) -> Option<ControlDefinition> {
+    match id {
+        "myNewFeature" => Some(control_my_new_feature_for_brand(brand)),
+        // Falls back to get_extended_control() for other controls
+        _ => get_extended_control(id),
+    }
+}
 ```
 
-3. **Update naming documentation** in `docs/radar API/signalk_radar_api_naming.md`
+3. **Update naming documentation** in `docs/radar-API/signalk_radar_api_naming.md`
 
 ## Control Types Reference
 
@@ -254,10 +264,11 @@ cd mayara-core
 cargo test
 ```
 
-2. **Build the WASM plugin** (if applicable):
+2. **Run the server** and test with GUI:
 ```bash
-cd mayara-signalk-wasm
-./build.sh
+cd mayara-server
+cargo run
+# Open http://localhost:6502 in browser
 ```
 
 3. **Test with actual hardware** - verify:
@@ -270,7 +281,7 @@ cd mayara-signalk-wasm
 
 Before submitting:
 
-- [ ] Protocol documented in `docs/radar protocols/{brand}/protocol.md`
+- [ ] Protocol documented in `docs/radar-protocols/{brand}/protocol.md`
 - [ ] Model added to `mayara-core/src/models/{brand}.rs`
 - [ ] Range table defined (if new ranges)
 - [ ] Controls list defined with correct semantic IDs
@@ -284,13 +295,13 @@ Before submitting:
 
 | File | Purpose |
 |------|---------|
-| `docs/radar protocols/{brand}/protocol.md` | Protocol documentation |
+| `docs/radar-protocols/{brand}/protocol.md` | Protocol documentation |
 | `mayara-core/src/models/mod.rs` | Model database entry point |
 | `mayara-core/src/models/{brand}.rs` | Brand-specific model definitions |
 | `mayara-core/src/capabilities/mod.rs` | CapabilityManifest and SupportedFeature types |
 | `mayara-core/src/capabilities/controls.rs` | Control definitions |
 | `mayara-core/src/capabilities/builder.rs` | Capability manifest builder |
-| `docs/radar API/signalk_radar_api_naming.md` | Naming conventions |
+| `docs/radar-API/signalk_radar_api_naming.md` | Naming conventions |
 
 ## Understanding CapabilityManifest and SupportedFeatures
 
@@ -386,7 +397,7 @@ let supported_features = vec![
 ];
 ```
 
-See `mayara-server/src/web.rs` and `mayara-signalk-wasm/src/radar_provider.rs` for examples.
+See `mayara-server/src/web.rs` for an example.
 
 ## Examples
 
@@ -435,4 +446,4 @@ ModelInfo {
 2. Add `pub mod newbrand;` to `mayara-core/src/models/mod.rs`
 3. Add `Brand::NewBrand` to `mayara-core/src/brand.rs`
 4. Update `get_model()` and `get_models_for_brand()` in `mod.rs`
-5. Create protocol documentation in `docs/radar protocols/newbrand/`
+5. Create protocol documentation in `docs/radar-protocols/newbrand/`
