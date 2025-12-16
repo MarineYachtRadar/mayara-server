@@ -1595,6 +1595,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mayara-signalk-wasm"
+version = "0.1.0"
+dependencies = [
+ "mayara-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "mdns-sd"
 version = "0.11.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"

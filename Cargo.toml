@@ -1,5 +1,5 @@
 [workspace]
-members = ["mayara-core", "mayara-server"]
+members = ["mayara-core", "mayara-server", "mayara-signalk-wasm"]
 resolver = "2"
 
 # WASM release profile optimizations
