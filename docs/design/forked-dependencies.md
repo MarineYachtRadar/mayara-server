@@ -66,7 +66,7 @@ Depends on the tungstenite-rs fork. If upstream ever merges permessage-deflate s
 
 ---
 
-## Future Plans
+## Possible Future Plans
 
 1. **nmea-parser**: Consider submitting a PR upstream for the precision fixes
 2. **tungstenite/tokio-tungstenite**: Monitor the upstream PR. If it gets merged and released, switch to the official crates

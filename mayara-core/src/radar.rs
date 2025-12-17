@@ -16,11 +16,11 @@ pub struct RadarDiscovery {
     pub model: Option<String>,
     /// Radar name/serial from beacon
     pub name: String,
-    /// IP address as string
+    /// IP address as string (radar's DHCP address)
     pub address: String,
-    /// Port for data streaming
+    /// Port for data streaming (legacy - use data_address if available)
     pub data_port: u16,
-    /// Port for commands/reports
+    /// Port for commands/reports (legacy - use report_address/send_address if available)
     pub command_port: u16,
     /// Number of spokes per revolution
     pub spokes_per_revolution: u16,
@@ -34,6 +34,18 @@ pub struct RadarDiscovery {
     /// NIC address that received this beacon (for multi-interface systems)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nic_address: Option<String>,
+    /// Suffix for dual-range radars ("A" or "B"), None for single-range
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suffix: Option<String>,
+    /// Full data address including IP (for brands like Navico that use separate multicast addresses)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data_address: Option<String>,
+    /// Full report address including IP (for brands like Navico that use separate multicast addresses)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub report_address: Option<String>,
+    /// Full send/command address including IP
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub send_address: Option<String>,
 }
 
 /// Legend entry for mapping pixel values to colors

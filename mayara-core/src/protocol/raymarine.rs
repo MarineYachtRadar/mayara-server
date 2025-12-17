@@ -433,6 +433,10 @@ pub fn parse_beacon_response(data: &[u8], source_addr: &str) -> Result<RadarDisc
             pixel_values: pixels,
             serial_number: None,
             nic_address: None, // Set by locator
+            suffix: None,
+            data_address: None,
+            report_address: None,
+            send_address: None,
         });
     }
 
@@ -476,6 +480,10 @@ pub fn parse_beacon_response(data: &[u8], source_addr: &str) -> Result<RadarDisc
             pixel_values: pixels,
             serial_number: None,
             nic_address: None, // Set by locator
+            suffix: None,
+            data_address: None,
+            report_address: None,
+            send_address: None,
         });
     }
 

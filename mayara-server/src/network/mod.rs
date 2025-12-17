@@ -165,11 +165,11 @@ fn bind_to_multicast(
         }
     }
 
-    // Bind to 0.0.0.0:port instead of multicast_addr:port to match mayara-wasm behavior.
-    // On some Linux configurations, binding directly to the multicast address doesn't work
-    // properly for receiving packets. The IP_MULTICAST_ALL=0 above ensures we only receive
-    // packets for groups we've joined on this specific interface.
-    let socketaddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), addr.port());
+    // Bind to the multicast address itself for proper packet filtering on Unix.
+    // This differs from WASM which must use 0.0.0.0 due to Node.js dgram limitations.
+    // The IP_MULTICAST_ALL=0 above ensures we only receive packets for groups we've
+    // joined on this specific interface.
+    let socketaddr = SocketAddr::new(IpAddr::V4(*addr.ip()), addr.port());
     socket.bind(&socket2::SockAddr::from(socketaddr))?;
 
     socket.join_multicast_v4(addr.ip(), nic_addr)?;

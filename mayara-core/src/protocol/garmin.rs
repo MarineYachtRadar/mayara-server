@@ -348,6 +348,10 @@ pub fn create_discovery(source_addr: &str) -> RadarDiscovery {
         pixel_values: PIXEL_VALUES,
         serial_number: None,
         nic_address: None, // Set by locator
+        suffix: None,
+        data_address: None,
+        report_address: None,
+        send_address: None,
     }
 }
 

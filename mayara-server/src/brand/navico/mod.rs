@@ -24,6 +24,16 @@ use mayara_core::protocol::navico::{
 const NAVICO_SPOKES: usize = NAVICO_SPOKES_U16 as usize;
 const NAVICO_SPOKE_LEN: usize = NAVICO_SPOKE_LEN_U16 as usize;
 
+/// Parse a socket address string "ip:port" into SocketAddrV4
+fn parse_socket_addr(s: &str) -> Option<SocketAddrV4> {
+    let colon_pos = s.rfind(':')?;
+    let ip_str = &s[..colon_pos];
+    let port_str = &s[colon_pos + 1..];
+    let ip: Ipv4Addr = ip_str.parse().ok()?;
+    let port: u16 = port_str.parse().ok()?;
+    Some(SocketAddrV4::new(ip, port))
+}
+
 // Spoke numbers go from [0..4096>, but only half of them are used.
 // The actual image is 2048 x 1024 x 4 bits
 const NAVICO_BITS_PER_PIXEL: usize = BITS_PER_NIBBLE;
@@ -341,10 +351,9 @@ use mayara_core::radar::{ParsedAddress, RadarDiscovery};
 
 /// Process a radar discovery from the core locator.
 ///
-/// Note: The core RadarDiscovery doesn't fully support Navico's dual-range radars
-/// or the separate data/report/send endpoints. For now, this uses the simplified
-/// addresses from RadarDiscovery. Full dual-range support requires keeping
-/// the existing beacon parsing via parse_beacon_endpoints.
+/// Navico radars provide separate multicast addresses for data/report/send in their
+/// beacon packets. For dual-range radars (4G, HALO), this is called twice - once for
+/// each range (A and B), each with its own complete set of addresses.
 pub fn process_discovery(
     session: Session,
     discovery: &RadarDiscovery,
@@ -352,16 +361,30 @@ pub fn process_discovery(
     radars: &SharedRadars,
     subsys: &SubsystemHandle,
 ) -> Result<(), io::Error> {
-    // Parse address from discovery using core's parser
+    // Parse radar's main address
     let parsed = ParsedAddress::parse(&discovery.address)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
     let radar_ip = Ipv4Addr::from(parsed.ip);
     let radar_addr = SocketAddrV4::new(radar_ip, parsed.port);
 
-    // For simplified discovery, use the same address for data/report/send with different ports
-    let data_addr: SocketAddrV4 = SocketAddrV4::new(radar_ip, discovery.data_port);
-    let report_addr: SocketAddrV4 = SocketAddrV4::new(radar_ip, discovery.command_port);
-    let send_addr: SocketAddrV4 = SocketAddrV4::new(radar_ip, discovery.command_port);
+    // Use the full addresses from beacon if available, otherwise fall back to port-based
+    let data_addr: SocketAddrV4 = if let Some(addr) = &discovery.data_address {
+        parse_socket_addr(addr).unwrap_or_else(|| SocketAddrV4::new(radar_ip, discovery.data_port))
+    } else {
+        SocketAddrV4::new(radar_ip, discovery.data_port)
+    };
+
+    let report_addr: SocketAddrV4 = if let Some(addr) = &discovery.report_address {
+        parse_socket_addr(addr).unwrap_or_else(|| SocketAddrV4::new(radar_ip, discovery.command_port))
+    } else {
+        SocketAddrV4::new(radar_ip, discovery.command_port)
+    };
+
+    let send_addr: SocketAddrV4 = if let Some(addr) = &discovery.send_address {
+        parse_socket_addr(addr).unwrap_or_else(|| SocketAddrV4::new(radar_ip, discovery.command_port))
+    } else {
+        SocketAddrV4::new(radar_ip, discovery.command_port)
+    };
 
     // Determine locator ID and model
     let is_br24 = discovery.model.as_deref() == Some("BR24");
@@ -372,12 +395,15 @@ pub fn process_discovery(
     };
     let model_name = discovery.model.as_deref();
 
+    // Determine if this is a dual-range radar based on suffix
+    let is_dual_range = discovery.suffix.is_some();
+
     let info: RadarInfo = RadarInfo::new(
         session.clone(),
         locator_id,
         Brand::Navico,
         discovery.serial_number.as_deref(),
-        None, // suffix - not available from simplified discovery
+        discovery.suffix.as_deref(),
         16,
         NAVICO_SPOKES,
         NAVICO_SPOKE_LEN,
@@ -387,7 +413,7 @@ pub fn process_discovery(
         report_addr,
         send_addr,
         settings::new(session.clone(), model_name),
-        false, // is_dual_range - not available from simplified discovery
+        is_dual_range,
     );
 
     // Set userName control
