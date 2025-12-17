@@ -18,59 +18,68 @@ jobs:
       uses: jirutka/setup-alpine@v1.2.0
     - name: Prepare Alpine chroot
       run: |
-        apk add git curl bash g++ musl-dev make perl
+        apk add git curl bash g++ musl-dev make perl nodejs npm
         curl -sSf https://sh.rustup.rs | bash -s -- -y
       shell: alpine.sh --root {0}
     - name: Build in Alpine chroot
-      run: cargo build --release
+      run: cargo build --release -p mayara-server
       shell: alpine.sh --root {0}
     - name: Run tests
-      run: cargo test --release --verbose
+      run: cargo test --release --verbose -p mayara-core -p mayara-server
       shell: alpine.sh --root {0}
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
         name: Mayara Linux x86_64
-        path: target/release/mayara
+        path: target/release/mayara-server
 
   macos:
-    runs-on: macos-13
+    runs-on: macos-15
     steps:
     - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '20'
     - name: Build
-      run: cargo build --release
+      run: cargo build --release -p mayara-server
     - name: Run tests
-      run: cargo test --release --verbose
+      run: cargo test --release --verbose -p mayara-core -p mayara-server
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
         name: Mayara macOS Intel
-        path: target/release/mayara
+        path: target/release/mayara-server
 
   macos_arm64:
     runs-on: macos-14
     steps:
     - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '20'
     - name: Build
-      run: cargo build --release
+      run: cargo build --release -p mayara-server
     - name: Run tests
-      run: cargo test --release --verbose
+      run: cargo test --release --verbose -p mayara-core -p mayara-server
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
         name: Mayara macOS Apple Silicon
-        path: target/release/mayara
+        path: target/release/mayara-server
 
   windows:
     runs-on: windows-latest
     steps:
     - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '20'
     - name: Build
-      run: cargo build --release
+      run: cargo build --release -p mayara-server
     - name: Run tests
-      run: cargo test --release --verbose
+      run: cargo test --release --verbose -p mayara-core -p mayara-server
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
         name: Mayara Windows x86_64
-        path: target/release/mayara.exe
+        path: target/release/mayara-server.exe
