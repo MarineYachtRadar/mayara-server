@@ -27,13 +27,22 @@ TODO:
 
 ### dirkwa
 
-- Find a github org home for the project and rename vereything
-- Update GITHUB build infrastructure and NPM publish for new infrastructure
-- Make new SignalK connector for mayara-server standalone.
+- Test HALO radar @Kees/PI4
+  - Update protocol
+  - Verify and extend radar model database in core.
+  - Verify and extend tests
+  - Update documentation
+  - Update README
+  - Prepare PR
+- Make new SignalK connector for mayara-server standalone as provider and client (similar to WASM).
+  - doc folder in server or plugin?
+  - 
+- For SignalK devs - Plugin too use history and playback Radar Spokes
 
 
 #### diwa done
-
+- Find a github org home for the project and rename evreything
+- Update GITHUB build infrastructure and NPM publish for new infrastructure
 - Full refactor
 - Refactor WASM to new infrastructure
 - Update documentation to WASM
