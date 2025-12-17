@@ -33,6 +33,24 @@ jobs:
         name: Mayara Linux x86_64
         path: target/release/mayara-server
 
+  linux_arm64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+    - uses: dtolnay/rust-toolchain@stable
+    - name: Build
+      run: cargo build --release -p mayara-server
+    - name: Run tests
+      run: cargo test --release --verbose -p mayara-core -p mayara-server
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: Mayara Linux ARM64 (Raspberry Pi)
+        path: target/release/mayara-server
+
   macos:
     runs-on: macos-15
     steps:
@@ -40,6 +58,7 @@ jobs:
     - uses: actions/setup-node@v4
       with:
         node-version: '20'
+    - uses: dtolnay/rust-toolchain@stable
     - name: Build
       run: cargo build --release -p mayara-server
     - name: Run tests
@@ -57,6 +76,7 @@ jobs:
     - uses: actions/setup-node@v4
       with:
         node-version: '20'
+    - uses: dtolnay/rust-toolchain@stable
     - name: Build
       run: cargo build --release -p mayara-server
     - name: Run tests
@@ -74,6 +94,7 @@ jobs:
     - uses: actions/setup-node@v4
       with:
         node-version: '20'
+    - uses: dtolnay/rust-toolchain@stable
     - name: Build
       run: cargo build --release -p mayara-server
     - name: Run tests
