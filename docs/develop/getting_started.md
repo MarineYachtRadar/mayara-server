@@ -146,21 +146,21 @@ The server exposes a SignalK-compatible REST API:
 
 ```bash
 # List all radars
-curl http://localhost:6502/v1/api/radars
+curl http://localhost:6502/v2/api/radars
 
 # Get radar capabilities (controls, ranges, features)
-curl http://localhost:6502/v1/api/radars/radar-1/capabilities
+curl http://localhost:6502/v2/api/radars/radar-1/capabilities
 
 # Get current state (control values)
-curl http://localhost:6502/v1/api/radars/radar-1/state
+curl http://localhost:6502/v2/api/radars/radar-1/state
 
 # Set a control
-curl -X PUT http://localhost:6502/v1/api/radars/radar-1/controls/gain \
+curl -X PUT http://localhost:6502/v2/api/radars/radar-1/controls/gain \
   -H "Content-Type: application/json" \
   -d '{"value": 50}'
 
 # Set control with auto mode
-curl -X PUT http://localhost:6502/v1/api/radars/radar-1/controls/gain \
+curl -X PUT http://localhost:6502/v2/api/radars/radar-1/controls/gain \
   -H "Content-Type: application/json" \
   -d '{"value": 50, "auto": true}'
 ```
@@ -168,8 +168,8 @@ curl -X PUT http://localhost:6502/v1/api/radars/radar-1/controls/gain \
 ### WebSocket Endpoints
 
 ```
-/v1/api/radars/{id}/spokes   - Binary protobuf spoke stream
-/v1/api/radars/{id}/targets  - ARPA target updates (JSON)
+/v2/api/radars/{id}/spokes   - Binary protobuf spoke stream
+/v2/api/radars/{id}/targets  - ARPA target updates (JSON)
 ```
 
 ---

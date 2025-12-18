@@ -14,9 +14,12 @@ fn main() {
 
     let out_dir = env::var_os("OUT_DIR").unwrap();
 
-    // Download GUI from npm if not present
+    // Skip GUI download in dev mode - we serve from filesystem instead
+    let is_dev = env::var("CARGO_FEATURE_DEV").is_ok();
+
+    // Download GUI from npm if not present (skip in dev mode)
     let gui_dir = PathBuf::from(&out_dir).join("gui");
-    if !gui_dir.join("index.html").exists() {
+    if !is_dev && !gui_dir.join("index.html").exists() {
         println!("cargo:warning=Downloading GUI from npm...");
 
         // Create temp dir for npm install

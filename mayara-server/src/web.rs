@@ -56,29 +56,29 @@ use mayara_core::engine::RadarEngine;
 use mayara_core::capabilities::{builder::build_capabilities_from_model_with_key, RadarStateV5, SupportedFeature};
 use mayara_core::models;
 
-// Standalone Radar API v1 paths (matches SignalK Radar API structure for GUI compatibility)
-const RADARS_URI: &str = "/v1/api/radars";
-const RADAR_CAPABILITIES_URI: &str = "/v1/api/radars/{radar_id}/capabilities";
-const RADAR_STATE_URI: &str = "/v1/api/radars/{radar_id}/state";
-const SPOKES_URI: &str = "/v1/api/radars/{radar_id}/spokes";
-const CONTROL_URI: &str = "/v1/api/radars/{radar_id}/control";
-const CONTROL_VALUE_URI: &str = "/v1/api/radars/{radar_id}/controls/{control_id}";
-const TARGETS_URI: &str = "/v1/api/radars/{radar_id}/targets";
-const TARGET_URI: &str = "/v1/api/radars/{radar_id}/targets/{target_id}";
-const ARPA_SETTINGS_URI: &str = "/v1/api/radars/{radar_id}/arpa/settings";
+// Standalone Radar API v2 paths (matches SignalK Radar API v2 structure)
+const RADARS_URI: &str = "/v2/api/radars";
+const RADAR_CAPABILITIES_URI: &str = "/v2/api/radars/{radar_id}/capabilities";
+const RADAR_STATE_URI: &str = "/v2/api/radars/{radar_id}/state";
+const SPOKES_URI: &str = "/v2/api/radars/{radar_id}/spokes";
+const CONTROL_URI: &str = "/v2/api/radars/{radar_id}/control";
+const CONTROL_VALUE_URI: &str = "/v2/api/radars/{radar_id}/controls/{control_id}";
+const TARGETS_URI: &str = "/v2/api/radars/{radar_id}/targets";
+const TARGET_URI: &str = "/v2/api/radars/{radar_id}/targets/{target_id}";
+const ARPA_SETTINGS_URI: &str = "/v2/api/radars/{radar_id}/arpa/settings";
 // Guard zones
-const GUARD_ZONES_URI: &str = "/v1/api/radars/{radar_id}/guardZones";
-const GUARD_ZONE_URI: &str = "/v1/api/radars/{radar_id}/guardZones/{zone_id}";
+const GUARD_ZONES_URI: &str = "/v2/api/radars/{radar_id}/guardZones";
+const GUARD_ZONE_URI: &str = "/v2/api/radars/{radar_id}/guardZones/{zone_id}";
 // Trails
-const TRAILS_URI: &str = "/v1/api/radars/{radar_id}/trails";
-const TRAIL_URI: &str = "/v1/api/radars/{radar_id}/trails/{target_id}";
-const TRAIL_SETTINGS_URI: &str = "/v1/api/radars/{radar_id}/trails/settings";
+const TRAILS_URI: &str = "/v2/api/radars/{radar_id}/trails";
+const TRAIL_URI: &str = "/v2/api/radars/{radar_id}/trails/{target_id}";
+const TRAIL_SETTINGS_URI: &str = "/v2/api/radars/{radar_id}/trails/settings";
 // Dual-range
-const DUAL_RANGE_URI: &str = "/v1/api/radars/{radar_id}/dualRange";
-const DUAL_RANGE_SPOKES_URI: &str = "/v1/api/radars/{radar_id}/dualRange/spokes";
+const DUAL_RANGE_URI: &str = "/v2/api/radars/{radar_id}/dualRange";
+const DUAL_RANGE_SPOKES_URI: &str = "/v2/api/radars/{radar_id}/dualRange/spokes";
 
 // Non-radar endpoints
-const INTERFACES_URI: &str = "/v1/api/interfaces";
+const INTERFACES_URI: &str = "/v2/api/interfaces";
 
 // SignalK applicationData API (for settings persistence)
 const APP_DATA_URI: &str = "/signalk/v1/applicationData/global/{appid}/{version}/{*key}";
@@ -164,9 +164,10 @@ impl Web {
 
         // In dev mode, serve files from filesystem for live reload
         // In production, use embedded files
-        // Note: CARGO_MANIFEST_DIR is the directory containing mayara-server/Cargo.toml
+        // Note: CARGO_MANIFEST_DIR is /home/dirk/dev/mayara-server/mayara-server
+        // So we go up two levels to reach /home/dirk/dev/mayara-gui
         #[cfg(feature = "dev")]
-        let serve_assets = ServeDir::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../mayara-gui"));
+        let serve_assets = ServeDir::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../mayara-gui"));
         #[cfg(not(feature = "dev"))]
         let serve_assets = ServeEmbed::<Assets>::new();
 
@@ -333,8 +334,8 @@ async fn get_radars(
     {
         let legend = &info.legend;
         let id = format!("radar-{}", info.id);
-        let stream_url = format!("ws://{}/v1/api/radars/{}/spokes", host, id);
-        let control_url = format!("ws://{}/v1/api/radars/{}/control", host, id);
+        let stream_url = format!("ws://{}/v2/api/radars/{}/spokes", host, id);
+        let control_url = format!("ws://{}/v2/api/radars/{}/control", host, id);
         let name = info.controls.user_name();
         let v = RadarApi::new(
             id.to_owned(),
@@ -369,7 +370,7 @@ fn to_core_brand(brand: mayara_server::Brand) -> mayara_core::Brand {
     }
 }
 
-/// GET /v1/api/radars/{radar_id}/capabilities
+/// GET /v2/api/radars/{radar_id}/capabilities
 /// Returns the capability manifest for a specific radar (v5 API format)
 #[debug_handler]
 async fn get_radar_capabilities(
@@ -443,7 +444,7 @@ async fn get_radar_capabilities(
     }
 }
 
-/// GET /v1/api/radars/{radar_id}/state
+/// GET /v2/api/radars/{radar_id}/state
 /// Returns the current state of a radar (v5 API format)
 #[debug_handler]
 async fn get_radar_state(
@@ -777,7 +778,7 @@ struct SetControlRequest {
     value: serde_json::Value,
 }
 
-/// PUT /v1/api/radars/{radar_id}/controls/{control_id}
+/// PUT /v2/api/radars/{radar_id}/controls/{control_id}
 /// Sets a control value on the radar
 #[debug_handler]
 async fn set_control_value(

@@ -372,12 +372,17 @@ The server's `brand/` modules still handle:
 - WebSocket spoke streaming to clients
 - Navigation data sending (Navico `info.rs` uses core formatting functions)
 
+### ✅ Recently Implemented
+
+| Component | Notes |
+|-----------|-------|
+| mayara-server-signalk-plugin | Native JS plugin connecting SignalK to mayara-server (see External Clients section) |
+
 ### ❌ Not Yet Implemented
 
 | Component | Notes |
 |-----------|-------|
-| mayara_opencpn plugin | OpenCPN integration (see Future section) |
-| SignalK Provider Mode | Standalone → SignalK provider registration |
+| mayara_opencpn plugin | OpenCPN integration (see External Clients section) |
 | Garmin server controller | Server still uses old locator-based approach |
 
 ---
@@ -1323,9 +1328,101 @@ Controls with `wire_hints.write_only = true` in mayara-core indicate that:
 
 ---
 
-## Future: OpenCPN Integration (mayara_opencpn)
+## External Clients: The Shared API Architecture
 
-> Create a standalone OpenCPN plugin that connects to Mayara Standalone via HTTP/WebSocket.
+The mayara-server REST API (`/v2/api/radars/*`) is the **shared interface** that enables
+multiple client applications to connect to the same radar infrastructure. All radar logic
+(protocol handling, ARPA tracking, signal processing) runs on mayara-server - clients are
+thin display and control layers.
+
+```
+                                    ┌─────────────────────┐
+                                    │  mayara-server      │
+                                    │  (localhost:6502)   │
+                                    │                     │
+                                    │  /v2/api/radars/*   │
+                                    │  (REST + WebSocket) │
+                                    └─────────┬───────────┘
+                                              │
+                                              │  HTTP + WebSocket
+                    ┌─────────────────────────┼─────────────────────────┐
+                    │                         │                         │
+                    ▼                         ▼                         ▼
+     ┌──────────────────────┐   ┌──────────────────────┐   ┌──────────────────────┐
+     │   mayara-gui         │   │   mayara-server-     │   │   mayara_opencpn     │
+     │   (Web Browser)      │   │   signalk-plugin     │   │   (Future)           │
+     │                      │   │   (SignalK/Node.js)  │   │   (C++)              │
+     │   - Direct access    │   │                      │   │                      │
+     │   - WebGPU rendering │   │   - Exposes radars   │   │   - OpenGL rendering │
+     │   - VanJS UI         │   │     via SignalK API  │   │   - Chart overlay    │
+     └──────────────────────┘   └──────────────────────┘   └──────────────────────┘
+                                              │
+                                              ▼
+                                ┌──────────────────────────────┐
+                                │  SignalK Server              │
+                                │  /signalk/v2/api/.../radars  │
+                                │                              │
+                                │  - Security (JWT)            │
+                                │  - Multi-provider support    │
+                                │  - Built-in binary streaming │
+                                └──────────────────────────────┘
+```
+
+### Deployment Mode: mayara-server-signalk-plugin
+
+The **mayara-server-signalk-plugin** is a native SignalK (JavaScript) plugin that:
+1. Connects to mayara-server's REST API
+2. Registers as a RadarProvider with SignalK's Radar API
+3. Forwards spoke data via SignalK's `binaryStreamManager`
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            SignalK Server                                    │
+│  ┌────────────────────────────────────────────────────────────────────────┐ │
+│  │                   mayara-server-signalk-plugin                          │ │
+│  │                                                                         │ │
+│  │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────────────┐ │ │
+│  │  │  MayaraClient   │  │  RadarProvider  │  │    SpokeForwarder       │ │ │
+│  │  │  (HTTP client)  │  │  (API methods)  │  │  (WS → emitData)        │ │ │
+│  │  └────────┬────────┘  └────────┬────────┘  └────────────┬────────────┘ │ │
+│  │           │                    │                        │              │ │
+│  └───────────┼────────────────────┼────────────────────────┼──────────────┘ │
+│              │   radarApi.register()      binaryStreamManager.emitData()    │
+│              │                    │                        │                │
+│  ┌───────────┼────────────────────┼────────────────────────┼──────────────┐ │
+│  │           │        SignalK Radar API v2                 │              │ │
+│  │           │   /signalk/v2/api/vessels/self/radars/*     │              │ │
+│  │           │   Security: JWT via authorizeWS()           │              │ │
+│  └───────────┼────────────────────────────────────────────────────────────┘ │
+└──────────────┼──────────────────────────────────────────────────────────────┘
+               │ HTTP + WebSocket
+               ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            mayara-server                                     │
+│              /v2/api/radars/*            /v2/api/radars/*/spokes             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Key Features:**
+- Pure JavaScript (no native dependencies beyond `ws`)
+- Implements `RadarProviderMethods` interface from SignalK
+- Uses SignalK's built-in `binaryStreamManager` for spoke streaming (no custom proxy)
+- Auto-discovery of radars connected to mayara-server
+- Auto-reconnection on network failures
+- Embeds mayara-gui for web display
+
+**Plugin Location:** `mayara-server-signalk-plugin/` (separate repository)
+
+**Why NOT embed mayara-core in the plugin?**
+- SignalK's WASM plugin already provides embedded radar support via mayara-signalk-wasm
+- mayara-server-signalk-plugin is for deployments where mayara-server runs separately
+- Separation allows mayara-server to run on different hardware (e.g., dedicated radar PC)
+- Single mayara-server can serve multiple clients (SignalK, direct browser, future OpenCPN)
+
+### Deployment Mode: Future OpenCPN Integration (mayara_opencpn)
+
+A future OpenCPN plugin will connect to mayara-server using the same API. OpenCPN
+includes the IXWebSocket library, providing full HTTP and WebSocket support in C++.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -1335,19 +1432,23 @@ Controls with `wire_hints.write_only = true` in mayara-core indicate that:
 │  │                    MayaraRadarPanel                       │   │
 │  │  - PPI rendering (OpenGL/GLES with shaders)               │   │
 │  │  - Guard zones, ARPA targets, trails display              │   │
+│  │  - Chart overlay mode                                     │   │
 │  │  - All data from mayara-server API                        │   │
 │  └──────────────────────────────────────────────────────────┘   │
 │                              │                                   │
 │  ┌──────────────────────────────────────────────────────────┐   │
-│  │                    MayaraClient                           │   │
-│  │  - HTTP: GET /radars, GET /capabilities, PUT /state       │   │
+│  │                    MayaraClient (C++)                     │   │
+│  │  - Uses IXWebSocket (built into OpenCPN)                  │   │
+│  │  - HTTP: GET /radars, GET /capabilities, PUT /controls    │   │
 │  │  - WebSocket: /radars/{id}/spokes (protobuf stream)       │   │
+│  │  - WebSocket: /radars/{id}/targets (ARPA stream)          │   │
 │  └──────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
                                │
+                               │  HTTP + WebSocket (same API!)
                                ▼
                     ┌─────────────────────┐
-                    │  Mayara Standalone  │
+                    │  mayara-server      │
                     │  (localhost:6502)   │
                     └─────────────────────┘
                                │
@@ -1356,10 +1457,20 @@ Controls with `wire_hints.write_only = true` in mayara-core indicate that:
                     (Furuno, Navico, etc.)
 ```
 
-**Why this works well:**
-- ARPA logic already in mayara-core
-- No reimplementation needed in OpenCPN plugin
-- Plugin is just a thin rendering client
+**Why this architecture works well:**
+- ARPA logic already in mayara-core (no reimplementation needed)
+- OpenCPN plugin is just a thin rendering client
+- Same API used by mayara-gui and SignalK plugin
+- IXWebSocket provides cross-platform HTTP/WebSocket in OpenCPN
+
+### Client Comparison
+
+| Client | Language | Use Case | Radar Logic |
+|--------|----------|----------|-------------|
+| **mayara-gui** | JavaScript | Direct browser access | mayara-server |
+| **mayara-signalk-wasm** | Rust/WASM | Embedded in SignalK | mayara-core (in WASM) |
+| **mayara-server-signalk-plugin** | JavaScript | SignalK + remote mayara-server | mayara-server |
+| **mayara_opencpn** (future) | C++ | OpenCPN chart plotter | mayara-server |
 
 ---
 
@@ -1419,7 +1530,7 @@ async fn test_radar_capabilities_endpoint() {
     let app = create_test_app();
 
     let response = app
-        .oneshot(Request::get("/v1/api/radars/test-radar/capabilities").body(Body::empty())?)
+        .oneshot(Request::get("/v2/api/radars/test-radar/capabilities").body(Body::empty())?)
         .await?;
 
     assert_eq!(response.status(), StatusCode::OK);
