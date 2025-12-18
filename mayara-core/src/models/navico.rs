@@ -95,6 +95,23 @@ static CONTROLS_4G: &[&str] = &[
 /// All known Navico radar models
 pub static MODELS: &[ModelInfo] = &[
     // HALO Series (Doppler capable)
+    // Generic HALO entry for radars that don't report specific variant
+    ModelInfo {
+        brand: Brand::Navico,
+        model: "HALO",
+        family: "HALO",
+        display_name: "Navico HALO",
+        max_range: 74080, // Conservative max range
+        min_range: 50,
+        range_table: RANGE_TABLE_HALO,
+        spokes_per_revolution: 2048,
+        max_spoke_length: 1024,
+        has_doppler: true,
+        has_dual_range: true,
+        max_dual_range: 24000,
+        no_transmit_zone_count: 4,
+        controls: CONTROLS_HALO,
+    },
     ModelInfo {
         brand: Brand::Navico,
         model: "HALO20+",

@@ -119,6 +119,7 @@ impl NavicoReportReceiver {
                 info.send_command_addr.port(),
                 &info.report_addr.ip().to_string(),
                 info.report_addr.port(),
+                &info.nic_addr.to_string(),
                 core_model,
             ))
         } else {
@@ -346,6 +347,8 @@ impl NavicoReportReceiver {
         let cv = control_update.control_value;
         let reply_tx = control_update.reply_tx;
 
+        log::debug!("{}: process_control_update id={} value={}", self.key, cv.id, cv.value);
+
         match self.send_control_to_radar(&cv) {
             Ok(()) => {
                 self.info.controls.set_refresh(&cv.id);
@@ -368,6 +371,20 @@ impl NavicoReportReceiver {
             Some(c) => c,
             None => return Ok(()), // Replay mode, no controller
         };
+
+        // Handle power control first (string value, not numeric)
+        if cv.id.as_str() == "power" {
+            let transmit = if let Some(control) = self.info.controls.get("power") {
+                let index = control.enum_value_to_index(&cv.value).unwrap_or(1);
+                index == 2 // transmit is index 2
+            } else {
+                cv.value.to_lowercase() == "transmit"
+            };
+            log::info!("{}: set_power transmit={} (value='{}')", self.key, transmit, cv.value);
+            controller.set_power(&mut self.io, transmit);
+            return Ok(());
+        }
+
         let value = cv
             .value
             .parse::<f32>()
@@ -397,16 +414,6 @@ impl NavicoReportReceiver {
         let deci_value = (value * 10.0) as i32;
 
         match cv.id.as_str() {
-            "power" => {
-                // Convert to transmit/standby
-                let transmit = if let Some(control) = self.info.controls.get("power") {
-                    let index = control.enum_value_to_index(&cv.value).unwrap_or(1);
-                    index == 2 // transmit is index 2
-                } else {
-                    cv.value.to_lowercase() == "transmit"
-                };
-                controller.set_power(&mut self.io, transmit);
-            }
             "range" => {
                 controller.set_range(&mut self.io, deci_value);
             }
@@ -527,6 +534,12 @@ impl NavicoReportReceiver {
     }
 
     pub async fn run(mut self, subsys: SubsystemHandle) -> Result<(), RadarError> {
+        // Initialize controller sockets (command socket for sending commands to radar)
+        if let Some(controller) = &mut self.controller {
+            controller.poll(&mut self.io);
+            log::debug!("{}: Controller initialized", self.key);
+        }
+
         self.start_report_socket().await?;
         loop {
             if self.report_socket.is_some() {

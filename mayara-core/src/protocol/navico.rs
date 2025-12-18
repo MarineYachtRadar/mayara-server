@@ -761,7 +761,8 @@ pub fn is_address_request(data: &[u8]) -> bool {
 /// Parse a beacon response packet
 ///
 /// Returns radar discovery information. Works with BR24, 3G, 4G, and HALO.
-pub fn parse_beacon_response(data: &[u8], source_addr: &str) -> Result<RadarDiscovery, ParseError> {
+/// For dual-range radars (4G, HALO), returns two discoveries (A and B ranges).
+pub fn parse_beacon_response(data: &[u8], source_addr: &str) -> Result<Vec<RadarDiscovery>, ParseError> {
     if data.len() < 2 {
         return Err(ParseError::TooShort {
             expected: 2,
@@ -796,34 +797,58 @@ pub fn parse_beacon_response(data: &[u8], source_addr: &str) -> Result<RadarDisc
     })
 }
 
-fn parse_beacon_dual(data: &[u8], source_addr: &str) -> Result<RadarDiscovery, ParseError> {
+fn parse_beacon_dual(data: &[u8], source_addr: &str) -> Result<Vec<RadarDiscovery>, ParseError> {
     let beacon: BeaconDual = bincode::deserialize(data)?;
 
     let serial_no = c_string(&beacon.header.serial_no)
         .ok_or(ParseError::InvalidString)?;
 
-    Ok(RadarDiscovery {
-        brand: Brand::Navico,
-        model: None, // Model comes from Report 03
-        name: serial_no,
-        address: source_addr.to_string(),
-        data_port: beacon.a.data.port(),
-        command_port: beacon.a.send.port(),
-        spokes_per_revolution: SPOKES_PER_REVOLUTION,
-        max_spoke_len: MAX_SPOKE_LEN,
-        pixel_values: 16, // 4-bit pixels
-        serial_number: None,
-        nic_address: None, // Set by locator
-    })
+    // Dual-range radars have two independent radar endpoints (A and B)
+    Ok(vec![
+        RadarDiscovery {
+            brand: Brand::Navico,
+            model: None, // Model comes from Report 03
+            name: serial_no.clone(),
+            address: source_addr.to_string(),
+            data_port: beacon.a.data.port(),
+            command_port: beacon.a.send.port(),
+            spokes_per_revolution: SPOKES_PER_REVOLUTION,
+            max_spoke_len: MAX_SPOKE_LEN,
+            pixel_values: 16, // 4-bit pixels
+            serial_number: None,
+            nic_address: None, // Set by locator
+            suffix: Some("A".into()),
+            data_address: Some(beacon.a.data.as_string()),
+            report_address: Some(beacon.a.report.as_string()),
+            send_address: Some(beacon.a.send.as_string()),
+        },
+        RadarDiscovery {
+            brand: Brand::Navico,
+            model: None,
+            name: serial_no,
+            address: source_addr.to_string(),
+            data_port: beacon.b.data.port(),
+            command_port: beacon.b.send.port(),
+            spokes_per_revolution: SPOKES_PER_REVOLUTION,
+            max_spoke_len: MAX_SPOKE_LEN,
+            pixel_values: 16,
+            serial_number: None,
+            nic_address: None,
+            suffix: Some("B".into()),
+            data_address: Some(beacon.b.data.as_string()),
+            report_address: Some(beacon.b.report.as_string()),
+            send_address: Some(beacon.b.send.as_string()),
+        },
+    ])
 }
 
-fn parse_beacon_single(data: &[u8], source_addr: &str) -> Result<RadarDiscovery, ParseError> {
+fn parse_beacon_single(data: &[u8], source_addr: &str) -> Result<Vec<RadarDiscovery>, ParseError> {
     let beacon: BeaconSingle = bincode::deserialize(data)?;
 
     let serial_no = c_string(&beacon.header.serial_no)
         .ok_or(ParseError::InvalidString)?;
 
-    Ok(RadarDiscovery {
+    Ok(vec![RadarDiscovery {
         brand: Brand::Navico,
         model: None,
         name: serial_no,
@@ -835,16 +860,20 @@ fn parse_beacon_single(data: &[u8], source_addr: &str) -> Result<RadarDiscovery,
         pixel_values: 16,
         serial_number: None,
         nic_address: None, // Set by locator
-    })
+        suffix: None,
+        data_address: Some(beacon.a.data.as_string()),
+        report_address: Some(beacon.a.report.as_string()),
+        send_address: Some(beacon.a.send.as_string()),
+    }])
 }
 
-fn parse_beacon_br24(data: &[u8], source_addr: &str) -> Result<RadarDiscovery, ParseError> {
+fn parse_beacon_br24(data: &[u8], source_addr: &str) -> Result<Vec<RadarDiscovery>, ParseError> {
     let beacon: BR24Beacon = bincode::deserialize(data)?;
 
     let serial_no = c_string(&beacon.serial_no)
         .ok_or(ParseError::InvalidString)?;
 
-    Ok(RadarDiscovery {
+    Ok(vec![RadarDiscovery {
         brand: Brand::Navico,
         model: Some("BR24".to_string()),
         name: serial_no,
@@ -856,7 +885,11 @@ fn parse_beacon_br24(data: &[u8], source_addr: &str) -> Result<RadarDiscovery, P
         pixel_values: 16,
         serial_number: None,
         nic_address: None, // Set by locator
-    })
+        suffix: None,
+        data_address: Some(beacon.data.as_string()),
+        report_address: Some(beacon.report.as_string()),
+        send_address: Some(beacon.send.as_string()),
+    }])
 }
 
 /// Parse beacon into detailed endpoint information

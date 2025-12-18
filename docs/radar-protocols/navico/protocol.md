@@ -712,6 +712,52 @@ Color scheme (16-level radar + extras):
 - Pixel 17: Doppler Receding (light blue #90D0F0)
 - Pixels 18-49: History/trail fade (grayscale)
 
+## Implementation Notes
+
+### Network Interface Binding
+
+**Critical**: When sending commands to the radar, the UDP socket must be bound to the
+correct network interface (NIC). Navico radars are typically on a dedicated network
+segment (e.g., 10.56.0.x). If the command socket is bound to `0.0.0.0` (any interface),
+the operating system may route packets out the wrong interface, especially when:
+
+- VPN is active (default route changes)
+- Multiple network interfaces exist
+- The radar network is not the default route
+
+The solution is to bind the command socket to the specific NIC IP address where the
+radar was discovered:
+
+```rust
+// Correct: bind to NIC address
+socket.bind(&SocketAddr::new(nic_addr, 0))?;
+socket.send_to(&command, radar_addr)?;
+
+// Wrong: OS chooses interface, may pick wrong one
+socket.bind(&SocketAddr::new(Ipv4Addr::UNSPECIFIED, 0))?;
+```
+
+The `nic_addr` is available from the radar discovery process - it's the local IP
+address on which the radar beacon was received.
+
+### Power Control String Values
+
+The power/status control uses string enum values ("off", "standby", "transmit", "warming"),
+not numeric values. When processing control updates, handle power specially before
+attempting to parse as float:
+
+```rust
+// Handle power control first (string value, not numeric)
+if control_id == "power" {
+    let transmit = value.to_lowercase() == "transmit";
+    send_power_command(transmit);
+    return;
+}
+
+// Other controls use numeric values
+let value: f32 = value.parse()?;
+```
+
 ## References
 
 - mayara-lib source: `src/brand/navico/`

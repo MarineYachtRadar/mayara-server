@@ -519,9 +519,11 @@ impl RadarLocator {
                     continue;
                 }
                 match navico::parse_beacon_response(data, &addr) {
-                    Ok(discovery) => {
-                        io.debug(&format!("Navico BR24 beacon from {}: {:?}", addr, discovery.model));
-                        discoveries.push(discovery);
+                    Ok(discovered) => {
+                        for d in &discovered {
+                            io.debug(&format!("Navico BR24 beacon from {}: {:?} {:?}", addr, d.model, d.suffix));
+                        }
+                        discoveries.extend(discovered);
                     }
                     Err(e) => {
                         io.debug(&format!("Navico BR24 parse error: {}", e));
@@ -538,9 +540,11 @@ impl RadarLocator {
                     continue;
                 }
                 match navico::parse_beacon_response(data, &addr) {
-                    Ok(discovery) => {
-                        io.debug(&format!("Navico Gen3 beacon from {}: {:?}", addr, discovery.model));
-                        discoveries.push(discovery);
+                    Ok(discovered) => {
+                        for d in &discovered {
+                            io.debug(&format!("Navico Gen3 beacon from {}: {:?} {:?}", addr, d.model, d.suffix));
+                        }
+                        discoveries.extend(discovered);
                     }
                     Err(e) => {
                         io.debug(&format!("Navico Gen3 parse error: {}", e));
@@ -721,7 +725,11 @@ impl RadarLocator {
     }
 
     fn make_radar_id(&self, discovery: &RadarDiscovery) -> String {
-        format!("{}-{}", discovery.brand, discovery.name)
+        if let Some(suffix) = &discovery.suffix {
+            format!("{}-{}-{}", discovery.brand, discovery.name, suffix)
+        } else {
+            format!("{}-{}", discovery.brand, discovery.name)
+        }
     }
 
     /// Stop all locator sockets and clean up

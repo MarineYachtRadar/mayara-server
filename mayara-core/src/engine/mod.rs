@@ -247,10 +247,11 @@ impl RadarEngine {
         command_port: u16,
         report_addr: &str,
         report_port: u16,
+        nic_addr: &str,
         model: NavicoModel,
     ) {
         let controller =
-            NavicoController::new(id, command_addr, command_port, report_addr, report_port, model);
+            NavicoController::new(id, command_addr, command_port, report_addr, report_port, nic_addr, model);
         let managed = ManagedRadar::new(id.to_string(), RadarController::Navico(controller));
         self.radars.insert(id.to_string(), managed);
     }

@@ -483,7 +483,7 @@ pub fn control_no_transmit_angle_for_brand(id: &str, zone_number: u8, is_start: 
             ..Default::default()
         },
         Brand::Navico => WireProtocolHint {
-            scale_factor: Some(1800.0), // 0.1 degree precision: 180.0 * 10 = 1800
+            scale_factor: Some(3600.0), // 0.1 degree precision for full 360°: 360.0 * 10 = 3600
             step: Some(0.1),
             has_enabled: true,
             ..Default::default()

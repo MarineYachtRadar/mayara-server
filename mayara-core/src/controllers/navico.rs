@@ -69,6 +69,8 @@ pub struct NavicoController {
     command_port: u16,
     report_addr: String,
     report_port: u16,
+    /// NIC address to bind to (ensures packets go out correct interface)
+    nic_addr: String,
     /// Command socket
     command_socket: Option<UdpSocketHandle>,
     /// Report socket
@@ -98,6 +100,7 @@ impl NavicoController {
         command_port: u16,
         report_addr: &str,
         report_port: u16,
+        nic_addr: &str,
         model: NavicoModel,
     ) -> Self {
         Self {
@@ -106,6 +109,7 @@ impl NavicoController {
             command_port,
             report_addr: report_addr.to_string(),
             report_port,
+            nic_addr: nic_addr.to_string(),
             command_socket: None,
             report_socket: None,
             state: NavicoControllerState::Disconnected,
@@ -152,17 +156,31 @@ impl NavicoController {
     }
 
     fn start_sockets<I: IoProvider>(&mut self, io: &mut I) {
-        // Create command socket
+        // Create command socket bound to the correct NIC
         match io.udp_create() {
             Ok(socket) => {
-                if io.udp_bind(&socket, 0).is_ok() {
+                // Bind to NIC address to ensure packets go out the correct interface
+                if io.udp_bind_interface(&socket, &self.nic_addr).is_ok() {
                     self.command_socket = Some(socket);
                     io.debug(&format!(
-                        "[{}] Command socket created for {}:{}",
-                        self.radar_id, self.command_addr, self.command_port
+                        "[{}] Command socket created for {}:{} via {}",
+                        self.radar_id, self.command_addr, self.command_port, self.nic_addr
                     ));
                 } else {
-                    io.udp_close(socket);
+                    io.debug(&format!(
+                        "[{}] Failed to bind command socket to {}, falling back to any interface",
+                        self.radar_id, self.nic_addr
+                    ));
+                    // Fallback to any interface if binding to NIC fails
+                    if io.udp_bind(&socket, 0).is_ok() {
+                        self.command_socket = Some(socket);
+                        io.debug(&format!(
+                            "[{}] Command socket created for {}:{} (fallback)",
+                            self.radar_id, self.command_addr, self.command_port
+                        ));
+                    } else {
+                        io.udp_close(socket);
+                    }
                 }
             }
             Err(e) => {
@@ -261,6 +279,8 @@ impl NavicoController {
             if let Err(e) = io.udp_send_to(&socket, data, &self.command_addr, self.command_port) {
                 io.debug(&format!("[{}] Failed to send command: {}", self.radar_id, e));
             }
+        } else {
+            io.debug(&format!("[{}] WARNING: No command socket - command dropped!", self.radar_id));
         }
     }
 

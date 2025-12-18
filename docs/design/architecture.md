@@ -1576,3 +1576,9 @@ variant prevents the mDNS daemon from starting when `--navigation-address` is no
 
 **Future fix:** The mdns-sd library needs rate limiting or the browse loop needs
 throttling. For now, explicit configuration is required for SignalK integration.
+
+---
+
+## Related Documents
+
+- [Forked Dependencies](forked-dependencies.md) - Why we use forked versions of nmea-parser and tungstenite
