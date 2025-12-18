@@ -77,9 +77,7 @@ POST /radars/{id}/targets         - Manual target acquisition
 
 ### Furuno Multi-Client Behavior
 
-Furuno radars support multiple TCP clients (multi-master mode), but model detection requires receiving the initial connect reply (`$N96` message). If another client (e.g., NavNet TZtouch, TimeZero) is already connected when mayara starts, this message won't be sent again, and mayara won't be able to detect the radar model or populate the range list.
-
-**Workaround**: Ensure mayara connects to the radar before other clients, or temporarily disconnect other clients and restart mayara.
+Furuno radars support multiple TCP clients (multi-master mode). When mayara connects, it actively requests model information via `$R96`, so model detection works regardless of whether other clients (NavNet TZtouch, TimeZero, etc.) are already connected.
 
 ## Status
 
