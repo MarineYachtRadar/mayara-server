@@ -215,6 +215,8 @@ pub enum Brand {
     Garmin,
     Navico,
     Raymarine,
+    #[clap(skip)]
+    Playback,
 }
 
 impl Into<Brand> for &str {
@@ -239,6 +241,7 @@ impl Serialize for Brand {
             Self::Garmin => serializer.serialize_str("Garmin"),
             Self::Navico => serializer.serialize_str("Navico"),
             Self::Raymarine => serializer.serialize_str("Raymarine"),
+            Self::Playback => serializer.serialize_str("Playback"),
         }
     }
 }
@@ -250,6 +253,7 @@ impl std::fmt::Display for Brand {
             Self::Garmin => write!(f, "Garmin"),
             Self::Navico => write!(f, "Navico"),
             Self::Raymarine => write!(f, "Raymarine"),
+            Self::Playback => write!(f, "Playback"),
         }
     }
 }

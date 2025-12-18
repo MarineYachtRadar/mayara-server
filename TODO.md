@@ -1,6 +1,6 @@
 # TODO.md
 
-### Kees
+## Kees
 Working:
 
 * Start, logging
@@ -25,7 +25,7 @@ TODO:
 * Everything else
 
 
-### dirkwa
+## dirkwa
 
 - Test HALO radar @Kees/PI4
   - Get GUI working, find all race conditions etc. 
@@ -35,24 +35,25 @@ TODO:
   - Update documentation
   - Update README
   - Prepare PR
-- Make new SignalK connector for mayara-server standalone as provider and client (similar to WASM).
   - doc folder in server or plugin?
   - 
 - For SignalK devs - Plugin too use history and playback Radar Spokes
 
 
-#### diwa done
+### diwa done
+- Record and playback mode for mayara-server
+- Make new SignalK connector for mayara-server standalone as provider and client (similar to WASM).
 - Find a github org home for the project and rename evreything
 - Update GITHUB build infrastructure and NPM publish for new infrastructure
 - Full refactor
 - Refactor WASM to new infrastructure
 - Update documentation to WASM
 
-### unassigned
+### diwa delme later
+./target/debug/mayara-server -p 6502 -v 2>&1 | grep -E "report 01|status|power"
+
+## unassigned
 - OpenCPN plugin
 - Test more radars for new architecture.
 
-
-### delme
-./target/debug/mayara-server -p 6502 -v 2>&1 | grep -E "report 01|status|power"
 

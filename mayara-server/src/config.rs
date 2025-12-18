@@ -147,10 +147,11 @@ impl Persistence {
             .entry(radar_info.key())
             .or_insert(Radar::default());
 
-        let user_name = radar_info.controls.user_name();
-        if radar.user_name != user_name {
-            radar.user_name = user_name;
-            modified = true;
+        if let Some(user_name) = radar_info.controls.user_name() {
+            if radar.user_name != user_name {
+                radar.user_name = user_name;
+                modified = true;
+            }
         }
         if let Some(cv) = radar_info.controls.get("range") {
             if let Some(ranges) = &cv.item().valid_values {

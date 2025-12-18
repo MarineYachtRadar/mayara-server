@@ -85,7 +85,7 @@ pub fn update_when_model_known(controls: &SharedControls, model: Model, radar_in
 
     // Update the UserName; it had to be present at start so it could be loaded from
     // config. Override it if it is still the 'Navico ... ' name.
-    if controls.user_name() == radar_info.key() {
+    if controls.user_name().as_deref() == Some(radar_info.key().as_str()) {
         let mut user_name = model.to_string();
         if radar_info.serial_no.is_some() {
             let mut serial = radar_info.serial_no.clone().unwrap();

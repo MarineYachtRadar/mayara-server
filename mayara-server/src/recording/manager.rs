@@ -388,6 +388,63 @@ impl RecordingManager {
         }
     }
 
+    /// Save uploaded recording data to a file
+    /// Handles both .mrr and .mrr.gz (decompresses gzip)
+    pub fn save_upload(&self, filename: &str, data: &[u8], subdirectory: Option<&str>) -> Result<RecordingInfo, String> {
+        // Determine target filename and whether to decompress
+        let (target_filename, needs_decompress) = if filename.ends_with(".mrr.gz") {
+            // Strip .gz suffix for storage
+            (filename.trim_end_matches(".gz").to_string(), true)
+        } else if filename.ends_with(".mrr") {
+            (filename.to_string(), false)
+        } else {
+            return Err("Invalid file extension. Must be .mrr or .mrr.gz".to_string());
+        };
+
+        let target_path = self.get_recording_path(&target_filename, subdirectory);
+
+        // Check if file already exists
+        if target_path.exists() {
+            return Err(format!("File already exists: {}", target_filename));
+        }
+
+        // Ensure parent directory exists
+        if let Some(parent) = target_path.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("Failed to create directory: {}", e))?;
+        }
+
+        // Security check
+        if !self.is_safe_path(&target_path) {
+            return Err("Invalid path".to_string());
+        }
+
+        // Write the file (decompress if needed)
+        let final_data = if needs_decompress {
+            use std::io::Read;
+            let mut decoder = flate2::read::GzDecoder::new(data);
+            let mut decompressed = Vec::new();
+            decoder.read_to_end(&mut decompressed)
+                .map_err(|e| format!("Failed to decompress gzip data: {}", e))?;
+            decompressed
+        } else {
+            data.to_vec()
+        };
+
+        // Validate it's a valid MRR file by checking magic
+        if final_data.len() < 4 || &final_data[0..4] != b"MRR1" {
+            return Err("Invalid MRR file format".to_string());
+        }
+
+        fs::write(&target_path, &final_data)
+            .map_err(|e| format!("Failed to write file: {}", e))?;
+
+        info!("Uploaded recording: {} ({} bytes)", target_path.display(), final_data.len());
+
+        // Return info about the saved file
+        self.get_recording_info(&target_path, subdirectory)
+            .ok_or_else(|| "Failed to read uploaded file info".to_string())
+    }
+
     /// Get total storage used
     pub fn total_storage_used(&self) -> u64 {
         self.calculate_dir_size(&self.base_dir)

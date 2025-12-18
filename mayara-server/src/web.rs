@@ -16,9 +16,10 @@ use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "dev")]
 use tower_http::services::ServeDir;
+use flate2::{write::GzEncoder, Compression};
 use std::{
     collections::{BTreeMap, HashMap},
-    io,
+    io::{self, Write},
     net::{IpAddr, Ipv4Addr, SocketAddr},
     str::FromStr,
     sync::{Arc, RwLock},
@@ -33,7 +34,10 @@ use axum_fix::{Message, WebSocket, WebSocketUpgrade};
 
 use mayara_server::{
     radar::{Legend, RadarError, RadarInfo},
-    recording::{RecordingManager, RecordingInfo, RecordingStatus, ActiveRecording, start_recording, build_initial_state},
+    recording::{
+        RecordingManager, RecordingInfo, RecordingStatus, ActiveRecording, start_recording, build_initial_state,
+        ActivePlayback, PlaybackSettings, PlaybackStatus, load_recording, unregister_playback_radar,
+    },
     storage::{AppDataKey, SharedStorage, create_shared_storage},
     ProtoAssets, Session,
 };
@@ -88,6 +92,7 @@ const APP_DATA_URI: &str = "/signalk/v1/applicationData/global/{appid}/{version}
 const RECORDINGS_URI: &str = "/v2/api/recordings/files";
 const RECORDING_URI: &str = "/v2/api/recordings/files/{filename}";
 const RECORDING_DOWNLOAD_URI: &str = "/v2/api/recordings/files/{filename}/download";
+const RECORDING_UPLOAD_URI: &str = "/v2/api/recordings/files/upload";
 const RECORDINGS_DIRS_URI: &str = "/v2/api/recordings/directories";
 const RECORDING_DIR_URI: &str = "/v2/api/recordings/directories/{name}";
 // Recordings API - Recording control
@@ -95,6 +100,14 @@ const RECORD_RADARS_URI: &str = "/v2/api/recordings/radars";
 const RECORD_START_URI: &str = "/v2/api/recordings/record/start";
 const RECORD_STOP_URI: &str = "/v2/api/recordings/record/stop";
 const RECORD_STATUS_URI: &str = "/v2/api/recordings/record/status";
+// Recordings API - Playback control
+const PLAYBACK_LOAD_URI: &str = "/v2/api/recordings/playback/load";
+const PLAYBACK_PLAY_URI: &str = "/v2/api/recordings/playback/play";
+const PLAYBACK_PAUSE_URI: &str = "/v2/api/recordings/playback/pause";
+const PLAYBACK_STOP_URI: &str = "/v2/api/recordings/playback/stop";
+const PLAYBACK_SEEK_URI: &str = "/v2/api/recordings/playback/seek";
+const PLAYBACK_SETTINGS_URI: &str = "/v2/api/recordings/playback/settings";
+const PLAYBACK_STATUS_URI: &str = "/v2/api/recordings/playback/status";
 
 #[cfg(not(feature = "dev"))]
 #[derive(RustEmbed, Clone)]
@@ -129,6 +142,9 @@ type SharedRecordingManager = Arc<RwLock<RecordingManager>>;
 /// Shared active recording state
 type SharedActiveRecording = Arc<RwLock<Option<ActiveRecording>>>;
 
+/// Shared active playback state
+type SharedActivePlayback = Arc<tokio::sync::RwLock<Option<ActivePlayback>>>;
+
 #[derive(Clone)]
 pub struct Web {
     session: Session,
@@ -141,6 +157,8 @@ pub struct Web {
     recording_manager: SharedRecordingManager,
     /// Active recording (if any)
     active_recording: SharedActiveRecording,
+    /// Active playback (if any)
+    active_playback: SharedActivePlayback,
 }
 
 impl Web {
@@ -154,6 +172,7 @@ impl Web {
             storage: create_shared_storage(),
             recording_manager: Arc::new(RwLock::new(RecordingManager::new())),
             active_recording: Arc::new(RwLock::new(None)),
+            active_playback: Arc::new(tokio::sync::RwLock::new(None)),
         }
     }
 
@@ -236,6 +255,7 @@ impl Web {
             .route(RECORDINGS_URI, get(list_recordings))
             .route(RECORDING_URI, get(get_recording).delete(delete_recording).put(update_recording))
             .route(RECORDING_DOWNLOAD_URI, get(download_recording))
+            .route(RECORDING_UPLOAD_URI, post(upload_recording))
             .route(RECORDINGS_DIRS_URI, get(list_directories).post(create_directory))
             .route(RECORDING_DIR_URI, delete(delete_directory))
             // Recordings API - Recording control
@@ -243,6 +263,14 @@ impl Web {
             .route(RECORD_START_URI, post(start_recording_handler))
             .route(RECORD_STOP_URI, post(stop_recording_handler))
             .route(RECORD_STATUS_URI, get(get_recording_status))
+            // Recordings API - Playback control
+            .route(PLAYBACK_LOAD_URI, post(playback_load_handler))
+            .route(PLAYBACK_PLAY_URI, post(playback_play_handler))
+            .route(PLAYBACK_PAUSE_URI, post(playback_pause_handler))
+            .route(PLAYBACK_STOP_URI, post(playback_stop_handler))
+            .route(PLAYBACK_SEEK_URI, post(playback_seek_handler))
+            .route(PLAYBACK_SETTINGS_URI, put(playback_settings_handler))
+            .route(PLAYBACK_STATUS_URI, get(playback_status_handler))
             // Apply no-cache middleware to all API routes
             .layer(middleware::from_fn(no_cache_middleware))
             // Static assets (no middleware - can be cached)
@@ -372,7 +400,7 @@ async fn get_radars(
         let id = format!("radar-{}", info.id);
         let stream_url = format!("ws://{}/v2/api/radars/{}/spokes", host, id);
         let control_url = format!("ws://{}/v2/api/radars/{}/control", host, id);
-        let name = info.controls.user_name();
+        let name = info.controls.user_name().unwrap_or_else(|| info.key().to_string());
         let v = RadarApi::new(
             id.to_owned(),
             name,
@@ -403,6 +431,8 @@ fn to_core_brand(brand: mayara_server::Brand) -> mayara_core::Brand {
         mayara_server::Brand::Navico => mayara_core::Brand::Navico,
         mayara_server::Brand::Raymarine => mayara_core::Brand::Raymarine,
         mayara_server::Brand::Garmin => mayara_core::Brand::Garmin,
+        // Playback uses recorded capabilities, brand doesn't matter for model lookup
+        mayara_server::Brand::Playback => mayara_core::Brand::Furuno,
     }
 }
 
@@ -651,8 +681,14 @@ async fn spokes_stream(
                         }
                         trace!("Sent radar message {} bytes", len);
                     },
-                    Err(e) => {
-                        debug!("Error on RadarMessage channel: {}", e);
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        // Channel lagged - receiver fell behind, skip missed messages
+                        debug!("Websocket receiver lagged, skipped {} messages", n);
+                        // Continue to receive next message
+                    },
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        // Channel closed - sender was dropped (radar disconnected or playback stopped)
+                        debug!("RadarMessage channel closed");
                         break;
                     }
                 }
@@ -1652,8 +1688,11 @@ async fn dual_range_spokes_stream(
                         }
                         trace!("Sent dual-range radar message {} bytes", len);
                     },
-                    Err(e) => {
-                        debug!("Error on RadarMessage channel: {}", e);
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        debug!("Dual-range websocket receiver lagged, skipped {} messages", n);
+                    },
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        debug!("Dual-range RadarMessage channel closed");
                         break;
                     }
                 }
@@ -1786,7 +1825,7 @@ async fn update_recording(
     StatusCode::OK.into_response()
 }
 
-/// GET /v2/api/recordings/files/{filename}/download - Download a recording file
+/// GET /v2/api/recordings/files/{filename}/download - Download a recording file (gzip compressed)
 #[debug_handler]
 async fn download_recording(
     State(state): State<Web>,
@@ -1805,16 +1844,66 @@ async fn download_recording(
     // Read the file
     match std::fs::read(&path) {
         Ok(data) => {
+            // Compress with gzip
+            let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+            if let Err(e) = encoder.write_all(&data) {
+                return (StatusCode::INTERNAL_SERVER_ERROR, format!("Compression error: {}", e)).into_response();
+            }
+            let compressed = match encoder.finish() {
+                Ok(data) => data,
+                Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("Compression error: {}", e)).into_response(),
+            };
+
+            debug!("Compressed {} from {} to {} bytes ({:.1}% reduction)",
+                filename, data.len(), compressed.len(),
+                (1.0 - compressed.len() as f64 / data.len() as f64) * 100.0);
+
+            // Return compressed file with .mrr.gz extension
+            let gz_filename = format!("{}.gz", filename);
             let headers = [
-                (header::CONTENT_TYPE, "application/octet-stream"),
+                (header::CONTENT_TYPE, "application/gzip"),
                 (
                     header::CONTENT_DISPOSITION,
-                    &format!("attachment; filename=\"{}\"", filename),
+                    &format!("attachment; filename=\"{}\"", gz_filename),
                 ),
             ];
-            (headers, data).into_response()
+            (headers, compressed).into_response()
         }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// POST /v2/api/recordings/files/upload - Upload a recording file
+/// Accepts raw .mrr or .mrr.gz file data in request body
+/// Filename is taken from Content-Disposition header
+#[debug_handler]
+async fn upload_recording(
+    State(state): State<Web>,
+    axum::extract::Query(query): axum::extract::Query<RecordingsQuery>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    // Extract filename from Content-Disposition header
+    let filename = headers
+        .get(header::CONTENT_DISPOSITION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| {
+            // Parse "attachment; filename="xxx.mrr""
+            s.split("filename=").nth(1)
+                .map(|f| f.trim_matches('"').trim_matches('\'').to_string())
+        })
+        .unwrap_or_else(|| {
+            // Generate a default filename if not provided
+            let manager = state.recording_manager.read().unwrap();
+            manager.generate_filename(Some("upload"), query.subdirectory.as_deref())
+        });
+
+    debug!("POST upload recording: {} ({} bytes)", filename, body.len());
+
+    let manager = state.recording_manager.read().unwrap();
+    match manager.save_upload(&filename, &body, query.subdirectory.as_deref()) {
+        Ok(info) => Json(info).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": e}))).into_response(),
     }
 }
 
@@ -1890,7 +1979,7 @@ async fn get_recordable_radars(State(state): State<Web>) -> Response {
         let radar_id = format!("radar-{}", info.id);
         result.push(RecordableRadar {
             id: radar_id,
-            name: info.controls.user_name(),
+            name: info.controls.user_name().unwrap_or_else(|| info.key().to_string()),
             brand: format!("{:?}", info.brand),
             model: info.controls.model_name(),
         });
@@ -2052,6 +2141,207 @@ async fn get_recording_status(State(state): State<Web>) -> Response {
             }
         }
         None => RecordingStatus::default(),
+    };
+
+    Json(status).into_response()
+}
+
+// ============================================================================
+// Playback Control Endpoints
+// ============================================================================
+
+/// Request body for loading a recording for playback
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PlaybackLoadRequest {
+    filename: String,
+    #[serde(default)]
+    subdirectory: Option<String>,
+}
+
+/// Request body for seeking
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PlaybackSeekRequest {
+    position_ms: u64,
+}
+
+/// POST /v2/api/recordings/playback/load - Load a recording for playback
+#[debug_handler]
+async fn playback_load_handler(
+    State(state): State<Web>,
+    Json(request): Json<PlaybackLoadRequest>,
+) -> Response {
+    debug!("POST playback load: {}", request.filename);
+
+    // Stop and clean up any existing playback first
+    {
+        let mut active = state.active_playback.write().await;
+        if let Some(playback) = active.take() {
+            log::info!("Stopping existing playback before loading new: {}", playback.filename());
+            playback.stop();
+            // Unregister the old playback radar
+            let session = state.session.read().unwrap();
+            if let Some(radars) = session.radars.as_ref() {
+                unregister_playback_radar(radars, playback.radar_key());
+            }
+            // Drop playback here to release any resources
+            drop(playback);
+        }
+    }
+
+    // Small delay to allow old playback task to fully stop
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+    // Get radars from session
+    let radars = {
+        let session = state.session.read().unwrap();
+        match &session.radars {
+            Some(r) => r.clone(),
+            None => {
+                return (StatusCode::SERVICE_UNAVAILABLE, "Radars not initialized").into_response()
+            }
+        }
+    };
+
+    // Load the recording
+    match load_recording(
+        state.session.clone(),
+        &radars,
+        &request.filename,
+        request.subdirectory.as_deref(),
+    )
+    .await
+    {
+        Ok(playback) => {
+            let status = playback.status().await;
+            // Store the active playback
+            {
+                let mut active = state.active_playback.write().await;
+                *active = Some(playback);
+            }
+            (StatusCode::OK, Json(status)).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    }
+}
+
+/// POST /v2/api/recordings/playback/play - Start or resume playback
+#[debug_handler]
+async fn playback_play_handler(State(state): State<Web>) -> Response {
+    debug!("POST playback play");
+
+    let active = state.active_playback.read().await;
+    match &*active {
+        Some(playback) if !playback.is_stopped() => {
+            playback.resume();
+            let status = playback.status().await;
+            (StatusCode::OK, Json(status)).into_response()
+        }
+        Some(_) => (StatusCode::GONE, "Playback has stopped").into_response(),
+        None => (StatusCode::NOT_FOUND, "No recording loaded").into_response(),
+    }
+}
+
+/// POST /v2/api/recordings/playback/pause - Pause playback
+#[debug_handler]
+async fn playback_pause_handler(State(state): State<Web>) -> Response {
+    debug!("POST playback pause");
+
+    let active = state.active_playback.read().await;
+    match &*active {
+        Some(playback) if !playback.is_stopped() => {
+            playback.pause();
+            let status = playback.status().await;
+            (StatusCode::OK, Json(status)).into_response()
+        }
+        Some(_) => (StatusCode::GONE, "Playback has stopped").into_response(),
+        None => (StatusCode::NOT_FOUND, "No recording loaded").into_response(),
+    }
+}
+
+/// POST /v2/api/recordings/playback/stop - Stop playback and unload
+#[debug_handler]
+async fn playback_stop_handler(State(state): State<Web>) -> Response {
+    debug!("POST playback stop");
+
+    let mut active = state.active_playback.write().await;
+    match active.take() {
+        Some(playback) => {
+            playback.stop();
+            // Unregister the playback radar from radars list
+            {
+                let session = state.session.read().unwrap();
+                if let Some(radars) = session.radars.as_ref() {
+                    unregister_playback_radar(radars, playback.radar_key());
+                }
+            }
+            let status = PlaybackStatus {
+                state: "stopped".to_string(),
+                filename: Some(playback.filename().to_string()),
+                radar_id: Some(playback.radar_id().to_string()),
+                ..Default::default()
+            };
+            (StatusCode::OK, Json(status)).into_response()
+        }
+        None => (StatusCode::OK, Json(PlaybackStatus::default())).into_response(),
+    }
+}
+
+/// POST /v2/api/recordings/playback/seek - Seek to position
+#[debug_handler]
+async fn playback_seek_handler(
+    State(state): State<Web>,
+    Json(request): Json<PlaybackSeekRequest>,
+) -> Response {
+    debug!("POST playback seek to {}ms", request.position_ms);
+
+    let active = state.active_playback.read().await;
+    match &*active {
+        Some(playback) if !playback.is_stopped() => {
+            playback.seek(request.position_ms).await;
+            let status = playback.status().await;
+            (StatusCode::OK, Json(status)).into_response()
+        }
+        Some(_) => (StatusCode::GONE, "Playback has stopped").into_response(),
+        None => (StatusCode::NOT_FOUND, "No recording loaded").into_response(),
+    }
+}
+
+/// PUT /v2/api/recordings/playback/settings - Update playback settings
+#[debug_handler]
+async fn playback_settings_handler(
+    State(state): State<Web>,
+    Json(settings): Json<PlaybackSettings>,
+) -> Response {
+    debug!("PUT playback settings: {:?}", settings);
+
+    let active = state.active_playback.read().await;
+    match &*active {
+        Some(playback) if !playback.is_stopped() => {
+            if let Some(speed) = settings.speed {
+                playback.set_speed(speed);
+            }
+            if let Some(loop_playback) = settings.loop_playback {
+                playback.set_loop(loop_playback);
+            }
+            let status = playback.status().await;
+            (StatusCode::OK, Json(status)).into_response()
+        }
+        Some(_) => (StatusCode::GONE, "Playback has stopped").into_response(),
+        None => (StatusCode::NOT_FOUND, "No recording loaded").into_response(),
+    }
+}
+
+/// GET /v2/api/recordings/playback/status - Get current playback status
+#[debug_handler]
+async fn playback_status_handler(State(state): State<Web>) -> Response {
+    debug!("GET playback status");
+
+    let active = state.active_playback.read().await;
+    let status = match &*active {
+        Some(playback) => playback.status().await,
+        None => PlaybackStatus::default(),
     };
 
     Json(status).into_response()

@@ -46,6 +46,7 @@ pub enum LocatorId {
     Gen3Plus,
     Furuno,
     Raymarine,
+    Playback,
 }
 
 impl LocatorId {
@@ -56,6 +57,7 @@ impl LocatorId {
             Gen3Plus => "Navico 3G/4G/HALO",
             Furuno => "Furuno DRSxxxx",
             Raymarine => "Raymarine",
+            Playback => "Playback",
         }
     }
 }

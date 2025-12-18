@@ -144,12 +144,10 @@ pub async fn start_recording(
             f
         }
         None => {
-            let prefix = radar_info.controls.user_name();
-            let prefix = if prefix.is_empty() {
-                format!("radar-{}", radar_info.id)
-            } else {
-                prefix.replace(' ', "_")
-            };
+            let prefix = radar_info.controls.user_name()
+                .filter(|s| !s.is_empty())
+                .map(|s| s.replace(' ', "_"))
+                .unwrap_or_else(|| format!("radar-{}", radar_info.id));
             manager.generate_filename(Some(&prefix), subdirectory)
         }
     };
@@ -336,6 +334,7 @@ fn brand_to_id(brand: Brand) -> u32 {
         Brand::Garmin => 2,
         Brand::Navico => 3,
         Brand::Raymarine => 4,
+        Brand::Playback => 5,
     }
 }
 
@@ -346,6 +345,7 @@ pub fn id_to_brand(id: u32) -> Option<Brand> {
         2 => Some(Brand::Garmin),
         3 => Some(Brand::Navico),
         4 => Some(Brand::Raymarine),
+        5 => Some(Brand::Playback),
         _ => None,
     }
 }

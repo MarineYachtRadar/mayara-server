@@ -479,7 +479,7 @@ impl SharedRadars {
                 "Found radar: key '{}' id {} name '{}'",
                 &new_info.key,
                 new_info.id,
-                new_info.controls.user_name()
+                new_info.controls.user_name().unwrap_or_else(|| new_info.key.clone())
             );
             radars.info.insert(key, new_info.clone());
             Some(new_info)
@@ -529,12 +529,28 @@ impl SharedRadars {
     pub fn get_by_id(&self, key: &str) -> Option<RadarInfo> {
         let radars = self.radars.read().unwrap();
         for info in radars.info.iter() {
+            // Check standard radar ID format
             let id = format!("radar-{}", info.1.id);
             if id == key {
                 return Some(info.1.clone());
             }
+            // Check for playback radar ID (playback-filename format)
+            if key.starts_with("playback-") {
+                // For playback radars, check if the key contains the base filename
+                // The internal key is like "Furuno-Playback-filename", and we're looking for "playback-filename"
+                let playback_suffix = &key[9..]; // Strip "playback-" prefix
+                if info.0.contains(&format!("Playback-{}", playback_suffix)) {
+                    return Some(info.1.clone());
+                }
+            }
         }
         None
+    }
+
+    /// Get radar by internal key (e.g., "Playback-filename" or "Furuno-serial-A")
+    pub fn get_by_key(&self, key: &str) -> Option<RadarInfo> {
+        let radars = self.radars.read().unwrap();
+        radars.info.get(key).cloned()
     }
 
     pub fn remove(&self, key: &str) {

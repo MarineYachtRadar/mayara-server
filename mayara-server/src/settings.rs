@@ -567,10 +567,9 @@ impl SharedControls {
         control.set_string(name);
     }
 
-    pub fn user_name(&self) -> String {
+    pub fn user_name(&self) -> Option<String> {
         self.get("userName")
             .and_then(|c| c.description)
-            .unwrap()
     }
 
     pub fn set_model_name(&self, name: String) {

@@ -163,11 +163,18 @@ mayara/
 │       ├── storage.rs              # Local applicationData storage
 │       ├── navdata.rs              # NMEA/SignalK navigation input
 │       │
-│       └── brand/                  # Brand-specific async adapters
-│           ├── furuno/             # Async report/data receivers, delegates to core
-│           ├── navico/             # report.rs + info.rs use core protocol/navico.rs
-│           ├── raymarine/          # Async report/data receivers, delegates to core
-│           └── garmin/             # Discovery only (controller integration pending)
+│       ├── brand/                  # Brand-specific async adapters
+│       │   ├── furuno/             # Async report/data receivers, delegates to core
+│       │   ├── navico/             # report.rs + info.rs use core protocol/navico.rs
+│       │   ├── raymarine/          # Async report/data receivers, delegates to core
+│       │   └── garmin/             # Discovery only (controller integration pending)
+│       │
+│       └── recording/              # Radar recording and playback
+│           ├── mod.rs              # Module exports
+│           ├── file_format.rs      # .mrr binary format read/write
+│           ├── recorder.rs         # Subscribes to broadcast, writes .mrr files
+│           ├── player.rs           # Reads .mrr, emits as virtual radar
+│           └── manager.rs          # File listing, metadata, CRUD operations
 │
 ├── mayara-signalk-wasm/            # SignalK WASM plugin 
 │   └── src/
@@ -178,16 +185,33 @@ mayara/
 │       ├── spoke_receiver.rs       # UDP spoke data receiver
 │       └── signalk_ffi.rs          # SignalK FFI bindings
 │
-└── mayara-gui/                     # Shared web GUI assets
-    ├── index.html                  # Landing page with radar list
-    ├── viewer.html                 # Radar PPI display page
-    ├── control.html                # Radar controls panel
-    ├── mayara.js                   # Main entry, VanJS components
-    ├── viewer.js                   # WebSocket spoke handling, rendering coordination
-    ├── control.js                  # Control UI, API interactions
-    ├── render_webgpu.js            # WebGPU-based radar renderer (GPU-accelerated)
-    ├── api.js                      # REST/WebSocket API client, auto-detects mode
-    └── van-*.js                    # VanJS reactive UI library
+├── mayara-gui/                     # Shared web GUI assets
+│   ├── index.html                  # Landing page with radar list
+│   ├── viewer.html                 # Radar PPI display page
+│   ├── control.html                # Radar controls panel
+│   ├── recordings.html             # Recording/playback control page
+│   ├── mayara.js                   # Main entry, VanJS components
+│   ├── viewer.js                   # WebSocket spoke handling, rendering coordination
+│   ├── control.js                  # Control UI, API interactions
+│   ├── recordings.js               # Recording/playback UI logic
+│   ├── render_webgpu.js            # WebGPU-based radar renderer (GPU-accelerated)
+│   ├── api.js                      # REST/WebSocket API client, auto-detects mode
+│   └── van-*.js                    # VanJS reactive UI library
+│
+├── mayara-server-signalk-plugin/   # SignalK plugin (connects to mayara-server)
+│   ├── package.json                # npm manifest, SignalK webapp config
+│   ├── build.js                    # Copies mayara-gui to public/
+│   └── plugin/
+│       └── index.js                # Main plugin: MayaraClient, RadarProvider
+│
+└── mayara-server-signalk-playbackrecordings-plugin/  # SignalK playback plugin (developer tool)
+    ├── package.json                # npm manifest, SignalK webapp config
+    ├── build.js                    # Copies mayara-gui (minus recordings.html), adds playback.html
+    └── plugin/
+        ├── index.js                # MrrPlayer, playback API endpoints
+        ├── mrr-reader.js           # JavaScript port of file_format.rs
+        └── public/
+            └── playback.html       # Custom upload/playback UI
 ```
 
 ---
@@ -377,6 +401,9 @@ The server's `brand/` modules still handle:
 | Component | Notes |
 |-----------|-------|
 | mayara-server-signalk-plugin | Native JS plugin connecting SignalK to mayara-server (see External Clients section) |
+| Recording/Playback (mayara-server) | .mrr file format, recording, playback, REST API (see Recording and Playback System) |
+| recordings.html/js (mayara-gui) | Web UI for recording and playback control |
+| mayara-server-signalk-playbackrecordings-plugin | SignalK playback plugin for developers (no mayara-server required) |
 
 ### ❌ Not Yet Implemented
 
@@ -384,6 +411,8 @@ The server's `brand/` modules still handle:
 |-----------|-------|
 | mayara_opencpn plugin | OpenCPN integration (see External Clients section) |
 | Garmin server controller | Server still uses old locator-based approach |
+| Playback speed control | Currently plays at recorded speed only |
+| Playback seek | Timeline seeking not yet implemented |
 
 ---
 
@@ -1471,6 +1500,190 @@ includes the IXWebSocket library, providing full HTTP and WebSocket support in C
 | **mayara-signalk-wasm** | Rust/WASM | Embedded in SignalK | mayara-core (in WASM) |
 | **mayara-server-signalk-plugin** | JavaScript | SignalK + remote mayara-server | mayara-server |
 | **mayara_opencpn** (future) | C++ | OpenCPN chart plotter | mayara-server |
+
+---
+
+## Recording and Playback System
+
+The recording and playback system enables capturing radar data to `.mrr` files and replaying
+them later. This provides two key capabilities:
+
+1. **Developer testing** - SignalK Radar API consumers can test `render()` functions with
+   consistent recorded data without live radar hardware
+2. **Demos/exhibitions** - Playback works standalone without radar connection
+
+### Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              RECORDING PATH                                  │
+│                                                                              │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │                         mayara-server (Rust)                          │   │
+│  │  ┌─────────────┐    ┌─────────────┐    ┌──────────────────────────┐  │   │
+│  │  │Radar Drivers│───►│  Recorder   │───►│  ~/.../recordings/*.mrr  │  │   │
+│  │  │(Furuno,etc) │    │             │    └──────────────────────────┘  │   │
+│  │  └─────────────┘    └─────────────┘                                  │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           PLAYBACK PATHS (2 options)                         │
+│                                                                              │
+│  Option A: Standalone (mayara-server only)                                  │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │  mayara-server ─► Player ─► Virtual Radar ─► mayara-gui              │   │
+│  │                                                                       │   │
+│  │  Good for: demos, exhibitions, testing without SignalK               │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  Option B: SignalK (for radar API consumers)                                │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │  .mrr file ─► SignalK Plugin ─► radarApi.register() ─► SignalK       │   │
+│  │                    │                                        │         │   │
+│  │                    │            binaryStreamManager         │         │   │
+│  │                    └───────────────────────────────────────►│         │   │
+│  │                                                             ▼         │   │
+│  │                                           ┌─────────────────────────┐│   │
+│  │                                           │  Any Radar Consumer:   ││   │
+│  │                                           │  - mayara-gui          ││   │
+│  │                                           │  - OpenCPN (future)    ││   │
+│  │                                           │  - SignalK dev testing ││   │
+│  │                                           └─────────────────────────┘│   │
+│  │                                                                       │   │
+│  │  Good for: SignalK developers testing render(), chart plotter devs  │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### .mrr File Format (MaYaRa Radar Recording)
+
+Binary format optimized for efficient seeking and playback:
+
+```
+┌──────────────────────────┐
+│ Header (256 bytes)       │  magic "MRR1", version, radar metadata
+├──────────────────────────┤
+│ Capabilities (JSON)      │  length-prefixed JSON (v5 capabilities)
+├──────────────────────────┤
+│ Initial State (JSON)     │  length-prefixed JSON (controls state)
+├──────────────────────────┤
+│ Frame 0                  │  timestamp + protobuf RadarMessage + state delta
+│ Frame 1                  │
+│ ...                      │
+├──────────────────────────┤
+│ Index (for seeking)      │  array of (timestamp, file_offset)
+├──────────────────────────┤
+│ Footer (32 bytes)        │  index offset, frame count, duration
+└──────────────────────────┘
+```
+
+**File sizes:** ~15-30 MB/minute, ~1-2 GB/hour
+
+**Compression strategy:**
+- Storage: Uncompressed `.mrr` for fast seeking/playback
+- Download: Gzip-compressed `.mrr.gz` for transfer (~95% size reduction)
+- Upload: SignalK plugin accepts `.mrr.gz`, auto-decompresses
+
+### REST API Endpoints (mayara-server)
+
+All at `/v2/api/recordings/`:
+
+**Recording Control:**
+```
+GET  /v2/api/recordings/radars          # List available radars to record
+POST /v2/api/recordings/record/start    # {radarId, filename?}
+POST /v2/api/recordings/record/stop
+GET  /v2/api/recordings/record/status
+```
+
+**Playback Control:**
+```
+POST /v2/api/recordings/playback/load   # {filename}
+POST /v2/api/recordings/playback/play
+POST /v2/api/recordings/playback/pause
+POST /v2/api/recordings/playback/stop
+POST /v2/api/recordings/playback/seek   # {timestamp_ms}
+PUT  /v2/api/recordings/playback/settings  # {loop?, speed?}
+GET  /v2/api/recordings/playback/status
+```
+
+**File Management:**
+```
+GET    /v2/api/recordings/files              # ?dir=subdir
+GET    /v2/api/recordings/files/:filename
+DELETE /v2/api/recordings/files/:filename
+PUT    /v2/api/recordings/files/:filename    # {newName?, directory?}
+POST   /v2/api/recordings/files/upload       # Accepts .mrr or .mrr.gz
+GET    /v2/api/recordings/files/:filename/download  # Returns .mrr.gz
+```
+
+### Virtual Radar Registration
+
+During playback, the player registers as a "virtual radar" that appears in the radar list.
+Playback radars are identified by their ID prefix `playback-*`:
+
+```rust
+// Playback radar is distinguished from real radars
+let radar_id = format!("playback-{}", base_name);
+
+// Capabilities include isPlayback flag
+let capabilities = Capabilities {
+    id: radar_id,
+    name: format!("Playback: {}", base_name),
+    brand: "Playback",
+    model: "Recording",
+    isPlayback: true,  // GUI uses this to disable controls
+    ...metadata_from_mrr_file
+};
+```
+
+### GUI Playback Mode
+
+The mayara-gui detects playback radars and adjusts its behavior:
+
+```javascript
+// api.js
+export function isPlaybackRadar(radarId) {
+  return radarId && radarId.startsWith('playback-');
+}
+
+// control.js - Disable controls for playback
+if (isPlaybackRadar(radarId)) {
+  container.querySelectorAll('input, select, button').forEach(el => {
+    el.disabled = true;
+  });
+  header.appendChild(span({class: 'playback-badge'}, 'PLAYBACK'));
+}
+```
+
+### SignalK Playback Plugin
+
+The `mayara-server-signalk-playbackrecordings-plugin` is a **self-contained** developer tool
+that reads `.mrr` files directly (no mayara-server required). It:
+
+1. Parses `.mrr` files using JavaScript port of `file_format.rs`
+2. Registers as RadarProvider via SignalK Radar API
+3. Emits frames through `binaryStreamManager` at correct timing
+4. Provides simple playback UI (upload, play/pause/stop, loop)
+5. Links to mayara-gui's `viewer.html` for radar display
+
+**Why separate plugin:**
+- Keeps main `mayara-server-signalk-plugin` simple for normal users
+- Self-contained for developers (single plugin install)
+- No coordination between plugins needed
+
+### Implementation Files
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| **file_format.rs** | mayara-server/recording/ | .mrr binary format read/write |
+| **recorder.rs** | mayara-server/recording/ | Subscribe to radar, write frames |
+| **player.rs** | mayara-server/recording/ | Read frames, emit as virtual radar |
+| **manager.rs** | mayara-server/recording/ | File listing, metadata, CRUD |
+| **recordings.html/js** | mayara-gui/ | Recording/playback UI |
+| **mrr-reader.js** | signalk-playback-plugin/ | JS port of file_format.rs |
+| **playback.html** | signalk-playback-plugin/ | Minimal playback control UI |
 
 ---
 

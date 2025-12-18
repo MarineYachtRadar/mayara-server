@@ -29,8 +29,10 @@
 
 pub mod file_format;
 pub mod manager;
+pub mod player;
 pub mod recorder;
 
 pub use file_format::{MrrHeader, MrrFooter, MrrIndexEntry, MrrReader, MrrWriter};
 pub use manager::{RecordingInfo, RecordingManager, recordings_dir};
+pub use player::{ActivePlayback, PlaybackSettings, PlaybackState, PlaybackStatus, load_recording, unregister_playback_radar};
 pub use recorder::{ActiveRecording, RecordingState, RecordingStatus, start_recording, build_initial_state};
