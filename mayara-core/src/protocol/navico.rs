@@ -1187,6 +1187,9 @@ pub fn parse_report_08(data: &[u8]) -> Result<ParsedAdvancedSettings, ParseError
 }
 
 /// Parse spoke header (4G/HALO)
+///
+/// Range calculation uses: (large_range * small_range) / 512
+/// This formula works for both 3G/4G and HALO models.
 pub fn parse_4g_spoke_header(data: &[u8]) -> Result<(u32, u16, Option<u16>), ParseError> {
     if data.len() < SPOKE_HEADER_SIZE {
         return Err(ParseError::TooShort {
@@ -1218,13 +1221,19 @@ pub fn parse_4g_spoke_header(data: &[u8]) -> Result<(u32, u16, Option<u16>), Par
     let small_range = u16::from_le_bytes(header.small_range);
 
     // Calculate range in meters
+    // 4G uses large_range=0x80 (128) for all ranges, with small_range encoding the actual range
+    // Observed: small_range=3232 should be 926m (1/2nm), small_range=6464 should be 1852m (1nm)
+    // Formula: small_range * 1852 / 6464 = small_range * 463 / 1616
     let range = if large_range == 0x80 {
+        // Short range mode (used by 4G for all ranges)
         if small_range == 0xffff {
             0
         } else {
-            (small_range as u32) / 4
+            // 4G encoding: small_range * 463 / 1616 (with rounding)
+            ((small_range as u32) * 463 + 808) / 1616
         }
     } else {
+        // Standard range calculation for HALO (uses both large_range and small_range)
         ((large_range as u32) * (small_range as u32)) / 512
     };
 
