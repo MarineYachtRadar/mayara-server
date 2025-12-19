@@ -103,6 +103,10 @@ pub struct Characteristics {
     /// Maximum spoke length in samples
     pub max_spoke_length: u16,
 
+    /// Number of distinct pixel intensity values (e.g., 16 for 4-bit, 64 for 6-bit)
+    /// Used by GUI to generate appropriate color palette
+    pub pixel_values: u8,
+
     /// Whether Doppler processing is available
     pub has_doppler: bool,
 

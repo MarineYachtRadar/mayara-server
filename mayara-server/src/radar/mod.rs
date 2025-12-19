@@ -218,7 +218,10 @@ impl RadarInfo {
         controls: SharedControls,
         doppler: bool,
     ) -> Self {
-        let (message_tx, _message_rx) = tokio::sync::broadcast::channel(128);
+        // Large buffer to handle high-latency connections (VPN, slow networks)
+        // A 4G radar sends ~64 frames/second with 32 spokes each = ~2048 spokes/sec
+        // With 200ms latency, we need ~400+ messages buffered to avoid lag
+        let (message_tx, _message_rx) = tokio::sync::broadcast::channel(1024);
 
         let legend = default_legend(session.clone(), false, pixel_values);
 
@@ -276,6 +279,10 @@ impl RadarInfo {
 
     pub fn key(&self) -> String {
         self.key.to_owned()
+    }
+
+    pub fn pixel_values(&self) -> u8 {
+        self.pixel_values
     }
 
     pub fn set_doppler(&mut self, doppler: bool) {

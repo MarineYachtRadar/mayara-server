@@ -480,6 +480,7 @@ async fn get_radar_capabilities(
                     supported_features,
                     info.spokes_per_revolution,
                     info.max_spoke_len,
+                    info.pixel_values(),
                 ))
             }
             None => None,
@@ -487,7 +488,7 @@ async fn get_radar_capabilities(
     }; // session lock released here
 
     match build_args {
-        Some((model_info, radar_id, radar_key, supported_features, spokes_per_revolution, max_spoke_len)) => {
+        Some((model_info, radar_id, radar_key, supported_features, spokes_per_revolution, max_spoke_len, pixel_values)) => {
             // Use spawn_blocking to run capability building on a thread with larger stack
             // This avoids stack overflow in debug builds where ControlDefinition structs
             // (328 bytes each) can overflow the default 2MB async task stack
@@ -499,6 +500,7 @@ async fn get_radar_capabilities(
                     supported_features,
                     spokes_per_revolution,
                     max_spoke_len,
+                    pixel_values,
                 )
             })
             .await
@@ -676,14 +678,14 @@ async fn spokes_stream(
                         let len = message.len();
                         let ws_message = Message::Binary(message.into());
                         if let Err(e) = socket.send(ws_message).await {
-                            debug!("Error on send to websocket: {}", e);
+                            log::warn!("Error on send to websocket: {}", e);
                             break;
                         }
                         trace!("Sent radar message {} bytes", len);
                     },
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                         // Channel lagged - receiver fell behind, skip missed messages
-                        debug!("Websocket receiver lagged, skipped {} messages", n);
+                        log::warn!("Websocket receiver lagged, skipped {} messages", n);
                         // Continue to receive next message
                     },
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
@@ -2067,6 +2069,7 @@ async fn start_recording_handler(
             supported_features,
             radar.spokes_per_revolution,
             radar.max_spoke_len,
+            radar.pixel_values(),
         );
 
         let capabilities_json = serde_json::to_vec(&capabilities).unwrap_or_else(|_| b"{}".to_vec());

@@ -46,6 +46,7 @@ pub fn build_capabilities(
             supported_ranges: model_info.range_table.to_vec(),
             spokes_per_revolution: model_info.spokes_per_revolution,
             max_spoke_length: model_info.max_spoke_length,
+            pixel_values: discovery.pixel_values,
             has_doppler: model_info.has_doppler,
             has_dual_range: model_info.has_dual_range,
             max_dual_range: model_info.max_dual_range,
@@ -85,6 +86,7 @@ pub fn build_capabilities_from_model(
             supported_ranges: model_info.range_table.to_vec(),
             spokes_per_revolution: model_info.spokes_per_revolution,
             max_spoke_length: model_info.max_spoke_length,
+            pixel_values: 64, // Default to 6-bit radar data
             has_doppler: model_info.has_doppler,
             has_dual_range: model_info.has_dual_range,
             max_dual_range: model_info.max_dual_range,
@@ -108,6 +110,7 @@ pub fn build_capabilities_from_model_with_spokes(
     supported_features: Vec<SupportedFeature>,
     spokes_per_revolution: u16,
     max_spoke_length: u16,
+    pixel_values: u8,
 ) -> CapabilityManifest {
     build_capabilities_from_model_with_key(
         model_info,
@@ -116,6 +119,7 @@ pub fn build_capabilities_from_model_with_spokes(
         supported_features,
         spokes_per_revolution,
         max_spoke_length,
+        pixel_values,
     )
 }
 
@@ -129,6 +133,7 @@ pub fn build_capabilities_from_model_with_key(
     supported_features: Vec<SupportedFeature>,
     spokes_per_revolution: u16,
     max_spoke_length: u16,
+    pixel_values: u8,
 ) -> CapabilityManifest {
     CapabilityManifest {
         id: radar_id.to_string(),
@@ -145,6 +150,7 @@ pub fn build_capabilities_from_model_with_key(
             supported_ranges: model_info.range_table.to_vec(),
             spokes_per_revolution,
             max_spoke_length,
+            pixel_values,
             has_doppler: model_info.has_doppler,
             has_dual_range: model_info.has_dual_range,
             max_dual_range: model_info.max_dual_range,
