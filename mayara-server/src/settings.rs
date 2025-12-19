@@ -133,7 +133,7 @@ impl Controls {
 
         let (all_clients_tx, _) = tokio::sync::broadcast::channel(32);
         let (control_update_tx, _) = tokio::sync::broadcast::channel(32);
-        let (data_update_tx, _) = tokio::sync::broadcast::channel(10);
+        let (data_update_tx, _) = tokio::sync::broadcast::channel(64);
 
         Controls {
             session: session.clone(),

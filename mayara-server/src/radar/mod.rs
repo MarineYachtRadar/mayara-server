@@ -218,7 +218,7 @@ impl RadarInfo {
         controls: SharedControls,
         doppler: bool,
     ) -> Self {
-        let (message_tx, _message_rx) = tokio::sync::broadcast::channel(32);
+        let (message_tx, _message_rx) = tokio::sync::broadcast::channel(128);
 
         let legend = default_legend(session.clone(), false, pixel_values);
 
