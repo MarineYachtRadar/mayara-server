@@ -102,6 +102,11 @@ pub struct RadarLocator {
 
     /// Current startup phase for staggered initialization
     startup_phase: StartupPhase,
+
+    /// List of interface IP addresses to join multicast on
+    /// If empty, uses UNSPECIFIED (OS default). For multi-NIC setups,
+    /// populate this with all NIC IPs to ensure multicast works on all interfaces.
+    multicast_interfaces: Vec<String>,
 }
 
 impl RadarLocator {
@@ -118,6 +123,7 @@ impl RadarLocator {
             status: LocatorStatus::default(),
             furuno_interface: None,
             startup_phase: StartupPhase::NotStarted,
+            multicast_interfaces: Vec::new(),
         }
     }
 
@@ -127,6 +133,27 @@ impl RadarLocator {
     /// from going out on the wrong interface (e.g., 192.168.0.x instead of 172.31.x.x).
     pub fn set_furuno_interface(&mut self, interface: &str) {
         self.furuno_interface = Some(interface.to_string());
+    }
+
+    /// Set the list of interface IPs to join multicast groups on.
+    ///
+    /// In multi-NIC setups, you MUST call this with all non-loopback IPv4 addresses
+    /// to ensure multicast beacons are received on all interfaces. Without this,
+    /// multicast joins default to a single OS-chosen interface.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// locator.set_multicast_interfaces(&["192.168.0.106", "172.31.3.119"]);
+    /// ```
+    pub fn set_multicast_interfaces(&mut self, interfaces: &[&str]) {
+        self.multicast_interfaces = interfaces.iter().map(|s| s.to_string()).collect();
+    }
+
+    /// Add a single interface to the multicast interface list.
+    pub fn add_multicast_interface(&mut self, interface: &str) {
+        if !self.multicast_interfaces.contains(&interface.to_string()) {
+            self.multicast_interfaces.push(interface.to_string());
+        }
     }
 
     /// Start listening for beacons
@@ -277,11 +304,35 @@ impl RadarLocator {
         }
     }
 
+    /// Join a multicast group on all configured interfaces.
+    /// Returns true if at least one join succeeded.
+    fn join_multicast_all<I: IoProvider>(&self, io: &mut I, socket: &UdpSocketHandle, group: &str) -> bool {
+        if self.multicast_interfaces.is_empty() {
+            // No specific interfaces configured - use OS default
+            io.udp_join_multicast(socket, group, "").is_ok()
+        } else {
+            // Join on each configured interface
+            let mut any_success = false;
+            for interface in &self.multicast_interfaces {
+                match io.udp_join_multicast(socket, group, interface) {
+                    Ok(()) => {
+                        io.debug(&format!("Joined multicast {} on interface {}", group, interface));
+                        any_success = true;
+                    }
+                    Err(e) => {
+                        io.debug(&format!("Failed to join multicast {} on {}: {}", group, interface, e));
+                    }
+                }
+            }
+            any_success
+        }
+    }
+
     fn start_navico_br24<I: IoProvider>(&mut self, io: &mut I) {
         let status = match io.udp_create() {
             Ok(socket) => {
                 if io.udp_bind(&socket, navico::BR24_BEACON_PORT).is_ok() {
-                    if io.udp_join_multicast(&socket, navico::BR24_BEACON_ADDR, "").is_ok() {
+                    if self.join_multicast_all(io, &socket, navico::BR24_BEACON_ADDR) {
                         io.debug(&format!(
                             "Listening for Navico BR24 beacons on {}:{}",
                             navico::BR24_BEACON_ADDR,
@@ -332,7 +383,7 @@ impl RadarLocator {
         let status = match io.udp_create() {
             Ok(socket) => {
                 if io.udp_bind(&socket, navico::GEN3_BEACON_PORT).is_ok() {
-                    if io.udp_join_multicast(&socket, navico::GEN3_BEACON_ADDR, "").is_ok() {
+                    if self.join_multicast_all(io, &socket, navico::GEN3_BEACON_ADDR) {
                         io.debug(&format!(
                             "Listening for Navico 3G/4G/HALO beacons on {}:{}",
                             navico::GEN3_BEACON_ADDR,
@@ -383,7 +434,7 @@ impl RadarLocator {
         let status = match io.udp_create() {
             Ok(socket) => {
                 if io.udp_bind(&socket, raymarine::BEACON_PORT).is_ok() {
-                    if io.udp_join_multicast(&socket, raymarine::BEACON_ADDR, "").is_ok() {
+                    if self.join_multicast_all(io, &socket, raymarine::BEACON_ADDR) {
                         io.debug(&format!(
                             "Listening for Raymarine beacons on {}:{}",
                             raymarine::BEACON_ADDR,
@@ -434,7 +485,7 @@ impl RadarLocator {
         let status = match io.udp_create() {
             Ok(socket) => {
                 if io.udp_bind(&socket, garmin::REPORT_PORT).is_ok() {
-                    if io.udp_join_multicast(&socket, garmin::REPORT_ADDR, "").is_ok() {
+                    if self.join_multicast_all(io, &socket, garmin::REPORT_ADDR) {
                         io.debug(&format!(
                             "Listening for Garmin on {}:{}",
                             garmin::REPORT_ADDR,

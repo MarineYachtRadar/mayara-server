@@ -272,10 +272,16 @@ pub fn match_ipv4(addr: &Ipv4Addr, bcast: &Ipv4Addr, netmask: &Ipv4Addr) -> bool
     r == b
 }
 
+/// Check if an IP address is in the link-local range (169.254.0.0/16)
+fn is_link_local(ip: &Ipv4Addr) -> bool {
+    ip.octets()[0] == 169 && ip.octets()[1] == 254
+}
+
 /// Find the NIC address that can reach a given radar IP.
 ///
 /// Returns the first interface IP that matches the radar's subnet.
-/// Falls back to the first non-loopback interface if no match is found.
+/// For link-local addresses (169.254.x.x), prefers the Furuno subnet (172.31.x.x).
+/// Falls back to the first non-loopback, non-wireless interface if no match is found.
 pub fn find_nic_for_radar(radar_ip: &Ipv4Addr) -> Option<Ipv4Addr> {
     use network_interface::{NetworkInterface, NetworkInterfaceConfig};
 
@@ -296,7 +302,44 @@ pub fn find_nic_for_radar(radar_ip: &Ipv4Addr) -> Option<Ipv4Addr> {
         }
     }
 
-    // Second pass: return first non-loopback interface
+    // Special case: link-local addresses (169.254.x.x)
+    // These are typically used by Navico radars and are reachable from any ethernet interface.
+    // Prefer the Furuno/Navico subnet (172.31.x.x) if available, as it's the dedicated radar network.
+    if is_link_local(radar_ip) {
+        // Look for the 172.31.x.x interface (Furuno/Navico subnet)
+        for itf in &interfaces {
+            for addr in &itf.addr {
+                if let IpAddr::V4(nic_ip) = addr.ip() {
+                    if nic_ip.octets()[0] == 172 && nic_ip.octets()[1] == 31 {
+                        log::debug!(
+                            "Using Furuno/Navico NIC {} ({}) for link-local radar {}",
+                            itf.name, nic_ip, radar_ip
+                        );
+                        return Some(nic_ip);
+                    }
+                }
+            }
+        }
+
+        // Link-local fallback: prefer wired ethernet interfaces (name starts with 'en' or 'eth')
+        for itf in &interfaces {
+            if itf.name.starts_with("en") || itf.name.starts_with("eth") {
+                for addr in &itf.addr {
+                    if let IpAddr::V4(nic_ip) = addr.ip() {
+                        if !nic_ip.is_loopback() {
+                            log::debug!(
+                                "Using wired NIC {} ({}) for link-local radar {}",
+                                itf.name, nic_ip, radar_ip
+                            );
+                            return Some(nic_ip);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Final fallback: return first non-loopback interface
     for itf in &interfaces {
         for addr in &itf.addr {
             if let IpAddr::V4(nic_ip) = addr.ip() {

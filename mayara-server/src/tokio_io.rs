@@ -229,6 +229,37 @@ impl IoProvider for TokioIoProvider {
             })?
         };
 
+        // CRITICAL: Linux requires disabling IP_MULTICAST_ALL
+        // Without this, the kernel delivers multicast packets to ALL sockets that joined
+        // ANY multicast group, not just the specific one we want.
+        // See: https://man7.org/linux/man-pages/man7/ip.7.html (IP_MULTICAST_ALL)
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::io::AsRawFd;
+
+            // IP_MULTICAST_ALL = 49 on Linux
+            const IP_MULTICAST_ALL: libc::c_int = 49;
+
+            unsafe {
+                let optval: libc::c_int = 0; // Disable IP_MULTICAST_ALL
+                let ret = libc::setsockopt(
+                    state.socket.as_raw_fd(),
+                    libc::SOL_IP,
+                    IP_MULTICAST_ALL,
+                    &optval as *const _ as *const libc::c_void,
+                    std::mem::size_of_val(&optval) as libc::socklen_t,
+                );
+                if ret != 0 {
+                    log::warn!(
+                        "Failed to disable IP_MULTICAST_ALL: {}",
+                        std::io::Error::last_os_error()
+                    );
+                } else {
+                    log::debug!("Disabled IP_MULTICAST_ALL for multicast group {}", group);
+                }
+            }
+        }
+
         state
             .socket
             .join_multicast_v4(multicast_addr, interface_addr)

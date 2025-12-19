@@ -740,6 +740,89 @@ socket.bind(&SocketAddr::new(Ipv4Addr::UNSPECIFIED, 0))?;
 The `nic_addr` is available from the radar discovery process - it's the local IP
 address on which the radar beacon was received.
 
+### Multi-NIC Multicast Configuration
+
+**Critical for multi-NIC setups**: When a system has multiple network interfaces (e.g., WiFi
+for internet and USB-Ethernet for radar), multicast groups must be joined on ALL interfaces
+to ensure beacon reception regardless of which NIC the radar is connected to.
+
+The problem occurs when joining multicast with `INADDR_ANY` (0.0.0.0) - the OS picks one
+interface (typically the default route), which may not be the radar network.
+
+```rust
+// Wrong: OS picks one interface, often the wrong one
+socket.join_multicast_v4(multicast_addr, Ipv4Addr::UNSPECIFIED)?;
+
+// Correct: Join on each NIC explicitly
+for nic_addr in &all_interface_addresses {
+    socket.join_multicast_v4(multicast_addr, nic_addr)?;
+}
+```
+
+Navico radars use link-local addressing (169.254.x.x) which is reachable from any connected
+ethernet interface, so the code must discover all NICs at startup and join multicast groups
+on each one.
+
+### Linux Multicast Socket Configuration
+
+**Critical for Linux**: When joining multicast groups, the `IP_MULTICAST_ALL` socket option
+must be disabled. By default, Linux delivers multicast packets to ALL sockets that have
+joined ANY multicast group, not just the specific group for that socket. This causes
+beacon packets to be misrouted between different brand listeners (Navico, Raymarine, etc.).
+
+```rust
+// Linux requires disabling IP_MULTICAST_ALL for correct multicast reception
+#[cfg(target_os = "linux")]
+{
+    use std::os::unix::io::AsRawFd;
+    const IP_MULTICAST_ALL: libc::c_int = 49;
+
+    let optval: libc::c_int = 0; // Disable
+    libc::setsockopt(
+        socket.as_raw_fd(),
+        libc::SOL_IP,
+        IP_MULTICAST_ALL,
+        &optval as *const _ as *const libc::c_void,
+        std::mem::size_of_val(&optval) as libc::socklen_t,
+    );
+}
+
+// Then join the multicast group
+socket.join_multicast_v4(multicast_addr, interface_addr)?;
+```
+
+See: https://man7.org/linux/man-pages/man7/ip.7.html (IP_MULTICAST_ALL)
+
+### Link-Local Address Handling (169.254.x.x)
+
+Navico radars typically use link-local IP addresses (169.254.x.x range, RFC 3927). These
+addresses are auto-assigned by the radar and are valid only on the local network segment.
+
+When determining which NIC to use for communication with a link-local radar:
+
+1. **Don't rely on subnet matching** - link-local is not on any local subnet
+2. **Prefer dedicated radar networks** - e.g., 172.31.x.x (Furuno/Navico shared subnet)
+3. **Prefer wired interfaces** - avoid WiFi for radar data due to latency/reliability
+4. **Track the receiving interface** - ideally, use the same NIC that received the beacon
+
+```rust
+fn find_nic_for_radar(radar_ip: &Ipv4Addr) -> Option<Ipv4Addr> {
+    // Link-local special case
+    if is_link_local(radar_ip) {
+        // Prefer 172.31.x.x (dedicated radar network)
+        if let Some(nic) = find_interface_on_subnet(172, 31) {
+            return Some(nic);
+        }
+        // Fallback: prefer wired ethernet
+        if let Some(nic) = find_wired_interface() {
+            return Some(nic);
+        }
+    }
+    // Normal subnet matching
+    find_matching_subnet(radar_ip)
+}
+```
+
 ### Power Control String Values
 
 The power/status control uses string enum values ("off", "standby", "transmit", "warming"),

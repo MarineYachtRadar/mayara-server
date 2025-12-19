@@ -287,14 +287,20 @@ impl NavicoController {
     // Control methods
 
     /// Set power state (transmit/standby)
+    ///
+    /// Navico requires a two-part command sequence:
+    /// 1. `00 C1 01` - Prepare for status change
+    /// 2. `01 C1 XX` - Execute (XX = 00 for standby, 01 for transmit)
     pub fn set_power<I: IoProvider>(&mut self, io: &mut I, transmit: bool) {
-        let cmd = if transmit {
-            [0x00, 0xC1, 0x01]
-        } else {
-            [0x00, 0xC1, 0x00]
-        };
-        self.send_command(io, &cmd);
-        io.debug(&format!("[{}] Set power: {}", self.radar_id, transmit));
+        // Part 1: Prepare for status change
+        let prepare_cmd = [0x00, 0xC1, 0x01];
+        self.send_command(io, &prepare_cmd);
+
+        // Part 2: Execute the state change
+        let execute_cmd = [0x01, 0xC1, if transmit { 0x01 } else { 0x00 }];
+        self.send_command(io, &execute_cmd);
+
+        io.debug(&format!("[{}] Set power: {} (sent prepare + execute)", self.radar_id, if transmit { "transmit" } else { "standby" }));
     }
 
     /// Set range in decimeters

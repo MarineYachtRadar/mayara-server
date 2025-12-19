@@ -97,6 +97,17 @@ impl CoreLocatorAdapter {
     pub fn start(&mut self) {
         log::info!("Starting core radar locator");
 
+        // CRITICAL: Configure multicast interfaces for multi-NIC setups
+        // Without this, multicast only joins on OS-chosen interface (often wrong one)
+        let interfaces = find_all_interfaces();
+        if interfaces.len() > 1 {
+            log::info!("Multi-NIC setup detected - joining multicast on {} interfaces: {:?}",
+                       interfaces.len(), interfaces);
+        }
+        for iface in &interfaces {
+            self.locator.add_multicast_interface(iface);
+        }
+
         // CRITICAL: Configure Furuno interface to prevent cross-NIC broadcast traffic
         // Furuno uses 172.31.x.x subnet - find the NIC that can reach it
         if let Some(furuno_nic) = find_furuno_interface() {
@@ -379,6 +390,33 @@ fn find_furuno_interface() -> Option<Ipv4Addr> {
     }
 
     None
+}
+
+/// Find all non-loopback IPv4 interface addresses.
+///
+/// This is used to join multicast groups on all interfaces, which is
+/// critical for multi-NIC setups where the radar might be on a different
+/// interface than the OS default.
+fn find_all_interfaces() -> Vec<String> {
+    use network_interface::{NetworkInterface, NetworkInterfaceConfig};
+    use std::net::IpAddr;
+
+    let mut interfaces = Vec::new();
+
+    if let Ok(ifaces) = NetworkInterface::show() {
+        for itf in &ifaces {
+            for addr in &itf.addr {
+                if let IpAddr::V4(nic_ip) = addr.ip() {
+                    if !nic_ip.is_loopback() {
+                        log::debug!("Found interface {} with IP {}", itf.name, nic_ip);
+                        interfaces.push(nic_ip.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    interfaces
 }
 
 #[cfg(test)]
