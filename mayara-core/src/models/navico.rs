@@ -7,53 +7,52 @@ use super::ModelInfo;
 use crate::Brand;
 
 /// Range table for HALO series (in meters)
+/// Matches B&G chart plotter range steps for consistent UX
+/// 1 NM = 1852 meters
 static RANGE_TABLE_HALO: &[u32] = &[
-    50,     // ~1/32 NM
-    75,
-    100,
-    125,    // 1/16 NM
-    250,    // 1/8 NM
-    500,    // 1/4 NM
-    750,    // 3/8 NM
-    1000,   // ~1/2 NM
-    1500,   // 3/4 NM
-    2000,   // 1 NM
-    3000,   // 1.5 NM
-    4000,   // 2 NM
-    6000,   // 3 NM
-    8000,   // 4 NM
-    12000,  // 6 NM
-    16000,  // 8 NM
-    24000,  // 12 NM
-    36000,  // 18 NM
-    48000,  // 24 NM
-    64000,  // 32 NM
-    72000,  // 36 NM
-    96000,  // 48 NM
+    50,     // 50m
+    75,     // 75m
+    100,    // 100m
+    231,    // 1/8 NM
+    463,    // 1/4 NM
+    926,    // 1/2 NM
+    1389,   // 3/4 NM
+    1852,   // 1 NM
+    2778,   // 1.5 NM
+    3704,   // 2 NM
+    5556,   // 3 NM
+    7408,   // 4 NM
+    11112,  // 6 NM
+    14816,  // 8 NM
+    22224,  // 12 NM
+    29632,  // 16 NM
+    44448,  // 24 NM
+    66672,  // 36 NM
+    88896,  // 48 NM
 ];
 
 /// Range table for 4G/3G series (in meters)
+/// Matches B&G chart plotter range steps for consistent UX
+/// 1 NM = 1852 meters
 static RANGE_TABLE_4G: &[u32] = &[
-    50,
-    75,
-    100,
-    125,
-    250,
-    500,
-    750,
-    1000,
-    1500,
-    2000,
-    3000,
-    4000,
-    6000,
-    8000,
-    12000,
-    16000,
-    24000,
-    36000,
-    48000,
-    64000,
+    50,     // 50m
+    75,     // 75m
+    100,    // 100m
+    231,    // 1/8 NM
+    463,    // 1/4 NM
+    926,    // 1/2 NM
+    1389,   // 3/4 NM
+    1852,   // 1 NM
+    2778,   // 1.5 NM
+    3704,   // 2 NM
+    5556,   // 3 NM
+    7408,   // 4 NM
+    11112,  // 6 NM
+    14816,  // 8 NM
+    22224,  // 12 NM
+    29632,  // 16 NM
+    44448,  // 24 NM
+    66672,  // 36 NM
 ];
 
 /// Extended controls for HALO series
