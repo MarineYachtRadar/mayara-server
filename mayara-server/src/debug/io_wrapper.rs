@@ -155,83 +155,244 @@ impl<T: IoProvider> DebugIoProvider<T> {
                 command_id,
                 fields,
                 ..
-            } => {
-                // Only process responses ($N messages)
-                if message_type != "response" {
-                    return Vec::new();
+            } => self.extract_furuno_controls(message_type, command_id.as_deref(), fields),
+
+            DecodedMessage::Navico {
+                message_type,
+                fields,
+                ..
+            } => self.extract_navico_controls(message_type, fields),
+
+            DecodedMessage::Raymarine {
+                message_type,
+                fields,
+                ..
+            } => self.extract_raymarine_controls(message_type, fields),
+
+            DecodedMessage::Garmin {
+                message_type,
+                fields,
+                ..
+            } => self.extract_garmin_controls(message_type, fields),
+
+            DecodedMessage::Unknown { .. } => Vec::new(),
+        }
+    }
+
+    /// Extract control values from Furuno decoded message.
+    fn extract_furuno_controls(
+        &self,
+        message_type: &str,
+        command_id: Option<&str>,
+        fields: &serde_json::Value,
+    ) -> Vec<(String, serde_json::Value)> {
+        // Only process responses ($N messages)
+        if message_type != "response" {
+            return Vec::new();
+        }
+
+        let cmd = command_id.unwrap_or("");
+        // Command IDs are like "N63", "N64", etc.
+        let cmd_num = cmd.trim_start_matches('N');
+
+        match cmd_num {
+            // Gain (0x63)
+            "63" => {
+                let auto = fields.get("auto").and_then(|v| v.as_bool()).unwrap_or(false);
+                let value = fields.get("value").and_then(|v| v.as_i64()).unwrap_or(0);
+                vec![
+                    ("gain".to_string(), serde_json::json!(value)),
+                    ("gainAuto".to_string(), serde_json::json!(auto)),
+                ]
+            }
+            // Sea clutter (0x64)
+            "64" => {
+                let auto = fields.get("auto").and_then(|v| v.as_bool()).unwrap_or(false);
+                let value = fields.get("value").and_then(|v| v.as_i64()).unwrap_or(0);
+                vec![
+                    ("sea".to_string(), serde_json::json!(value)),
+                    ("seaAuto".to_string(), serde_json::json!(auto)),
+                ]
+            }
+            // Rain clutter (0x65)
+            "65" => {
+                let auto = fields.get("auto").and_then(|v| v.as_bool()).unwrap_or(false);
+                let value = fields.get("value").and_then(|v| v.as_i64()).unwrap_or(0);
+                vec![
+                    ("rain".to_string(), serde_json::json!(value)),
+                    ("rainAuto".to_string(), serde_json::json!(auto)),
+                ]
+            }
+            // Status/Power (0x69)
+            "69" => {
+                // First param is mode: 1=standby, 2=transmit
+                if let Some(params) = fields.get("allParams").and_then(|v| v.as_array()) {
+                    if let Some(mode) = params.first().and_then(|v| v.as_str()) {
+                        let power = match mode {
+                            "1" => "standby",
+                            "2" => "transmit",
+                            _ => "unknown",
+                        };
+                        return vec![("power".to_string(), serde_json::json!(power))];
+                    }
                 }
-
-                let cmd = command_id.as_deref().unwrap_or("");
-                // Command IDs are like "N63", "N64", etc.
-                let cmd_num = cmd.trim_start_matches('N');
-
-                match cmd_num {
-                    // Gain (0x63)
-                    "63" => {
-                        let auto = fields.get("auto").and_then(|v| v.as_bool()).unwrap_or(false);
-                        let value = fields.get("value").and_then(|v| v.as_i64()).unwrap_or(0);
-                        vec![
-                            ("gain".to_string(), serde_json::json!(value)),
-                            ("gainAuto".to_string(), serde_json::json!(auto)),
-                        ]
-                    }
-                    // Sea clutter (0x64)
-                    "64" => {
-                        let auto = fields.get("auto").and_then(|v| v.as_bool()).unwrap_or(false);
-                        let value = fields.get("value").and_then(|v| v.as_i64()).unwrap_or(0);
-                        vec![
-                            ("sea".to_string(), serde_json::json!(value)),
-                            ("seaAuto".to_string(), serde_json::json!(auto)),
-                        ]
-                    }
-                    // Rain clutter (0x65)
-                    "65" => {
-                        let auto = fields.get("auto").and_then(|v| v.as_bool()).unwrap_or(false);
-                        let value = fields.get("value").and_then(|v| v.as_i64()).unwrap_or(0);
-                        vec![
-                            ("rain".to_string(), serde_json::json!(value)),
-                            ("rainAuto".to_string(), serde_json::json!(auto)),
-                        ]
-                    }
-                    // Status/Power (0x69)
-                    "69" => {
-                        // First param is mode: 1=standby, 2=transmit
-                        if let Some(params) = fields.get("allParams").and_then(|v| v.as_array()) {
-                            if let Some(mode) = params.first().and_then(|v| v.as_str()) {
-                                let power = match mode {
-                                    "1" => "standby",
-                                    "2" => "transmit",
-                                    _ => "unknown",
-                                };
-                                return vec![("power".to_string(), serde_json::json!(power))];
-                            }
-                        }
-                        // Fallback to level field (from Bird Mode decoding, reused for status)
-                        if let Some(level) = fields.get("level").and_then(|v| v.as_i64()) {
-                            let power = match level {
-                                1 => "standby",
-                                2 => "transmit",
-                                _ => "unknown",
-                            };
-                            return vec![("power".to_string(), serde_json::json!(power))];
-                        }
-                        Vec::new()
-                    }
-                    // Unknown commands: track raw params for reverse engineering
-                    _ => {
-                        // Use allParams if available, otherwise the whole fields object
-                        if let Some(params) = fields.get("allParams") {
-                            vec![(cmd.to_string(), params.clone())]
-                        } else if !fields.is_null() && fields.as_object().map_or(false, |o| !o.is_empty()) {
-                            vec![(cmd.to_string(), fields.clone())]
-                        } else {
-                            Vec::new()
-                        }
-                    }
+                // Fallback to level field (from Bird Mode decoding, reused for status)
+                if let Some(level) = fields.get("level").and_then(|v| v.as_i64()) {
+                    let power = match level {
+                        1 => "standby",
+                        2 => "transmit",
+                        _ => "unknown",
+                    };
+                    return vec![("power".to_string(), serde_json::json!(power))];
+                }
+                Vec::new()
+            }
+            // Unknown commands: track raw params for reverse engineering
+            _ => {
+                // Use allParams if available, otherwise the whole fields object
+                if let Some(params) = fields.get("allParams") {
+                    vec![(cmd.to_string(), params.clone())]
+                } else if !fields.is_null() && fields.as_object().map_or(false, |o| !o.is_empty()) {
+                    vec![(cmd.to_string(), fields.clone())]
+                } else {
+                    Vec::new()
                 }
             }
-            _ => Vec::new(),
         }
+    }
+
+    /// Extract control values from Navico decoded message.
+    fn extract_navico_controls(
+        &self,
+        message_type: &str,
+        fields: &serde_json::Value,
+    ) -> Vec<(String, serde_json::Value)> {
+        let mut controls = Vec::new();
+
+        match message_type {
+            "status" => {
+                // Power state from status report
+                if let Some(power) = fields.get("power") {
+                    controls.push(("power".to_string(), power.clone()));
+                }
+                if let Some(power_str) = fields.get("powerStr") {
+                    controls.push(("powerStr".to_string(), power_str.clone()));
+                }
+            }
+            "settings" => {
+                // Gain, sea, rain from settings report
+                if let Some(gain) = fields.get("gain") {
+                    controls.push(("gain".to_string(), gain.clone()));
+                }
+                if let Some(gain_auto) = fields.get("gainAuto") {
+                    controls.push(("gainAuto".to_string(), gain_auto.clone()));
+                }
+                if let Some(sea) = fields.get("sea") {
+                    controls.push(("sea".to_string(), sea.clone()));
+                }
+                if let Some(sea_auto) = fields.get("seaAuto") {
+                    controls.push(("seaAuto".to_string(), sea_auto.clone()));
+                }
+                if let Some(rain) = fields.get("rain") {
+                    controls.push(("rain".to_string(), rain.clone()));
+                }
+                if let Some(interference) = fields.get("interference") {
+                    controls.push(("interference".to_string(), interference.clone()));
+                }
+            }
+            "range" => {
+                if let Some(range) = fields.get("rangeRaw") {
+                    controls.push(("range".to_string(), range.clone()));
+                }
+            }
+            _ => {}
+        }
+
+        controls
+    }
+
+    /// Extract control values from Raymarine decoded message.
+    fn extract_raymarine_controls(
+        &self,
+        message_type: &str,
+        fields: &serde_json::Value,
+    ) -> Vec<(String, serde_json::Value)> {
+        // Only process status messages (both Quantum and RD)
+        if message_type != "status" {
+            return Vec::new();
+        }
+
+        let mut controls = Vec::new();
+
+        // Common controls for both Quantum and RD status packets
+        if let Some(power) = fields.get("power") {
+            controls.push(("power".to_string(), power.clone()));
+        }
+        if let Some(power_str) = fields.get("powerStr") {
+            controls.push(("powerStr".to_string(), power_str.clone()));
+        }
+        if let Some(gain) = fields.get("gain") {
+            controls.push(("gain".to_string(), gain.clone()));
+        }
+        if let Some(gain_auto) = fields.get("gainAuto") {
+            controls.push(("gainAuto".to_string(), gain_auto.clone()));
+        }
+        if let Some(sea) = fields.get("sea") {
+            controls.push(("sea".to_string(), sea.clone()));
+        }
+        if let Some(sea_auto) = fields.get("seaAuto") {
+            controls.push(("seaAuto".to_string(), sea_auto.clone()));
+        }
+        if let Some(rain) = fields.get("rain") {
+            controls.push(("rain".to_string(), rain.clone()));
+        }
+
+        controls
+    }
+
+    /// Extract control values from Garmin decoded message.
+    fn extract_garmin_controls(
+        &self,
+        message_type: &str,
+        fields: &serde_json::Value,
+    ) -> Vec<(String, serde_json::Value)> {
+        // Only process status messages
+        if message_type != "status" {
+            return Vec::new();
+        }
+
+        let mut controls = Vec::new();
+
+        // Garmin sends separate packets for each control, so we extract what's available
+        if let Some(power) = fields.get("power") {
+            controls.push(("power".to_string(), power.clone()));
+        }
+        if let Some(power_str) = fields.get("powerStr") {
+            controls.push(("powerStr".to_string(), power_str.clone()));
+        }
+        if let Some(gain) = fields.get("gain") {
+            controls.push(("gain".to_string(), gain.clone()));
+        }
+        if let Some(gain_auto) = fields.get("gainAuto") {
+            controls.push(("gainAuto".to_string(), gain_auto.clone()));
+        }
+        if let Some(sea) = fields.get("sea") {
+            controls.push(("sea".to_string(), sea.clone()));
+        }
+        if let Some(sea_auto) = fields.get("seaAuto") {
+            controls.push(("seaAuto".to_string(), sea_auto.clone()));
+        }
+        if let Some(rain) = fields.get("rain") {
+            controls.push(("rain".to_string(), rain.clone()));
+        }
+        if let Some(rain_auto) = fields.get("rainAuto") {
+            controls.push(("rainAuto".to_string(), rain_auto.clone()));
+        }
+        if let Some(range) = fields.get("range") {
+            controls.push(("range".to_string(), range.clone()));
+        }
+
+        controls
     }
 
     /// Submit a socket operation event.
@@ -822,6 +983,174 @@ mod tests {
             assert_eq!(control_id, "N68");
             assert_eq!(*before, serde_json::json!(["1", "0", "50"]));
             assert_eq!(*after, serde_json::json!(["1", "0", "75"]));
+        } else {
+            panic!("Expected StateChange event");
+        }
+    }
+
+    #[test]
+    fn test_navico_state_change_detection() {
+        use super::super::DebugEventPayload;
+
+        let hub = Arc::new(DebugHub::new());
+        let mut provider = DebugIoProvider::new(
+            MockIoProvider,
+            hub.clone(),
+            "radar-1".to_string(),
+            "navico".to_string(),
+        );
+
+        // First observation - Navico settings report
+        let decoded1 = DecodedMessage::Navico {
+            message_type: "settings".to_string(),
+            report_id: Some(0x02),
+            fields: serde_json::json!({
+                "gain": 50,
+                "gainAuto": false,
+                "sea": 30,
+                "rain": 20
+            }),
+            description: Some("Settings report".to_string()),
+        };
+        provider.check_state_changes(&decoded1);
+
+        // Change gain value
+        let decoded2 = DecodedMessage::Navico {
+            message_type: "settings".to_string(),
+            report_id: Some(0x02),
+            fields: serde_json::json!({
+                "gain": 75,
+                "gainAuto": false,
+                "sea": 30,
+                "rain": 20
+            }),
+            description: Some("Settings report".to_string()),
+        };
+        provider.check_state_changes(&decoded2);
+
+        // Should have a state change event for gain
+        let events = hub.get_all_events();
+        let state_events: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e.payload, DebugEventPayload::StateChange { .. }))
+            .collect();
+        assert!(state_events.len() >= 1, "Changed gain should emit event");
+
+        // Find the gain change event
+        let gain_event = state_events
+            .iter()
+            .find(|e| {
+                if let DebugEventPayload::StateChange { control_id, .. } = &e.payload {
+                    control_id == "gain"
+                } else {
+                    false
+                }
+            });
+        assert!(gain_event.is_some(), "Should have gain state change");
+    }
+
+    #[test]
+    fn test_raymarine_state_change_detection() {
+        use super::super::DebugEventPayload;
+
+        let hub = Arc::new(DebugHub::new());
+        let mut provider = DebugIoProvider::new(
+            MockIoProvider,
+            hub.clone(),
+            "radar-1".to_string(),
+            "raymarine".to_string(),
+        );
+
+        // First observation - Raymarine Quantum status
+        let decoded1 = DecodedMessage::Raymarine {
+            message_type: "status".to_string(),
+            variant: Some("quantum".to_string()),
+            fields: serde_json::json!({
+                "power": 0,
+                "powerStr": "standby",
+                "gain": 50,
+                "sea": 30,
+                "rain": 20
+            }),
+            description: Some("Quantum status".to_string()),
+        };
+        provider.check_state_changes(&decoded1);
+
+        // Change to transmit
+        let decoded2 = DecodedMessage::Raymarine {
+            message_type: "status".to_string(),
+            variant: Some("quantum".to_string()),
+            fields: serde_json::json!({
+                "power": 1,
+                "powerStr": "transmit",
+                "gain": 50,
+                "sea": 30,
+                "rain": 20
+            }),
+            description: Some("Quantum status".to_string()),
+        };
+        provider.check_state_changes(&decoded2);
+
+        // Should have state change events for power
+        let events = hub.get_all_events();
+        let state_events: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e.payload, DebugEventPayload::StateChange { .. }))
+            .collect();
+        assert!(state_events.len() >= 1, "Changed power should emit event");
+    }
+
+    #[test]
+    fn test_garmin_state_change_detection() {
+        use super::super::DebugEventPayload;
+
+        let hub = Arc::new(DebugHub::new());
+        let mut provider = DebugIoProvider::new(
+            MockIoProvider,
+            hub.clone(),
+            "radar-1".to_string(),
+            "garmin".to_string(),
+        );
+
+        // First observation - Garmin gain status
+        let decoded1 = DecodedMessage::Garmin {
+            message_type: "status".to_string(),
+            fields: serde_json::json!({
+                "gain": 50
+            }),
+            description: Some("Gain: 50".to_string()),
+        };
+        provider.check_state_changes(&decoded1);
+
+        // Change gain value
+        let decoded2 = DecodedMessage::Garmin {
+            message_type: "status".to_string(),
+            fields: serde_json::json!({
+                "gain": 80
+            }),
+            description: Some("Gain: 80".to_string()),
+        };
+        provider.check_state_changes(&decoded2);
+
+        // Should have a state change event
+        let events = hub.get_all_events();
+        let state_events: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e.payload, DebugEventPayload::StateChange { .. }))
+            .collect();
+        assert_eq!(state_events.len(), 1, "Changed gain should emit event");
+
+        // Verify the event content
+        if let DebugEventPayload::StateChange {
+            control_id,
+            before,
+            after,
+            ..
+        } = &state_events[0].payload
+        {
+            assert_eq!(control_id, "gain");
+            assert_eq!(*before, serde_json::json!(50));
+            assert_eq!(*after, serde_json::json!(80));
         } else {
             panic!("Expected StateChange event");
         }

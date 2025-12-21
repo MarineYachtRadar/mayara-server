@@ -123,7 +123,9 @@ Shows before/after comparison when radar state changes:
 
 **Automatic State Detection:**
 
-The debugger automatically tracks control values from protocol responses and emits STATE events when they change. For Furuno, this includes:
+The debugger automatically tracks control values from protocol responses and emits STATE events when they change. This works for **all supported brands**:
+
+**Furuno** (ASCII over TCP):
 
 | Control | Command | What's Tracked |
 |---------|---------|----------------|
@@ -132,9 +134,39 @@ The debugger automatically tracks control values from protocol responses and emi
 | `rain` / `rainAuto` | N65 | Rain clutter value and auto mode |
 | `power` | N69 | Standby/transmit state |
 
-**Unknown Command Tracking:**
+**Navico** (Binary UDP multicast - Simrad, B&G, Lowrance):
 
-For reverse engineering, the debugger also tracks state changes for **unknown commands**. When an unrecognized `$N` response changes, you'll see a STATE event like:
+| Control | Report | What's Tracked |
+|---------|--------|----------------|
+| `power` / `powerStr` | Status (0x01) | Power state (off/standby/warmup/transmit) |
+| `gain` / `gainAuto` | Settings (0x02) | Gain value and auto mode |
+| `sea` / `seaAuto` | Settings (0x02) | Sea clutter value and mode (manual/auto/calm/moderate/rough) |
+| `rain` | Settings (0x02) | Rain clutter value |
+| `interference` | Settings (0x02) | Interference rejection level (0-3) |
+| `range` | Range (0x08) | Range in decimeters |
+
+**Raymarine** (Binary UDP multicast - Quantum and RD series):
+
+| Control | Source | What's Tracked |
+|---------|--------|----------------|
+| `power` / `powerStr` | Status packet | Power state (standby/transmit) |
+| `gain` / `gainAuto` | Status packet | Gain value and auto mode |
+| `sea` / `seaAuto` | Status packet | Sea clutter value and auto mode |
+| `rain` | Status packet | Rain clutter value |
+
+**Garmin** (Binary UDP multicast - xHD series):
+
+| Control | Packet Type | What's Tracked |
+|---------|-------------|----------------|
+| `power` / `powerStr` | 0x0919 | Power state (standby/transmit) |
+| `gain` / `gainAuto` | 0x0924/0x0925 | Gain mode and value |
+| `sea` / `seaAuto` | 0x0939/0x093a | Sea mode and value |
+| `rain` / `rainAuto` | 0x0933/0x0934 | Rain mode and value |
+| `range` | 0x091e | Range in meters |
+
+**Unknown Command Tracking (Furuno only):**
+
+For reverse engineering, the debugger also tracks state changes for **unknown Furuno commands**. When an unrecognized `$N` response changes, you'll see a STATE event like:
 
 ```
 N68: ["1","0","50"] → ["1","0","75"]
@@ -426,21 +458,91 @@ The debugger automatically tracks known controls (gain, sea, rain, power) and em
 
 ### Navico (Simrad, B&G, Lowrance)
 
+**Protocol Overview:**
 - Uses binary UDP multicast
-- Spoke data, status reports, and commands have different structures
-- Large packets (>100 bytes) are typically spoke data
+- Report types identified by first byte
+- Spoke data is typically >100 bytes
+
+**Decoded Reports:**
+
+| Report ID | Name | What's Decoded |
+|-----------|------|----------------|
+| 0x01 | Status | Power state (off/standby/warmup/transmit) |
+| 0x02 | Settings | Gain, sea, rain, interference rejection |
+| 0x03 | Firmware | Firmware version info |
+| 0x04 | Diagnostic | Bearing alignment |
+| 0x08 | Range | Current range in decimeters |
+
+**Field Offsets (Settings Report 0x02):**
+- Gain auto: byte 11, Gain value: byte 12
+- Sea value: byte 17, Sea auto: byte 21
+- Rain value: byte 22
+- Interference: byte 5
+
+**State Change Detection:**
+
+The debugger tracks all settings from the Settings report (0x02) and power state from Status report (0x01).
 
 ### Raymarine
 
+**Protocol Overview:**
 - Uses binary UDP multicast
-- Beacon packets are 56 bytes
-- Different radar variants use different packet formats
+- Two variants: Quantum (solid-state) and RD (magnetron)
+- Beacon packets are 36-56 bytes
+
+**Quantum Commands:**
+- Format: `[opcode_lo, opcode_hi, 0x28, value, ...]`
+- Status packets are 260+ bytes
+
+| Opcode | Control |
+|--------|---------|
+| 0xc401 | Gain |
+| 0xc402 | Sea clutter |
+| 0xc403 | Rain clutter |
+| 0xc404 | Range index |
+| 0xc405 | Power |
+
+**RD Commands:**
+- Format: `[0x00, 0xC1, lead, value, 0x00, ...]`
+- Status packets are 250-259 bytes
+
+| Lead Byte | Control |
+|-----------|---------|
+| 0x01 | Gain |
+| 0x02 | Sea clutter |
+| 0x03 | Rain clutter |
+
+**State Change Detection:**
+
+The debugger tracks power, gain, sea, and rain from status packets for both Quantum and RD series.
 
 ### Garmin
 
+**Protocol Overview:**
 - Uses binary UDP multicast on 239.254.2.x
-- Status and control messages are relatively small
-- Spoke data arrives in larger packets
+- 12-byte command packets (sent)
+- Status packets are 8-100 bytes with packet type in first 4 bytes
+
+**Decoded Packet Types:**
+
+| Type Code | Name | What's Decoded |
+|-----------|------|----------------|
+| 0x0919 | Transmit | Power state (standby/transmit) |
+| 0x0924 | Gain Mode | Auto/manual mode |
+| 0x0925 | Gain Value | Gain level |
+| 0x0939 | Sea Mode | Auto/manual mode |
+| 0x093a | Sea Value | Sea clutter level |
+| 0x0933 | Rain Mode | Auto/manual mode |
+| 0x0934 | Rain Value | Rain clutter level |
+| 0x091e | Range | Range in meters |
+
+**Packet Format:**
+- Bytes 0-3: Packet type (u32 LE)
+- Bytes 4-7: Value (u32 LE)
+
+**State Change Detection:**
+
+The debugger tracks all decoded status packet types, including power, gain, sea, rain, and range.
 
 ---
 
