@@ -117,9 +117,30 @@ For unknown bytes, regions are highlighted as `[UNKNOWN - N bytes]`.
 ### State Change View
 
 Shows before/after comparison when radar state changes:
-- Which control changed
+- Which control changed (e.g., `gain`, `sea`, `rain`, `power`)
 - Previous and new values
 - Triggering event (if correlatable)
+
+**Automatic State Detection:**
+
+The debugger automatically tracks control values from protocol responses and emits STATE events when they change. For Furuno, this includes:
+
+| Control | Command | What's Tracked |
+|---------|---------|----------------|
+| `gain` / `gainAuto` | N63 | Gain value and auto mode |
+| `sea` / `seaAuto` | N64 | Sea clutter value and auto mode |
+| `rain` / `rainAuto` | N65 | Rain clutter value and auto mode |
+| `power` | N69 | Standby/transmit state |
+
+**Unknown Command Tracking:**
+
+For reverse engineering, the debugger also tracks state changes for **unknown commands**. When an unrecognized `$N` response changes, you'll see a STATE event like:
+
+```
+N68: ["1","0","50"] → ["1","0","75"]
+```
+
+This helps identify which parameter changed when you interact with the chart plotter, even for commands we don't yet understand.
 
 ---
 
@@ -184,14 +205,26 @@ GET /v2/api/debug/recordings
 
 ### Step 3: Correlate Changes
 
-For multicast protocols:
-- You'll see a status broadcast showing the new state
-- The debugger correlates this with recent commands
+When you change a setting on the chart plotter, the debugger shows:
 
-For TCP protocols (Furuno):
-- We poll the radar every 2 seconds for current state
-- You'll see the state change in the response (e.g., `$N63` for gain)
-- To see the actual command from the chart plotter, use `tcpdump`
+1. **RECV event** - The radar's response containing the new state
+2. **STATE event** - Automatic diff showing what changed
+
+For example, changing gain from 50 to 75:
+```
+[14:30:45.123] RECV  $N63,0,75,0,...     ← Response with new value
+[14:30:45.124] STATE gain: 50 → 75       ← Automatic state change detection
+```
+
+**For unknown commands**, you'll still see STATE events with raw parameters:
+```
+[14:30:46.500] RECV  $N68,1,0,75,...     ← Unknown command
+[14:30:46.501] STATE N68: ["1","0","50"] → ["1","0","75"]
+```
+
+This makes it easy to identify which parameter changed, even for commands we don't yet understand.
+
+**Note:** To see the actual command sent by the chart plotter (not just the radar's response), use `tcpdump`.
 
 ### Step 4: Record and Export
 
@@ -283,9 +316,21 @@ Files can be loaded by any developer to replay and analyze.
 
 1. **Start with known operations**: First observe commands you already understand
 2. **One change at a time**: Change one setting, observe the result
-3. **Document timestamps**: Note exactly when you press each button
-4. **Combine tools**: Use Protocol Debugger + tcpdump together
-5. **Share recordings**: Upload `.mdbg` files to issues for collaboration
+3. **Watch for STATE events**: The purple STATE badges highlight exactly what changed
+4. **Filter by "State Changes"**: Use the type filter to see only state changes - great for spotting patterns
+5. **Track unknown commands**: Even unrecognized commands get STATE events showing parameter changes
+6. **Document timestamps**: Note exactly when you press each button
+7. **Combine tools**: Use Protocol Debugger + tcpdump together
+8. **Share recordings**: Upload `.mdbg` files to issues for collaboration
+
+**Example workflow for discovering a new command:**
+
+1. Set type filter to "State Changes"
+2. Press a button on the chart plotter
+3. Watch for a STATE event with an `N##` control ID (unknown command)
+4. Note which parameter position changed (e.g., 3rd element in the array)
+5. Repeat with different values to understand the mapping
+6. Document in the protocol documentation
 
 ---
 
@@ -310,6 +355,17 @@ This is expected for direct commands. However:
 
 The decoder may not recognize the message format. The raw hex is always available. Use the "Unknown Only" filter to find these messages. Consider contributing to the protocol documentation.
 
+### "No STATE events appearing"
+
+STATE events only appear after the **second** observation of a control value:
+- First observation: Value is recorded internally (no event)
+- Subsequent observations: If value differs, STATE event is emitted
+
+This avoids flooding with "null → value" events on startup. To see STATE events:
+1. Wait for the radar to report status at least once
+2. Change a setting on the chart plotter
+3. The next poll (within 2 seconds for Furuno) will show the STATE event
+
 ### "Radar not appearing in filter dropdown"
 
 - Wait for some events to arrive (the dropdown populates from event data)
@@ -327,11 +383,46 @@ The decoder may not recognize the message format. The raw hex is always availabl
 
 ### Furuno
 
+**Protocol Overview:**
 - Uses ASCII commands over TCP (e.g., `$S69,50\r\n`)
 - Commands start with `$S` (set), `$R` (request), `$N` (notification/response)
-- The decoder recognizes common commands like gain (63), sea (64), rain (65)
 - State is polled every 2 seconds to sync changes from chart plotter
 - You'll see `$R63` (request gain) followed by `$N63,auto,value,...` (response)
+
+**Decoded Commands:**
+
+| ID | Name | Description |
+|----|------|-------------|
+| 63 | Gain | `$N63,auto,value,...` - Gain level and auto mode |
+| 64 | Sea | `$N64,auto,value,...` - Sea clutter and auto mode |
+| 65 | Rain | `$N65,value,...` - Rain clutter level |
+| 69 | Status | `$N69,mode,...` - Power state (1=standby, 2=transmit) |
+| FF | Keepalive | `$SFF` / `$NFF` - Connection keepalive |
+
+**Binary Framing:**
+
+Some Furuno firmware versions wrap ASCII commands in an 8-byte binary header:
+```
+00 00 00 08 00 00 00 00 $N69,2,0,0,60,300,0
+└──────────────────────┘└─────────────────┘
+     8-byte header         ASCII command
+```
+The debugger automatically strips this header and decodes the ASCII command inside.
+
+**Login Protocol:**
+
+Furuno uses a binary login handshake before ASCII commands:
+
+| Direction | Bytes | Description |
+|-----------|-------|-------------|
+| Send | 56 bytes starting `08 01 00 38` | Login request with copyright string |
+| Recv | 12 bytes starting `09 01 00 0c` | Login response with command port offset |
+
+The port offset (bytes 8-9) determines the command port: `10000 + offset`. For example, offset `0x0064` (100) means command port 10100.
+
+**State Change Detection:**
+
+The debugger automatically tracks known controls (gain, sea, rain, power) and emits STATE events when values change. For unknown commands, it tracks the raw parameters - useful for reverse engineering new commands.
 
 ### Navico (Simrad, B&G, Lowrance)
 
