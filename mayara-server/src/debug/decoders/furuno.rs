@@ -19,6 +19,49 @@ use crate::debug::{DecodedMessage, IoDirection};
 /// Some firmware versions wrap commands in an 8-byte binary header.
 pub struct FurunoDecoder;
 
+/// Login message header (first 12 bytes of 56-byte login message).
+const LOGIN_MESSAGE_HEADER: [u8; 4] = [0x08, 0x01, 0x00, 0x38];
+
+/// Login response header (8 bytes).
+const LOGIN_RESPONSE_HEADER: [u8; 8] = [0x09, 0x01, 0x00, 0x0c, 0x01, 0x00, 0x00, 0x00];
+
+/// Try to decode a binary login message or response.
+///
+/// Returns Some(DecodedMessage) if the data matches login protocol,
+/// None if it should be parsed as ASCII command.
+fn try_decode_login(data: &[u8]) -> Option<DecodedMessage> {
+    // Check for login response (12 bytes: 8-byte header + 2-byte port offset + 2 unknown)
+    if data.len() >= 12 && data[0..8] == LOGIN_RESPONSE_HEADER {
+        let port_offset = ((data[8] as u16) << 8) | (data[9] as u16);
+        let command_port = 10000 + port_offset;
+        return Some(DecodedMessage::Furuno {
+            message_type: "login_response".to_string(),
+            command_id: None,
+            fields: serde_json::json!({
+                "portOffset": port_offset,
+                "commandPort": command_port,
+                "rawBytes": format!("{:02x?}", &data[..data.len().min(12)])
+            }),
+            description: Some(format!("Login response: command port {}", command_port)),
+        });
+    }
+
+    // Check for login message (56 bytes starting with 08 01 00 38)
+    if data.len() >= 12 && data[0..4] == LOGIN_MESSAGE_HEADER {
+        return Some(DecodedMessage::Furuno {
+            message_type: "login_request".to_string(),
+            command_id: None,
+            fields: serde_json::json!({
+                "length": data.len(),
+                "hasCopyright": data.len() >= 56
+            }),
+            description: Some("Login request with copyright string".to_string()),
+        });
+    }
+
+    None
+}
+
 /// Strip binary header if present.
 ///
 /// Some Furuno models/firmware wrap ASCII commands in an 8-byte binary header:
@@ -44,6 +87,11 @@ fn strip_binary_header(data: &[u8]) -> &[u8] {
 
 impl ProtocolDecoder for FurunoDecoder {
     fn decode(&self, data: &[u8], direction: IoDirection) -> DecodedMessage {
+        // First, check for binary login protocol messages
+        if let Some(login_msg) = try_decode_login(data) {
+            return login_msg;
+        }
+
         // Some Furuno firmware versions wrap ASCII commands in an 8-byte binary header.
         // Header format: [4 bytes unknown] [4 bytes unknown] followed by "$..." ASCII.
         // We detect this by looking for '$' (0x24) after the header.
@@ -461,5 +509,53 @@ mod tests {
         // No $ found
         let no_dollar = [0x00, 0x01, 0x02, 0x03];
         assert_eq!(strip_binary_header(&no_dollar), &no_dollar[..]);
+    }
+
+    #[test]
+    fn test_decode_login_response() {
+        let decoder = FurunoDecoder;
+        // Real login response: command port 10100 (offset = 100 = 0x64)
+        let data = [
+            0x09, 0x01, 0x00, 0x0c, 0x01, 0x00, 0x00, 0x00, // header
+            0x00, 0x64, // port offset = 100
+            0x00, 0x00, // unknown
+        ];
+        let msg = decoder.decode(&data, IoDirection::Recv);
+
+        match msg {
+            DecodedMessage::Furuno {
+                message_type,
+                description,
+                fields,
+                ..
+            } => {
+                assert_eq!(message_type, "login_response");
+                assert!(description.unwrap().contains("10100"));
+                assert_eq!(fields["commandPort"], 10100);
+            }
+            _ => panic!("Expected Furuno login response, got {:?}", msg),
+        }
+    }
+
+    #[test]
+    fn test_decode_login_request() {
+        let decoder = FurunoDecoder;
+        // Login message header (first 12 bytes of 56-byte message)
+        let data = [
+            0x08, 0x01, 0x00, 0x38, 0x01, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00,
+        ];
+        let msg = decoder.decode(&data, IoDirection::Send);
+
+        match msg {
+            DecodedMessage::Furuno {
+                message_type,
+                description,
+                ..
+            } => {
+                assert_eq!(message_type, "login_request");
+                assert!(description.unwrap().contains("Login request"));
+            }
+            _ => panic!("Expected Furuno login request, got {:?}", msg),
+        }
     }
 }
