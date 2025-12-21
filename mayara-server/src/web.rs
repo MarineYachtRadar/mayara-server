@@ -184,6 +184,12 @@ impl Web {
     pub fn new(session: Session) -> Self {
         let (shutdown_tx, _) = broadcast::channel(1);
 
+        // Get the debug hub from the session (shared with all components)
+        #[cfg(feature = "dev")]
+        let debug_hub = session
+            .debug_hub()
+            .expect("DebugHub should be initialized in Session when dev feature is enabled");
+
         Web {
             session,
             shutdown_tx,
@@ -193,7 +199,7 @@ impl Web {
             active_recording: Arc::new(RwLock::new(None)),
             active_playback: Arc::new(tokio::sync::RwLock::new(None)),
             #[cfg(feature = "dev")]
-            debug_hub: Arc::new(mayara_server::debug::DebugHub::new()),
+            debug_hub,
         }
     }
 

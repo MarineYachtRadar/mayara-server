@@ -88,6 +88,10 @@ impl<T: IoProvider> DebugIoProvider<T> {
         remote_port: u16,
         data: &[u8],
     ) {
+        log::debug!(
+            "[DebugIoProvider] {} {} {:?} {}:{} {} bytes",
+            self.radar_id, self.brand, direction, remote_addr, remote_port, data.len()
+        );
         let decoded = self.decoder.decode(data, direction);
         let event = self
             .hub

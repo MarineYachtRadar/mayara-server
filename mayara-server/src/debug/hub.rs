@@ -130,7 +130,12 @@ impl DebugHub {
         event.timestamp = self.timestamp();
 
         // Broadcast to real-time subscribers (ignore if no subscribers)
-        let _ = self.event_tx.send(event.clone());
+        let subscribers = self.event_tx.receiver_count();
+        let result = self.event_tx.send(event.clone());
+        log::trace!(
+            "[DebugHub] Event #{} broadcast to {} subscribers: {:?}",
+            event.id, subscribers, result.is_ok()
+        );
 
         // Store in ring buffer
         let mut events = self.events.write().unwrap();
