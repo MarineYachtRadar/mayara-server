@@ -261,7 +261,7 @@ Status values:
 | 0 | Off (not observed - radar stops sending when powered off) |
 | 1 | Standby |
 | 2 | Transmit |
-| 5 | Preparing/Warming |
+| 5 | Preparing/Warming (not observed on 4G model, possibly wrong) |
 
 **Power-off behavior:** When the radar is powered off, it simply stops sending
 packets. There is no special "powering down" status - the radar goes silent

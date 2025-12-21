@@ -82,6 +82,7 @@ const REPORT_02_C4_99: u8 = 0x02;
 const REPORT_03_C4_129: u8 = 0x03;
 const REPORT_04_C4_66: u8 = 0x04;
 const REPORT_06_C4_68: u8 = 0x06;
+const REPORT_07_C4_188: u8 = 0x07;
 const REPORT_08_C4_18_OR_21_OR_22: u8 = 0x08;
 
 impl NavicoReportReceiver {
@@ -448,7 +449,7 @@ impl NavicoReportReceiver {
                 controller.set_local_interference_rejection(&mut self.io, value as u8);
             }
             "scanSpeed" => {
-                controller.set_scan_speed(&mut self.io, value as u8 > 0);
+                controller.set_scan_speed(&mut self.io, value as u8);
             }
             "mode" => {
                 controller.set_mode(&mut self.io, value as u8);
@@ -806,6 +807,11 @@ impl NavicoReportReceiver {
                     return self.process_report_06_74().await;
                 }
             }
+            REPORT_07_C4_188 => {
+                if self.model != Model::Unknown {
+                    return self.process_report_07().await;
+                }
+            }
             REPORT_08_C4_18_OR_21_OR_22 => {
                 if self.model != Model::Unknown {
                     return self.process_report_08().await;
@@ -884,6 +890,26 @@ impl NavicoReportReceiver {
         self.set_value("targetBoost", target_boost as f32);
 
         self.process_range(range).await?;
+
+        // Log guard zone data (read-only for now - commands not yet implemented)
+        // Zone data is parsed from offsets 54-88 of Report 02
+        if report.guard_zone_1.enabled || report.guard_zone_2.enabled {
+            log::debug!(
+                "{}: Guard zones - sensitivity: {}, zone1: {} ({}m-{}m, bearing:{} width:{}), zone2: {} ({}m-{}m, bearing:{} width:{})",
+                self.key,
+                report.guard_zone_sensitivity,
+                if report.guard_zone_1.enabled { "ON" } else { "off" },
+                report.guard_zone_1.inner_range_m,
+                report.guard_zone_1.outer_range_m,
+                report.guard_zone_1.bearing_decideg as f32 / 10.0,
+                report.guard_zone_1.width_decideg as f32 / 10.0,
+                if report.guard_zone_2.enabled { "ON" } else { "off" },
+                report.guard_zone_2.inner_range_m,
+                report.guard_zone_2.outer_range_m,
+                report.guard_zone_2.bearing_decideg as f32 / 10.0,
+                report.guard_zone_2.width_decideg as f32 / 10.0,
+            );
+        }
 
         Ok(())
     }
@@ -1025,6 +1051,38 @@ impl NavicoReportReceiver {
             }
         }
 
+        Ok(())
+    }
+
+    /// Report 07 - Statistics/Diagnostics (188 bytes)
+    /// Contains packet counters and per-radar statistics
+    /// Structure (from protocol.md):
+    /// - Offset 69: unknown (0x40 = 64 observed)
+    /// - Offset 136-139: counter 1 (u32)
+    /// - Offset 140-143: counter 2 (u32)
+    /// - Offset 144-147: counter 3 (u32)
+    /// - Offset 152-155: per-radar value A
+    /// - Offset 156-159: per-radar value B
+    async fn process_report_07(&mut self) -> Result<(), Error> {
+        let data = &self.report_buf;
+        if data.len() < 188 {
+            log::warn!("{}: Report 07 too short: {} bytes", self.key, data.len());
+            return Ok(());
+        }
+
+        // Parse statistics for debug logging
+        let counter1 = u32::from_le_bytes([data[136], data[137], data[138], data[139]]);
+        let counter2 = u32::from_le_bytes([data[140], data[141], data[142], data[143]]);
+        let counter3 = u32::from_le_bytes([data[144], data[145], data[146], data[147]]);
+        let per_radar_a = u32::from_le_bytes([data[152], data[153], data[154], data[155]]);
+        let per_radar_b = u32::from_le_bytes([data[156], data[157], data[158], data[159]]);
+
+        log::debug!(
+            "{}: Report 07 stats - counters: [{}, {}, {}], per-radar: [A={}, B={}]",
+            self.key, counter1, counter2, counter3, per_radar_a, per_radar_b
+        );
+
+        // For now, just log the statistics. Could expose via API if useful.
         Ok(())
     }
 

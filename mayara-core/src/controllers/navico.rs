@@ -369,11 +369,11 @@ impl NavicoController {
         io.debug(&format!("[{}] Set target boost: {}", self.radar_id, level));
     }
 
-    /// Set scan speed (0=normal, 1=fast)
-    pub fn set_scan_speed<I: IoProvider>(&mut self, io: &mut I, fast: bool) {
-        let cmd = [0x0F, 0xC1, if fast { 1 } else { 0 }];
+    /// Set scan speed (0=Off/Normal, 1=Medium, 2=Medium-High)
+    pub fn set_scan_speed<I: IoProvider>(&mut self, io: &mut I, speed: u8) {
+        let cmd = [0x0F, 0xC1, speed.min(2)];
         self.send_command(io, &cmd);
-        io.debug(&format!("[{}] Set scan speed: {}", self.radar_id, fast));
+        io.debug(&format!("[{}] Set scan speed: {}", self.radar_id, speed));
     }
 
     /// Set bearing alignment in deci-degrees

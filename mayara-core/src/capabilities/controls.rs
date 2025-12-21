@@ -962,7 +962,8 @@ pub fn control_no_transmit_zones(zone_count: u8) -> ControlDefinition {
     }
 }
 
-/// Scan speed: antenna rotation speed (Navico, generic)
+/// Scan speed: antenna rotation speed (Navico)
+/// 4G verified: 0=Off (Normal), 1=Medium, 2=Medium-High
 pub fn control_scan_speed() -> ControlDefinition {
     ControlDefinition {
         id: "scanSpeed".into(),
@@ -973,15 +974,21 @@ pub fn control_scan_speed() -> ControlDefinition {
         range: None,
         values: Some(vec![
             EnumValue {
-                value: "normal".into(),
-                label: "Normal".into(),
-                description: Some("Standard rotation speed".into()),
+                value: 0.into(),
+                label: "Off".into(),
+                description: Some("Normal rotation speed".into()),
                 read_only: false,
             },
             EnumValue {
-                value: "fast".into(),
-                label: "Fast".into(),
-                description: Some("Increased rotation speed".into()),
+                value: 1.into(),
+                label: "Medium".into(),
+                description: Some("Medium rotation speed".into()),
+                read_only: false,
+            },
+            EnumValue {
+                value: 2.into(),
+                label: "Medium-High".into(),
+                description: Some("Medium-high rotation speed".into()),
                 read_only: false,
             },
         ]),
@@ -989,7 +996,7 @@ pub fn control_scan_speed() -> ControlDefinition {
         modes: None,
         default_mode: None,
         read_only: false,
-        default: Some("normal".into()),
+        default: Some(0.into()),
         wire_hints: None,
     }
 }
