@@ -125,7 +125,7 @@ RUST_BACKTRACE=1 cargo run -p mayara-server --features dev
 | `furuno` | Yes | Furuno radar support |
 | `raymarine` | Yes | Raymarine radar support |
 | `garmin` | No | Garmin radar support |
-| `dev` | No | Serve GUI from filesystem instead of embedded |
+| `dev` | No | Serve GUI from filesystem + enable Protocol Debugger |
 | `rustdoc` | No | Embed rustdoc at `/rustdoc/` endpoint |
 
 ```bash
@@ -183,6 +183,24 @@ Without `--brand`, all compiled-in brands are discovered. This is the production
 # Multi-radar mode (keep looking after first radar found)
 ./mayara-server --multiple-radar
 ```
+
+### Protocol Debugging (`--features dev`)
+
+The dev feature enables the Protocol Debugger, a real-time tool for analyzing radar protocol traffic. This is essential for reverse-engineering unknown protocol elements.
+
+```bash
+# Run with protocol debugger enabled
+cargo run -p mayara-server --features dev
+```
+
+When enabled, the server exposes additional debug endpoints:
+- `GET /v2/api/debug` - WebSocket for real-time debug events
+- `GET /v2/api/debug/events` - Query historical events
+- `POST /v2/api/debug/recording/start` - Start session recording
+- `POST /v2/api/debug/recording/stop` - Stop and save recording
+- `GET /v2/api/debug/recordings` - List saved recordings
+
+See [Protocol Debugger User Guide](../user-guide/protocol-debugger.md) for usage.
 
 ---
 

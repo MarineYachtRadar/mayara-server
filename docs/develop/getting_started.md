@@ -263,6 +263,29 @@ pub fn format_control_command(id: &str, value: i32, auto: bool) -> Option<String
 
 ## Debugging Tips
 
+### Protocol Debugger (Dev Mode Only)
+
+When built with `--features dev`, mayara-server includes a real-time protocol debugger for reverse-engineering radar protocols.
+
+**Enable the debugger:**
+```bash
+# Build and run with dev features
+cargo run -p mayara-server --features dev
+```
+
+**Open the debug panel:**
+1. Navigate to `http://localhost:6502/`
+2. Click the "Debug" icon in the top toolbar (only visible in dev mode)
+3. The debug panel opens as a sidebar showing real-time protocol traffic
+
+**Features:**
+- View all TCP/UDP traffic to/from radars
+- Decoded protocol messages with hex dump
+- Automatic state change detection
+- Session recording for sharing with other developers
+
+See the [Protocol Debugger User Guide](../user-guide/protocol-debugger.md) for details.
+
 ### Logging
 
 ```bash

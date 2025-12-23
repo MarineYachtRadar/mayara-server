@@ -109,6 +109,18 @@ const PLAYBACK_SEEK_URI: &str = "/v2/api/recordings/playback/seek";
 const PLAYBACK_SETTINGS_URI: &str = "/v2/api/recordings/playback/settings";
 const PLAYBACK_STATUS_URI: &str = "/v2/api/recordings/playback/status";
 
+// Debug API (dev mode only)
+#[cfg(feature = "dev")]
+const DEBUG_WS_URI: &str = "/v2/api/debug";
+#[cfg(feature = "dev")]
+const DEBUG_EVENTS_URI: &str = "/v2/api/debug/events";
+#[cfg(feature = "dev")]
+const DEBUG_RECORDING_START_URI: &str = "/v2/api/debug/recording/start";
+#[cfg(feature = "dev")]
+const DEBUG_RECORDING_STOP_URI: &str = "/v2/api/debug/recording/stop";
+#[cfg(feature = "dev")]
+const DEBUG_RECORDINGS_URI: &str = "/v2/api/debug/recordings";
+
 #[cfg(not(feature = "dev"))]
 #[derive(RustEmbed, Clone)]
 #[folder = "$OUT_DIR/gui/"]
@@ -145,6 +157,10 @@ type SharedActiveRecording = Arc<RwLock<Option<ActiveRecording>>>;
 /// Shared active playback state
 type SharedActivePlayback = Arc<tokio::sync::RwLock<Option<ActivePlayback>>>;
 
+/// Shared DebugHub for protocol debugging (dev mode only)
+#[cfg(feature = "dev")]
+type SharedDebugHub = Arc<mayara_server::debug::DebugHub>;
+
 #[derive(Clone)]
 pub struct Web {
     session: Session,
@@ -159,11 +175,20 @@ pub struct Web {
     active_recording: SharedActiveRecording,
     /// Active playback (if any)
     active_playback: SharedActivePlayback,
+    /// Debug hub for protocol analysis (dev mode only)
+    #[cfg(feature = "dev")]
+    debug_hub: SharedDebugHub,
 }
 
 impl Web {
     pub fn new(session: Session) -> Self {
         let (shutdown_tx, _) = broadcast::channel(1);
+
+        // Get the debug hub from the session (shared with all components)
+        #[cfg(feature = "dev")]
+        let debug_hub = session
+            .debug_hub()
+            .expect("DebugHub should be initialized in Session when dev feature is enabled");
 
         Web {
             session,
@@ -173,7 +198,15 @@ impl Web {
             recording_manager: Arc::new(RwLock::new(RecordingManager::new())),
             active_recording: Arc::new(RwLock::new(None)),
             active_playback: Arc::new(tokio::sync::RwLock::new(None)),
+            #[cfg(feature = "dev")]
+            debug_hub,
         }
+    }
+
+    /// Get the debug hub (dev mode only)
+    #[cfg(feature = "dev")]
+    pub fn debug_hub(&self) -> &SharedDebugHub {
+        &self.debug_hub
     }
 
     /// Ensure a radar exists in the engine (lazy initialization)
@@ -270,7 +303,18 @@ impl Web {
             .route(PLAYBACK_STOP_URI, post(playback_stop_handler))
             .route(PLAYBACK_SEEK_URI, post(playback_seek_handler))
             .route(PLAYBACK_SETTINGS_URI, put(playback_settings_handler))
-            .route(PLAYBACK_STATUS_URI, get(playback_status_handler))
+            .route(PLAYBACK_STATUS_URI, get(playback_status_handler));
+
+        // Debug API routes (dev mode only)
+        #[cfg(feature = "dev")]
+        let app = app
+            .route(DEBUG_WS_URI, get(debug_ws_handler))
+            .route(DEBUG_EVENTS_URI, get(debug_events_handler))
+            .route(DEBUG_RECORDING_START_URI, post(debug_recording_start_handler))
+            .route(DEBUG_RECORDING_STOP_URI, post(debug_recording_stop_handler))
+            .route(DEBUG_RECORDINGS_URI, get(debug_recordings_list_handler));
+
+        let app = app
             // Apply no-cache middleware to all API routes
             .layer(middleware::from_fn(no_cache_middleware))
             // Static assets (no middleware - can be cached)
@@ -2349,3 +2393,363 @@ async fn playback_status_handler(State(state): State<Web>) -> Response {
 
     Json(status).into_response()
 }
+
+// =============================================================================
+// Debug API Handlers (dev mode only)
+// =============================================================================
+
+#[cfg(feature = "dev")]
+mod debug_handlers {
+    use super::*;
+    use mayara_server::debug::{DebugEvent, recording::{RecordingManager as DebugRecordingManager, RecordedRadar}};
+
+    /// Query parameters for debug events
+    #[derive(Debug, Deserialize)]
+    pub struct DebugEventsQuery {
+        /// Filter by radar ID
+        #[serde(default)]
+        pub radar_id: Option<String>,
+        /// Maximum number of events to return
+        #[serde(default)]
+        pub limit: Option<usize>,
+        /// Start from this event ID
+        #[serde(default)]
+        pub after: Option<u64>,
+    }
+
+    /// WebSocket message from client
+    #[derive(Debug, Deserialize)]
+    #[serde(tag = "type", rename_all = "camelCase")]
+    pub enum DebugClientMessage {
+        /// Subscribe to events with optional filter
+        Subscribe {
+            #[serde(default)]
+            radar_id: Option<String>,
+        },
+        /// Get historical events
+        GetHistory {
+            #[serde(default)]
+            limit: Option<usize>,
+        },
+        /// Pause event streaming
+        Pause,
+        /// Resume event streaming
+        Resume,
+    }
+
+    /// WebSocket message to client
+    #[derive(Debug, Serialize)]
+    #[serde(tag = "type", rename_all = "camelCase")]
+    pub enum DebugServerMessage {
+        /// A debug event
+        Event(DebugEvent),
+        /// Historical events
+        History { events: Vec<DebugEvent> },
+        /// Connection established
+        Connected { event_count: usize },
+        /// Error message
+        Error { message: String },
+    }
+
+    /// Request body for starting debug recording
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct StartDebugRecordingRequest {
+        /// Radars to include in the recording
+        #[serde(default)]
+        pub radars: Vec<RecordedRadarInfo>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct RecordedRadarInfo {
+        pub radar_id: String,
+        pub brand: String,
+        #[serde(default)]
+        pub model: Option<String>,
+        #[serde(default)]
+        pub address: Option<String>,
+    }
+
+    /// Response for debug recording operations
+    #[derive(Debug, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct DebugRecordingResponse {
+        pub success: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub filename: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub error: Option<String>,
+    }
+
+    /// Response for listing debug recordings
+    #[derive(Debug, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct DebugRecordingsListResponse {
+        pub recordings: Vec<mayara_server::debug::recording::RecordingInfo>,
+    }
+
+    /// GET /v2/api/debug - WebSocket for real-time debug events
+    #[debug_handler]
+    pub async fn debug_ws_handler(
+        State(state): State<Web>,
+        ConnectInfo(addr): ConnectInfo<SocketAddr>,
+        ws: WebSocketUpgrade,
+    ) -> Response {
+        debug!("Debug WebSocket connection from {}", addr);
+
+        let hub = state.debug_hub.clone();
+        let shutdown_rx = state.shutdown_tx.subscribe();
+
+        ws.on_upgrade(move |socket| debug_ws_stream(socket, hub, shutdown_rx))
+    }
+
+    /// WebSocket stream for debug events
+    async fn debug_ws_stream(
+        mut socket: WebSocket,
+        hub: SharedDebugHub,
+        mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
+    ) {
+        use futures_util::SinkExt;
+
+        // Subscribe to the debug event broadcast
+        let mut event_rx = hub.subscribe();
+        let mut paused = false;
+        let mut radar_filter: Option<String> = None;
+
+        // Send initial connected message
+        let connected = DebugServerMessage::Connected {
+            event_count: hub.event_count(),
+        };
+        if let Ok(json) = serde_json::to_string(&connected) {
+            let _ = socket.send(Message::Text(json.into())).await;
+        }
+
+        loop {
+            tokio::select! {
+                _ = shutdown_rx.recv() => {
+                    debug!("Shutdown of debug websocket");
+                    break;
+                }
+                // Receive commands from client
+                msg = socket.recv() => {
+                    match msg {
+                        Some(Ok(Message::Text(text))) => {
+                            if let Ok(cmd) = serde_json::from_str::<DebugClientMessage>(&text) {
+                                match cmd {
+                                    DebugClientMessage::Subscribe { radar_id } => {
+                                        radar_filter = radar_id;
+                                        debug!("Debug WS: filter set to {:?}", radar_filter);
+                                    }
+                                    DebugClientMessage::GetHistory { limit } => {
+                                        let events = hub.get_events(
+                                            radar_filter.as_deref(),
+                                            limit.unwrap_or(100),
+                                            None,
+                                        );
+                                        let msg = DebugServerMessage::History { events };
+                                        if let Ok(json) = serde_json::to_string(&msg) {
+                                            let _ = socket.send(Message::Text(json.into())).await;
+                                        }
+                                    }
+                                    DebugClientMessage::Pause => {
+                                        paused = true;
+                                        debug!("Debug WS: paused");
+                                    }
+                                    DebugClientMessage::Resume => {
+                                        paused = false;
+                                        debug!("Debug WS: resumed");
+                                    }
+                                }
+                            }
+                        }
+                        Some(Ok(Message::Close(_))) | None => {
+                            debug!("Debug websocket closed");
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                // Broadcast events to client
+                event = event_rx.recv() => {
+                    if paused {
+                        continue;
+                    }
+                    match event {
+                        Ok(event) => {
+                            debug!("Debug WS: received event #{} for radar {}", event.id, event.radar_id);
+                            // Apply radar filter
+                            if let Some(ref filter) = radar_filter {
+                                if &event.radar_id != filter {
+                                    debug!("Debug WS: filtered out event (filter: {})", filter);
+                                    continue;
+                                }
+                            }
+                            let msg = DebugServerMessage::Event(event);
+                            if let Ok(json) = serde_json::to_string(&msg) {
+                                if socket.send(Message::Text(json.into())).await.is_err() {
+                                    debug!("Debug WS: failed to send event");
+                                    break;
+                                }
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            debug!("Debug WS lagged, missed {} events", n);
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// GET /v2/api/debug/events - Get historical debug events
+    #[debug_handler]
+    pub async fn debug_events_handler(
+        State(state): State<Web>,
+        axum::extract::Query(query): axum::extract::Query<DebugEventsQuery>,
+    ) -> Response {
+        debug!("GET debug events: {:?}", query);
+
+        let events = state.debug_hub.get_events(
+            query.radar_id.as_deref(),
+            query.limit.unwrap_or(100),
+            query.after,
+        );
+
+        Json(events).into_response()
+    }
+
+    /// POST /v2/api/debug/recording/start - Start debug recording
+    #[debug_handler]
+    pub async fn debug_recording_start_handler(
+        State(state): State<Web>,
+        Json(request): Json<StartDebugRecordingRequest>,
+    ) -> Response {
+        debug!("POST debug recording start");
+
+        // Get the debug recorder from the hub
+        let recorder = state.debug_hub.recorder();
+
+        // Convert radar info
+        let radars: Vec<RecordedRadar> = request.radars.into_iter().map(|r| {
+            RecordedRadar {
+                radar_id: r.radar_id,
+                brand: r.brand,
+                model: r.model,
+                address: r.address,
+            }
+        }).collect();
+
+        match recorder.start(radars) {
+            Ok(filename) => {
+                Json(DebugRecordingResponse {
+                    success: true,
+                    filename: Some(filename),
+                    error: None,
+                }).into_response()
+            }
+            Err(e) => {
+                (StatusCode::CONFLICT, Json(DebugRecordingResponse {
+                    success: false,
+                    filename: None,
+                    error: Some(e.to_string()),
+                })).into_response()
+            }
+        }
+    }
+
+    /// POST /v2/api/debug/recording/stop - Stop debug recording
+    #[debug_handler]
+    pub async fn debug_recording_stop_handler(
+        State(state): State<Web>,
+    ) -> Response {
+        debug!("POST debug recording stop");
+
+        let recorder = state.debug_hub.recorder();
+
+        match recorder.stop() {
+            Ok(path) => {
+                Json(DebugRecordingResponse {
+                    success: true,
+                    filename: path.file_name().map(|n| n.to_string_lossy().to_string()),
+                    error: None,
+                }).into_response()
+            }
+            Err(e) => {
+                (StatusCode::BAD_REQUEST, Json(DebugRecordingResponse {
+                    success: false,
+                    filename: None,
+                    error: Some(e.to_string()),
+                })).into_response()
+            }
+        }
+    }
+
+    /// GET /v2/api/debug/recordings - List debug recordings
+    #[debug_handler]
+    pub async fn debug_recordings_list_handler(
+        State(state): State<Web>,
+    ) -> Response {
+        debug!("GET debug recordings list");
+
+        let recorder = state.debug_hub.recorder();
+        let output_dir = recorder.output_dir().to_path_buf();
+        let manager = DebugRecordingManager::new(output_dir);
+
+        match manager.list() {
+            Ok(recordings) => {
+                Json(DebugRecordingsListResponse { recordings }).into_response()
+            }
+            Err(e) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use mayara_server::debug::{DebugEventPayload, IoDirection, ProtocolType, EventSource};
+
+        #[test]
+        fn test_debug_server_message_serialization() {
+            // Test that DebugServerMessage serializes correctly with distinct type fields
+            let event = DebugEvent {
+                id: 123,
+                timestamp: 1000,
+                radar_id: "radar-1".to_string(),
+                brand: "furuno".to_string(),
+                source: EventSource::IoProvider,
+                payload: DebugEventPayload::Data {
+                    direction: IoDirection::Recv,
+                    protocol: ProtocolType::Tcp,
+                    local_addr: None,
+                    remote_addr: "172.31.1.4".to_string(),
+                    remote_port: 10050,
+                    raw_hex: "24 4e 36 33".to_string(),
+                    raw_ascii: "$N63".to_string(),
+                    decoded: None,
+                    length: 4,
+                },
+            };
+
+            let msg = DebugServerMessage::Event(event);
+            let json = serde_json::to_string_pretty(&msg).unwrap();
+
+            // Verify both type fields are present and distinct
+            assert!(json.contains(r#""type": "event""#), "Should have WebSocket message type 'event'");
+            assert!(json.contains(r#""eventType": "data""#), "Should have payload eventType 'data'");
+
+            // Verify parsed type field is correct
+            let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed.get("type").and_then(|v| v.as_str()), Some("event"));
+            assert_eq!(parsed.get("eventType").and_then(|v| v.as_str()), Some("data"));
+        }
+    }
+}
+
+#[cfg(feature = "dev")]
+use debug_handlers::*;

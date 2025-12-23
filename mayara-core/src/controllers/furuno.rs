@@ -121,6 +121,8 @@ pub struct FurunoController {
     last_emitted_tx_hours: Option<f64>,
     /// Previous power state (to detect transitions)
     prev_power_state: crate::state::PowerState,
+    /// Poll count when last state refresh was sent (for periodic sync)
+    last_state_refresh: u64,
 }
 
 impl FurunoController {
@@ -134,6 +136,9 @@ impl FurunoController {
     const FALLBACK_PORTS: [u16; 3] = [10100, 10001, 10002];
     /// Keep-alive interval in poll counts (~5 seconds at 10 polls/sec)
     const KEEPALIVE_INTERVAL: u64 = 50;
+    /// State refresh interval in poll counts (~2 seconds at 10 polls/sec)
+    /// This allows us to sync state changes made by other clients (e.g., chart plotter)
+    const STATE_REFRESH_INTERVAL: u64 = 20;
 
     /// Create a new controller for a Furuno radar
     ///
@@ -166,6 +171,7 @@ impl FurunoController {
             last_emitted_hours: None,
             last_emitted_tx_hours: None,
             prev_power_state: crate::state::PowerState::Off,
+            last_state_refresh: 0,
         };
         // Queue keepalive to trigger connection
         controller.request_info();
@@ -729,6 +735,19 @@ impl FurunoController {
         if self.poll_count - self.last_keepalive > Self::KEEPALIVE_INTERVAL {
             self.send_keepalive(io);
             self.last_keepalive = self.poll_count;
+        }
+
+        // Periodic state refresh to sync changes made by other clients (e.g., chart plotter)
+        // When refreshing, we force-update the state to accept external values
+        if self.poll_count - self.last_state_refresh > Self::STATE_REFRESH_INTERVAL {
+            io.debug(&format!(
+                "[{}] Periodic state refresh (sync with external clients)",
+                self.radar_id
+            ));
+            // Mark as pending external update so state.rs accepts radar values
+            self.radar_state.mark_pending_refresh();
+            self.send_state_requests(io);
+            self.last_state_refresh = self.poll_count;
         }
 
         true

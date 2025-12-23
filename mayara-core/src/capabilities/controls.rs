@@ -962,7 +962,8 @@ pub fn control_no_transmit_zones(zone_count: u8) -> ControlDefinition {
     }
 }
 
-/// Scan speed: antenna rotation speed (Navico, generic)
+/// Scan speed: antenna rotation speed (Navico)
+/// 4G verified: 0=Off (Normal), 1=Medium, 2=Medium-High
 pub fn control_scan_speed() -> ControlDefinition {
     ControlDefinition {
         id: "scanSpeed".into(),
@@ -973,15 +974,21 @@ pub fn control_scan_speed() -> ControlDefinition {
         range: None,
         values: Some(vec![
             EnumValue {
-                value: "normal".into(),
-                label: "Normal".into(),
-                description: Some("Standard rotation speed".into()),
+                value: 0.into(),
+                label: "Off".into(),
+                description: Some("Normal rotation speed".into()),
                 read_only: false,
             },
             EnumValue {
-                value: "fast".into(),
-                label: "Fast".into(),
-                description: Some("Increased rotation speed".into()),
+                value: 1.into(),
+                label: "Medium".into(),
+                description: Some("Medium rotation speed".into()),
+                read_only: false,
+            },
+            EnumValue {
+                value: 2.into(),
+                label: "Medium-High".into(),
+                description: Some("Medium-high rotation speed".into()),
                 read_only: false,
             },
         ]),
@@ -989,7 +996,7 @@ pub fn control_scan_speed() -> ControlDefinition {
         modes: None,
         default_mode: None,
         read_only: false,
-        default: Some("normal".into()),
+        default: Some(0.into()),
         wire_hints: None,
     }
 }
@@ -1781,19 +1788,11 @@ pub fn control_rain_for_brand(brand: Brand) -> ControlDefinition {
 pub fn control_bearing_alignment_for_brand(brand: Brand) -> ControlDefinition {
     let mut def = control_bearing_alignment();
     def.wire_hints = Some(match brand {
-        Brand::Furuno => WireProtocolHint {
-            write_only: true, // Cannot reliably read from hardware
-            ..Default::default()
-        },
-        Brand::Navico | Brand::Raymarine => WireProtocolHint {
-            scale_factor: Some(1800.0), // 0.1 degree precision
-            offset: Some(-1.0),
-            step: Some(0.1),
-            write_only: true, // Cannot reliably read from hardware
-            ..Default::default()
-        },
-        Brand::Garmin => WireProtocolHint {
-            write_only: true, // Cannot reliably read from hardware
+        // Navico: Wire protocol uses deci-degrees (0-3599), conversion done in report.rs
+        // Raymarine: Similar wire protocol
+        // All brands: Report 04 provides readable values
+        Brand::Navico | Brand::Raymarine | Brand::Furuno | Brand::Garmin => WireProtocolHint {
+            write_only: false,
             ..Default::default()
         },
     });
@@ -1804,13 +1803,10 @@ pub fn control_bearing_alignment_for_brand(brand: Brand) -> ControlDefinition {
 pub fn control_antenna_height_for_brand(brand: Brand) -> ControlDefinition {
     let mut def = control_antenna_height();
     def.wire_hints = Some(match brand {
-        Brand::Navico => WireProtocolHint {
-            scale_factor: Some(99000.0), // cm to mm conversion
-            write_only: true, // Cannot reliably read from hardware
-            ..Default::default()
-        },
-        Brand::Furuno | Brand::Raymarine | Brand::Garmin => WireProtocolHint {
-            write_only: true, // Cannot reliably read from hardware
+        // Navico: Wire protocol uses decimeters (0-990), control uses meters (0-99).
+        // Conversion is done in report.rs when reading Report 04.
+        Brand::Navico | Brand::Furuno | Brand::Raymarine | Brand::Garmin => WireProtocolHint {
+            write_only: false, // Navico Report 04 provides readable antenna height
             ..Default::default()
         },
     });

@@ -23,6 +23,12 @@ pub fn new(session: Session, model: Option<&str>) -> SharedControls {
     }
     controls.insert("modelName".to_string(), control);
 
+    // Power control - from mayara-core (single source of truth)
+    controls.insert(
+        "power".to_string(),
+        control_factory::power_control_for_brand(Brand::Navico),
+    );
+
     // From mayara-core (single source of truth)
     controls.insert(
         "antennaHeight".to_string(),

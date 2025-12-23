@@ -328,6 +328,7 @@ pub struct Report01 {
 pub const REPORT_01_SIZE: usize = 18;
 
 /// Report 02 - Controls status (0x02 0xC4, 99 bytes)
+/// Includes guard zone data at offsets 54-88 (per protocol.md)
 #[derive(Deserialize, Debug, Clone, Copy)]
 #[repr(C, packed)]
 pub struct Report02 {
@@ -350,8 +351,26 @@ pub struct Report02 {
     pub target_expansion: u8,   // 38
     _u06: [u8; 3],              // 39..42
     pub target_boost: u8,       // 42
-    _u07a: [u8; 32],            // 43..75 (split for serde array limit)
-    _u07b: [u8; 24],            // 75..99
+    _u07: [u8; 11],             // 43..54 unknown
+    // Guard zone fields (offsets 54-88)
+    pub guard_zone_sensitivity: u8, // 54 - shared by both zones (0-255)
+    pub guard_zone_1_enabled: u8,   // 55
+    pub guard_zone_2_enabled: u8,   // 56
+    _u08: [u8; 4],                  // 57..61 unknown (zeros)
+    pub guard_zone_1_inner_range: u8, // 61 - meters
+    _u09: [u8; 3],                  // 62..65 unknown (zeros)
+    pub guard_zone_1_outer_range: u8, // 65 - meters
+    _u10: [u8; 3],                  // 66..69 unknown (zeros)
+    pub guard_zone_1_bearing: [u8; 2], // 69..71 - deci-degrees (u16 LE)
+    pub guard_zone_1_width: [u8; 2],   // 71..73 - deci-degrees (u16 LE)
+    _u11: [u8; 4],                  // 73..77 unknown (zeros)
+    pub guard_zone_2_inner_range: u8, // 77 - meters
+    _u12: [u8; 3],                  // 78..81 unknown (zeros)
+    pub guard_zone_2_outer_range: u8, // 81 - meters
+    _u13: [u8; 3],                  // 82..85 unknown (zeros)
+    pub guard_zone_2_bearing: [u8; 2], // 85..87 - deci-degrees (u16 LE)
+    pub guard_zone_2_width: [u8; 2],   // 87..89 - deci-degrees (u16 LE)
+    _u14: [u8; 10],                 // 89..99 unknown
 }
 
 pub const REPORT_02_SIZE: usize = 99;
@@ -656,6 +675,16 @@ pub struct ParsedSpoke {
     pub data: Vec<u8>,       // Pixel data (1024 bytes, unpacked from nibbles)
 }
 
+/// Parsed guard zone from Report 02
+#[derive(Debug, Clone, Default)]
+pub struct ParsedGuardZone {
+    pub enabled: bool,
+    pub inner_range_m: u8,      // meters
+    pub outer_range_m: u8,      // meters
+    pub bearing_decideg: u16,   // center angle in deci-degrees
+    pub width_decideg: u16,     // width in deci-degrees (3599 = full circle)
+}
+
 /// Parsed Report 02 (controls)
 #[derive(Debug, Clone)]
 pub struct ParsedControls {
@@ -669,6 +698,10 @@ pub struct ParsedControls {
     pub interference_rejection: u8,
     pub target_expansion: u8,
     pub target_boost: u8,
+    // Guard zones (parsed from offsets 54-88)
+    pub guard_zone_sensitivity: u8,  // 0-255, shared by both zones
+    pub guard_zone_1: ParsedGuardZone,
+    pub guard_zone_2: ParsedGuardZone,
 }
 
 /// Parsed Report 03 (model info)
@@ -1026,6 +1059,22 @@ pub fn parse_report_02(data: &[u8]) -> Result<ParsedControls, ParseError> {
         interference_rejection: report.interference_rejection,
         target_expansion: report.target_expansion,
         target_boost: report.target_boost,
+        // Guard zones
+        guard_zone_sensitivity: report.guard_zone_sensitivity,
+        guard_zone_1: ParsedGuardZone {
+            enabled: report.guard_zone_1_enabled > 0,
+            inner_range_m: report.guard_zone_1_inner_range,
+            outer_range_m: report.guard_zone_1_outer_range,
+            bearing_decideg: u16::from_le_bytes(report.guard_zone_1_bearing),
+            width_decideg: u16::from_le_bytes(report.guard_zone_1_width),
+        },
+        guard_zone_2: ParsedGuardZone {
+            enabled: report.guard_zone_2_enabled > 0,
+            inner_range_m: report.guard_zone_2_inner_range,
+            outer_range_m: report.guard_zone_2_outer_range,
+            bearing_decideg: u16::from_le_bytes(report.guard_zone_2_bearing),
+            width_decideg: u16::from_le_bytes(report.guard_zone_2_width),
+        },
     })
 }
 

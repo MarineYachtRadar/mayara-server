@@ -22,6 +22,18 @@ use crate::storage::load_installation_settings;
 use crate::tokio_io::TokioIoProvider;
 use crate::Session;
 
+// Debug I/O wrapper for protocol analysis (dev feature only)
+#[cfg(feature = "dev")]
+use crate::debug::DebugIoProvider;
+
+/// Type alias for the I/O provider used by FurunoReportReceiver.
+/// When dev feature is enabled, wraps TokioIoProvider with DebugIoProvider.
+#[cfg(feature = "dev")]
+type FurunoIoProvider = DebugIoProvider<TokioIoProvider>;
+
+#[cfg(not(feature = "dev"))]
+type FurunoIoProvider = TokioIoProvider;
+
 /// Furuno report receiver that uses the unified core controller
 pub struct FurunoReportReceiver {
     #[allow(dead_code)]
@@ -32,8 +44,8 @@ pub struct FurunoReportReceiver {
     key: String,
     /// Unified controller from mayara-core
     controller: FurunoController,
-    /// I/O provider for the controller
-    io: TokioIoProvider,
+    /// I/O provider for the controller (wrapped with DebugIoProvider when dev feature enabled)
+    io: FurunoIoProvider,
     /// Poll interval for the controller
     poll_interval: Duration,
 }
@@ -53,6 +65,27 @@ impl FurunoReportReceiver {
 
         // Create the unified controller from mayara-core
         let controller = FurunoController::new(&key, &radar_addr);
+
+        // Create I/O provider - wrapped with DebugIoProvider when dev feature enabled
+        #[cfg(feature = "dev")]
+        let io = {
+            let inner = TokioIoProvider::new();
+            if let Some(hub) = session.debug_hub() {
+                log::debug!("{}: Using DebugIoProvider for protocol analysis", key);
+                DebugIoProvider::new(inner, hub, key.clone(), "furuno".to_string())
+            } else {
+                // Fallback if debug_hub not initialized (shouldn't happen)
+                log::warn!("{}: DebugHub not available, using plain TokioIoProvider", key);
+                DebugIoProvider::new(
+                    inner,
+                    std::sync::Arc::new(crate::debug::DebugHub::new()),
+                    key.clone(),
+                    "furuno".to_string(),
+                )
+            }
+        };
+
+        #[cfg(not(feature = "dev"))]
         let io = TokioIoProvider::new();
 
         FurunoReportReceiver {

@@ -21,6 +21,18 @@ use mayara_core::controllers::RaymarineController;
 
 use super::BaseModel;
 
+// Debug I/O wrapper for protocol analysis (dev feature only)
+#[cfg(feature = "dev")]
+use crate::debug::DebugIoProvider;
+
+/// Type alias for the I/O provider used by RaymarineReportReceiver.
+/// When dev feature is enabled, wraps TokioIoProvider with DebugIoProvider.
+#[cfg(feature = "dev")]
+type RaymarineIoProvider = DebugIoProvider<TokioIoProvider>;
+
+#[cfg(not(feature = "dev"))]
+type RaymarineIoProvider = TokioIoProvider;
+
 mod quantum;
 mod rd;
 
@@ -61,6 +73,8 @@ enum ReceiverState {
 }
 
 pub(crate) struct RaymarineReportReceiver {
+    #[allow(dead_code)]
+    session: Session, // Kept for debug_hub access
     replay: bool,
     info: RadarInfo,
     key: String,
@@ -71,8 +85,8 @@ pub(crate) struct RaymarineReportReceiver {
     base_model: Option<BaseModel>,
     /// Unified controller from mayara-core
     controller: Option<RaymarineController>,
-    /// I/O provider for the controller
-    io: TokioIoProvider,
+    /// I/O provider for the controller (wrapped with DebugIoProvider when dev feature enabled)
+    io: RaymarineIoProvider,
     control_update_rx: broadcast::Receiver<ControlUpdate>,
     report_request_timeout: Instant,
     reported_unknown: HashMap<u32, bool>,
@@ -104,6 +118,27 @@ impl RaymarineReportReceiver {
 
         // Controller is created when we know the model (from info report)
         let controller = None;
+
+        // Create I/O provider - wrapped with DebugIoProvider when dev feature enabled
+        #[cfg(feature = "dev")]
+        let io = {
+            let inner = TokioIoProvider::new();
+            if let Some(hub) = session.debug_hub() {
+                log::debug!("{}: Using DebugIoProvider for protocol analysis", key);
+                DebugIoProvider::new(inner, hub, key.clone(), "raymarine".to_string())
+            } else {
+                // Fallback if debug_hub not initialized (shouldn't happen)
+                log::warn!("{}: DebugHub not available, using plain TokioIoProvider", key);
+                DebugIoProvider::new(
+                    inner,
+                    std::sync::Arc::new(crate::debug::DebugHub::new()),
+                    key.clone(),
+                    "raymarine".to_string(),
+                )
+            }
+        };
+
+        #[cfg(not(feature = "dev"))]
         let io = TokioIoProvider::new();
 
         let control_update_rx = info.controls.control_update_subscribe();
@@ -112,6 +147,7 @@ impl RaymarineReportReceiver {
         let trails = TrailBuffer::new(session.clone(), &info);
 
         RaymarineReportReceiver {
+            session,
             replay,
             key,
             info,

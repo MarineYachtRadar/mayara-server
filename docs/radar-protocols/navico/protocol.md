@@ -119,6 +119,40 @@ Doppler modes:
 | 1 | Both (show approaching and receding) |
 | 2 | Approaching only |
 
+## Control Categories
+
+Radar settings are categorized by their purpose and persistence:
+
+### Installation Settings (Report 04 and Report 08)
+These are configured once during radar installation and rarely changed:
+- **Bearing alignment** - Corrects for antenna mounting offset (deci-degrees, 0-3599) [Report 04]
+- **Antenna height** - Height above waterline in decimeters (affects sea clutter calculations) [Report 04]
+- **Accent light** - HALO pedestal LED brightness (0-3, HALO only) [Report 04]
+- **Local interference rejection** - Reduce local interference (off/low/medium/high) [Report 08]
+- **Sidelobe suppression** - Reduce sidelobe artifacts (0-100%, auto or manual) [Report 08]
+
+### Runtime Controls (Report 02)
+Operational settings adjusted during normal use (per-radar on dual-range systems):
+- **Gain** - Signal amplification (0-100%, auto or manual)
+- **Sea clutter** - Sea return suppression (auto: harbor/offshore, or manual 0-100%)
+- **Rain clutter** - Precipitation suppression (0-100%, no auto mode)
+- **Interference rejection** - Filter other radar interference (off/low/medium/high)
+- **Target expansion** - Make small targets more visible (off/on)
+- **Target boost** - Amplify weak targets (off/low/high)
+- **Guard zones** - Up to 2 zones per radar, sector or full-circle shape, sensitivity shared within same radar
+
+### Advanced Settings (Report 08)
+Performance tuning options (per-radar on dual-range systems):
+- **Scan speed** - Antenna rotation speed (normal/fast)
+- **Sea state** - Sea condition preset (calm/moderate/rough)
+- **Noise rejection** - Filter noise (off/low/medium/high)
+- **Target separation** - Distinguish close targets (off/low/medium/high)
+- **Doppler mode** - Motion detection (off/both/approaching, HALO only)
+
+### Blanking Zones (Report 06)
+No-transmit sectors to protect crew or equipment:
+- Up to 4 sectors with start/end angles
+
 ## Spoke Data Protocol
 
 ### Frame Structure
@@ -208,7 +242,9 @@ All reports have a 2-byte header:
 | 0x03 | 129 | Model info (model, hours, firmware) |
 | 0x04 | 66 | Installation settings (bearing, antenna height) |
 | 0x06 | 68/74 | Blanking zones and radar name |
+| 0x07 | 188 | Statistics/diagnostics (4G verified) |
 | 0x08 | 18/21/22 | Advanced settings (scan speed, doppler) |
+| 0x09 | 13 | Unknown (tuning/calibration?) |
 
 ### Report 01 - Status (18 bytes)
 
@@ -222,10 +258,14 @@ All reports have a 2-byte header:
 Status values:
 | Value | Status |
 |-------|--------|
-| 0 | Off |
+| 0 | Off (not observed - radar stops sending when powered off) |
 | 1 | Standby |
 | 2 | Transmit |
-| 5 | Preparing/Warming |
+| 5 | Preparing/Warming (not observed on 4G model, possibly wrong) |
+
+**Power-off behavior:** When the radar is powered off, it simply stops sending
+packets. There is no special "powering down" status - the radar goes silent
+immediately. This is expected since the radar has no power to transmit anything.
 
 ### Report 02 - Controls (99 bytes)
 
@@ -239,18 +279,96 @@ Status values:
 | 8 | 1 | Gain auto (0=manual, 1=auto) |
 | 9 | 3 | Unknown |
 | 12 | 1 | Gain value (0-255) |
-| 13 | 1 | Sea auto (0=off, 1=harbor, 2=offshore) |
+| 13 | 1 | Sea auto (0=manual, 1=harbor, 2=offshore) |
 | 14 | 3 | Unknown |
-| 17 | 4 | Sea value |
+| 17 | 1 | Sea value (0-255) |
+| 18 | 3 | Unknown |
 | 21 | 1 | Unknown |
-| 22 | 1 | Rain value |
+| 22 | 1 | Rain value (0-255, no auto mode) |
 | 23 | 11 | Unknown |
 | 34 | 1 | Interference rejection |
 | 35 | 3 | Unknown |
 | 38 | 1 | Target expansion |
 | 39 | 3 | Unknown |
 | 42 | 1 | Target boost |
-| 43 | 56 | Unknown |
+| 43 | 11 | Unknown |
+| 54 | 1 | Guard zone sensitivity (0-255, shared by both zones) |
+| 55 | 1 | Guard zone 1 enabled (0=off, 1=on) |
+| 56 | 1 | Guard zone 2 enabled (0=off, 1=on) |
+| 57 | 4 | Unknown (zeros) |
+| 61 | 1 | Guard zone 1 inner range (meters) |
+| 62 | 3 | Unknown (zeros) |
+| 65 | 1 | Guard zone 1 outer range (meters) |
+| 66 | 3 | Unknown (zeros) |
+| 69 | 2 | Guard zone 1 bearing (deci-degrees, u16 LE) |
+| 71 | 2 | Guard zone 1 width (deci-degrees, u16 LE) |
+| 73 | 4 | Unknown (zeros) |
+| 77 | 1 | Guard zone 2 inner range (meters) |
+| 78 | 3 | Unknown (zeros) |
+| 81 | 1 | Guard zone 2 outer range (meters) |
+| 82 | 3 | Unknown (zeros) |
+| 85 | 2 | Guard zone 2 bearing (deci-degrees, u16 LE) |
+| 87 | 2 | Guard zone 2 width (deci-degrees, u16 LE) |
+| 89 | 10 | Unknown |
+
+**Verified values (4G radar):**
+
+Gain (offsets 8, 12):
+- Auto: offset 8 = `01`, offset 12 = auto-calculated value
+- Manual 0%: offset 8 = `00`, offset 12 = `00`
+- Manual 100%: offset 8 = `00`, offset 12 = `FF`
+
+Sea clutter (offsets 13, 17):
+| Mode | Offset 13 |
+|------|-----------|
+| Manual | `00` |
+| Harbor (auto) | `01` |
+| Offshore (auto) | `02` |
+- Manual value: offset 17 = 0-255 (percentage × 255 / 100)
+
+Rain clutter (offset 22):
+- No auto mode available
+- Value: 0-255 (percentage × 255 / 100)
+- 0% = `00`, 64% = `A4`, 100% = `FF`
+
+Interference rejection (offset 34):
+| Value | Setting |
+|-------|---------|
+| 0 | Off |
+| 1 | Low |
+| 2 | Medium |
+| 3 | High |
+
+Target expansion (offset 38):
+| Value | Setting |
+|-------|---------|
+| 0 | Off |
+| 1 | On |
+
+Target boost (offset 42):
+| Value | Setting |
+|-------|---------|
+| 0 | Off |
+| 1 | Low |
+| 2 | High |
+
+Guard zones (offsets 54-88):
+- **Per-radar**: Each radar (A/B) has independent guard zone settings
+- **Sensitivity** (offset 54): 0-255, shared by both zones within same radar
+- **Shape**: Determined by width field
+  - Sector: width < 3600 (e.g., 68.3° = 683)
+  - Cycle (full circle): width = 3599 (359.9°)
+- **Range**: Inner/outer in meters (e.g., 18m inner, 33m outer)
+- **Bearing**: Center angle in deci-degrees (e.g., 50° = 500)
+- **Alarm mode** (enter/exit): NOT transmitted - chartplotter-internal logic
+
+**Chartplotter-Internal Features (NOT in protocol):**
+The following radar display features are computed/stored locally by the chartplotter
+and are NOT transmitted in any radar report:
+- Guard zone alarm mode (enter/exit trigger)
+- Threshold setting (display threshold adjustment)
+- Target trails (radar echo history/persistence)
+- Acquire target (ARPA/MARPA target tracking)
 
 ### Report 03 - Model Info (129 bytes)
 
@@ -282,17 +400,43 @@ Model bytes:
 
 ### Report 04 - Installation (66 bytes)
 
+Settings are per-radar (A/B can have different values on dual-range radars).
+
 | Offset | Size | Description |
 |--------|------|-------------|
 | 0 | 1 | Type (0x04) |
 | 1 | 1 | Command (0xC4) |
-| 2 | 4 | Unknown |
-| 6 | 2 | Bearing alignment (deci-degrees, signed) |
-| 8 | 2 | Unknown |
-| 10 | 2 | Antenna height (decimeters) |
-| 12 | 7 | Unknown |
-| 19 | 1 | Accent light (HALO only) |
-| 20 | 46 | Unknown |
+| 2 | 4 | Unknown (always 0) |
+| 6 | 2 | Bearing alignment (deci-degrees, i16, -1800 to +1799) |
+| 8 | 2 | Unknown (always 0) |
+| 10 | 2 | Antenna height (decimeters, u16) |
+| 12 | 7 | Unknown (always 0) |
+| 19 | 1 | Accent light (HALO only, 0-3) |
+| 20 | 6 | Unknown (always 0) |
+| 26 | 4 | Unknown per-radar value (u32, differs A vs B) |
+| 30 | 4 | Unknown per-radar value (u32, differs A vs B) |
+| 34 | 32 | Unknown (always 0) |
+
+**Verified values (4G radar):**
+- Antenna height 4m: offset 10-11 = `A0 0F` = 4000 mm
+- Antenna height 10m: offset 10-11 = `10 27` = 10000 mm
+- Bearing alignment 0°: offset 6-7 = `00 00` = 0
+- Bearing alignment +90°: offset 6-7 = `84 03` = 900 deci-degrees
+- Bearing alignment -123°: offset 6-7 = `42 09` = 2370 deci-degrees (= 237° = 360-123)
+
+**Note:** Bearing alignment uses unsigned 0-3599 range. Negative values are
+represented as 360° - |value|. For example, -123° is stored as 237° (2370).
+
+**Observed per-radar values at offsets 26-33 (4G):**
+- Radar A: offset 26 = 20, offset 30 = 180
+- Radar B: offset 26 = 10, offset 30 = 10
+- These values do NOT correspond to X-Axis/Y-Axis antenna position settings
+- Purpose unknown (possibly timing, tuning, or guard zone parameters)
+
+**Note:** The chartplotter has X-Axis and Y-Axis antenna position settings
+(offset from ship center, supports positive/negative values). These are
+**NOT transmitted in Report 04** - they may be chartplotter-internal only
+or stored in a different report.
 
 ### Report 06 - Blanking Zones (68 or 74 bytes)
 
@@ -306,6 +450,8 @@ Each zone (5 bytes):
 | 3 | 2 | End angle (deci-degrees) |
 
 ### Report 08 - Advanced Settings (18/21/22 bytes)
+
+Settings are per-radar (A/B have independent values on dual-range radars).
 
 | Offset | Size | Description |
 |--------|------|-------------|
@@ -329,6 +475,93 @@ Extended fields (21+ bytes, HALO only):
 |--------|------|-------------|
 | 18 | 1 | Doppler state |
 | 19 | 2 | Doppler speed threshold (cm/s, 0-1594) |
+
+**Verified values (4G radar):**
+
+Sea state (offset 2):
+| Value | Setting |
+|-------|---------|
+| 0 | Calm |
+| 1 | Moderate |
+| 2 | Rough |
+
+Local interference rejection (offset 3):
+| Value | Setting |
+|-------|---------|
+| 0 | Off |
+| 1 | Low |
+| 2 | Medium |
+| 3 | High |
+
+Scan speed (offset 4):
+| Value | Setting |
+|-------|---------|
+| 0 | Off (normal) |
+| 1 | Medium |
+| 2 | Medium-High |
+
+Sidelobe suppression:
+- Auto=off, 37%: offset 5 = `00`, offset 9 = `5F` (95 → 37.3%)
+- Auto=off, 100%: offset 5 = `00`, offset 9 = `FF` (255 → 100%)
+- Auto=on: offset 5 = `01`, offset 9 = current auto value
+- **Offset 5**: `00` = manual, `01` = auto
+- **Offset 9**: 0-255 value, formula: **percentage = value × 100 / 255**
+
+Noise rejection (offset 12):
+| Value | Setting |
+|-------|---------|
+| 0 | Off |
+| 1 | Low |
+| 2 | Medium |
+| 3 | High |
+
+Target separation (offset 13):
+| Value | Setting |
+|-------|---------|
+| 0 | Off |
+| 1 | Low |
+| 2 | Medium |
+| 3 | High |
+
+**Note:** Threshold setting appears to be chartplotter-internal only.
+
+### Report 07 - Statistics/Diagnostics (188 bytes)
+
+Discovered on 4G radar. Contains mostly zeros with data at specific offsets.
+
+| Offset | Size | Description |
+|--------|------|-------------|
+| 0 | 1 | Type (0x07) |
+| 1 | 1 | Command (0xC4) |
+| 2 | 67 | Unknown (zeros) |
+| 69 | 1 | Unknown (0x40 = 64 observed) |
+| 70 | 66 | Unknown (zeros) |
+| 136 | 4 | Counter/statistic 1 (u32, ~442778 observed) |
+| 140 | 4 | Counter/statistic 2 (u32, ~238698 observed) |
+| 144 | 4 | Counter/statistic 3 (u32, ~18415 observed) |
+| 148 | 4 | Unknown (40 observed) |
+| 152 | 4 | Per-radar value (A=45, B=40 observed) |
+| 156 | 4 | Per-radar value (A=45, B=40 observed) |
+| 160 | 4 | Unknown (20 observed) |
+| 164 | 24 | Unknown (zeros) |
+
+**Note:** The counter values at 136-147 may be related to packet counts or
+timing statistics. Values at 152-159 differ between Radar A and B.
+
+### Report 09 - Unknown (13 bytes)
+
+Purpose unknown. May contain tuning or calibration indices.
+
+| Offset | Size | Description |
+|--------|------|-------------|
+| 0 | 1 | Type (0x09) |
+| 1 | 1 | Command (0xC4) |
+| 2 | 2 | Value 1 (u16, observed: 1) |
+| 4 | 2 | Value 2 (u16, observed: 1) |
+| 6 | 2 | Value 3 (u16, observed: 2) |
+| 8 | 2 | Value 4 (u16, observed: 4) |
+| 10 | 2 | Value 5 (u16, observed: 0) |
+| 12 | 1 | Unknown (0) |
 
 ## Command Protocol (UDP)
 

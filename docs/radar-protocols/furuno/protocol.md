@@ -115,6 +115,31 @@ Command port = BASE_PORT (10000) + port_offset
 
 Commands are ASCII strings terminated with `\r\n`.
 
+### Binary Framing (Some Firmware Versions)
+
+Some Furuno models/firmware versions wrap ASCII commands in an 8-byte binary header:
+
+```
+| Offset | Size | Description                    |
+|--------|------|--------------------------------|
+| 0x00   | 4    | Unknown (often 00 00 00 08)    |
+| 0x04   | 4    | Unknown (often 00 00 00 00)    |
+| 0x08   | N    | ASCII command (e.g., $N69,...) |
+```
+
+**Example captured packet:**
+```
+0000  00 00 00 08 00 00 00 00 24 4e 36 39 2c 32 2c 30  ........$N69,2,0
+0010  2c 30 2c 36 30 2c 33 30 30 2c 30                 ,0,60,300,0
+```
+
+The header meaning is not yet fully understood. It may be:
+- Length prefix (but 0x08 doesn't match payload length)
+- Message type or sequence number
+- Padding for alignment
+
+When decoding, look for `$` (0x24) to find the start of the ASCII command.
+
 ### Command Format
 ```
 ${mode}{command_id},{arg1},{arg2},...\r\n

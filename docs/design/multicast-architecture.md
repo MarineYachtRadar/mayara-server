@@ -46,6 +46,35 @@ This means:
 - WASM automatically gets the correct behavior through Node.js
 - No code sharing conflicts between the two implementations
 
+## Multi-NIC Support
+
+Marine installations often have multiple network interfaces - one for the ship's network and separate dedicated interfaces for each radar brand. By default, the OS chooses a single interface for multicast, which may not be the correct one for the radar.
+
+### Joining Multicast on All Interfaces
+
+At startup, mayara-server discovers all non-loopback IPv4 interfaces and joins multicast groups on each one:
+
+```rust
+let interfaces = find_all_interfaces();  // Discovers all NICs
+for iface in &interfaces {
+    locator.add_multicast_interface(iface);
+}
+```
+
+This ensures radar beacons are received regardless of which physical interface the radar is connected to.
+
+### Interface Selection for Radar Communication
+
+When sending commands to a radar, the correct NIC must be selected. The `find_nic_for_radar()` function uses this priority:
+
+1. **Subnet match**: Find a NIC in the same subnet as the radar IP
+2. **Link-local handling**: For 169.254.x.x addresses (common with Navico):
+   - Prefer the 172.31.x.x interface (dedicated radar subnet)
+   - Fall back to wired ethernet interfaces (`eth*` or `en*`)
+3. **Final fallback**: First non-loopback interface
+
+This logic ensures that dedicated radar NICs are preferred over general-purpose network interfaces.
+
 ## The IP_MULTICAST_ALL Socket Option
 
 On Linux, when multiple sockets are bound to the same port, the kernel normally delivers multicast packets to all of them. The `IP_MULTICAST_ALL` option controls this:
@@ -53,10 +82,11 @@ On Linux, when multiple sockets are bound to the same port, the kernel normally 
 - `IP_MULTICAST_ALL=1` (default): Deliver to all sockets on this port
 - `IP_MULTICAST_ALL=0`: Only deliver to sockets that explicitly joined this multicast group
 
-We set this to 0 because:
+We set this to 0 via `setsockopt()` immediately after joining a multicast group because:
 1. Multiple radar brands may use the same port with different multicast groups
 2. On multi-NIC systems, we want interface-specific multicast reception
-3. It reduces unnecessary packet processing
+3. It prevents cross-brand beacon routing (e.g., Navico packets being delivered to Furuno sockets)
+4. It reduces unnecessary packet processing
 
 ## Navico-Specific Considerations
 
@@ -84,9 +114,15 @@ Each operates independently with its own controls, though some physical limitati
 
 | Platform | Bind Address | Multicast Join | Notes |
 |----------|--------------|----------------|-------|
-| Linux | Multicast addr | After bind | IP_MULTICAST_ALL=0 required |
-| macOS | Multicast addr | After bind | Similar to Linux |
-| Windows | 0.0.0.0 | Before bind | MSDN requirement |
+| Linux | Multicast addr | After bind, on all NICs | IP_MULTICAST_ALL=0 required |
+| macOS | Multicast addr | After bind, on all NICs | Similar to Linux |
+| Windows | 0.0.0.0 | Before bind, on all NICs | MSDN requirement |
 | WASM/Node.js | 0.0.0.0 | Via addMembership | Handled by SignalK |
 
 The native server (`mayara-server`) and WASM plugin (`mayara-signalk-wasm`) use separate socket implementations, so each platform gets optimal behavior without code conflicts.
+
+### Key Implementation Files
+
+- [core_locator.rs](../../mayara-server/src/core_locator.rs) - `find_all_interfaces()` discovers NICs, multicast setup at startup
+- [network/mod.rs](../../mayara-server/src/network/mod.rs) - `find_nic_for_radar()` selects correct interface for outbound traffic
+- [tokio_io.rs](../../mayara-server/src/tokio_io.rs) - `IP_MULTICAST_ALL` socket option configuration

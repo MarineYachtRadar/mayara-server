@@ -136,12 +136,25 @@ pub struct RadarState {
     /// Timestamp of last update (milliseconds since epoch)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<u64>,
+
+    /// Internal flag: when true, accept radar values even in manual mode
+    /// Used during state refresh to sync changes made by other clients (chart plotter)
+    #[serde(skip)]
+    pending_refresh: bool,
 }
 
 impl RadarState {
     /// Create a new radar state with default values
     pub fn new() -> Self {
         RadarState::default()
+    }
+
+    /// Mark that a state refresh is pending.
+    /// When set, the next update_from_response calls will accept radar values
+    /// even if we're in manual mode. This allows syncing changes made by
+    /// other clients (e.g., chart plotter).
+    pub fn mark_pending_refresh(&mut self) {
+        self.pending_refresh = true;
     }
 
     /// Update state by parsing a response line from the radar
@@ -160,9 +173,14 @@ impl RadarState {
 
         // Try gain response ($N63)
         // In manual mode, preserve the commanded value - radar reports sensor readings,
-        // but we want to show what the user set, not what the sensor reads
+        // but we want to show what the user set, not what the sensor reads.
+        // EXCEPTION: During refresh, always accept radar values to sync external changes.
         if let Some(cv) = parse_gain_response(line) {
-            if self.gain.mode == "manual" && !cv.auto {
+            if self.pending_refresh {
+                // Refresh mode: accept radar values (sync from chart plotter)
+                self.gain = cv.into();
+                self.pending_refresh = false; // Clear after first control update
+            } else if self.gain.mode == "manual" && !cv.auto {
                 // Manual mode: only update mode confirmation, keep commanded value
                 // (value was already set when we sent the command)
             } else {
@@ -175,7 +193,9 @@ impl RadarState {
         // Try sea response ($N64)
         // Same logic: in manual mode, preserve commanded value
         if let Some(cv) = parse_sea_response(line) {
-            if self.sea.mode == "manual" && !cv.auto {
+            if self.pending_refresh {
+                self.sea = cv.into();
+            } else if self.sea.mode == "manual" && !cv.auto {
                 // Manual mode: keep commanded value
             } else {
                 self.sea = cv.into();
@@ -186,7 +206,9 @@ impl RadarState {
         // Try rain response ($N65)
         // Same logic: in manual mode, preserve commanded value
         if let Some(cv) = parse_rain_response(line) {
-            if self.rain.mode == "manual" && !cv.auto {
+            if self.pending_refresh {
+                self.rain = cv.into();
+            } else if self.rain.mode == "manual" && !cv.auto {
                 // Manual mode: keep commanded value
             } else {
                 self.rain = cv.into();

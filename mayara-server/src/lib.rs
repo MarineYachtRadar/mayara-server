@@ -127,6 +127,9 @@ pub mod settings;
 pub mod storage;
 pub mod tokio_io;
 pub mod util;
+
+#[cfg(feature = "dev")]
+pub mod debug;
 use rust_embed::RustEmbed;
 use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
@@ -322,12 +325,19 @@ impl Serialize for InterfaceId {
     }
 }
 
+/// Type alias for the shared debug hub.
+#[cfg(feature = "dev")]
+pub type SharedDebugHub = Arc<debug::DebugHub>;
+
 pub struct SessionInner {
     pub args: Cli,
     pub tx_interface_request: broadcast::Sender<Option<mpsc::Sender<InterfaceApi>>>,
     pub radars: Option<SharedRadars>,
     /// Locator status from core (updated by CoreLocatorAdapter)
     pub locator_status: mayara_core::LocatorStatus,
+    /// Debug hub for protocol analysis (only available with dev feature)
+    #[cfg(feature = "dev")]
+    pub debug_hub: Option<SharedDebugHub>,
 }
 
 #[derive(Clone)]
@@ -364,6 +374,8 @@ impl Session {
                 tx_interface_request,
                 radars: None,
                 locator_status: mayara_core::LocatorStatus::default(),
+                #[cfg(feature = "dev")]
+                debug_hub: Some(Arc::new(debug::DebugHub::new())),
             })),
         };
         selfref
@@ -422,6 +434,12 @@ impl Session {
     pub fn args(&self) -> Cli {
         let args = { self.read().unwrap().args.clone() };
         args
+    }
+
+    /// Get the debug hub for protocol analysis (only available with dev feature).
+    #[cfg(feature = "dev")]
+    pub fn debug_hub(&self) -> Option<SharedDebugHub> {
+        self.read().unwrap().debug_hub.clone()
     }
 }
 

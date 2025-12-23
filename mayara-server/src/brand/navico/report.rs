@@ -34,7 +34,21 @@ use mayara_core::protocol::navico::{
     INFO_ADDR, INFO_PORT, SPEED_ADDR_A, SPEED_PORT_A,
 };
 
+// Debug I/O wrapper for protocol analysis (dev feature only)
+#[cfg(feature = "dev")]
+use crate::debug::DebugIoProvider;
+
+/// Type alias for the I/O provider used by NavicoReportReceiver.
+/// When dev feature is enabled, wraps TokioIoProvider with DebugIoProvider.
+#[cfg(feature = "dev")]
+type NavicoIoProvider = DebugIoProvider<TokioIoProvider>;
+
+#[cfg(not(feature = "dev"))]
+type NavicoIoProvider = TokioIoProvider;
+
 pub struct NavicoReportReceiver {
+    #[allow(dead_code)]
+    session: Session, // Kept for debug_hub access
     replay: bool,
     transmit_after_range_detection: bool,
     info: RadarInfo,
@@ -49,8 +63,8 @@ pub struct NavicoReportReceiver {
     model: Model,
     /// Unified controller from mayara-core
     controller: Option<NavicoController>,
-    /// I/O provider for the controller
-    io: TokioIoProvider,
+    /// I/O provider for the controller (wrapped with DebugIoProvider when dev feature enabled)
+    io: NavicoIoProvider,
     info_sender: Option<Information>,
     data_tx: broadcast::Sender<DataUpdate>,
     control_update_rx: broadcast::Receiver<ControlUpdate>,
@@ -82,6 +96,7 @@ const REPORT_02_C4_99: u8 = 0x02;
 const REPORT_03_C4_129: u8 = 0x03;
 const REPORT_04_C4_66: u8 = 0x04;
 const REPORT_06_C4_68: u8 = 0x06;
+const REPORT_07_C4_188: u8 = 0x07;
 const REPORT_08_C4_18_OR_21_OR_22: u8 = 0x08;
 
 impl NavicoReportReceiver {
@@ -126,6 +141,27 @@ impl NavicoReportReceiver {
             log::debug!("{}: No controller, replay mode", key);
             None
         };
+
+        // Create I/O provider - wrapped with DebugIoProvider when dev feature enabled
+        #[cfg(feature = "dev")]
+        let io = {
+            let inner = TokioIoProvider::new();
+            if let Some(hub) = session.debug_hub() {
+                log::debug!("{}: Using DebugIoProvider for protocol analysis", key);
+                DebugIoProvider::new(inner, hub, key.clone(), "navico".to_string())
+            } else {
+                // Fallback if debug_hub not initialized (shouldn't happen)
+                log::warn!("{}: DebugHub not available, using plain TokioIoProvider", key);
+                DebugIoProvider::new(
+                    inner,
+                    std::sync::Arc::new(crate::debug::DebugHub::new()),
+                    key.clone(),
+                    "navico".to_string(),
+                )
+            }
+        };
+
+        #[cfg(not(feature = "dev"))]
         let io = TokioIoProvider::new();
 
         let info_sender = if !replay {
@@ -141,6 +177,7 @@ impl NavicoReportReceiver {
 
         let now = Instant::now();
         NavicoReportReceiver {
+            session,
             replay,
             transmit_after_range_detection: false,
             key,
@@ -448,7 +485,7 @@ impl NavicoReportReceiver {
                 controller.set_local_interference_rejection(&mut self.io, value as u8);
             }
             "scanSpeed" => {
-                controller.set_scan_speed(&mut self.io, value as u8 > 0);
+                controller.set_scan_speed(&mut self.io, value as u8);
             }
             "mode" => {
                 controller.set_mode(&mut self.io, value as u8);
@@ -560,25 +597,15 @@ impl NavicoReportReceiver {
     }
 
     fn set(&mut self, control_type: &str, value: f32, auto: Option<bool>) {
-        match self.info.controls.set(control_type, value, auto) {
-            Err(e) => {
-                log::error!("{}: {}", self.key, e.to_string());
-            }
-            Ok(Some(())) => {
-                if log::log_enabled!(log::Level::Debug) {
-                    let control = self.info.controls.get(control_type).unwrap();
-                    log::trace!(
-                        "{}: Control '{}' new value {} auto {:?} enabled {:?}",
-                        self.key,
-                        control_type,
-                        control.value(),
-                        control.auto,
-                        control.enabled
-                    );
-                }
-            }
-            Ok(None) => {}
-        };
+        if let Err(e) = self.info.controls.set(control_type, value, auto) {
+            log::error!(
+                "{}: set '{}' = {} FAILED: {}",
+                self.key,
+                control_type,
+                value,
+                e
+            );
+        }
     }
 
     fn set_value(&mut self, control_type: &str, value: f32) {
@@ -776,6 +803,13 @@ impl NavicoReportReceiver {
             return Ok(());
         }
         let report_identification = data[0];
+
+        // Debug: dump raw report bytes for protocol analysis
+        if log::log_enabled!(log::Level::Trace) {
+            log::trace!("{}: Report {:02X} raw ({} bytes): {:02X?}",
+                self.key, report_identification, data.len(), data);
+        }
+
         match report_identification {
             REPORT_01_C4_18 => {
                 return self.process_report_01().await;
@@ -797,6 +831,11 @@ impl NavicoReportReceiver {
                         return self.process_report_06_68().await;
                     }
                     return self.process_report_06_74().await;
+                }
+            }
+            REPORT_07_C4_188 => {
+                if self.model != Model::Unknown {
+                    return self.process_report_07().await;
                 }
             }
             REPORT_08_C4_18_OR_21_OR_22 => {
@@ -878,6 +917,26 @@ impl NavicoReportReceiver {
 
         self.process_range(range).await?;
 
+        // Log guard zone data (read-only for now - commands not yet implemented)
+        // Zone data is parsed from offsets 54-88 of Report 02
+        if report.guard_zone_1.enabled || report.guard_zone_2.enabled {
+            log::debug!(
+                "{}: Guard zones - sensitivity: {}, zone1: {} ({}m-{}m, bearing:{} width:{}), zone2: {} ({}m-{}m, bearing:{} width:{})",
+                self.key,
+                report.guard_zone_sensitivity,
+                if report.guard_zone_1.enabled { "ON" } else { "off" },
+                report.guard_zone_1.inner_range_m,
+                report.guard_zone_1.outer_range_m,
+                report.guard_zone_1.bearing_decideg as f32 / 10.0,
+                report.guard_zone_1.width_decideg as f32 / 10.0,
+                if report.guard_zone_2.enabled { "ON" } else { "off" },
+                report.guard_zone_2.inner_range_m,
+                report.guard_zone_2.outer_range_m,
+                report.guard_zone_2.bearing_decideg as f32 / 10.0,
+                report.guard_zone_2.width_decideg as f32 / 10.0,
+            );
+        }
+
         Ok(())
     }
 
@@ -947,10 +1006,21 @@ impl NavicoReportReceiver {
         let report = parse_report_04(&self.report_buf)
             .map_err(|e| anyhow::anyhow!("{}: Report 04 parse error: {}", self.key, e))?;
 
-        log::trace!("{}: report 04 - {:?}", self.key, report);
-
-        self.set_value("bearingAlignment", report.bearing_alignment as f32);
-        self.set_value("antennaHeight", report.antenna_height as f32);
+        // Report 04 returns bearing alignment as signed deci-degrees (i16),
+        // convert to degrees for the control (-179 to +179)
+        let bearing_deg = report.bearing_alignment as f32 / 10.0;
+        log::debug!(
+            "{}: report 04 - bearing_alignment={} (raw i16) -> {} deg, antenna_height={} dm ({} m)",
+            self.key,
+            report.bearing_alignment,
+            bearing_deg,
+            report.antenna_height,
+            report.antenna_height as f32 / 10.0
+        );
+        self.set_value("bearingAlignment", bearing_deg);
+        // Report 04 returns antenna height in decimeters (same unit as command 0x30 C1),
+        // convert to meters for the control
+        self.set_value("antennaHeight", report.antenna_height as f32 / 10.0);
         if self.model == Model::HALO {
             self.set_value("accentLight", report.accent_light as f32);
         }
@@ -1018,6 +1088,38 @@ impl NavicoReportReceiver {
             }
         }
 
+        Ok(())
+    }
+
+    /// Report 07 - Statistics/Diagnostics (188 bytes)
+    /// Contains packet counters and per-radar statistics
+    /// Structure (from protocol.md):
+    /// - Offset 69: unknown (0x40 = 64 observed)
+    /// - Offset 136-139: counter 1 (u32)
+    /// - Offset 140-143: counter 2 (u32)
+    /// - Offset 144-147: counter 3 (u32)
+    /// - Offset 152-155: per-radar value A
+    /// - Offset 156-159: per-radar value B
+    async fn process_report_07(&mut self) -> Result<(), Error> {
+        let data = &self.report_buf;
+        if data.len() < 188 {
+            log::warn!("{}: Report 07 too short: {} bytes", self.key, data.len());
+            return Ok(());
+        }
+
+        // Parse statistics for debug logging
+        let counter1 = u32::from_le_bytes([data[136], data[137], data[138], data[139]]);
+        let counter2 = u32::from_le_bytes([data[140], data[141], data[142], data[143]]);
+        let counter3 = u32::from_le_bytes([data[144], data[145], data[146], data[147]]);
+        let per_radar_a = u32::from_le_bytes([data[152], data[153], data[154], data[155]]);
+        let per_radar_b = u32::from_le_bytes([data[156], data[157], data[158], data[159]]);
+
+        log::debug!(
+            "{}: Report 07 stats - counters: [{}, {}, {}], per-radar: [A={}, B={}]",
+            self.key, counter1, counter2, counter3, per_radar_a, per_radar_b
+        );
+
+        // For now, just log the statistics. Could expose via API if useful.
         Ok(())
     }
 
