@@ -1098,5 +1098,4 @@ let value: f32 = value.parse()?;
 - mayara-core protocol: `src/protocol/navico.rs`
 - signalk-radar Go implementation: `radar-server/radar/navico/`
 - OpenCPN radar_pi plugin (original reverse engineering)
-- Network captures from various Navico radar installations
-- Sample PCAP: `signalk-radar/demo/samples/halo_and_0183.pcap`
+- [Network captures from various Navico radar installations](https://github.com/keesverruijt/radar-recordings/tree/main/navico)
