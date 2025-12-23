@@ -135,7 +135,10 @@ fn build_compound_control(def: &CoreControlDefinition) -> Control {
     };
 
     // Check if this control has auto mode
-    let has_auto = def.modes.as_ref().map_or(false, |m| m.contains(&"auto".to_string()));
+    let has_auto = def
+        .modes
+        .as_ref()
+        .map_or(false, |m| m.contains(&"auto".to_string()));
 
     let mut control = if has_auto {
         // Check for adjustable auto from wire hints
@@ -295,7 +298,12 @@ pub fn rotation_speed_control_for_brand(brand: Brand) -> Control {
 }
 
 /// Build no-transmit zone angle control for a specific brand
-pub fn no_transmit_angle_control_for_brand(id: &str, zone_number: u8, is_start: bool, brand: Brand) -> Control {
+pub fn no_transmit_angle_control_for_brand(
+    id: &str,
+    zone_number: u8,
+    is_start: bool,
+    brand: Brand,
+) -> Control {
     let core_def = controls::control_no_transmit_angle_for_brand(id, zone_number, is_start, brand);
     build_control(&core_def)
 }
@@ -425,7 +433,10 @@ pub fn build_base_controls_for_brand(brand: Brand) -> HashMap<String, Control> {
 /// Includes base controls plus model-specific extended controls.
 ///
 /// If model_name is None, only base controls are returned.
-pub fn build_all_controls_for_model(brand: Brand, model_name: Option<&str>) -> HashMap<String, Control> {
+pub fn build_all_controls_for_model(
+    brand: Brand,
+    model_name: Option<&str>,
+) -> HashMap<String, Control> {
     let core_defs = controls::get_all_controls_for_model(brand, model_name);
     let mut result = HashMap::new();
     for def in core_defs {
@@ -437,7 +448,10 @@ pub fn build_all_controls_for_model(brand: Brand, model_name: Option<&str>) -> H
 
 /// Build model-specific extended controls for a brand and model.
 /// Does NOT include base controls (use build_base_controls_for_brand for those).
-pub fn build_extended_controls_for_model(brand: Brand, model_name: &str) -> HashMap<String, Control> {
+pub fn build_extended_controls_for_model(
+    brand: Brand,
+    model_name: &str,
+) -> HashMap<String, Control> {
     use mayara_core::models;
 
     let mut result = HashMap::new();

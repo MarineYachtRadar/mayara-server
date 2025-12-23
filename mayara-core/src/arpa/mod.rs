@@ -56,37 +56,35 @@
 //! ```
 
 // New modular ARPA implementation
-mod polar;
-mod doppler;
 mod contour;
+mod doppler;
 mod history;
 mod kalman;
+mod polar;
 mod target;
 
 // Legacy/simple implementation
-mod types;
-mod tracker;
 mod cpa;
 mod detector;
+mod tracker;
+mod types;
 
 // Re-export new modular types
-pub use polar::{
-    Polar, LocalPosition, PolarConverter, FOUR_DIRECTIONS,
-    METERS_PER_DEGREE_LATITUDE, NAUTICAL_MILE, KN_TO_MS, MS_TO_KN,
-    meters_per_degree_longitude,
-};
+pub use contour::{Contour, ContourError, MAX_CONTOUR_LENGTH, MIN_CONTOUR_LENGTH};
 pub use doppler::DopplerState;
-pub use contour::{Contour, ContourError, MIN_CONTOUR_LENGTH, MAX_CONTOUR_LENGTH};
-pub use history::{HistoryPixel, HistorySpoke, HistoryBuffer, Legend};
+pub use history::{HistoryBuffer, HistoryPixel, HistorySpoke, Legend};
 pub use kalman::KalmanFilter;
+pub use polar::{
+    meters_per_degree_longitude, LocalPosition, Polar, PolarConverter, FOUR_DIRECTIONS, KN_TO_MS,
+    METERS_PER_DEGREE_LATITUDE, MS_TO_KN, NAUTICAL_MILE,
+};
 pub use target::{
-    TargetState, TargetStatus, RefreshState, Pass, ExtendedPosition,
-    RefreshConfig, refresh_target,
-    MAX_LOST_COUNT, MAX_DETECTION_SPEED_KN,
+    refresh_target, ExtendedPosition, Pass, RefreshConfig, RefreshState, TargetState, TargetStatus,
+    MAX_DETECTION_SPEED_KN, MAX_LOST_COUNT,
 };
 
 // Re-export legacy types (for backward compatibility)
-pub use types::*;
-pub use tracker::ArpaProcessor;
 pub use cpa::CpaResult;
 pub use detector::TargetDetector;
+pub use tracker::ArpaProcessor;
+pub use types::*;

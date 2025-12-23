@@ -98,7 +98,13 @@ pub struct ArpaTarget {
 
 impl ArpaTarget {
     /// Create a new target with initial position
-    pub fn new(id: u32, bearing: f64, distance: f64, timestamp: u64, method: AcquisitionMethod) -> Self {
+    pub fn new(
+        id: u32,
+        bearing: f64,
+        distance: f64,
+        timestamp: u64,
+        method: AcquisitionMethod,
+    ) -> Self {
         ArpaTarget {
             id,
             status: TargetStatus::Acquiring,
@@ -118,7 +124,9 @@ impl ArpaTarget {
 
     /// Check if target is dangerous based on CPA/TCPA thresholds
     pub fn is_dangerous(&self, cpa_threshold: f64, tcpa_threshold: f64) -> bool {
-        self.danger.cpa < cpa_threshold && self.danger.tcpa > 0.0 && self.danger.tcpa < tcpa_threshold
+        self.danger.cpa < cpa_threshold
+            && self.danger.tcpa > 0.0
+            && self.danger.tcpa < tcpa_threshold
     }
 
     /// Get alert state based on CPA/TCPA
@@ -201,13 +209,13 @@ impl Default for ArpaSettings {
         ArpaSettings {
             enabled: true,
             max_targets: 40,
-            cpa_threshold: 500.0,       // 500 meters
-            tcpa_threshold: 600.0,      // 10 minutes
-            lost_target_timeout: 30.0,  // 30 seconds
+            cpa_threshold: 500.0,      // 500 meters
+            tcpa_threshold: 600.0,     // 10 minutes
+            lost_target_timeout: 30.0, // 30 seconds
             auto_acquisition: false,
             min_target_size: 3,
             detection_threshold: 128,
-            min_speed: 2.0,             // 2 knots minimum
+            min_speed: 2.0, // 2 knots minimum
         }
     }
 }
@@ -233,13 +241,9 @@ pub struct OwnShip {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ArpaEvent {
     /// New target acquired
-    TargetAcquired {
-        target: ArpaTarget,
-    },
+    TargetAcquired { target: ArpaTarget },
     /// Target state updated
-    TargetUpdate {
-        target: ArpaTarget,
-    },
+    TargetUpdate { target: ArpaTarget },
     /// Target lost
     TargetLost {
         target_id: u32,
@@ -281,14 +285,20 @@ pub(crate) struct TrackingState {
 
 impl TrackingState {
     /// Create new tracking state from polar position
-    pub fn new(id: u32, bearing_deg: f64, distance_m: f64, timestamp: u64, method: AcquisitionMethod) -> Self {
+    pub fn new(
+        id: u32,
+        bearing_deg: f64,
+        distance_m: f64,
+        timestamp: u64,
+        method: AcquisitionMethod,
+    ) -> Self {
         let bearing_rad = bearing_deg.to_radians();
         let x = distance_m * bearing_rad.sin();
         let y = distance_m * bearing_rad.cos();
 
         // Initial covariance - high uncertainty in position, very high in velocity
-        let pos_var = 100.0;  // 10m std dev
-        let vel_var = 25.0;   // 5 m/s std dev (~10 knots)
+        let pos_var = 100.0; // 10m std dev
+        let vel_var = 25.0; // 5 m/s std dev (~10 knots)
 
         TrackingState {
             id,
@@ -297,10 +307,8 @@ impl TrackingState {
             vx: 0.0,
             vy: 0.0,
             covariance: [
-                pos_var, 0.0, 0.0, 0.0,
-                0.0, pos_var, 0.0, 0.0,
-                0.0, 0.0, vel_var, 0.0,
-                0.0, 0.0, 0.0, vel_var,
+                pos_var, 0.0, 0.0, 0.0, 0.0, pos_var, 0.0, 0.0, 0.0, 0.0, vel_var, 0.0, 0.0, 0.0,
+                0.0, vel_var,
             ],
             acquisition: method,
             first_seen: timestamp,
@@ -327,7 +335,7 @@ impl TrackingState {
     /// Get speed in knots
     pub fn speed_knots(&self) -> f64 {
         let speed_ms = (self.vx * self.vx + self.vy * self.vy).sqrt();
-        speed_ms * 1.94384  // m/s to knots
+        speed_ms * 1.94384 // m/s to knots
     }
 
     /// Get course in degrees (0-360)
@@ -340,14 +348,21 @@ impl TrackingState {
     }
 
     /// Convert to ArpaTarget for API output
-    pub fn to_arpa_target(&self, status: TargetStatus, danger: TargetDanger, own_ship: Option<&OwnShip>) -> ArpaTarget {
-        let (lat, lon) = own_ship.map(|os| {
-            // Convert offset to lat/lon using simple approximation
-            // This is good enough for short ranges (< 50km)
-            let lat_offset = self.y / 111_320.0;  // meters to degrees latitude
-            let lon_offset = self.x / (111_320.0 * os.latitude.to_radians().cos());
-            (os.latitude + lat_offset, os.longitude + lon_offset)
-        }).unzip();
+    pub fn to_arpa_target(
+        &self,
+        status: TargetStatus,
+        danger: TargetDanger,
+        own_ship: Option<&OwnShip>,
+    ) -> ArpaTarget {
+        let (lat, lon) = own_ship
+            .map(|os| {
+                // Convert offset to lat/lon using simple approximation
+                // This is good enough for short ranges (< 50km)
+                let lat_offset = self.y / 111_320.0; // meters to degrees latitude
+                let lon_offset = self.x / (111_320.0 * os.latitude.to_radians().cos());
+                (os.latitude + lat_offset, os.longitude + lon_offset)
+            })
+            .unzip();
 
         ArpaTarget {
             id: self.id,

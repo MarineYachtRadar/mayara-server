@@ -194,7 +194,11 @@ impl IoProvider for TokioIoProvider {
         Ok(())
     }
 
-    fn udp_set_broadcast(&mut self, socket: &UdpSocketHandle, enabled: bool) -> Result<(), IoError> {
+    fn udp_set_broadcast(
+        &mut self,
+        socket: &UdpSocketHandle,
+        enabled: bool,
+    ) -> Result<(), IoError> {
         let state = self
             .udp_sockets
             .get(&socket.0)
@@ -217,15 +221,18 @@ impl IoProvider for TokioIoProvider {
             .get(&socket.0)
             .ok_or_else(|| IoError::new(-1, "Invalid socket handle"))?;
 
-        let multicast_addr: Ipv4Addr = group
-            .parse()
-            .map_err(|e| IoError::new(-1, format!("Invalid multicast address '{}': {}", group, e)))?;
+        let multicast_addr: Ipv4Addr = group.parse().map_err(|e| {
+            IoError::new(-1, format!("Invalid multicast address '{}': {}", group, e))
+        })?;
 
         let interface_addr: Ipv4Addr = if interface.is_empty() {
             Ipv4Addr::UNSPECIFIED
         } else {
             interface.parse().map_err(|e| {
-                IoError::new(-1, format!("Invalid interface address '{}': {}", interface, e))
+                IoError::new(
+                    -1,
+                    format!("Invalid interface address '{}': {}", interface, e),
+                )
             })?
         };
 
@@ -321,23 +328,26 @@ impl IoProvider for TokioIoProvider {
         self.udp_sockets.remove(&socket.0);
     }
 
-    fn udp_bind_interface(&mut self, socket: &UdpSocketHandle, interface: &str) -> Result<(), IoError> {
+    fn udp_bind_interface(
+        &mut self,
+        socket: &UdpSocketHandle,
+        interface: &str,
+    ) -> Result<(), IoError> {
         let state = self
             .udp_sockets
             .get_mut(&socket.0)
             .ok_or_else(|| IoError::new(-1, "Invalid socket handle"))?;
 
         // Get current port from the socket
-        let current_port = state
-            .socket
-            .local_addr()
-            .map(|a| a.port())
-            .unwrap_or(0);
+        let current_port = state.socket.local_addr().map(|a| a.port()).unwrap_or(0);
 
         // Parse the interface IP address
-        let interface_ip: Ipv4Addr = interface
-            .parse()
-            .map_err(|e| IoError::new(-1, format!("Invalid interface address '{}': {}", interface, e)))?;
+        let interface_ip: Ipv4Addr = interface.parse().map_err(|e| {
+            IoError::new(
+                -1,
+                format!("Invalid interface address '{}': {}", interface, e),
+            )
+        })?;
 
         // Recreate the socket bound to the specific interface
         let new_socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))
@@ -392,13 +402,20 @@ impl IoProvider for TokioIoProvider {
                     if ret == 0 {
                         log::debug!("Bound socket to device {}", iface_name);
                     } else {
-                        log::debug!("SO_BINDTODEVICE failed (may need CAP_NET_RAW): {}", std::io::Error::last_os_error());
+                        log::debug!(
+                            "SO_BINDTODEVICE failed (may need CAP_NET_RAW): {}",
+                            std::io::Error::last_os_error()
+                        );
                     }
                 }
             }
         }
 
-        log::debug!("UDP socket configured for interface {} port {}", interface_ip, current_port);
+        log::debug!(
+            "UDP socket configured for interface {} port {}",
+            interface_ip,
+            current_port
+        );
 
         let std_socket: std::net::UdpSocket = new_socket.into();
         let tokio_socket = UdpSocket::from_std(std_socket)
@@ -544,7 +561,10 @@ impl IoProvider for TokioIoProvider {
             Some(len)
         } else {
             if !state.line_buffer.is_empty() {
-                log::debug!("tcp_recv_line: buffer has {} bytes but no newline yet", state.line_buffer.len());
+                log::debug!(
+                    "tcp_recv_line: buffer has {} bytes but no newline yet",
+                    state.line_buffer.len()
+                );
             }
             None
         }

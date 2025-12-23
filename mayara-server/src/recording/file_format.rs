@@ -139,22 +139,18 @@ impl MrrHeader {
             max_spoke_len: u32::from_le_bytes([buf[16], buf[17], buf[18], buf[19]]),
             pixel_values: u32::from_le_bytes([buf[20], buf[21], buf[22], buf[23]]),
             start_time_ms: u64::from_le_bytes([
-                buf[24], buf[25], buf[26], buf[27],
-                buf[28], buf[29], buf[30], buf[31],
+                buf[24], buf[25], buf[26], buf[27], buf[28], buf[29], buf[30], buf[31],
             ]),
             capabilities_offset: u64::from_le_bytes([
-                buf[32], buf[33], buf[34], buf[35],
-                buf[36], buf[37], buf[38], buf[39],
+                buf[32], buf[33], buf[34], buf[35], buf[36], buf[37], buf[38], buf[39],
             ]),
             capabilities_len: u32::from_le_bytes([buf[40], buf[41], buf[42], buf[43]]),
             initial_state_offset: u64::from_le_bytes([
-                buf[44], buf[45], buf[46], buf[47],
-                buf[48], buf[49], buf[50], buf[51],
+                buf[44], buf[45], buf[46], buf[47], buf[48], buf[49], buf[50], buf[51],
             ]),
             initial_state_len: u32::from_le_bytes([buf[52], buf[53], buf[54], buf[55]]),
             frames_offset: u64::from_le_bytes([
-                buf[56], buf[57], buf[58], buf[59],
-                buf[60], buf[61], buf[62], buf[63],
+                buf[56], buf[57], buf[58], buf[59], buf[60], buf[61], buf[62], buf[63],
             ]),
         })
     }
@@ -208,14 +204,12 @@ impl MrrFooter {
 
         Ok(Self {
             index_offset: u64::from_le_bytes([
-                buf[4], buf[5], buf[6], buf[7],
-                buf[8], buf[9], buf[10], buf[11],
+                buf[4], buf[5], buf[6], buf[7], buf[8], buf[9], buf[10], buf[11],
             ]),
             index_count: u32::from_le_bytes([buf[12], buf[13], buf[14], buf[15]]),
             frame_count: u32::from_le_bytes([buf[16], buf[17], buf[18], buf[19]]),
             duration_ms: u64::from_le_bytes([
-                buf[20], buf[21], buf[22], buf[23],
-                buf[24], buf[25], buf[26], buf[27],
+                buf[20], buf[21], buf[22], buf[23], buf[24], buf[25], buf[26], buf[27],
             ]),
         })
     }
@@ -244,12 +238,10 @@ impl MrrIndexEntry {
 
         Ok(Self {
             timestamp_ms: u64::from_le_bytes([
-                buf[0], buf[1], buf[2], buf[3],
-                buf[4], buf[5], buf[6], buf[7],
+                buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7],
             ]),
             file_offset: u64::from_le_bytes([
-                buf[8], buf[9], buf[10], buf[11],
-                buf[12], buf[13], buf[14], buf[15],
+                buf[8], buf[9], buf[10], buf[11], buf[12], buf[13], buf[14], buf[15],
             ]),
         })
     }
@@ -560,7 +552,8 @@ impl<R: Read + Seek> MrrReader<R> {
     /// Seek to a specific timestamp (uses index for efficiency)
     pub fn seek_to_timestamp(&mut self, target_ms: u64) -> io::Result<()> {
         // Read index
-        self.reader.seek(SeekFrom::Start(self.footer.index_offset))?;
+        self.reader
+            .seek(SeekFrom::Start(self.footer.index_offset))?;
 
         let mut best_entry: Option<MrrIndexEntry> = None;
         for _ in 0..self.footer.index_count {
@@ -602,7 +595,8 @@ impl<R: Read + Seek> MrrReader<R> {
 
     /// Reset to the beginning
     pub fn rewind(&mut self) -> io::Result<()> {
-        self.reader.seek(SeekFrom::Start(self.header.frames_offset))?;
+        self.reader
+            .seek(SeekFrom::Start(self.header.frames_offset))?;
         self.current_frame = 0;
         Ok(())
     }
@@ -682,11 +676,7 @@ mod tests {
 
     #[test]
     fn test_frame_with_state_roundtrip() {
-        let frame = MrrFrame::with_state(
-            2000,
-            vec![1, 2, 3],
-            vec![b'{', b'}'],
-        );
+        let frame = MrrFrame::with_state(2000, vec![1, 2, 3], vec![b'{', b'}']);
 
         let mut buf = Vec::new();
         frame.write(&mut buf).unwrap();
@@ -708,13 +698,14 @@ mod tests {
         let buf = Cursor::new(Vec::new());
         let mut writer = MrrWriter::new(
             buf,
-            1, // brand
+            1,    // brand
             2048, // spokes
             1024, // spoke len
-            64, // pixel values
+            64,   // pixel values
             capabilities,
             initial_state,
-        ).unwrap();
+        )
+        .unwrap();
 
         // Write some frames
         for i in 0..10 {
@@ -731,15 +722,8 @@ mod tests {
 
         // Actually finish
         let buf = Cursor::new(Vec::new());
-        let mut writer = MrrWriter::new(
-            buf,
-            1,
-            2048,
-            1024,
-            64,
-            capabilities,
-            initial_state,
-        ).unwrap();
+        let mut writer =
+            MrrWriter::new(buf, 1, 2048, 1024, 64, capabilities, initial_state).unwrap();
 
         for i in 0..10 {
             let frame = MrrFrame::new(i * 100, vec![i as u8; 10]);

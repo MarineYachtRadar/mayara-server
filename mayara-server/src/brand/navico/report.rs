@@ -28,9 +28,8 @@ use crate::radar::Status;
 
 // Use mayara-core for report parsing and packet types (pure, WASM-compatible)
 use mayara_core::protocol::navico::{
-    parse_report_01, parse_report_02, parse_report_03, parse_report_04,
-    parse_report_06_68, parse_report_06_74, parse_report_08,
-    HaloHeadingPacket, HaloNavigationPacket, HaloSpeedPacket,
+    parse_report_01, parse_report_02, parse_report_03, parse_report_04, parse_report_06_68,
+    parse_report_06_74, parse_report_08, HaloHeadingPacket, HaloNavigationPacket, HaloSpeedPacket,
     INFO_ADDR, INFO_PORT, SPEED_ADDR_A, SPEED_PORT_A,
 };
 
@@ -151,7 +150,10 @@ impl NavicoReportReceiver {
                 DebugIoProvider::new(inner, hub, key.clone(), "navico".to_string())
             } else {
                 // Fallback if debug_hub not initialized (shouldn't happen)
-                log::warn!("{}: DebugHub not available, using plain TokioIoProvider", key);
+                log::warn!(
+                    "{}: DebugHub not available, using plain TokioIoProvider",
+                    key
+                );
                 DebugIoProvider::new(
                     inner,
                     std::sync::Arc::new(crate::debug::DebugHub::new()),
@@ -384,7 +386,12 @@ impl NavicoReportReceiver {
         let cv = control_update.control_value;
         let reply_tx = control_update.reply_tx;
 
-        log::info!("{}: process_control_update id={} value={}", self.key, cv.id, cv.value);
+        log::info!(
+            "{}: process_control_update id={} value={}",
+            self.key,
+            cv.id,
+            cv.value
+        );
 
         match self.send_control_to_radar(&cv) {
             Ok(()) => {
@@ -417,7 +424,12 @@ impl NavicoReportReceiver {
             } else {
                 cv.value.to_lowercase() == "transmit"
             };
-            log::info!("{}: set_power transmit={} (value='{}')", self.key, transmit, cv.value);
+            log::info!(
+                "{}: set_power transmit={} (value='{}')",
+                self.key,
+                transmit,
+                cv.value
+            );
             controller.set_power(&mut self.io, transmit);
             return Ok(());
         }
@@ -618,12 +630,7 @@ impl NavicoReportReceiver {
         self.set(control_type, value, Some(auto > 0))
     }
 
-    fn set_value_with_many_auto(
-        &mut self,
-        control_type: &str,
-        value: f32,
-        auto_value: f32,
-    ) {
+    fn set_value_with_many_auto(&mut self, control_type: &str, value: f32, auto_value: f32) {
         match self
             .info
             .controls
@@ -698,9 +705,7 @@ impl NavicoReportReceiver {
                 }
                 RangeDetectionResult::Complete(ranges, saved_range) => {
                     self.info.ranges = ranges.clone();
-                    self.info
-                        .controls
-                        .set_valid_ranges("range", &ranges)?;
+                    self.info.controls.set_valid_ranges("range", &ranges)?;
                     self.info.range_detection = None;
                     self.range_timeout = Instant::now() + FAR_FUTURE;
 
@@ -808,8 +813,13 @@ impl NavicoReportReceiver {
 
         // Debug: dump raw report bytes for protocol analysis
         if log::log_enabled!(log::Level::Trace) {
-            log::trace!("{}: Report {:02X} raw ({} bytes): {:02X?}",
-                self.key, report_identification, data.len(), data);
+            log::trace!(
+                "{}: Report {:02X} raw ({} bytes): {:02X?}",
+                self.key,
+                report_identification,
+                data.len(),
+                data
+            );
         }
 
         match report_identification {
@@ -910,10 +920,7 @@ impl NavicoReportReceiver {
                 .unwrap(); // Only crashes if control not supported which would be an internal bug
         }
         self.set_value("rain", rain as f32);
-        self.set_value(
-            "interferenceRejection",
-            interference_rejection as f32,
-        );
+        self.set_value("interferenceRejection", interference_rejection as f32);
         self.set_value("targetExpansion", target_expansion as f32);
         self.set_value("targetBoost", target_boost as f32);
 
@@ -1048,12 +1055,18 @@ impl NavicoReportReceiver {
             if i < report.sectors.len() {
                 let sector = &report.sectors[i];
                 let enabled = Some(sector.enabled);
-                self.info
-                    .controls
-                    .set_value_auto_enabled(&start, sector.start_angle as f32, None, enabled)?;
-                self.info
-                    .controls
-                    .set_value_auto_enabled(&end, sector.end_angle as f32, None, enabled)?;
+                self.info.controls.set_value_auto_enabled(
+                    &start,
+                    sector.start_angle as f32,
+                    None,
+                    enabled,
+                )?;
+                self.info.controls.set_value_auto_enabled(
+                    &end,
+                    sector.end_angle as f32,
+                    None,
+                    enabled,
+                )?;
             }
         }
 
@@ -1081,12 +1094,18 @@ impl NavicoReportReceiver {
             if i < report.sectors.len() {
                 let sector = &report.sectors[i];
                 let enabled = Some(sector.enabled);
-                self.info
-                    .controls
-                    .set_value_auto_enabled(&start, sector.start_angle as f32, None, enabled)?;
-                self.info
-                    .controls
-                    .set_value_auto_enabled(&end, sector.end_angle as f32, None, enabled)?;
+                self.info.controls.set_value_auto_enabled(
+                    &start,
+                    sector.start_angle as f32,
+                    None,
+                    enabled,
+                )?;
+                self.info.controls.set_value_auto_enabled(
+                    &end,
+                    sector.end_angle as f32,
+                    None,
+                    enabled,
+                )?;
             }
         }
 
@@ -1118,7 +1137,12 @@ impl NavicoReportReceiver {
 
         log::debug!(
             "{}: Report 07 stats - counters: [{}, {}, {}], per-radar: [A={}, B={}]",
-            self.key, counter1, counter2, counter3, per_radar_a, per_radar_b
+            self.key,
+            counter1,
+            counter2,
+            counter3,
+            per_radar_a,
+            per_radar_b
         );
 
         // For now, just log the statistics. Could expose via API if useful.
@@ -1135,7 +1159,11 @@ impl NavicoReportReceiver {
         let sea_state = report.sea_state as i32;
         let local_interference_rejection = report.local_interference_rejection as i32;
         let scan_speed = report.scan_speed as i32;
-        let sidelobe_suppression_auto = if report.sidelobe_suppression_auto { 1u8 } else { 0u8 };
+        let sidelobe_suppression_auto = if report.sidelobe_suppression_auto {
+            1u8
+        } else {
+            0u8
+        };
         let sidelobe_suppression = report.sidelobe_suppression as i32;
         let noise_reduction = report.noise_rejection as i32;
         let target_sep = report.target_separation as i32;
@@ -1143,15 +1171,13 @@ impl NavicoReportReceiver {
         let auto_sea_clutter = report.auto_sea_clutter;
 
         // Handle Doppler settings if present (extended report)
-        if let (Some(doppler_state), Some(doppler_speed)) = (report.doppler_state, report.doppler_speed) {
+        if let (Some(doppler_state), Some(doppler_speed)) =
+            (report.doppler_state, report.doppler_speed)
+        {
             let doppler_mode: Result<DopplerMode, _> = doppler_state.try_into();
             match doppler_mode {
                 Err(_) => {
-                    bail!(
-                        "{}: Unknown doppler state {}",
-                        self.key,
-                        doppler_state
-                    );
+                    bail!("{}: Unknown doppler state {}", self.key, doppler_state);
                 }
                 Ok(doppler_mode) => {
                     log::debug!(
@@ -1169,11 +1195,7 @@ impl NavicoReportReceiver {
 
         if self.model == Model::HALO {
             self.set_value("seaState", sea_state as f32);
-            self.set_value_with_many_auto(
-                "sea",
-                sea_clutter as f32,
-                auto_sea_clutter as f32,
-            );
+            self.set_value_with_many_auto("sea", sea_clutter as f32, auto_sea_clutter as f32);
         }
         self.set_value(
             "localInterferenceRejection",

@@ -90,7 +90,9 @@ fn main() {
 fn copy_gui_files(src: &PathBuf, dest: &PathBuf) {
     fs::create_dir_all(dest).unwrap();
 
-    let extensions = [".html", ".js", ".css", ".ico", ".svg", ".png", ".jpg", ".woff", ".woff2"];
+    let extensions = [
+        ".html", ".js", ".css", ".ico", ".svg", ".png", ".jpg", ".woff", ".woff2",
+    ];
     let directories = ["assets", "proto", "protobuf"];
 
     for entry in fs::read_dir(src).unwrap() {

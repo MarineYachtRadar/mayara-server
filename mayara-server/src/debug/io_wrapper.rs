@@ -54,12 +54,7 @@ struct UdpSocketInfo {
 
 impl<T: IoProvider> DebugIoProvider<T> {
     /// Create a new DebugIoProvider wrapping the given provider.
-    pub fn new(
-        inner: T,
-        hub: Arc<DebugHub>,
-        radar_id: String,
-        brand: String,
-    ) -> Self {
+    pub fn new(inner: T, hub: Arc<DebugHub>, radar_id: String, brand: String) -> Self {
         let decoder = super::decoders::create_decoder(&brand);
         Self {
             inner,
@@ -94,7 +89,12 @@ impl<T: IoProvider> DebugIoProvider<T> {
     ) {
         log::debug!(
             "[DebugIoProvider] {} {} {:?} {}:{} {} bytes",
-            self.radar_id, self.brand, direction, remote_addr, remote_port, data.len()
+            self.radar_id,
+            self.brand,
+            direction,
+            remote_addr,
+            remote_port,
+            data.len()
         );
         let decoded = self.decoder.decode(data, direction);
 
@@ -107,7 +107,14 @@ impl<T: IoProvider> DebugIoProvider<T> {
             .hub
             .event_builder(&self.radar_id, &self.brand)
             .source(EventSource::IoProvider)
-            .data(direction, protocol, remote_addr, remote_port, data, Some(decoded));
+            .data(
+                direction,
+                protocol,
+                remote_addr,
+                remote_port,
+                data,
+                Some(decoded),
+            );
         self.hub.submit(event);
     }
 
@@ -133,7 +140,9 @@ impl<T: IoProvider> DebugIoProvider<T> {
                 if old_value != serde_json::Value::Null {
                     log::debug!(
                         "[DebugIoProvider] State change: {} {} -> {}",
-                        control_id, old_value, new_value
+                        control_id,
+                        old_value,
+                        new_value
                     );
 
                     let event = self
@@ -198,7 +207,10 @@ impl<T: IoProvider> DebugIoProvider<T> {
         match cmd_num {
             // Gain (0x63)
             "63" => {
-                let auto = fields.get("auto").and_then(|v| v.as_bool()).unwrap_or(false);
+                let auto = fields
+                    .get("auto")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
                 let value = fields.get("value").and_then(|v| v.as_i64()).unwrap_or(0);
                 vec![
                     ("gain".to_string(), serde_json::json!(value)),
@@ -207,7 +219,10 @@ impl<T: IoProvider> DebugIoProvider<T> {
             }
             // Sea clutter (0x64)
             "64" => {
-                let auto = fields.get("auto").and_then(|v| v.as_bool()).unwrap_or(false);
+                let auto = fields
+                    .get("auto")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
                 let value = fields.get("value").and_then(|v| v.as_i64()).unwrap_or(0);
                 vec![
                     ("sea".to_string(), serde_json::json!(value)),
@@ -216,7 +231,10 @@ impl<T: IoProvider> DebugIoProvider<T> {
             }
             // Rain clutter (0x65)
             "65" => {
-                let auto = fields.get("auto").and_then(|v| v.as_bool()).unwrap_or(false);
+                let auto = fields
+                    .get("auto")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
                 let value = fields.get("value").and_then(|v| v.as_i64()).unwrap_or(0);
                 vec![
                     ("rain".to_string(), serde_json::json!(value)),
@@ -858,7 +876,11 @@ mod tests {
             .iter()
             .filter(|e| matches!(e.payload, DebugEventPayload::StateChange { .. }))
             .collect();
-        assert_eq!(state_events.len(), 0, "First observation should not emit event");
+        assert_eq!(
+            state_events.len(),
+            0,
+            "First observation should not emit event"
+        );
 
         // Simulate receiving gain response with changed value
         let decoded2 = DecodedMessage::Furuno {
@@ -953,7 +975,11 @@ mod tests {
             .iter()
             .filter(|e| matches!(e.payload, DebugEventPayload::StateChange { .. }))
             .collect();
-        assert_eq!(state_events.len(), 0, "First observation should not emit event");
+        assert_eq!(
+            state_events.len(),
+            0,
+            "First observation should not emit event"
+        );
 
         // Simulate receiving same command with different params
         let decoded2 = DecodedMessage::Furuno {
@@ -1037,15 +1063,13 @@ mod tests {
         assert!(state_events.len() >= 1, "Changed gain should emit event");
 
         // Find the gain change event
-        let gain_event = state_events
-            .iter()
-            .find(|e| {
-                if let DebugEventPayload::StateChange { control_id, .. } = &e.payload {
-                    control_id == "gain"
-                } else {
-                    false
-                }
-            });
+        let gain_event = state_events.iter().find(|e| {
+            if let DebugEventPayload::StateChange { control_id, .. } = &e.payload {
+                control_id == "gain"
+            } else {
+                false
+            }
+        });
         assert!(gain_event.is_some(), "Should have gain state change");
     }
 

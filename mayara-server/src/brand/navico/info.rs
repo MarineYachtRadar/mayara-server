@@ -7,14 +7,13 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 use tokio::net::UdpSocket;
 
 use mayara_core::protocol::navico::{
-    format_heading_packet, format_navigation_packet, format_speed_packet,
-    INFO_ADDR, INFO_PORT, SPEED_ADDR_A, SPEED_PORT_A, SPEED_ADDR_B, SPEED_PORT_B,
+    format_heading_packet, format_navigation_packet, format_speed_packet, INFO_ADDR, INFO_PORT,
+    SPEED_ADDR_A, SPEED_ADDR_B, SPEED_PORT_A, SPEED_PORT_B,
 };
 
 use crate::navdata::{get_cog, get_heading_true, get_sog};
 use crate::network::create_multicast_send;
 use crate::radar::{RadarError, RadarInfo};
-
 
 // Socket addresses constructed from core constants
 fn info_socket_addr() -> SocketAddrV4 {
@@ -69,12 +68,7 @@ impl Information {
         let addr = socket_address(index);
         match create_multicast_send(&addr, &self.nic_addr) {
             Ok(sock) => {
-                log::debug!(
-                    "{} {} via {}: sending info",
-                    self.key,
-                    addr,
-                    &self.nic_addr
-                );
+                log::debug!("{} {} via {}: sending info", self.key, addr, &self.nic_addr);
                 self.sock[index] = Some(sock);
                 Ok(())
             }

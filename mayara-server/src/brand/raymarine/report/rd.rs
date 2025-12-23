@@ -6,12 +6,12 @@ use mayara_core::protocol::raymarine::{
     decompress_rd_spoke, parse_rd_frame_header, parse_rd_status, RD_FRAME_HEADER_SIZE,
 };
 
-use mayara_core::controllers::{RaymarineController, RaymarineVariant};
 use crate::brand::raymarine::{hd_to_pixel_values, settings, RaymarineModel};
 use crate::protos::RadarMessage::RadarMessage;
 use crate::radar::range::{Range, Ranges};
 use crate::radar::spoke::to_protobuf_spoke;
 use crate::radar::Status;
+use mayara_core::controllers::{RaymarineController, RaymarineVariant};
 
 use super::{RaymarineReportReceiver, ReceiverState};
 
@@ -296,7 +296,11 @@ pub(super) fn process_status_report(receiver: &mut RaymarineReportReceiver, data
             receiver.info.ranges
         );
     }
-    let range_index = if report.is_hd { data[296] } else { report.range_id } as usize;
+    let range_index = if report.is_hd {
+        data[296]
+    } else {
+        report.range_id
+    } as usize;
     let range_meters = receiver.info.ranges.get_distance(range_index);
     receiver.range_meters = range_meters as u32;
     log::info!("{}: range_meters={}", receiver.key, range_meters);

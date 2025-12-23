@@ -207,7 +207,8 @@ impl RadarLocator {
 
     /// Check if startup is still in progress
     pub fn is_starting(&self) -> bool {
-        self.startup_phase != StartupPhase::Complete && self.startup_phase != StartupPhase::NotStarted
+        self.startup_phase != StartupPhase::Complete
+            && self.startup_phase != StartupPhase::NotStarted
     }
 
     /// Get the current status of all brand listeners
@@ -230,9 +231,15 @@ impl RadarLocator {
                     // This prevents broadcast packets from going out on wrong NIC in multi-NIC setups
                     if let Some(ref interface) = self.furuno_interface {
                         if let Err(e) = io.udp_bind_interface(&socket, interface) {
-                            io.debug(&format!("Warning: Failed to bind Furuno socket to interface {}: {}", interface, e));
+                            io.debug(&format!(
+                                "Warning: Failed to bind Furuno socket to interface {}: {}",
+                                interface, e
+                            ));
                         } else {
-                            io.info(&format!("Furuno socket bound to interface {} (prevents cross-NIC traffic)", interface));
+                            io.info(&format!(
+                                "Furuno socket bound to interface {} (prevents cross-NIC traffic)",
+                                interface
+                            ));
                         }
                     }
 
@@ -306,7 +313,12 @@ impl RadarLocator {
 
     /// Join a multicast group on all configured interfaces.
     /// Returns true if at least one join succeeded.
-    fn join_multicast_all<I: IoProvider>(&self, io: &mut I, socket: &UdpSocketHandle, group: &str) -> bool {
+    fn join_multicast_all<I: IoProvider>(
+        &self,
+        io: &mut I,
+        socket: &UdpSocketHandle,
+        group: &str,
+    ) -> bool {
         if self.multicast_interfaces.is_empty() {
             // No specific interfaces configured - use OS default
             io.udp_join_multicast(socket, group, "").is_ok()
@@ -316,11 +328,17 @@ impl RadarLocator {
             for interface in &self.multicast_interfaces {
                 match io.udp_join_multicast(socket, group, interface) {
                     Ok(()) => {
-                        io.debug(&format!("Joined multicast {} on interface {}", group, interface));
+                        io.debug(&format!(
+                            "Joined multicast {} on interface {}",
+                            group, interface
+                        ));
                         any_success = true;
                     }
                     Err(e) => {
-                        io.debug(&format!("Failed to join multicast {} on {}: {}", group, interface, e));
+                        io.debug(&format!(
+                            "Failed to join multicast {} on {}: {}",
+                            group, interface, e
+                        ));
                     }
                 }
             }
@@ -572,7 +590,10 @@ impl RadarLocator {
                 match navico::parse_beacon_response(data, &addr) {
                     Ok(discovered) => {
                         for d in &discovered {
-                            io.debug(&format!("Navico BR24 beacon from {}: {:?} {:?}", addr, d.model, d.suffix));
+                            io.debug(&format!(
+                                "Navico BR24 beacon from {}: {:?} {:?}",
+                                addr, d.model, d.suffix
+                            ));
                         }
                         discoveries.extend(discovered);
                     }
@@ -593,7 +614,10 @@ impl RadarLocator {
                 match navico::parse_beacon_response(data, &addr) {
                     Ok(discovered) => {
                         for d in &discovered {
-                            io.debug(&format!("Navico Gen3 beacon from {}: {:?} {:?}", addr, d.model, d.suffix));
+                            io.debug(&format!(
+                                "Navico Gen3 beacon from {}: {:?} {:?}",
+                                addr, d.model, d.suffix
+                            ));
                         }
                         discoveries.extend(discovered);
                     }
@@ -613,7 +637,10 @@ impl RadarLocator {
                 }
                 match raymarine::parse_beacon_response(data, &addr) {
                     Ok(discovery) => {
-                        io.debug(&format!("Raymarine beacon from {}: {:?}", addr, discovery.model));
+                        io.debug(&format!(
+                            "Raymarine beacon from {}: {:?}",
+                            addr, discovery.model
+                        ));
                         discoveries.push(discovery);
                     }
                     Err(e) => {
@@ -645,7 +672,9 @@ impl RadarLocator {
         // Apply model reports to existing radars (after discoveries are added)
         // This ensures the radar exists before we try to update its model info
         for (addr, model, serial) in model_reports {
-            if let Some(updated) = self.update_radar_model_info(io, &addr, model.as_deref(), serial.as_deref()) {
+            if let Some(updated) =
+                self.update_radar_model_info(io, &addr, model.as_deref(), serial.as_deref())
+            {
                 events.push(LocatorEvent::RadarUpdated(updated));
             }
         }
@@ -667,7 +696,10 @@ impl RadarLocator {
                 if furuno::is_beacon_response(data) {
                     match furuno::parse_beacon_response(data, &addr) {
                         Ok(discovery) => {
-                            io.debug(&format!("Furuno beacon from {}: {:?}", addr, discovery.model));
+                            io.debug(&format!(
+                                "Furuno beacon from {}: {:?}",
+                                addr, discovery.model
+                            ));
                             discoveries.push(discovery);
                         }
                         Err(e) => {
@@ -688,12 +720,18 @@ impl RadarLocator {
                             }
                         }
                         Err(e) => {
-                            io.debug(&format!("Furuno UDP model report parse error from {}: {}", addr, e));
+                            io.debug(&format!(
+                                "Furuno UDP model report parse error from {}: {}",
+                                addr, e
+                            ));
                         }
                     }
                 } else {
                     // Log unexpected packet sizes to help debug
-                    io.debug(&format!("Furuno UDP packet from {}: {} bytes (not beacon or model)", addr, len));
+                    io.debug(&format!(
+                        "Furuno UDP packet from {}: {} bytes (not beacon or model)",
+                        addr, len
+                    ));
                 }
             }
         }
@@ -711,13 +749,20 @@ impl RadarLocator {
         let source_ip = source_addr.split(':').next().unwrap_or(source_addr);
 
         for (_id, radar) in self.radars.iter_mut() {
-            let radar_ip = radar.discovery.address.split(':').next().unwrap_or(&radar.discovery.address);
+            let radar_ip = radar
+                .discovery
+                .address
+                .split(':')
+                .next()
+                .unwrap_or(&radar.discovery.address);
 
             if radar_ip == source_ip {
                 let mut changed = false;
 
                 if let Some(m) = model {
-                    if radar.discovery.model.is_none() || radar.discovery.model.as_deref() != Some(m) {
+                    if radar.discovery.model.is_none()
+                        || radar.discovery.model.as_deref() != Some(m)
+                    {
                         io.info(&format!(
                             "Updating radar {} model: {:?} -> {}",
                             radar.discovery.name, radar.discovery.model, m
@@ -727,7 +772,9 @@ impl RadarLocator {
                     }
                 }
                 if let Some(s) = serial {
-                    if radar.discovery.serial_number.is_none() || radar.discovery.serial_number.as_deref() != Some(s) {
+                    if radar.discovery.serial_number.is_none()
+                        || radar.discovery.serial_number.as_deref() != Some(s)
+                    {
                         io.debug(&format!(
                             "Updating radar {} serial: {:?} -> {}",
                             radar.discovery.name, radar.discovery.serial_number, s
@@ -751,7 +798,12 @@ impl RadarLocator {
         None
     }
 
-    fn add_radar<I: IoProvider>(&mut self, io: &I, discovery: &RadarDiscovery, current_time_ms: u64) -> bool {
+    fn add_radar<I: IoProvider>(
+        &mut self,
+        io: &I,
+        discovery: &RadarDiscovery,
+        current_time_ms: u64,
+    ) -> bool {
         let id = self.make_radar_id(discovery);
 
         if self.radars.contains_key(&id) {

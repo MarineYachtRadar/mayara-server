@@ -8,7 +8,10 @@ use super::contour::{Contour, ContourError, MAX_CONTOUR_LENGTH};
 use super::doppler::DopplerState;
 use super::history::HistoryBuffer;
 use super::kalman::KalmanFilter;
-use super::polar::{LocalPosition, Polar, PolarConverter, METERS_PER_DEGREE_LATITUDE, MS_TO_KN, meters_per_degree_longitude};
+use super::polar::{
+    meters_per_degree_longitude, LocalPosition, Polar, PolarConverter, METERS_PER_DEGREE_LATITUDE,
+    MS_TO_KN,
+};
 
 /// Maximum number of sweeps a target can be missed before being marked lost
 pub const MAX_LOST_COUNT: i32 = 12;
@@ -87,8 +90,24 @@ pub struct ExtendedPosition {
 }
 
 impl ExtendedPosition {
-    pub fn new(lat: f64, lon: f64, dlat_dt: f64, dlon_dt: f64, time: u64, speed_kn: f64, sd_speed_kn: f64) -> Self {
-        Self { lat, lon, dlat_dt, dlon_dt, time, speed_kn, sd_speed_kn }
+    pub fn new(
+        lat: f64,
+        lon: f64,
+        dlat_dt: f64,
+        dlon_dt: f64,
+        time: u64,
+        speed_kn: f64,
+        sd_speed_kn: f64,
+    ) -> Self {
+        Self {
+            lat,
+            lon,
+            dlat_dt,
+            dlon_dt,
+            time,
+            speed_kn,
+            sd_speed_kn,
+        }
     }
 
     pub fn empty() -> Self {
@@ -219,7 +238,11 @@ impl TargetState {
         for point in &self.contour.points {
             for radius in 0..spoke_len {
                 let angle_idx = history.mod_spokes(point.angle);
-                if let Some(pixel) = history.spokes.get(angle_idx).and_then(|s| s.sweep.get(radius)) {
+                if let Some(pixel) = history
+                    .spokes
+                    .get(angle_idx)
+                    .and_then(|s| s.sweep.get(radius))
+                {
                     let is_target = pixel.contains(HistoryPixel::TARGET);
                     if !is_target {
                         break;
@@ -245,11 +268,9 @@ impl TargetState {
             return;
         }
 
-        let new_state = self.doppler.transition(
-            self.total_pix,
-            self.approaching_pix,
-            self.receding_pix,
-        );
+        let new_state =
+            self.doppler
+                .transition(self.total_pix, self.approaching_pix, self.receding_pix);
 
         if new_state != self.doppler {
             self.doppler = new_state;
@@ -318,7 +339,8 @@ pub fn refresh_target(
 
     // Check if enough time has passed for refresh
     let scan_margin = converter.scan_margin();
-    let angle_time = history.get_time_at_angle(converter.mod_spokes(pol.angle + scan_margin) as i32);
+    let angle_time =
+        history.get_time_at_angle(converter.mod_spokes(pol.angle + scan_margin) as i32);
 
     let rotation_period = if config.rotation_period_ms > 0 {
         config.rotation_period_ms
@@ -337,11 +359,12 @@ pub fn refresh_target(
     // PREDICTION CYCLE
 
     // Calculate time delta
-    let delta_t = if target.refresh_time >= prev_position.time && target.status != TargetStatus::Acquire0 {
-        (target.refresh_time - prev_position.time) as f64 / 1000.0
-    } else {
-        0.0
-    };
+    let delta_t =
+        if target.refresh_time >= prev_position.time && target.status != TargetStatus::Acquire0 {
+            (target.refresh_time - prev_position.time) as f64 / 1000.0
+        } else {
+            0.0
+        };
 
     // Bounds check
     if target.position.lat > 90.0 || target.position.lat < -90.0 {
@@ -455,7 +478,12 @@ pub fn refresh_target(
             if target.status == TargetStatus::Acquire2 || target.status == TargetStatus::Acquire3 {
                 target.kalman.update_covariance();
                 let mut measured = pos;
-                target.kalman.update(&mut measured, &mut x_local, &target.expected, config.pixels_per_meter);
+                target.kalman.update(
+                    &mut measured,
+                    &mut x_local,
+                    &target.expected,
+                    config.pixels_per_meter,
+                );
             }
 
             // Update timestamp
@@ -474,7 +502,9 @@ pub fn refresh_target(
             if target.status == TargetStatus::Acquire2 {
                 let dist_angle = pol.angle - initial_angle;
                 let dist_r = pol.r - initial_r;
-                let size_angle = history.mod_spokes(target.contour.max_angle - target.contour.min_angle).max(1);
+                let size_angle = history
+                    .mod_spokes(target.contour.max_angle - target.contour.min_angle)
+                    .max(1);
                 let size_r = (target.contour.max_r - target.contour.min_r).max(1);
                 let test = (dist_r as f64 / size_r as f64).abs()
                     + (dist_angle as f64 / size_angle as f64).abs();
@@ -488,7 +518,8 @@ pub fn refresh_target(
             if target.small_fast
                 && target.age_rotations >= 2
                 && target.age_rotations < FORCED_POSITION_STATUS
-                && (target.age_rotations < FORCED_POSITION_AGE_FAST || target.position.speed_kn > 10.0)
+                && (target.age_rotations < FORCED_POSITION_AGE_FAST
+                    || target.position.speed_kn > 10.0)
             {
                 let (delta_lat, delta_lon) = converter.polar_to_geo_offset(&pos, spoke_lat);
                 let new_lat = spoke_lat + delta_lat;
@@ -499,8 +530,11 @@ pub fn refresh_target(
                 let delta_t = pos.time.saturating_sub(prev_position.time);
 
                 if delta_t > 1000 {
-                    let d_lat_dt = (delta_lat_deg / delta_t as f64) * METERS_PER_DEGREE_LATITUDE * 1000.0;
-                    let d_lon_dt = (delta_lon_deg / delta_t as f64) * meters_per_degree_longitude(new_lat) * 1000.0;
+                    let d_lat_dt =
+                        (delta_lat_deg / delta_t as f64) * METERS_PER_DEGREE_LATITUDE * 1000.0;
+                    let d_lon_dt = (delta_lon_deg / delta_t as f64)
+                        * meters_per_degree_longitude(new_lat)
+                        * 1000.0;
 
                     let factor = 0.8_f64.powf((target.age_rotations - 1) as f64);
                     target.position.lat += factor * (new_lat - target.position.lat);
@@ -529,7 +563,9 @@ pub fn refresh_target(
                     if target.average_contour_length == 0 {
                         target.average_contour_length = target.contour.length;
                     } else {
-                        target.average_contour_length += ((target.contour.length - target.average_contour_length) as f64 * WEIGHT_FACTOR) as i32;
+                        target.average_contour_length +=
+                            ((target.contour.length - target.average_contour_length) as f64
+                                * WEIGHT_FACTOR) as i32;
                     }
                 }
 
@@ -548,14 +584,19 @@ pub fn refresh_target(
 }
 
 /// Handle the case when target is not found
-fn handle_target_not_found(target: &mut TargetState, _pol: Polar, pass: Pass) -> Result<(), ContourError> {
+fn handle_target_not_found(
+    target: &mut TargetState,
+    _pol: Polar,
+    pass: Pass,
+) -> Result<(), ContourError> {
     // Small-fast targets must be found quickly
     if target.small_fast && pass == Pass::Second && target.status == TargetStatus::Acquire2 {
         return Err(ContourError::Lost);
     }
 
     // Delete low-status targets immediately when not found
-    if ((target.status == TargetStatus::Acquire1 || target.status == TargetStatus::Acquire2) && pass == Pass::Third)
+    if ((target.status == TargetStatus::Acquire1 || target.status == TargetStatus::Acquire2)
+        && pass == Pass::Third)
         || target.status == TargetStatus::Acquire0
     {
         return Err(ContourError::Lost);

@@ -6,12 +6,12 @@ use mayara_core::protocol::raymarine::{
 };
 
 use crate::brand::raymarine::report::LookupDoppler;
-use mayara_core::controllers::{RaymarineController, RaymarineVariant};
 use crate::brand::raymarine::{hd_to_pixel_values, settings, RaymarineModel};
 use crate::protos::RadarMessage::RadarMessage;
 use crate::radar::range::{Range, Ranges};
 use crate::radar::spoke::to_protobuf_spoke;
 use crate::radar::{SpokeBearing, Status};
+use mayara_core::controllers::{RaymarineController, RaymarineVariant};
 
 use super::{RaymarineReportReceiver, ReceiverState};
 
@@ -33,7 +33,11 @@ pub(crate) fn process_frame(receiver: &mut RaymarineReportReceiver, data: &[u8])
     let header = match parse_quantum_frame_header(data) {
         Ok(h) => h,
         Err(e) => {
-            log::error!("{}: Failed to parse Quantum frame header: {}", receiver.key, e);
+            log::error!(
+                "{}: Failed to parse Quantum frame header: {}",
+                receiver.key,
+                e
+            );
             return;
         }
     };
@@ -179,7 +183,10 @@ pub(super) fn process_status_report(receiver: &mut RaymarineReportReceiver, data
         log::warn!("{}: Unknown mode {}", receiver.key, report.mode);
     }
     receiver.set_value("targetExpansion", report.target_expansion as f32);
-    receiver.set_value("interferenceRejection", report.interference_rejection as f32);
+    receiver.set_value(
+        "interferenceRejection",
+        report.interference_rejection as f32,
+    );
     receiver.set_value("bearingAlignment", report.bearing_offset as f32);
     receiver.set_value("mainBangSuppression", report.mbs_enabled as u8 as f32);
 }

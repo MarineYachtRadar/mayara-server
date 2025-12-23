@@ -138,7 +138,8 @@ impl DebugHub {
             match &event.payload {
                 DebugEventPayload::Data { direction, .. } => format!("data {:?}", direction),
                 DebugEventPayload::SocketOp { operation, .. } => format!("socket {:?}", operation),
-                DebugEventPayload::StateChange { control_id, .. } => format!("state {}", control_id),
+                DebugEventPayload::StateChange { control_id, .. } =>
+                    format!("state {}", control_id),
             },
             subscribers,
             result.is_ok()
@@ -226,7 +227,15 @@ impl DebugHub {
     /// Returns the last `count` events.
     pub fn get_recent_events(&self, count: usize) -> Vec<DebugEvent> {
         let events = self.events.read().unwrap();
-        events.iter().rev().take(count).cloned().collect::<Vec<_>>().into_iter().rev().collect()
+        events
+            .iter()
+            .rev()
+            .take(count)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect()
     }
 
     /// Get all events (up to buffer limit).
@@ -437,16 +446,14 @@ mod tests {
     fn test_event_submission() {
         let hub = DebugHub::new();
 
-        let event = hub
-            .event_builder("radar-1", "furuno")
-            .data(
-                IoDirection::Send,
-                ProtocolType::Tcp,
-                "172.31.1.4",
-                10050,
-                b"$S69,50\r\n",
-                None,
-            );
+        let event = hub.event_builder("radar-1", "furuno").data(
+            IoDirection::Send,
+            ProtocolType::Tcp,
+            "172.31.1.4",
+            10050,
+            b"$S69,50\r\n",
+            None,
+        );
 
         hub.submit(event);
 

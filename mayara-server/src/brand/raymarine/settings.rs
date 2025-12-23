@@ -41,8 +41,7 @@ pub fn new(session: Session, model: BaseModel) -> SharedControls {
         control_factory::rain_control_for_brand(Brand::Raymarine),
     );
 
-    let mut control =
-        Control::new_numeric("ftc", 0., 100.).wire_scale_factor(100., false);
+    let mut control = Control::new_numeric("ftc", 0., 100.).wire_scale_factor(100., false);
     if model == BaseModel::RD {
         control = control.has_enabled();
     }
@@ -65,10 +64,7 @@ pub fn new(session: Session, model: BaseModel) -> SharedControls {
         BaseModel::Quantum => {
             controls.insert(
                 "mode".to_string(),
-                Control::new_list(
-                    "mode",
-                    &["Harbor", "Coastal", "Offshore", "Weather"],
-                ),
+                Control::new_list("mode", &["Harbor", "Coastal", "Offshore", "Weather"]),
             );
             controls.insert(
                 "targetExpansion".to_string(),

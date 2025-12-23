@@ -6,8 +6,7 @@ use crate::{
     control_factory,
     radar::{RadarInfo, NAUTICAL_MILE_F64},
     settings::{
-        AutomaticValue, Control, ControlDestination, SharedControls,
-        HAS_AUTO_NOT_ADJUSTABLE,
+        AutomaticValue, Control, ControlDestination, SharedControls, HAS_AUTO_NOT_ADJUSTABLE,
     },
     Session,
 };
@@ -131,28 +130,32 @@ pub fn update_when_model_known(controls: &SharedControls, model: Model, radar_in
                 &["Custom", "Harbor", "Offshore", "Buoy", "Weather", "Bird"],
             ),
         );
-        controls.insert(
-            "accentLight",
-            control_factory::accent_light_control(),
-        );
+        controls.insert("accentLight", control_factory::accent_light_control());
 
         // No-transmit zones use core definitions for consistent metadata
         for (zone_idx, start_id, end_id) in super::BLANKING_SETS {
             let zone_number = (zone_idx + 1) as u8;
             controls.insert(
                 start_id,
-                control_factory::no_transmit_angle_control_for_brand(start_id, zone_number, true, Brand::Navico),
+                control_factory::no_transmit_angle_control_for_brand(
+                    start_id,
+                    zone_number,
+                    true,
+                    Brand::Navico,
+                ),
             );
             controls.insert(
                 end_id,
-                control_factory::no_transmit_angle_control_for_brand(end_id, zone_number, false, Brand::Navico),
+                control_factory::no_transmit_angle_control_for_brand(
+                    end_id,
+                    zone_number,
+                    false,
+                    Brand::Navico,
+                ),
             );
         }
 
-        controls.insert(
-            "seaState",
-            control_factory::sea_state_control(),
-        );
+        controls.insert("seaState", control_factory::sea_state_control());
 
         controls.insert(
             "sea",

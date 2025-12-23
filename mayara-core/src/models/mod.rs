@@ -58,7 +58,10 @@ pub static UNKNOWN_MODEL: ModelInfo = ModelInfo {
     display_name: "Unknown Radar",
     max_range: 74080,
     min_range: 50,
-    range_table: &[50, 75, 100, 250, 500, 750, 1000, 1500, 2000, 3000, 4000, 6000, 8000, 12000, 16000, 24000, 36000, 48000, 64000, 74080],
+    range_table: &[
+        50, 75, 100, 250, 500, 750, 1000, 1500, 2000, 3000, 4000, 6000, 8000, 12000, 16000, 24000,
+        36000, 48000, 64000, 74080,
+    ],
     spokes_per_revolution: 2048,
     max_spoke_length: 512,
     has_doppler: false,
@@ -99,9 +102,9 @@ pub fn infer_model(brand: Brand, spokes: u16, max_spoke_len: u16) -> Option<&'st
     let models = get_models_for_brand(brand);
 
     // Find best match based on spokes and spoke length
-    models.iter().find(|m| {
-        m.spokes_per_revolution == spokes && m.max_spoke_length == max_spoke_len
-    })
+    models
+        .iter()
+        .find(|m| m.spokes_per_revolution == spokes && m.max_spoke_length == max_spoke_len)
 }
 
 /// Get all unique range values supported by any model of a given brand.

@@ -101,7 +101,7 @@ impl KalmanFilter {
         self.p = Matrix4x4::zeros();
         self.p[(0, 0)] = 20.0; // Position variance (meters²)
         self.p[(1, 1)] = 20.0;
-        self.p[(2, 2)] = 4.0;  // Velocity variance (m/s)²
+        self.p[(2, 2)] = 4.0; // Velocity variance (m/s)²
         self.p[(3, 3)] = 4.0;
 
         // Process noise covariance
@@ -111,7 +111,7 @@ impl KalmanFilter {
 
         // Measurement noise covariance
         self.r[(0, 0)] = 100.0; // Variance in angle measurement
-        self.r[(1, 1)] = 25.0;  // Variance in range measurement
+        self.r[(1, 1)] = 25.0; // Variance in range measurement
     }
 
     /// Predict step: project state and covariance forward in time

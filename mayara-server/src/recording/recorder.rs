@@ -144,7 +144,9 @@ pub async fn start_recording(
             f
         }
         None => {
-            let prefix = radar_info.controls.user_name()
+            let prefix = radar_info
+                .controls
+                .user_name()
                 .filter(|s| !s.is_empty())
                 .map(|s| s.replace(' ', "_"))
                 .unwrap_or_else(|| format!("radar-{}", radar_info.id));
@@ -249,11 +251,8 @@ async fn recording_task(
         }
 
         // Use a timeout to periodically check the stop flag
-        let result = tokio::time::timeout(
-            std::time::Duration::from_millis(100),
-            message_rx.recv(),
-        )
-        .await;
+        let result =
+            tokio::time::timeout(std::time::Duration::from_millis(100), message_rx.recv()).await;
 
         match result {
             Ok(Ok(data)) => {

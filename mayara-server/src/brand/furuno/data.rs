@@ -166,8 +166,11 @@ impl FurunoDataReceiver {
 
         log::debug!("Starting Furuno socket loop");
         loop {
-            log::trace!("Socket loop iteration, multicast={}, broadcast={}",
-                multicast_socket.is_some(), broadcast_socket.is_some());
+            log::trace!(
+                "Socket loop iteration, multicast={}, broadcast={}",
+                multicast_socket.is_some(),
+                broadcast_socket.is_some()
+            );
             tokio::select! {
                 _ = subsys.on_shutdown_requested() => {
                     return Err(RadarError::Shutdown);
@@ -478,10 +481,7 @@ impl FurunoDataReceiver {
         sweep: &[u8],
     ) -> Spoke {
         if self.session.read().unwrap().args.replay {
-            let _ = self
-                .info
-                .controls
-                .set("range", metadata.range as f32, None);
+            let _ = self.info.controls.set("range", metadata.range as f32, None);
         }
         // Convert the spoke data to bytes
 
@@ -578,11 +578,7 @@ impl FurunoDataReceiver {
             );
         } else if self.sweep_count == 0 {
             // Log once per rotation for debugging
-            log::debug!(
-                "wire_index {} -> {} meters",
-                wire_index,
-                range
-            );
+            log::debug!("wire_index {} -> {} meters", wire_index, range);
         }
         let range = range as u32;
         let metadata = FurunoSpokeMetadata {

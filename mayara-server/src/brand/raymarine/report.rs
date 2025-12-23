@@ -128,7 +128,10 @@ impl RaymarineReportReceiver {
                 DebugIoProvider::new(inner, hub, key.clone(), "raymarine".to_string())
             } else {
                 // Fallback if debug_hub not initialized (shouldn't happen)
-                log::warn!("{}: DebugHub not available, using plain TokioIoProvider", key);
+                log::warn!(
+                    "{}: DebugHub not available, using plain TokioIoProvider",
+                    key
+                );
                 DebugIoProvider::new(
                     inner,
                     std::sync::Arc::new(crate::debug::DebugHub::new()),
@@ -269,7 +272,11 @@ impl RaymarineReportReceiver {
     async fn send_control_to_radar(&mut self, cv: &ControlValue) -> Result<(), RadarError> {
         let controller = match &mut self.controller {
             Some(c) => c,
-            None => return Err(RadarError::CannotSetControlType("Controller not initialized".to_string())),
+            None => {
+                return Err(RadarError::CannotSetControlType(
+                    "Controller not initialized".to_string(),
+                ))
+            }
         };
 
         let value: f32 = cv
@@ -280,7 +287,14 @@ impl RaymarineReportReceiver {
         let enabled = cv.enabled.unwrap_or(false);
         let v = Self::scale_100_to_byte(value);
 
-        log::debug!("{}: set_control {} = {} auto={} enabled={}", self.key, cv.id, value, auto, enabled);
+        log::debug!(
+            "{}: set_control {} = {} auto={} enabled={}",
+            self.key,
+            cv.id,
+            value,
+            auto,
+            enabled
+        );
 
         match cv.id.as_str() {
             "power" => {
@@ -396,13 +410,8 @@ impl RaymarineReportReceiver {
             }
         }
     }
-    fn set<T>(
-        &mut self,
-        control_id: &str,
-        value: T,
-        auto: Option<bool>,
-        enabled: Option<bool>,
-    ) where
+    fn set<T>(&mut self, control_id: &str, value: T, auto: Option<bool>, enabled: Option<bool>)
+    where
         f32: From<T>,
     {
         match self

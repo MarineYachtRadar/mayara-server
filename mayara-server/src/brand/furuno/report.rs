@@ -75,7 +75,10 @@ impl FurunoReportReceiver {
                 DebugIoProvider::new(inner, hub, key.clone(), "furuno".to_string())
             } else {
                 // Fallback if debug_hub not initialized (shouldn't happen)
-                log::warn!("{}: DebugHub not available, using plain TokioIoProvider", key);
+                log::warn!(
+                    "{}: DebugHub not available, using plain TokioIoProvider",
+                    key
+                );
                 DebugIoProvider::new(
                     inner,
                     std::sync::Arc::new(crate::debug::DebugHub::new()),
@@ -101,7 +104,10 @@ impl FurunoReportReceiver {
 
     /// Main run loop - polls the core controller and handles commands
     pub async fn run(mut self, subsys: SubsystemHandle) -> Result<(), RadarError> {
-        log::info!("{}: report receiver starting (unified controller)", self.key);
+        log::info!(
+            "{}: report receiver starting (unified controller)",
+            self.key
+        );
 
         let mut command_rx = self.info.control_update_subscribe();
         // Check if model was already known from persistence (loaded before we start)
@@ -159,7 +165,9 @@ impl FurunoReportReceiver {
             ControllerEvent::ModelDetected { model, version } => {
                 log::info!(
                     "{}: Model detected: {} (firmware {})",
-                    self.key, model, version
+                    self.key,
+                    model,
+                    version
                 );
                 *model_known = true;
 
@@ -214,9 +222,12 @@ impl FurunoReportReceiver {
         }
 
         // Apply gain, sea, rain with auto mode
-        changed |= self.set_value_auto_changed("gain", state.gain.value as f32, state.gain.mode == "auto");
-        changed |= self.set_value_auto_changed("sea", state.sea.value as f32, state.sea.mode == "auto");
-        changed |= self.set_value_auto_changed("rain", state.rain.value as f32, state.rain.mode == "auto");
+        changed |=
+            self.set_value_auto_changed("gain", state.gain.value as f32, state.gain.mode == "auto");
+        changed |=
+            self.set_value_auto_changed("sea", state.sea.value as f32, state.sea.mode == "auto");
+        changed |=
+            self.set_value_auto_changed("rain", state.rain.value as f32, state.rain.mode == "auto");
 
         // Model-specific controls are only available after model detection
         // (update_when_model_known adds these controls)
@@ -225,14 +236,25 @@ impl FurunoReportReceiver {
         }
 
         // Apply signal processing controls
-        changed |= self.set_value_changed("noiseReduction", if state.noise_reduction { 1.0 } else { 0.0 });
-        changed |= self.set_value_changed("interferenceRejection", if state.interference_rejection { 1.0 } else { 0.0 });
+        changed |= self.set_value_changed(
+            "noiseReduction",
+            if state.noise_reduction { 1.0 } else { 0.0 },
+        );
+        changed |= self.set_value_changed(
+            "interferenceRejection",
+            if state.interference_rejection {
+                1.0
+            } else {
+                0.0
+            },
+        );
 
         // Apply extended controls
         changed |= self.set_value_changed("beamSharpening", state.beam_sharpening as f32);
         changed |= self.set_value_changed("birdMode", state.bird_mode as f32);
         changed |= self.set_value_changed("scanSpeed", state.scan_speed as f32);
-        changed |= self.set_value_changed("mainBangSuppression", state.main_bang_suppression as f32);
+        changed |=
+            self.set_value_changed("mainBangSuppression", state.main_bang_suppression as f32);
         changed |= self.set_value_changed("txChannel", state.tx_channel as f32);
 
         // Apply Doppler mode (mode is "target" or "rain" string)
@@ -243,7 +265,11 @@ impl FurunoReportReceiver {
             "rain" => 1.0,
             _ => 0.0,
         };
-        changed |= self.set_value_enabled_changed("dopplerMode", doppler_mode_value, state.doppler_mode.enabled);
+        changed |= self.set_value_enabled_changed(
+            "dopplerMode",
+            doppler_mode_value,
+            state.doppler_mode.enabled,
+        );
 
         // NOTE: No-transmit zones are NOT synced from radar state here.
         // They are user-controlled values that we persist and restore.
@@ -273,21 +299,42 @@ impl FurunoReportReceiver {
                         "bearingAlignment" | "antennaHeight" | "autoAcquire" => {
                             self.set_value(&cv.id, num_value);
                             self.radars.update(&self.info);
-                            log::debug!("{}: Updated write-only control {} = {}", self.key, cv.id, num_value);
+                            log::debug!(
+                                "{}: Updated write-only control {} = {}",
+                                self.key,
+                                cv.id,
+                                num_value
+                            );
                         }
                         // Compound controls with auto/manual mode
                         "gain" | "sea" | "rain" => {
                             let auto = cv.auto.unwrap_or(false);
                             self.set_value_auto(&cv.id, num_value, auto);
                             self.radars.update(&self.info);
-                            log::debug!("{}: Updated {} = {} auto={}", self.key, cv.id, num_value, auto);
+                            log::debug!(
+                                "{}: Updated {} = {} auto={}",
+                                self.key,
+                                cv.id,
+                                num_value,
+                                auto
+                            );
                         }
                         // Extended controls - update immediately for responsive UI
-                        "beamSharpening" | "birdMode" | "scanSpeed" | "mainBangSuppression"
-                        | "txChannel" | "interferenceRejection" | "noiseReduction" => {
+                        "beamSharpening"
+                        | "birdMode"
+                        | "scanSpeed"
+                        | "mainBangSuppression"
+                        | "txChannel"
+                        | "interferenceRejection"
+                        | "noiseReduction" => {
                             self.set_value(&cv.id, num_value);
                             self.radars.update(&self.info);
-                            log::debug!("{}: Updated extended control {} = {}", self.key, cv.id, num_value);
+                            log::debug!(
+                                "{}: Updated extended control {} = {}",
+                                self.key,
+                                cv.id,
+                                num_value
+                            );
                         }
                         _ => {}
                     }
@@ -296,14 +343,22 @@ impl FurunoReportReceiver {
                 Ok(())
             }
             Err(e) => {
-                self.info.controls.send_error_to_client(reply_tx, &cv, &e).await?;
+                self.info
+                    .controls
+                    .send_error_to_client(reply_tx, &cv, &e)
+                    .await?;
                 Ok(())
             }
         }
     }
 
     /// Send a control command to the radar via the unified controller
-    fn send_control_to_radar(&mut self, id: &str, value: &str, auto: bool) -> Result<(), RadarError> {
+    fn send_control_to_radar(
+        &mut self,
+        id: &str,
+        value: &str,
+        auto: bool,
+    ) -> Result<(), RadarError> {
         // Handle power separately (enum value)
         if id == "power" {
             let transmit = value == "transmit" || value == "Transmit";
@@ -324,15 +379,25 @@ impl FurunoReportReceiver {
             "sea" => self.controller.set_sea(&mut self.io, num_value, auto),
             "rain" => self.controller.set_rain(&mut self.io, num_value, auto),
             "beamSharpening" => self.controller.set_rezboost(&mut self.io, num_value),
-            "interferenceRejection" => self.controller.set_interference_rejection(&mut self.io, num_value != 0),
-            "noiseReduction" => self.controller.set_noise_reduction(&mut self.io, num_value != 0),
+            "interferenceRejection" => self
+                .controller
+                .set_interference_rejection(&mut self.io, num_value != 0),
+            "noiseReduction" => self
+                .controller
+                .set_noise_reduction(&mut self.io, num_value != 0),
             "scanSpeed" => self.controller.set_scan_speed(&mut self.io, num_value),
             "birdMode" => self.controller.set_bird_mode(&mut self.io, num_value),
-            "mainBangSuppression" => self.controller.set_main_bang_suppression(&mut self.io, num_value),
+            "mainBangSuppression" => self
+                .controller
+                .set_main_bang_suppression(&mut self.io, num_value),
             "txChannel" => self.controller.set_tx_channel(&mut self.io, num_value),
-            "bearingAlignment" => self.controller.set_bearing_alignment(&mut self.io, num_value as f64),
+            "bearingAlignment" => self
+                .controller
+                .set_bearing_alignment(&mut self.io, num_value as f64),
             "antennaHeight" => self.controller.set_antenna_height(&mut self.io, num_value),
-            "autoAcquire" => self.controller.set_auto_acquire(&mut self.io, num_value != 0),
+            "autoAcquire" => self
+                .controller
+                .set_auto_acquire(&mut self.io, num_value != 0),
             "dopplerMode" => {
                 // dopplerMode is a compound control: enabled (bool) + mode (enum)
                 // The GUI sends {"enabled": bool, "mode": "target"|"rain"}
@@ -340,7 +405,8 @@ impl FurunoReportReceiver {
                 // enabled is passed via the 'auto' parameter (repurposed for compound enabled state)
                 // mode: 0 = "target", 1 = "rain"
                 let mode = num_value;
-                self.controller.set_target_analyzer(&mut self.io, auto, mode);
+                self.controller
+                    .set_target_analyzer(&mut self.io, auto, mode);
             }
             // No-transmit zone controls - GUI sets individual angles, we send combined command
             // Value of -180 means zone is disabled
@@ -418,7 +484,11 @@ impl FurunoReportReceiver {
     }
 
     fn set_value_enabled_changed(&mut self, control_type: &str, value: f32, enabled: bool) -> bool {
-        match self.info.controls.set_value_auto_enabled(control_type, value, None, Some(enabled)) {
+        match self
+            .info
+            .controls
+            .set_value_auto_enabled(control_type, value, None, Some(enabled))
+        {
             Ok(Some(())) => true,
             _ => false,
         }
@@ -432,16 +502,34 @@ impl FurunoReportReceiver {
         // This is critical because when GUI sends 4 updates in sequence,
         // the control values are already updated but radar state lags behind.
         let get_control_value = |id: &str| -> i32 {
-            self.info.controls.get(id)
+            self.info
+                .controls
+                .get(id)
                 .and_then(|c| c.value.map(|v| v as i32))
                 .unwrap_or(-1)
         };
 
         // Get current control values, applying the new value for the changed control
-        let z1_start = if changed_id == "noTransmitStart1" { new_value } else { get_control_value("noTransmitStart1") };
-        let z1_end = if changed_id == "noTransmitEnd1" { new_value } else { get_control_value("noTransmitEnd1") };
-        let z2_start = if changed_id == "noTransmitStart2" { new_value } else { get_control_value("noTransmitStart2") };
-        let z2_end = if changed_id == "noTransmitEnd2" { new_value } else { get_control_value("noTransmitEnd2") };
+        let z1_start = if changed_id == "noTransmitStart1" {
+            new_value
+        } else {
+            get_control_value("noTransmitStart1")
+        };
+        let z1_end = if changed_id == "noTransmitEnd1" {
+            new_value
+        } else {
+            get_control_value("noTransmitEnd1")
+        };
+        let z2_start = if changed_id == "noTransmitStart2" {
+            new_value
+        } else {
+            get_control_value("noTransmitStart2")
+        };
+        let z2_end = if changed_id == "noTransmitEnd2" {
+            new_value
+        } else {
+            get_control_value("noTransmitEnd2")
+        };
 
         // -1 means disabled
         let z1_enabled = z1_start >= 0 && z1_end >= 0;
@@ -450,8 +538,12 @@ impl FurunoReportReceiver {
         log::info!(
             "{}: Setting blind sector: z1({}, {}-{}) z2({}, {}-{})",
             self.key,
-            z1_enabled, z1_start, z1_end,
-            z2_enabled, z2_start, z2_end
+            z1_enabled,
+            z1_start,
+            z1_end,
+            z2_enabled,
+            z2_start,
+            z2_end
         );
 
         self.controller.set_blind_sector(
@@ -473,13 +565,18 @@ impl FurunoReportReceiver {
     /// These are write-only controls that cannot be read from the radar hardware.
     fn restore_installation_settings(&mut self) {
         if let Some(settings) = load_installation_settings(&self.key) {
-            log::info!("{}: Restoring installation settings: {:?}", self.key, settings);
+            log::info!(
+                "{}: Restoring installation settings: {:?}",
+                self.key,
+                settings
+            );
 
             let mut restored_any = false;
 
             // Restore bearing alignment
             if let Some(degrees) = settings.bearing_alignment {
-                self.controller.set_bearing_alignment(&mut self.io, degrees as f64);
+                self.controller
+                    .set_bearing_alignment(&mut self.io, degrees as f64);
                 self.set_value("bearingAlignment", degrees as f32);
                 log::info!("{}: Restored bearingAlignment = {}°", self.key, degrees);
                 restored_any = true;
@@ -504,7 +601,10 @@ impl FurunoReportReceiver {
             // CRITICAL: Push updated values to SharedRadars so REST API reflects them
             if restored_any {
                 self.radars.update(&self.info);
-                log::info!("{}: Updated SharedRadars with restored installation settings", self.key);
+                log::info!(
+                    "{}: Updated SharedRadars with restored installation settings",
+                    self.key
+                );
             }
         }
     }

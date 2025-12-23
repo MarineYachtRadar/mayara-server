@@ -414,7 +414,9 @@ impl Session {
 
         // Use the unified core locator (default and only option now)
         if use_legacy_locator {
-            log::error!("--legacy-locator flag is no longer supported, legacy code has been commented out");
+            log::error!(
+                "--legacy-locator flag is no longer supported, legacy code has been commented out"
+            );
             log::warn!("Falling back to unified core locator");
         }
         log::info!("Using unified core locator");

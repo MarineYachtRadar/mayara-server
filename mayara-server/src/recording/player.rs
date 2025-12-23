@@ -152,7 +152,8 @@ impl ActivePlayback {
     /// Set playback speed (1.0 = normal, 0.5 = half, 2.0 = double)
     pub fn set_speed(&self, speed: f32) {
         let speed_fixed = (speed * 100.0) as u32;
-        self.speed.store(speed_fixed.clamp(10, 1000), Ordering::SeqCst);
+        self.speed
+            .store(speed_fixed.clamp(10, 1000), Ordering::SeqCst);
     }
 
     /// Get playback speed
@@ -413,7 +414,9 @@ async fn playback_task(
         // Check for seek target, or resume from current position
         {
             let mut target = seek_target.write().await;
-            let seek_ms = target.take().unwrap_or_else(|| position_ms.load(Ordering::Relaxed));
+            let seek_ms = target
+                .take()
+                .unwrap_or_else(|| position_ms.load(Ordering::Relaxed));
             if seek_ms > 0 {
                 if let Err(e) = mrr_reader.seek_to_timestamp(seek_ms) {
                     warn!("Seek to {}ms failed: {}", seek_ms, e);

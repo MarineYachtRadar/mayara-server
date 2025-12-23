@@ -121,12 +121,7 @@ fn decode_raymarine(
         let value = data[3];
         let (desc, fields) = decode_rd_command(lead, value);
 
-        return (
-            Some("rd".to_string()),
-            "command".to_string(),
-            desc,
-            fields,
-        );
+        return (Some("rd".to_string()), "command".to_string(), desc, fields);
     }
 
     // Spoke data (typically 100-200 bytes, but not status-sized)
@@ -157,10 +152,19 @@ fn decode_raymarine(
 fn decode_quantum_status(
     data: &[u8],
 ) -> (Option<String>, String, Option<String>, serde_json::Value) {
-    let power_state = data.get(quantum_status::STATUS_OFFSET).copied().unwrap_or(0);
-    let gain_auto = data.get(quantum_status::GAIN_AUTO_OFFSET).copied().unwrap_or(0);
+    let power_state = data
+        .get(quantum_status::STATUS_OFFSET)
+        .copied()
+        .unwrap_or(0);
+    let gain_auto = data
+        .get(quantum_status::GAIN_AUTO_OFFSET)
+        .copied()
+        .unwrap_or(0);
     let gain = data.get(quantum_status::GAIN_OFFSET).copied().unwrap_or(0);
-    let sea_auto = data.get(quantum_status::SEA_AUTO_OFFSET).copied().unwrap_or(0);
+    let sea_auto = data
+        .get(quantum_status::SEA_AUTO_OFFSET)
+        .copied()
+        .unwrap_or(0);
     let sea = data.get(quantum_status::SEA_OFFSET).copied().unwrap_or(0);
     let rain = data.get(quantum_status::RAIN_OFFSET).copied().unwrap_or(0);
 
@@ -198,9 +202,7 @@ fn decode_quantum_status(
 }
 
 /// Decode RD status packet (250-259 bytes)
-fn decode_rd_status(
-    data: &[u8],
-) -> (Option<String>, String, Option<String>, serde_json::Value) {
+fn decode_rd_status(data: &[u8]) -> (Option<String>, String, Option<String>, serde_json::Value) {
     let power_state = data.get(rd_status::STATUS_OFFSET).copied().unwrap_or(0);
     let gain = data.get(rd_status::GAIN_OFFSET).copied().unwrap_or(0);
     let sea = data.get(rd_status::SEA_OFFSET).copied().unwrap_or(0);
@@ -249,10 +251,7 @@ fn decode_quantum_command(
         0xc402 => Some(format!("Sea: {}", value)),
         0xc403 => Some(format!("Rain: {}", value)),
         0xc404 => Some(format!("Range index: {}", value)),
-        0xc405 => Some(format!(
-            "Power: {}",
-            if value == 1 { "ON" } else { "OFF" }
-        )),
+        0xc405 => Some(format!("Power: {}", if value == 1 { "ON" } else { "OFF" })),
         _ => None,
     };
 
@@ -356,7 +355,10 @@ mod tests {
                     Some("transmit")
                 );
                 assert_eq!(fields.get("gain").and_then(|v| v.as_u64()), Some(75));
-                assert_eq!(fields.get("gainAuto").and_then(|v| v.as_bool()), Some(false));
+                assert_eq!(
+                    fields.get("gainAuto").and_then(|v| v.as_bool()),
+                    Some(false)
+                );
                 assert_eq!(fields.get("sea").and_then(|v| v.as_u64()), Some(50));
                 assert_eq!(fields.get("seaAuto").and_then(|v| v.as_bool()), Some(true));
                 assert_eq!(fields.get("rain").and_then(|v| v.as_u64()), Some(25));

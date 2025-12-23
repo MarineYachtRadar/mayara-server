@@ -54,10 +54,26 @@ impl Add for Polar {
 
 /// The four cardinal directions for contour following
 pub const FOUR_DIRECTIONS: [Polar; 4] = [
-    Polar { angle: 0, r: 1, time: 0 },      // Up (radially outward)
-    Polar { angle: 1, r: 0, time: 0 },      // Right (clockwise)
-    Polar { angle: 0, r: -1, time: 0 },     // Down (radially inward)
-    Polar { angle: -1, r: 0, time: 0 },     // Left (counter-clockwise)
+    Polar {
+        angle: 0,
+        r: 1,
+        time: 0,
+    }, // Up (radially outward)
+    Polar {
+        angle: 1,
+        r: 0,
+        time: 0,
+    }, // Right (clockwise)
+    Polar {
+        angle: 0,
+        r: -1,
+        time: 0,
+    }, // Down (radially inward)
+    Polar {
+        angle: -1,
+        r: 0,
+        time: 0,
+    }, // Left (counter-clockwise)
 ];
 
 /// Local position in meters relative to own ship
@@ -133,7 +149,8 @@ impl PolarConverter {
     /// Normalize angle to [0, spokes_per_revolution)
     #[inline]
     pub fn mod_spokes(&self, angle: i32) -> i32 {
-        ((angle % self.spokes_per_revolution) + self.spokes_per_revolution) % self.spokes_per_revolution
+        ((angle % self.spokes_per_revolution) + self.spokes_per_revolution)
+            % self.spokes_per_revolution
     }
 
     /// Convert polar coordinates to local position (meters from own ship)

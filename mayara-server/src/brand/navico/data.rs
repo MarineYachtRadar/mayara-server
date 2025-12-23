@@ -331,8 +331,13 @@ impl NavicoDataReceiver {
 
         match result {
             Ok((range, angle, heading)) => {
-                log::trace!("Received {:04} spoke: range={} angle={} heading={:?}",
-                    scanline, range, angle, heading);
+                log::trace!(
+                    "Received {:04} spoke: range={} angle={} heading={:?}",
+                    scanline,
+                    range,
+                    angle,
+                    heading
+                );
                 Some((range, angle, heading))
             }
             Err(e) => {

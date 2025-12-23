@@ -35,7 +35,7 @@ impl TargetDetector {
     pub fn new(settings: ArpaSettings) -> Self {
         TargetDetector {
             settings,
-            range_scale: 1852.0,  // Default 1nm
+            range_scale: 1852.0, // Default 1nm
             recent_detections: Vec::new(),
             correlation_scans: 3,
         }
@@ -62,7 +62,12 @@ impl TargetDetector {
     /// # Returns
     ///
     /// Vector of detected target candidates in this spoke
-    pub fn detect_in_spoke(&mut self, spoke_data: &[u8], bearing: f64, _timestamp: u64) -> Vec<DetectedTarget> {
+    pub fn detect_in_spoke(
+        &mut self,
+        spoke_data: &[u8],
+        bearing: f64,
+        _timestamp: u64,
+    ) -> Vec<DetectedTarget> {
         if !self.settings.auto_acquisition {
             return Vec::new();
         }
@@ -139,7 +144,11 @@ impl TargetDetector {
     /// # Returns
     ///
     /// Correlated targets that appear consistently across multiple scans
-    pub fn correlate_revolution(&mut self, detections: Vec<DetectedTarget>, timestamp: u64) -> Vec<DetectedTarget> {
+    pub fn correlate_revolution(
+        &mut self,
+        detections: Vec<DetectedTarget>,
+        timestamp: u64,
+    ) -> Vec<DetectedTarget> {
         // Store this revolution's detections
         self.recent_detections.push((timestamp, detections));
 
@@ -178,12 +187,16 @@ impl TargetDetector {
 
     /// Check if a detection matches any in a list (within tolerance)
     fn has_matching_detection(target: &DetectedTarget, candidates: &[DetectedTarget]) -> bool {
-        const BEARING_TOLERANCE: f64 = 5.0;   // degrees
-        const DISTANCE_TOLERANCE: f64 = 0.1;  // 10% of distance
+        const BEARING_TOLERANCE: f64 = 5.0; // degrees
+        const DISTANCE_TOLERANCE: f64 = 0.1; // 10% of distance
 
         for candidate in candidates {
             let bearing_diff = (target.bearing - candidate.bearing).abs();
-            let bearing_diff = if bearing_diff > 180.0 { 360.0 - bearing_diff } else { bearing_diff };
+            let bearing_diff = if bearing_diff > 180.0 {
+                360.0 - bearing_diff
+            } else {
+                bearing_diff
+            };
 
             let distance_diff = (target.distance - candidate.distance).abs();
             let distance_tolerance = target.distance * DISTANCE_TOLERANCE;
@@ -218,7 +231,7 @@ mod tests {
     #[test]
     fn test_detect_single_target() {
         let mut detector = TargetDetector::new(test_settings());
-        detector.set_range_scale(1852.0);  // 1nm
+        detector.set_range_scale(1852.0); // 1nm
 
         // Create spoke with a target blob
         let mut spoke = vec![0u8; 512];
@@ -232,7 +245,7 @@ mod tests {
         assert_eq!(detections.len(), 1);
         let det = &detections[0];
         assert_eq!(det.bearing, 45.0);
-        assert!((det.distance - 926.0).abs() < 50.0);  // ~926m at 0.5nm
+        assert!((det.distance - 926.0).abs() < 50.0); // ~926m at 0.5nm
         assert!(det.intensity >= 200);
         assert!(det.size >= 3);
     }
@@ -264,7 +277,7 @@ mod tests {
         let mut spoke = vec![0u8; 512];
         // Weak return below threshold
         for i in 250..260 {
-            spoke[i] = 100;  // Below 128 threshold
+            spoke[i] = 100; // Below 128 threshold
         }
 
         let detections = detector.detect_in_spoke(&spoke, 0.0, 0);

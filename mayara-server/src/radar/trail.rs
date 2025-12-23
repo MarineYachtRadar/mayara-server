@@ -164,7 +164,10 @@ impl TrailBuffer {
                 return Err(ControlError::NoHeading("trails_motion".to_string(), "True"));
             }
             if crate::navdata::get_radar_position().is_none() {
-                return Err(ControlError::NoPosition("trails_motion".to_string(), "True"));
+                return Err(ControlError::NoPosition(
+                    "trails_motion".to_string(),
+                    "True",
+                ));
             }
         }
         self.motion_true = value;
@@ -276,7 +279,7 @@ impl TrailBuffer {
                     data[radius] = self.legend.history_start + index - 1;
                 }
             }
-            radius += 1;  // Must be outside the if block to avoid infinite loop
+            radius += 1; // Must be outside the if block to avoid infinite loop
         }
     }
 
@@ -348,8 +351,7 @@ impl TrailBuffer {
             self.position = position;
             // get (floating point) shift of the ship in radar pixels
             let fshift_lat = dif_lat * METERS_PER_DEGREE_LATITUDE * pixels_per_meter;
-            let fshift_lon =
-                dif_lon * meters_per_degree_longitude(position.lat) * pixels_per_meter;
+            let fshift_lon = dif_lon * meters_per_degree_longitude(position.lat) * pixels_per_meter;
 
             // Get the integer pixel shift, first add previous rounding error
             let shift = GeoPositionPixels {

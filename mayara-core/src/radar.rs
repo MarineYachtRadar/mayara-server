@@ -3,8 +3,8 @@
 //! These structures represent radar metadata and configuration,
 //! independent of any I/O or networking code.
 
-use serde::{Deserialize, Serialize};
 use crate::Brand;
+use serde::{Deserialize, Serialize};
 
 /// Basic radar information discovered from beacon response
 #[derive(Debug, Clone, Serialize, Deserialize)]

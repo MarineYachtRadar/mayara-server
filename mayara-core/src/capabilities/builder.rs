@@ -200,9 +200,7 @@ fn build_controls(model: &ModelInfo, has_serial_number: bool) -> Vec<ControlDefi
             {
                 controls.push(def);
             }
-        } else if *control_id == "interferenceRejection"
-            && model.brand == crate::Brand::Furuno
-        {
+        } else if *control_id == "interferenceRejection" && model.brand == crate::Brand::Furuno {
             // Furuno has simple on/off interference rejection
             controls.push(control_interference_rejection_furuno());
         } else if *control_id == "scanSpeed" && model.brand == crate::Brand::Furuno {
@@ -329,6 +327,8 @@ mod tests {
 
         assert_eq!(caps.supported_features.len(), 2);
         assert!(caps.supported_features.contains(&SupportedFeature::Arpa));
-        assert!(caps.supported_features.contains(&SupportedFeature::GuardZones));
+        assert!(caps
+            .supported_features
+            .contains(&SupportedFeature::GuardZones));
     }
 }

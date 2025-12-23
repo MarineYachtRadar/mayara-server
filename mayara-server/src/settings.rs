@@ -118,15 +118,13 @@ impl Controls {
 
             string_controls.insert(
                 "clearTrails".to_string(),
-                Control::new_button("clearTrails")
-                    .set_destination(ControlDestination::Data),
+                Control::new_button("clearTrails").set_destination(ControlDestination::Data),
             );
 
             if session.read().unwrap().args.targets == TargetMode::Arpa {
                 string_controls.insert(
                     "clearTargets".to_string(),
-                    Control::new_button("clearTargets")
-                        .set_destination(ControlDestination::Data),
+                    Control::new_button("clearTargets").set_destination(ControlDestination::Data),
                 );
             }
         }
@@ -372,7 +370,11 @@ impl SharedControls {
     /// Get all control IDs and their Control values
     pub fn get_all(&self) -> Vec<(String, Control)> {
         let locked = self.controls.read().unwrap();
-        locked.controls.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+        locked
+            .controls
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
     }
 
     /// Look up a control by its API name (case-insensitive, camelCase)
@@ -426,12 +428,7 @@ impl SharedControls {
         }
     }
 
-    pub fn set_wire_range(
-        &self,
-        id: &str,
-        min: f32,
-        max: f32,
-    ) -> Result<Option<()>, ControlError> {
+    pub fn set_wire_range(&self, id: &str, min: f32, max: f32) -> Result<Option<()>, ControlError> {
         let control = {
             let mut locked = self.controls.write().unwrap();
             if let Some(control) = locked.controls.get_mut(id) {
@@ -480,11 +477,7 @@ impl SharedControls {
         }
     }
 
-    pub fn set_auto_state(
-        &self,
-        id: &str,
-        auto: bool,
-    ) -> Result<(), ControlError> {
+    pub fn set_auto_state(&self, id: &str, auto: bool) -> Result<(), ControlError> {
         let mut locked = self.controls.write().unwrap();
         if let Some(control) = locked.controls.get_mut(id) {
             control.set_auto(auto);
@@ -530,11 +523,7 @@ impl SharedControls {
         }
     }
 
-    pub fn set_string(
-        &self,
-        id: &str,
-        value: String,
-    ) -> Result<Option<String>, ControlError> {
+    pub fn set_string(&self, id: &str, value: String) -> Result<Option<String>, ControlError> {
         let control = {
             let mut locked = self.controls.write().unwrap();
             if let Some(control) = locked.controls.get_mut(id) {
@@ -568,8 +557,7 @@ impl SharedControls {
     }
 
     pub fn user_name(&self) -> Option<String> {
-        self.get("userName")
-            .and_then(|c| c.description)
+        self.get("userName").and_then(|c| c.description)
     }
 
     pub fn set_model_name(&self, name: String) {
@@ -579,15 +567,10 @@ impl SharedControls {
     }
 
     pub fn model_name(&self) -> Option<String> {
-        self.get("modelName")
-            .and_then(|c| c.description)
+        self.get("modelName").and_then(|c| c.description)
     }
 
-    pub fn set_valid_values(
-        &self,
-        id: &str,
-        valid_values: Vec<i32>,
-    ) -> Result<(), ControlError> {
+    pub fn set_valid_values(&self, id: &str, valid_values: Vec<i32>) -> Result<(), ControlError> {
         let mut locked = self.controls.write().unwrap();
         locked
             .controls
@@ -599,11 +582,7 @@ impl SharedControls {
             })
     }
 
-    pub fn set_valid_ranges(
-        &self,
-        id: &str,
-        ranges: &Ranges,
-    ) -> Result<(), ControlError> {
+    pub fn set_valid_ranges(&self, id: &str, ranges: &Ranges) -> Result<(), ControlError> {
         let mut locked = self.controls.write().unwrap();
         locked
             .controls
@@ -860,12 +839,7 @@ impl Control {
         control
     }
 
-    pub fn new_auto(
-        id: &str,
-        min_value: f32,
-        max_value: f32,
-        automatic: AutomaticValue,
-    ) -> Self {
+    pub fn new_auto(id: &str, min_value: f32, max_value: f32, automatic: AutomaticValue) -> Self {
         let min_value = Some(min_value);
         let max_value = Some(max_value);
         Self::new(ControlDefinition {
@@ -1099,11 +1073,7 @@ impl Control {
             }
 
             if value < min_value {
-                return Err(ControlError::TooLow(
-                    self.item.id.clone(),
-                    value,
-                    min_value,
-                ));
+                return Err(ControlError::TooLow(self.item.id.clone(), value, min_value));
             }
             if value > max_value {
                 return Err(ControlError::TooHigh(
@@ -1331,10 +1301,7 @@ mod test {
         let controls = SharedControls::new(session, HashMap::new());
 
         assert!(controls.set("targetTrails", 0., None).is_ok());
-        assert_eq!(
-            controls.set("targetTrails", 6., None).unwrap(),
-            Some(())
-        );
+        assert_eq!(controls.set("targetTrails", 6., None).unwrap(), Some(()));
         assert!(controls.set("targetTrails", 7., None).is_err());
         assert!(controls.set("targetTrails", -1., None).is_err());
         assert!(controls.set("targetTrails", 0.3, None).is_ok());

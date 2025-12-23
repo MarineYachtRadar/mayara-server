@@ -144,7 +144,11 @@ impl LocalStorage {
                     warn!("Failed to flush applicationData file: {}", e);
                 }
 
-                info!("Stored applicationData: {:?} -> {}", key, file_path.display());
+                info!(
+                    "Stored applicationData: {:?} -> {}",
+                    key,
+                    file_path.display()
+                );
                 self.cache.insert(key.clone(), value);
                 Ok(())
             }
@@ -237,7 +241,11 @@ pub fn load_installation_settings(radar_id: &str) -> Option<InstallationSettings
     path.push("signalk-radar");
     path.push("1.0.0.json");
 
-    info!("Loading installation settings for {} from {}", radar_id, path.display());
+    info!(
+        "Loading installation settings for {} from {}",
+        radar_id,
+        path.display()
+    );
 
     if !path.exists() {
         info!("No installation settings file found at {}", path.display());
@@ -251,21 +259,36 @@ pub fn load_installation_settings(radar_id: &str) -> Option<InstallationSettings
                 Ok(data) => {
                     if let Some(radars) = data.radars {
                         if let Some(settings) = radars.get(radar_id) {
-                            info!("Loaded installation settings for {}: {:?}", radar_id, settings);
+                            info!(
+                                "Loaded installation settings for {}: {:?}",
+                                radar_id, settings
+                            );
                             return Some(settings.clone());
                         }
                     }
-                    debug!("No installation settings for radar {} in {}", radar_id, path.display());
+                    debug!(
+                        "No installation settings for radar {} in {}",
+                        radar_id,
+                        path.display()
+                    );
                     None
                 }
                 Err(e) => {
-                    warn!("Failed to parse installation settings {}: {}", path.display(), e);
+                    warn!(
+                        "Failed to parse installation settings {}: {}",
+                        path.display(),
+                        e
+                    );
                     None
                 }
             }
         }
         Err(e) => {
-            warn!("Failed to open installation settings {}: {}", path.display(), e);
+            warn!(
+                "Failed to open installation settings {}: {}",
+                path.display(),
+                e
+            );
             None
         }
     }
@@ -333,9 +356,15 @@ mod tests {
     fn test_list_keys() {
         let (mut storage, _temp) = create_test_storage();
 
-        storage.put(&AppDataKey::new("mayara", "1.0", "key1"), json!(1)).unwrap();
-        storage.put(&AppDataKey::new("mayara", "1.0", "key2"), json!(2)).unwrap();
-        storage.put(&AppDataKey::new("other", "1.0", "key3"), json!(3)).unwrap();
+        storage
+            .put(&AppDataKey::new("mayara", "1.0", "key1"), json!(1))
+            .unwrap();
+        storage
+            .put(&AppDataKey::new("mayara", "1.0", "key2"), json!(2))
+            .unwrap();
+        storage
+            .put(&AppDataKey::new("other", "1.0", "key3"), json!(3))
+            .unwrap();
 
         let keys = storage.list_keys("mayara", "1.0");
         assert_eq!(keys.len(), 2);

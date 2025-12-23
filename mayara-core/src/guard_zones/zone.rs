@@ -2,8 +2,8 @@
 //!
 //! Defines guard zone shapes and the zone processor.
 
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Guard zone shape
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,9 +62,7 @@ impl ZoneShape {
             ZoneShape::Ring {
                 inner_radius,
                 outer_radius,
-            } => {
-                distance >= *inner_radius && distance <= *outer_radius
-            }
+            } => distance >= *inner_radius && distance <= *outer_radius,
         }
     }
 }
@@ -265,7 +263,12 @@ impl GuardZoneProcessor {
     /// # Returns
     ///
     /// Vector of alert events for zones that detected intrusions
-    pub fn check_spoke(&mut self, spoke_data: &[u8], bearing: f64, timestamp: u64) -> Vec<ZoneAlert> {
+    pub fn check_spoke(
+        &mut self,
+        spoke_data: &[u8],
+        bearing: f64,
+        timestamp: u64,
+    ) -> Vec<ZoneAlert> {
         let mut alerts = Vec::new();
         let samples = spoke_data.len();
 
@@ -317,7 +320,8 @@ impl GuardZoneProcessor {
 
             // Convert distance to sample indices
             let inner_idx = ((inner / self.range_scale) * samples as f64) as usize;
-            let outer_idx = ((outer / self.range_scale) * samples as f64).min(samples as f64) as usize;
+            let outer_idx =
+                ((outer / self.range_scale) * samples as f64).min(samples as f64) as usize;
 
             // Find peak intensity in the zone range
             let mut peak_intensity: u8 = 0;
@@ -503,7 +507,7 @@ mod tests {
     #[test]
     fn test_zone_alert() {
         let mut processor = GuardZoneProcessor::new();
-        processor.set_range_scale(1852.0);  // 1nm
+        processor.set_range_scale(1852.0); // 1nm
 
         let zone = GuardZone::new_arc(1, 40.0, 50.0, 450.0, 950.0);
         processor.add_zone(zone);
@@ -572,11 +576,11 @@ mod tests {
         processor.set_range_scale(1852.0);
 
         let mut zone = GuardZone::new_ring(1, 400.0, 1000.0);
-        zone.sensitivity = 150;  // High threshold
+        zone.sensitivity = 150; // High threshold
         processor.add_zone(zone);
 
         let mut spoke = vec![0u8; 512];
-        spoke[200] = 100;  // Below threshold
+        spoke[200] = 100; // Below threshold
 
         let alerts = processor.check_spoke(&spoke, 45.0, 1000);
         assert!(alerts.is_empty());
@@ -593,9 +597,9 @@ mod tests {
 
         let mut spoke = vec![0u8; 512];
         // Target in zone 1
-        spoke[140] = 200;  // ~500m
-        // Target in zone 2
-        spoke[240] = 180;  // ~900m
+        spoke[140] = 200; // ~500m
+                          // Target in zone 2
+        spoke[240] = 180; // ~900m
 
         let alerts = processor.check_spoke(&spoke, 45.0, 1000);
 

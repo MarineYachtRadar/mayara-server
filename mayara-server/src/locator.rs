@@ -148,10 +148,7 @@ impl Locator {
     pub fn new(session: Session, radars: SharedRadars) -> Self {
         // deprecated_marked_for_delete: args was only used by legacy locator
         // let args = session.clone().args();
-        Locator {
-            session,
-            radars,
-        }
+        Locator { session, radars }
     }
 
     // =========================================================================
@@ -339,10 +336,7 @@ impl Locator {
     /// This is a simpler implementation that uses mayara-core's RadarLocator
     /// for beacon parsing and model detection. It replaces the brand-specific
     /// RadarLocatorState implementations with a unified discovery flow.
-    pub async fn run_with_core_locator(
-        self,
-        subsys: SubsystemHandle,
-    ) -> Result<(), RadarError> {
+    pub async fn run_with_core_locator(self, subsys: SubsystemHandle) -> Result<(), RadarError> {
         use crate::core_locator::{create_locator_subsystem, dispatch_discovery, LocatorMessage};
         use tokio_graceful_shutdown::SubsystemBuilder;
 

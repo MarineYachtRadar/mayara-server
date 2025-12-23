@@ -55,8 +55,8 @@ impl Default for DualRangeState {
     fn default() -> Self {
         Self {
             enabled: false,
-            primary_range: 1852,      // 1nm default
-            secondary_range: 926,     // 0.5nm default
+            primary_range: 1852,        // 1nm default
+            secondary_range: 926,       // 0.5nm default
             max_secondary_range: 22224, // 12nm default limit
         }
     }

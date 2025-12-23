@@ -295,7 +295,10 @@ impl RangeDetection {
             .map(|&r| Range::initial(r as i32))
             .collect();
 
-        log::info!("{key}: Trying all ranges between {min_range} and {max_range} for brand {:?}", brand);
+        log::info!(
+            "{key}: Trying all ranges between {min_range} and {max_range} for brand {:?}",
+            brand
+        );
         log::debug!("{key}: Ranges to try: {ranges_to_try:?}");
 
         RangeDetection {

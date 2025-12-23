@@ -32,7 +32,7 @@ pub struct CpaResult {
 /// CpaResult with CPA in meters and TCPA in seconds
 pub(crate) fn calculate_cpa_tcpa(target: &TrackingState, own_ship: &OwnShip) -> CpaResult {
     // Convert own ship velocity to Cartesian (m/s)
-    let own_speed_ms = own_ship.speed / 1.94384;  // knots to m/s
+    let own_speed_ms = own_ship.speed / 1.94384; // knots to m/s
     let own_course_rad = own_ship.course.to_radians();
     let own_vx = own_speed_ms * own_course_rad.sin();
     let own_vy = own_speed_ms * own_course_rad.cos();
@@ -111,14 +111,14 @@ mod tests {
         // Target directly ahead, coming toward us
         let mut target = TrackingState::new(1, 0.0, 1000.0, 0, AcquisitionMethod::Auto);
         target.vx = 0.0;
-        target.vy = -5.0;  // 5 m/s toward us
+        target.vy = -5.0; // 5 m/s toward us
 
         let own_ship = OwnShip {
             latitude: 0.0,
             longitude: 0.0,
             heading: 0.0,
             course: 0.0,
-            speed: 10.0 * 1.94384,  // 10 m/s = ~19.4 knots
+            speed: 10.0 * 1.94384, // 10 m/s = ~19.4 knots
         };
 
         let result = calculate_cpa_tcpa(&target, &own_ship);
@@ -136,14 +136,14 @@ mod tests {
         // Target to starboard, same course and speed
         let mut target = TrackingState::new(1, 90.0, 500.0, 0, AcquisitionMethod::Auto);
         target.vx = 0.0;
-        target.vy = 5.0;  // 5 m/s same direction
+        target.vy = 5.0; // 5 m/s same direction
 
         let own_ship = OwnShip {
             latitude: 0.0,
             longitude: 0.0,
             heading: 0.0,
             course: 0.0,
-            speed: 5.0 * 1.94384,  // Same 5 m/s
+            speed: 5.0 * 1.94384, // Same 5 m/s
         };
 
         let result = calculate_cpa_tcpa(&target, &own_ship);
@@ -166,7 +166,7 @@ mod tests {
             longitude: 0.0,
             heading: 0.0,
             course: 0.0,
-            speed: 10.0 * 1.94384,  // 10 m/s north
+            speed: 10.0 * 1.94384, // 10 m/s north
         };
 
         let result = calculate_cpa_tcpa(&target, &own_ship);
@@ -182,14 +182,14 @@ mod tests {
         // Target ahead, moving away
         let mut target = TrackingState::new(1, 0.0, 1000.0, 0, AcquisitionMethod::Auto);
         target.vx = 0.0;
-        target.vy = 15.0;  // 15 m/s away from us
+        target.vy = 15.0; // 15 m/s away from us
 
         let own_ship = OwnShip {
             latitude: 0.0,
             longitude: 0.0,
             heading: 0.0,
             course: 0.0,
-            speed: 5.0 * 1.94384,  // Only 5 m/s, slower than target
+            speed: 5.0 * 1.94384, // Only 5 m/s, slower than target
         };
 
         let result = calculate_cpa_tcpa(&target, &own_ship);

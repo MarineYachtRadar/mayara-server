@@ -84,7 +84,7 @@ impl ArpaProcessor {
         let id = self.next_id;
         self.next_id += 1;
         if self.next_id > 99 {
-            self.next_id = 1;  // Wrap around
+            self.next_id = 1; // Wrap around
         }
 
         let track = TrackingState::new(id, bearing, distance, timestamp, AcquisitionMethod::Manual);
@@ -129,7 +129,12 @@ impl ArpaProcessor {
     /// # Returns
     ///
     /// Vector of events (target updates, acquisitions, losses, warnings)
-    pub fn process_spoke(&mut self, spoke_data: &[u8], bearing: f64, timestamp: u64) -> Vec<ArpaEvent> {
+    pub fn process_spoke(
+        &mut self,
+        spoke_data: &[u8],
+        bearing: f64,
+        timestamp: u64,
+    ) -> Vec<ArpaEvent> {
         if !self.settings.enabled {
             return Vec::new();
         }
@@ -137,7 +142,9 @@ impl ArpaProcessor {
         let mut events = Vec::new();
 
         // Detect potential targets in this spoke
-        let detections = self.detector.detect_in_spoke(spoke_data, bearing, timestamp);
+        let detections = self
+            .detector
+            .detect_in_spoke(spoke_data, bearing, timestamp);
 
         // Update existing tracks that align with this bearing
         events.extend(self.update_tracks_for_bearing(bearing, &detections, timestamp));
@@ -177,7 +184,7 @@ impl ArpaProcessor {
         timestamp: u64,
     ) -> Vec<ArpaEvent> {
         let mut events = Vec::new();
-        const BEARING_TOLERANCE: f64 = 3.0;  // degrees
+        const BEARING_TOLERANCE: f64 = 3.0; // degrees
 
         // Collect track IDs that match this bearing
         let matching_ids: Vec<u32> = self
@@ -186,7 +193,11 @@ impl ArpaProcessor {
             .filter_map(|(id, track)| {
                 let track_bearing = track.bearing();
                 let bearing_diff = (track_bearing - bearing).abs();
-                let bearing_diff = if bearing_diff > 180.0 { 360.0 - bearing_diff } else { bearing_diff };
+                let bearing_diff = if bearing_diff > 180.0 {
+                    360.0 - bearing_diff
+                } else {
+                    bearing_diff
+                };
                 if bearing_diff <= BEARING_TOLERANCE {
                     Some(*id)
                 } else {
@@ -225,7 +236,8 @@ impl ArpaProcessor {
 
                         // Calculate danger and emit event
                         let status = Self::get_status_for_track(track);
-                        let danger = Self::calculate_danger_for_track(track, self.own_ship.as_ref());
+                        let danger =
+                            Self::calculate_danger_for_track(track, self.own_ship.as_ref());
                         let target = track.to_arpa_target(status, danger, self.own_ship.as_ref());
 
                         // Check for collision warning state change
@@ -262,7 +274,7 @@ impl ArpaProcessor {
         //      [0, 1, 0, dt],
         //      [0, 0, 1, 0],
         //      [0, 0, 0, 1]]
-        let q = process_noise * dt * dt;  // Simplified process noise
+        let q = process_noise * dt * dt; // Simplified process noise
 
         // Extract current covariance values
         let p = &track.covariance;
@@ -279,10 +291,22 @@ impl ArpaProcessor {
 
         // Add process noise
         track.covariance = [
-            p00 + q, p01,     p02,     p03,
-            p01,     p11 + q, p12,     p13,
-            p02,     p12,     p22 + q, p23,
-            p03,     p13,     p23,     p33 + q,
+            p00 + q,
+            p01,
+            p02,
+            p03,
+            p01,
+            p11 + q,
+            p12,
+            p13,
+            p02,
+            p12,
+            p22 + q,
+            p23,
+            p03,
+            p13,
+            p23,
+            p33 + q,
         ];
     }
 
@@ -319,7 +343,7 @@ impl ArpaProcessor {
         // Kalman gain: K = P*H'*S^-1
         let det = s00 * s11 - s01 * s01;
         if det.abs() < 1e-10 {
-            return;  // Singular matrix, skip update
+            return; // Singular matrix, skip update
         }
 
         let s_inv_00 = s11 / det;
@@ -359,10 +383,22 @@ impl ArpaProcessor {
         let new_p13 = i_kh_10 * p[3] + i_kh_11 * p[7];
 
         track.covariance = [
-            new_p00, new_p01, new_p02, new_p03,
-            new_p01, new_p11, new_p12, new_p13,
-            new_p02, new_p12, p[10] - k20 * p[2] - k21 * p[6], p[11] - k20 * p[3] - k21 * p[7],
-            new_p03, new_p13, p[11] - k30 * p[2] - k31 * p[6], p[15] - k30 * p[3] - k31 * p[7],
+            new_p00,
+            new_p01,
+            new_p02,
+            new_p03,
+            new_p01,
+            new_p11,
+            new_p12,
+            new_p13,
+            new_p02,
+            new_p12,
+            p[10] - k20 * p[2] - k21 * p[6],
+            p[11] - k20 * p[3] - k21 * p[7],
+            new_p03,
+            new_p13,
+            p[11] - k30 * p[2] - k31 * p[6],
+            p[15] - k30 * p[3] - k31 * p[7],
         ];
     }
 
@@ -415,7 +451,10 @@ impl ArpaProcessor {
     }
 
     /// Calculate danger metrics (static version)
-    fn calculate_danger_for_track(track: &TrackingState, own_ship: Option<&OwnShip>) -> TargetDanger {
+    fn calculate_danger_for_track(
+        track: &TrackingState,
+        own_ship: Option<&OwnShip>,
+    ) -> TargetDanger {
         if let Some(own_ship) = own_ship {
             calculate_danger(track, own_ship)
         } else {
@@ -499,7 +538,7 @@ mod tests {
         processor.acquire_target(45.0, 1000.0, 0);
 
         // Process with timestamp beyond timeout
-        let timeout_ms = 35_000;  // 35 seconds > 30 second timeout
+        let timeout_ms = 35_000; // 35 seconds > 30 second timeout
         let events = processor.check_lost_targets(timeout_ms);
 
         assert_eq!(events.len(), 1);

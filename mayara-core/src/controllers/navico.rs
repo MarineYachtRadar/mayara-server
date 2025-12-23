@@ -184,7 +184,10 @@ impl NavicoController {
                 }
             }
             Err(e) => {
-                io.debug(&format!("[{}] Failed to create command socket: {}", self.radar_id, e));
+                io.debug(&format!(
+                    "[{}] Failed to create command socket: {}",
+                    self.radar_id, e
+                ));
             }
         }
 
@@ -192,7 +195,10 @@ impl NavicoController {
         match io.udp_create() {
             Ok(socket) => {
                 if io.udp_bind(&socket, self.report_port).is_ok() {
-                    if io.udp_join_multicast(&socket, &self.report_addr, "").is_ok() {
+                    if io
+                        .udp_join_multicast(&socket, &self.report_addr, "")
+                        .is_ok()
+                    {
                         self.report_socket = Some(socket);
                         io.debug(&format!(
                             "[{}] Joined report multicast {}:{}",
@@ -200,7 +206,10 @@ impl NavicoController {
                         ));
                         self.state = NavicoControllerState::Listening;
                     } else {
-                        io.debug(&format!("[{}] Failed to join report multicast", self.radar_id));
+                        io.debug(&format!(
+                            "[{}] Failed to join report multicast",
+                            self.radar_id
+                        ));
                         io.udp_close(socket);
                     }
                 } else {
@@ -209,7 +218,10 @@ impl NavicoController {
                 }
             }
             Err(e) => {
-                io.debug(&format!("[{}] Failed to create report socket: {}", self.radar_id, e));
+                io.debug(&format!(
+                    "[{}] Failed to create report socket: {}",
+                    self.radar_id, e
+                ));
             }
         }
     }
@@ -253,7 +265,9 @@ impl NavicoController {
         let report_type = (data[1] as u16) << 8 | data[0] as u16;
         io.debug(&format!(
             "[{}] Report type: 0x{:04X}, len: {}",
-            self.radar_id, report_type, data.len()
+            self.radar_id,
+            report_type,
+            data.len()
         ));
 
         // Parse based on report type
@@ -277,10 +291,16 @@ impl NavicoController {
     fn send_command<I: IoProvider>(&self, io: &mut I, data: &[u8]) {
         if let Some(socket) = self.command_socket {
             if let Err(e) = io.udp_send_to(&socket, data, &self.command_addr, self.command_port) {
-                io.debug(&format!("[{}] Failed to send command: {}", self.radar_id, e));
+                io.debug(&format!(
+                    "[{}] Failed to send command: {}",
+                    self.radar_id, e
+                ));
             }
         } else {
-            io.debug(&format!("[{}] WARNING: No command socket - command dropped!", self.radar_id));
+            io.debug(&format!(
+                "[{}] WARNING: No command socket - command dropped!",
+                self.radar_id
+            ));
         }
     }
 
@@ -300,14 +320,21 @@ impl NavicoController {
         let execute_cmd = [0x01, 0xC1, if transmit { 0x01 } else { 0x00 }];
         self.send_command(io, &execute_cmd);
 
-        io.debug(&format!("[{}] Set power: {} (sent prepare + execute)", self.radar_id, if transmit { "transmit" } else { "standby" }));
+        io.debug(&format!(
+            "[{}] Set power: {} (sent prepare + execute)",
+            self.radar_id,
+            if transmit { "transmit" } else { "standby" }
+        ));
     }
 
     /// Set range in decimeters
     pub fn set_range<I: IoProvider>(&mut self, io: &mut I, range_dm: i32) {
         let mut cmd = vec![0x03, 0xC1];
         cmd.extend_from_slice(&range_dm.to_le_bytes());
-        io.info(&format!("[{}] Set range: {} dm (cmd: {:02X?})", self.radar_id, range_dm, cmd));
+        io.info(&format!(
+            "[{}] Set range: {} dm (cmd: {:02X?})",
+            self.radar_id, range_dm, cmd
+        ));
         self.send_command(io, &cmd);
     }
 
@@ -318,7 +345,10 @@ impl NavicoController {
         cmd.extend_from_slice(&auto_val.to_le_bytes());
         cmd.push(value);
         self.send_command(io, &cmd);
-        io.debug(&format!("[{}] Set gain: {} auto={}", self.radar_id, value, auto));
+        io.debug(&format!(
+            "[{}] Set gain: {} auto={}",
+            self.radar_id, value, auto
+        ));
     }
 
     /// Set sea clutter (0-255 scale)
@@ -337,12 +367,17 @@ impl NavicoController {
             cmd.push(value);
             self.send_command(io, &cmd);
         }
-        io.debug(&format!("[{}] Set sea: {} auto={}", self.radar_id, value, auto));
+        io.debug(&format!(
+            "[{}] Set sea: {} auto={}",
+            self.radar_id, value, auto
+        ));
     }
 
     /// Set rain clutter (0-255 scale)
     pub fn set_rain<I: IoProvider>(&mut self, io: &mut I, value: u8) {
-        let cmd = vec![0x06, 0xC1, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, value];
+        let cmd = vec![
+            0x06, 0xC1, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, value,
+        ];
         self.send_command(io, &cmd);
         io.debug(&format!("[{}] Set rain: {}", self.radar_id, value));
     }
@@ -359,7 +394,10 @@ impl NavicoController {
         let cmd_id = if self.model.is_halo() { 0x12 } else { 0x09 };
         let cmd = [cmd_id, 0xC1, level];
         self.send_command(io, &cmd);
-        io.debug(&format!("[{}] Set target expansion: {}", self.radar_id, level));
+        io.debug(&format!(
+            "[{}] Set target expansion: {}",
+            self.radar_id, level
+        ));
     }
 
     /// Set target boost (0-2)
@@ -381,7 +419,10 @@ impl NavicoController {
         let mut cmd = vec![0x05, 0xC1];
         cmd.extend_from_slice(&deci_degrees.to_le_bytes());
         self.send_command(io, &cmd);
-        io.debug(&format!("[{}] Set bearing alignment: {}", self.radar_id, deci_degrees));
+        io.debug(&format!(
+            "[{}] Set bearing alignment: {}",
+            self.radar_id, deci_degrees
+        ));
     }
 
     /// Set antenna height in decimeters (1/10 meter)
@@ -393,7 +434,12 @@ impl NavicoController {
         cmd.extend_from_slice(&height_dm.to_le_bytes());
         cmd.extend_from_slice(&[0x00, 0x00]);
         self.send_command(io, &cmd);
-        io.debug(&format!("[{}] Set antenna height: {} dm ({} m)", self.radar_id, height_dm, height_dm as f32 / 10.0));
+        io.debug(&format!(
+            "[{}] Set antenna height: {} dm ({} m)",
+            self.radar_id,
+            height_dm,
+            height_dm as f32 / 10.0
+        ));
     }
 
     /// Set doppler mode (HALO only, 0=off, 1=normal, 2=approaching)
@@ -427,9 +473,14 @@ impl NavicoController {
     /// Set sidelobe suppression (0-255 scale)
     pub fn set_sidelobe_suppression<I: IoProvider>(&mut self, io: &mut I, value: u8, auto: bool) {
         let auto_val: u8 = if auto { 1 } else { 0 };
-        let cmd = [0x06, 0xC1, 0x05, 0x00, 0x00, 0x00, auto_val, 0x00, 0x00, 0x00, value];
+        let cmd = [
+            0x06, 0xC1, 0x05, 0x00, 0x00, 0x00, auto_val, 0x00, 0x00, 0x00, value,
+        ];
         self.send_command(io, &cmd);
-        io.debug(&format!("[{}] Set sidelobe suppression: {} auto={}", self.radar_id, value, auto));
+        io.debug(&format!(
+            "[{}] Set sidelobe suppression: {} auto={}",
+            self.radar_id, value, auto
+        ));
     }
 
     /// Set sea state (HALO only, 0=calm, 1=moderate, 2=rough)
@@ -450,14 +501,20 @@ impl NavicoController {
     pub fn set_noise_rejection<I: IoProvider>(&mut self, io: &mut I, level: u8) {
         let cmd = [0x21, 0xC1, level];
         self.send_command(io, &cmd);
-        io.debug(&format!("[{}] Set noise rejection: {}", self.radar_id, level));
+        io.debug(&format!(
+            "[{}] Set noise rejection: {}",
+            self.radar_id, level
+        ));
     }
 
     /// Set target separation (0-3)
     pub fn set_target_separation<I: IoProvider>(&mut self, io: &mut I, level: u8) {
         let cmd = [0x22, 0xC1, level];
         self.send_command(io, &cmd);
-        io.debug(&format!("[{}] Set target separation: {}", self.radar_id, level));
+        io.debug(&format!(
+            "[{}] Set target separation: {}",
+            self.radar_id, level
+        ));
     }
 
     /// Set accent light (HALO only, 0-3)

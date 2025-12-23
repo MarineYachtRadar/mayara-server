@@ -9,10 +9,10 @@ use std::collections::HashMap;
 
 use crate::protocol::furuno::command::{
     parse_bird_mode_response, parse_blind_sector_response, parse_gain_response,
-    parse_main_bang_response, parse_rain_response, parse_range_response,
-    parse_rezboost_response, parse_scan_speed_response, parse_sea_response,
-    parse_signal_processing_response, parse_status_response, parse_target_analyzer_response,
-    parse_tx_channel_response, range_index_to_meters, ControlValue as ParsedControlValue,
+    parse_main_bang_response, parse_rain_response, parse_range_response, parse_rezboost_response,
+    parse_scan_speed_response, parse_sea_response, parse_signal_processing_response,
+    parse_status_response, parse_target_analyzer_response, parse_tx_channel_response,
+    range_index_to_meters, ControlValue as ParsedControlValue,
 };
 
 /// Power state of the radar
@@ -366,10 +366,7 @@ impl RadarState {
         );
 
         // Bird Mode
-        map.insert(
-            "birdMode".to_string(),
-            serde_json::json!(self.bird_mode),
-        );
+        map.insert("birdMode".to_string(), serde_json::json!(self.bird_mode));
 
         // Target Analyzer (Doppler)
         map.insert(
@@ -381,10 +378,7 @@ impl RadarState {
         );
 
         // Scan Speed
-        map.insert(
-            "scanSpeed".to_string(),
-            serde_json::json!(self.scan_speed),
-        );
+        map.insert("scanSpeed".to_string(), serde_json::json!(self.scan_speed));
 
         // Main Bang Suppression
         map.insert(
@@ -393,10 +387,7 @@ impl RadarState {
         );
 
         // TX Channel
-        map.insert(
-            "txChannel".to_string(),
-            serde_json::json!(self.tx_channel),
-        );
+        map.insert("txChannel".to_string(), serde_json::json!(self.tx_channel));
 
         // No-Transmit Zones
         map.insert(
@@ -573,7 +564,7 @@ mod tests {
         let requests = generate_state_requests();
 
         assert_eq!(requests.len(), 14); // Base + signal processing (2) + extended controls
-        // Base controls
+                                        // Base controls
         assert!(requests.contains(&"$R69\r\n".to_string()));
         assert!(requests.contains(&"$R62\r\n".to_string()));
         assert!(requests.contains(&"$R63\r\n".to_string()));
@@ -582,7 +573,7 @@ mod tests {
         // Signal processing - feature-specific queries
         assert!(requests.contains(&"$R67,0,3\r\n".to_string())); // Noise reduction
         assert!(requests.contains(&"$R67,0,0\r\n".to_string())); // Interference rejection
-        // Extended controls
+                                                                 // Extended controls
         assert!(requests.contains(&"$REE\r\n".to_string()));
         assert!(requests.contains(&"$RED\r\n".to_string()));
         assert!(requests.contains(&"$REF\r\n".to_string()));

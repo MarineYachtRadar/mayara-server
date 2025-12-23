@@ -119,9 +119,17 @@ pub enum Report {
     /// Rain clutter settings
     RainClutter { mode: u32, level: u32 },
     /// Sea clutter settings
-    SeaClutter { mode: u32, level: u32, auto_level: u32 },
+    SeaClutter {
+        mode: u32,
+        level: u32,
+        auto_level: u32,
+    },
     /// No transmit zone settings
-    NoTransmitZone { mode: u32, start_deg: f32, end_deg: f32 },
+    NoTransmitZone {
+        mode: u32,
+        start_deg: f32,
+        end_deg: f32,
+    },
     /// Timed idle settings
     TimedIdle { mode: u32, time: u32, run_time: u32 },
     /// Scanner status
@@ -129,7 +137,11 @@ pub enum Report {
     /// Scanner message (model info etc.)
     ScannerMessage(String),
     /// Unknown report type
-    Unknown { packet_type: u32, value: u32, raw: Vec<u8> },
+    Unknown {
+        packet_type: u32,
+        value: u32,
+        raw: Vec<u8>,
+    },
 }
 
 /// Transmit state
@@ -458,7 +470,10 @@ mod tests {
     #[test]
     fn test_parse_report_too_short() {
         let data = [0u8; 5];
-        assert!(matches!(parse_report(&data), Err(ParseError::TooShort { .. })));
+        assert!(matches!(
+            parse_report(&data),
+            Err(ParseError::TooShort { .. })
+        ));
     }
 
     #[test]

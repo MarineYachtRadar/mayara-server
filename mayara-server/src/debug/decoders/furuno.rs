@@ -256,7 +256,10 @@ fn decode_furuno_command(
 
         // RezBoost / Beam Sharpening
         "68" => {
-            let level = params.first().and_then(|s| s.parse::<i32>().ok()).unwrap_or(0);
+            let level = params
+                .first()
+                .and_then(|s| s.parse::<i32>().ok())
+                .unwrap_or(0);
             let level_name = match level {
                 0 => "OFF",
                 1 => "Low",
@@ -272,7 +275,10 @@ fn decode_furuno_command(
 
         // Bird Mode
         "69" => {
-            let level = params.first().and_then(|s| s.parse::<i32>().ok()).unwrap_or(0);
+            let level = params
+                .first()
+                .and_then(|s| s.parse::<i32>().ok())
+                .unwrap_or(0);
             let level_name = match level {
                 0 => "OFF",
                 1 => "Low",
@@ -289,7 +295,10 @@ fn decode_furuno_command(
         // Target Analyzer / Doppler Mode
         "6A" => {
             let enabled = params.first().map(|s| *s == "1").unwrap_or(false);
-            let mode = params.get(1).and_then(|s| s.parse::<i32>().ok()).unwrap_or(0);
+            let mode = params
+                .get(1)
+                .and_then(|s| s.parse::<i32>().ok())
+                .unwrap_or(0);
             let mode_name = match mode {
                 0 => "Target",
                 1 => "Rain",
@@ -307,7 +316,10 @@ fn decode_furuno_command(
 
         // Scan speed
         "6B" => {
-            let speed = params.first().and_then(|s| s.parse::<i32>().ok()).unwrap_or(0);
+            let speed = params
+                .first()
+                .and_then(|s| s.parse::<i32>().ok())
+                .unwrap_or(0);
             let speed_name = match speed {
                 0 => "24 RPM",
                 2 => "Auto",
@@ -321,7 +333,10 @@ fn decode_furuno_command(
 
         // Main bang suppression
         "6C" => {
-            let value = params.first().and_then(|s| s.parse::<i32>().ok()).unwrap_or(0);
+            let value = params
+                .first()
+                .and_then(|s| s.parse::<i32>().ok())
+                .unwrap_or(0);
             (
                 Some(format!("Main Bang Suppression: {}%", value)),
                 serde_json::json!({"value": value}),
@@ -335,14 +350,14 @@ fn decode_furuno_command(
         ),
 
         // Keep-alive
-        "KA" | "KEEPALIVE" => (
-            Some("Keep-alive".to_string()),
-            serde_json::json!({}),
-        ),
+        "KA" | "KEEPALIVE" => (Some("Keep-alive".to_string()), serde_json::json!({})),
 
         // Operating time
         "5B" => {
-            let seconds = params.first().and_then(|s| s.parse::<i32>().ok()).unwrap_or(0);
+            let seconds = params
+                .first()
+                .and_then(|s| s.parse::<i32>().ok())
+                .unwrap_or(0);
             let hours = seconds / 3600;
             (
                 Some(format!("Operating time: {} hours", hours)),
@@ -365,7 +380,10 @@ fn decode_furuno_command(
 /// Decode gain/sea/rain commands which have similar structure.
 fn decode_gain_sea_rain(name: &str, params: &[&str]) -> (Option<String>, serde_json::Value) {
     let auto = params.first().map(|s| *s == "1").unwrap_or(false);
-    let value = params.get(1).and_then(|s| s.parse::<i32>().ok()).unwrap_or(0);
+    let value = params
+        .get(1)
+        .and_then(|s| s.parse::<i32>().ok())
+        .unwrap_or(0);
 
     (
         Some(format!(
@@ -437,7 +455,9 @@ mod tests {
 
         match msg {
             DecodedMessage::Furuno {
-                description, fields, ..
+                description,
+                fields,
+                ..
             } => {
                 assert!(description.unwrap().contains("Transmit"));
                 assert_eq!(fields["transmitting"], true);

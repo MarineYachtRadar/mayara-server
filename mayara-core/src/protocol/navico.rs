@@ -10,11 +10,11 @@
 //! - **4G**: Fourth generation with dual range capability
 //! - **HALO**: High-definition series with Doppler support
 
-use serde::Deserialize;
-use crate::error::ParseError;
-use crate::Brand;
-use crate::radar::RadarDiscovery;
 use super::c_string;
+use crate::error::ParseError;
+use crate::radar::RadarDiscovery;
+use crate::Brand;
+use serde::Deserialize;
 
 // =============================================================================
 // Constants
@@ -36,7 +36,7 @@ pub const SPOKES_PER_FRAME: usize = 32;
 pub const BITS_PER_PIXEL: usize = 4;
 
 /// Bytes per spoke data line
-pub const SPOKE_DATA_BYTES: usize = MAX_SPOKE_LEN as usize / 2;  // 512 bytes
+pub const SPOKE_DATA_BYTES: usize = MAX_SPOKE_LEN as usize / 2; // 512 bytes
 
 /// BR24 beacon multicast address
 pub const BR24_BEACON_ADDR: &str = "236.6.7.4";
@@ -112,7 +112,7 @@ impl Model {
     /// Parse model from model byte in Report 03
     pub fn from_byte(model: u8) -> Self {
         match model {
-            0x0e | 0x0f => Model::BR24,  // 0x0e seen on older BR24
+            0x0e | 0x0f => Model::BR24, // 0x0e seen on older BR24
             0x08 => Model::Gen3,
             0x01 => Model::Gen4,
             0x00 => Model::HALO,
@@ -170,7 +170,10 @@ impl NetworkSocketAddrV4 {
 
     /// Get IP address as string
     pub fn ip_string(&self) -> String {
-        format!("{}.{}.{}.{}", self.addr[0], self.addr[1], self.addr[2], self.addr[3])
+        format!(
+            "{}.{}.{}.{}",
+            self.addr[0], self.addr[1], self.addr[2], self.addr[3]
+        )
     }
 
     /// Get port number
@@ -193,7 +196,7 @@ impl NetworkSocketAddrV4 {
 #[repr(C, packed)]
 pub struct BeaconHeader {
     pub id: u16,
-    pub serial_no: [u8; 16],         // ASCII serial number, zero terminated
+    pub serial_no: [u8; 16], // ASCII serial number, zero terminated
     pub radar_addr: NetworkSocketAddrV4, // DHCP address of radar
     _filler1: [u8; 12],
     _addr1: NetworkSocketAddrV4,
@@ -210,9 +213,9 @@ pub struct BeaconHeader {
 #[repr(C, packed)]
 pub struct BeaconRadar {
     _filler1: [u8; 10],
-    pub data: NetworkSocketAddrV4,   // Spoke data multicast address
+    pub data: NetworkSocketAddrV4, // Spoke data multicast address
     _filler2: [u8; 4],
-    pub send: NetworkSocketAddrV4,   // Command send address
+    pub send: NetworkSocketAddrV4, // Command send address
     _filler3: [u8; 4],
     pub report: NetworkSocketAddrV4, // Report multicast address
 }
@@ -252,7 +255,7 @@ pub struct BR24Beacon {
     _filler5: [u8; 4],
     pub send: NetworkSocketAddrV4,
     _filler6: [u8; 4],
-    pub data: NetworkSocketAddrV4,  // Note: different order than newer radars
+    pub data: NetworkSocketAddrV4, // Note: different order than newer radars
 }
 
 // Sizes
@@ -280,9 +283,9 @@ pub struct Br24SpokeHeader {
     pub header_len: u8,
     pub status: u8,
     pub scan_number: [u8; 2],
-    pub mark: [u8; 4],          // On BR24: always 0x00, 0x44, 0x0d, 0x0e
+    pub mark: [u8; 4], // On BR24: always 0x00, 0x44, 0x0d, 0x0e
     pub angle: [u8; 2],
-    pub heading: [u8; 2],       // With RI-10/11 interface
+    pub heading: [u8; 2], // With RI-10/11 interface
     pub range: [u8; 4],
     _u01: [u8; 2],
     _u02: [u8; 2],
@@ -297,11 +300,11 @@ pub struct Br4gSpokeHeader {
     pub status: u8,
     pub scan_number: [u8; 2],
     pub mark: [u8; 2],
-    pub large_range: [u8; 2],   // 4G and up
+    pub large_range: [u8; 2], // 4G and up
     pub angle: [u8; 2],
-    pub heading: [u8; 2],       // With RI-10/11 interface
-    pub small_range: [u8; 2],   // Or -1
-    pub rotation: [u8; 2],      // Or -1
+    pub heading: [u8; 2],     // With RI-10/11 interface
+    pub small_range: [u8; 2], // Or -1
+    pub rotation: [u8; 2],    // Or -1
     _u01: [u8; 4],
     _u02: [u8; 4],
 }
@@ -319,8 +322,8 @@ pub const SPOKE_LINE_SIZE: usize = SPOKE_HEADER_SIZE + SPOKE_DATA_BYTES;
 #[derive(Deserialize, Debug, Clone, Copy)]
 #[repr(C, packed)]
 pub struct Report01 {
-    pub what: u8,       // 0x01
-    pub command: u8,    // 0xC4
+    pub what: u8,    // 0x01
+    pub command: u8, // 0xC4
     pub status: u8,
     _u00: [u8; 15],
 }
@@ -332,26 +335,26 @@ pub const REPORT_01_SIZE: usize = 18;
 #[derive(Deserialize, Debug, Clone, Copy)]
 #[repr(C, packed)]
 pub struct Report02 {
-    pub what: u8,               // 0x02
-    pub command: u8,            // 0xC4
-    pub range: [u8; 4],         // 2..6
-    _u00: [u8; 1],              // 6
-    pub mode: u8,               // 7
-    pub gain_auto: u8,          // 8
-    _u01: [u8; 3],              // 9..12
-    pub gain: u8,               // 12
-    pub sea_auto: u8,           // 13 = 0=off, 1=harbor, 2=offshore
-    _u02: [u8; 3],              // 14..17
-    pub sea: [u8; 4],           // 17..21
-    _u03: u8,                   // 21
-    pub rain: u8,               // 22
-    _u04: [u8; 11],             // 23..34
+    pub what: u8,                   // 0x02
+    pub command: u8,                // 0xC4
+    pub range: [u8; 4],             // 2..6
+    _u00: [u8; 1],                  // 6
+    pub mode: u8,                   // 7
+    pub gain_auto: u8,              // 8
+    _u01: [u8; 3],                  // 9..12
+    pub gain: u8,                   // 12
+    pub sea_auto: u8,               // 13 = 0=off, 1=harbor, 2=offshore
+    _u02: [u8; 3],                  // 14..17
+    pub sea: [u8; 4],               // 17..21
+    _u03: u8,                       // 21
+    pub rain: u8,                   // 22
+    _u04: [u8; 11],                 // 23..34
     pub interference_rejection: u8, // 34
-    _u05: [u8; 3],              // 35..38
-    pub target_expansion: u8,   // 38
-    _u06: [u8; 3],              // 39..42
-    pub target_boost: u8,       // 42
-    _u07: [u8; 11],             // 43..54 unknown
+    _u05: [u8; 3],                  // 35..38
+    pub target_expansion: u8,       // 38
+    _u06: [u8; 3],                  // 39..42
+    pub target_boost: u8,           // 42
+    _u07: [u8; 11],                 // 43..54 unknown
     // Guard zone fields (offsets 54-88)
     pub guard_zone_sensitivity: u8, // 54 - shared by both zones (0-255)
     pub guard_zone_1_enabled: u8,   // 55
@@ -362,14 +365,14 @@ pub struct Report02 {
     pub guard_zone_1_outer_range: u8, // 65 - meters
     _u10: [u8; 3],                  // 66..69 unknown (zeros)
     pub guard_zone_1_bearing: [u8; 2], // 69..71 - deci-degrees (u16 LE)
-    pub guard_zone_1_width: [u8; 2],   // 71..73 - deci-degrees (u16 LE)
+    pub guard_zone_1_width: [u8; 2], // 71..73 - deci-degrees (u16 LE)
     _u11: [u8; 4],                  // 73..77 unknown (zeros)
     pub guard_zone_2_inner_range: u8, // 77 - meters
     _u12: [u8; 3],                  // 78..81 unknown (zeros)
     pub guard_zone_2_outer_range: u8, // 81 - meters
     _u13: [u8; 3],                  // 82..85 unknown (zeros)
     pub guard_zone_2_bearing: [u8; 2], // 85..87 - deci-degrees (u16 LE)
-    pub guard_zone_2_width: [u8; 2],   // 87..89 - deci-degrees (u16 LE)
+    pub guard_zone_2_width: [u8; 2], // 87..89 - deci-degrees (u16 LE)
     _u14: [u8; 10],                 // 89..99 unknown
 }
 
@@ -379,17 +382,17 @@ pub const REPORT_02_SIZE: usize = 99;
 #[derive(Deserialize, Debug, Clone, Copy)]
 #[repr(C, packed)]
 pub struct Report03 {
-    pub what: u8,               // 0x03
-    pub command: u8,            // 0xC4
-    pub model: u8,              // Model byte (0x00=HALO, 0x01=4G, 0x08=3G, 0x0E/0x0F=BR24)
-    _u00: [u8; 31],             // 3..34
-    pub hours: [u8; 4],         // 34..38 Operating hours (total power-on time)
-    _u01: [u8; 4],              // 38..42 Unknown (always 0x01)
+    pub what: u8,                  // 0x03
+    pub command: u8,               // 0xC4
+    pub model: u8,                 // Model byte (0x00=HALO, 0x01=4G, 0x08=3G, 0x0E/0x0F=BR24)
+    _u00: [u8; 31],                // 3..34
+    pub hours: [u8; 4],            // 34..38 Operating hours (total power-on time)
+    _u01: [u8; 4],                 // 38..42 Unknown (always 0x01)
     pub transmit_seconds: [u8; 4], // 42..46 Transmit seconds (total TX time)
-    _u02: [u8; 12],             // 46..58 Unknown
-    pub firmware_date: [u8; 32], // 58..90 Wide chars (UTF-16)
-    pub firmware_time: [u8; 32], // 90..122 Wide chars (UTF-16)
-    _u03: [u8; 7],              // 122..129 Unknown
+    _u02: [u8; 12],                // 46..58 Unknown
+    pub firmware_date: [u8; 32],   // 58..90 Wide chars (UTF-16)
+    pub firmware_time: [u8; 32],   // 90..122 Wide chars (UTF-16)
+    _u03: [u8; 7],                 // 122..129 Unknown
 }
 
 pub const REPORT_03_SIZE: usize = 129;
@@ -398,16 +401,16 @@ pub const REPORT_03_SIZE: usize = 129;
 #[derive(Deserialize, Debug, Clone, Copy)]
 #[repr(C, packed)]
 pub struct Report04 {
-    pub what: u8,               // 0x04
-    pub command: u8,            // 0xC4
-    _u00: [u8; 4],              // 2..6
+    pub what: u8,                   // 0x04
+    pub command: u8,                // 0xC4
+    _u00: [u8; 4],                  // 2..6
     pub bearing_alignment: [u8; 2], // 6..8
-    _u01: [u8; 2],              // 8..10
-    pub antenna_height: [u8; 2],// 10..12
-    _u02: [u8; 7],              // 12..19
-    pub accent_light: u8,       // 19 (HALO only)
-    _u03a: [u8; 32],            // 20..52 (split for serde array limit)
-    _u03b: [u8; 14],            // 52..66
+    _u01: [u8; 2],                  // 8..10
+    pub antenna_height: [u8; 2],    // 10..12
+    _u02: [u8; 7],                  // 12..19
+    pub accent_light: u8,           // 19 (HALO only)
+    _u03a: [u8; 32],                // 20..52 (split for serde array limit)
+    _u03b: [u8; 14],                // 52..66
 }
 
 pub const REPORT_04_SIZE: usize = 66;
@@ -425,26 +428,26 @@ pub struct SectorBlanking {
 #[derive(Deserialize, Debug, Clone, Copy)]
 #[repr(C, packed)]
 pub struct Report06_68 {
-    pub what: u8,               // 0x06
-    pub command: u8,            // 0xC4
-    _u00: [u8; 4],              // 2..6
-    pub name: [u8; 6],          // 6..12
-    _u01: [u8; 24],             // 12..36
+    pub what: u8,                      // 0x06
+    pub command: u8,                   // 0xC4
+    _u00: [u8; 4],                     // 2..6
+    pub name: [u8; 6],                 // 6..12
+    _u01: [u8; 24],                    // 12..36
     pub blanking: [SectorBlanking; 4], // 36..56
-    _u02: [u8; 12],             // 56..68
+    _u02: [u8; 12],                    // 56..68
 }
 
 /// Report 06 - Blanking/name (0x06 0xC4, 74 bytes - HALO 24 2023+)
 #[derive(Deserialize, Debug, Clone, Copy)]
 #[repr(C, packed)]
 pub struct Report06_74 {
-    pub what: u8,               // 0x06
-    pub command: u8,            // 0xC4
-    _u00: [u8; 4],              // 2..6
-    pub name: [u8; 6],          // 6..12
-    _u01: [u8; 30],             // 12..42
+    pub what: u8,                      // 0x06
+    pub command: u8,                   // 0xC4
+    _u00: [u8; 4],                     // 2..6
+    pub name: [u8; 6],                 // 6..12
+    _u01: [u8; 30],                    // 12..42
     pub blanking: [SectorBlanking; 4], // 42..62
-    _u02: [u8; 12],             // 62..74
+    _u02: [u8; 12],                    // 62..74
 }
 
 /// Report 08 - Advanced settings base (0x08 0xC4, 18 bytes)
@@ -478,7 +481,7 @@ pub const REPORT_08_BASE_SIZE: usize = 18;
 pub struct Report08Extended {
     pub base: Report08Base,
     pub doppler_state: u8,
-    pub doppler_speed: [u8; 2],     // Speed threshold in cm/s (0..1594)
+    pub doppler_speed: [u8; 2], // Speed threshold in cm/s (0..1594)
 }
 
 pub const REPORT_08_EXTENDED_SIZE: usize = 21;
@@ -495,13 +498,13 @@ pub struct HaloHeadingPacket {
     pub preamble: [u8; 4], // 00 01 90 02
     pub counter: [u8; 2],  // Big-endian counter
     _u01: [u8; 26],
-    _u02: [u8; 4],         // 12 f1 01 00
-    pub now: [u8; 8],      // Millis since 1970
+    _u02: [u8; 4],    // 12 f1 01 00
+    pub now: [u8; 8], // Millis since 1970
     _u03: [u8; 8],
     _u04: [u8; 4],
     _u05: [u8; 4],
     _u06: [u8; 1],
-    pub heading: [u8; 2],  // Heading in 0.1 degrees
+    pub heading: [u8; 2], // Heading in 0.1 degrees
     _u07: [u8; 5],
 }
 
@@ -513,11 +516,11 @@ pub struct HaloNavigationPacket {
     pub preamble: [u8; 4], // 00 01 90 02
     pub counter: [u8; 2],  // Big-endian counter
     _u01: [u8; 26],
-    _u02: [u8; 4],         // 02 f8 01 00
-    pub now: [u8; 8],      // Millis since 1970
+    _u02: [u8; 4],    // 02 f8 01 00
+    pub now: [u8; 8], // Millis since 1970
     _u03: [u8; 18],
-    pub cog: [u8; 2],      // COG in 0.01 radians (0..63488)
-    pub sog: [u8; 2],      // SOG in 0.01 m/s
+    pub cog: [u8; 2], // COG in 0.01 radians (0..63488)
+    pub sog: [u8; 2], // SOG in 0.01 m/s
     _u04: [u8; 2],
 }
 
@@ -525,10 +528,10 @@ pub struct HaloNavigationPacket {
 #[derive(Debug, Copy, Clone)]
 #[repr(C, packed)]
 pub struct HaloSpeedPacket {
-    pub marker: [u8; 6],   // 01 d3 01 00 00 00
-    pub sog: [u8; 2],      // Speed m/s
+    pub marker: [u8; 6], // 01 d3 01 00 00 00
+    pub sog: [u8; 2],    // Speed m/s
     _u00: [u8; 6],
-    pub cog: [u8; 2],      // COG
+    pub cog: [u8; 2], // COG
     _u01: [u8; 7],
 }
 
@@ -594,8 +597,8 @@ const MS_TO_KN: f64 = 1.943844;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DopplerMode {
     #[default]
-    None,       // Doppler disabled
-    Both,       // Show approaching and receding targets
+    None, // Doppler disabled
+    Both,        // Show approaching and receding targets
     Approaching, // Show only approaching targets
 }
 
@@ -653,14 +656,14 @@ pub struct ParsedBeacon {
     pub serial_no: String,
     pub radar_addr: String,
     pub is_dual_range: bool,
-    pub is_br24: bool,  // True for BR24/old 3G beacons (different spoke format)
+    pub is_br24: bool, // True for BR24/old 3G beacons (different spoke format)
     pub radars: Vec<ParsedRadarEndpoints>,
 }
 
 /// Endpoints for a single radar (A or B)
 #[derive(Debug, Clone)]
 pub struct ParsedRadarEndpoints {
-    pub suffix: Option<String>,  // "A" or "B" for dual-range, None for single
+    pub suffix: Option<String>, // "A" or "B" for dual-range, None for single
     pub data_addr: String,
     pub send_addr: String,
     pub report_addr: String,
@@ -669,20 +672,20 @@ pub struct ParsedRadarEndpoints {
 /// Parsed spoke data
 #[derive(Debug, Clone)]
 pub struct ParsedSpoke {
-    pub angle: u16,          // 0..2047
+    pub angle: u16,           // 0..2047
     pub heading: Option<u16>, // True heading if available
     pub range_meters: u32,
-    pub data: Vec<u8>,       // Pixel data (1024 bytes, unpacked from nibbles)
+    pub data: Vec<u8>, // Pixel data (1024 bytes, unpacked from nibbles)
 }
 
 /// Parsed guard zone from Report 02
 #[derive(Debug, Clone, Default)]
 pub struct ParsedGuardZone {
     pub enabled: bool,
-    pub inner_range_m: u8,      // meters
-    pub outer_range_m: u8,      // meters
-    pub bearing_decideg: u16,   // center angle in deci-degrees
-    pub width_decideg: u16,     // width in deci-degrees (3599 = full circle)
+    pub inner_range_m: u8,    // meters
+    pub outer_range_m: u8,    // meters
+    pub bearing_decideg: u16, // center angle in deci-degrees
+    pub width_decideg: u16,   // width in deci-degrees (3599 = full circle)
 }
 
 /// Parsed Report 02 (controls)
@@ -699,7 +702,7 @@ pub struct ParsedControls {
     pub target_expansion: u8,
     pub target_boost: u8,
     // Guard zones (parsed from offsets 54-88)
-    pub guard_zone_sensitivity: u8,  // 0-255, shared by both zones
+    pub guard_zone_sensitivity: u8, // 0-255, shared by both zones
     pub guard_zone_1: ParsedGuardZone,
     pub guard_zone_2: ParsedGuardZone,
 }
@@ -798,7 +801,10 @@ pub fn is_address_request(data: &[u8]) -> bool {
 ///
 /// Returns radar discovery information. Works with BR24, 3G, 4G, and HALO.
 /// For dual-range radars (4G, HALO), returns two discoveries (A and B ranges).
-pub fn parse_beacon_response(data: &[u8], source_addr: &str) -> Result<Vec<RadarDiscovery>, ParseError> {
+pub fn parse_beacon_response(
+    data: &[u8],
+    source_addr: &str,
+) -> Result<Vec<RadarDiscovery>, ParseError> {
     if data.len() < 2 {
         return Err(ParseError::TooShort {
             expected: 2,
@@ -815,7 +821,9 @@ pub fn parse_beacon_response(data: &[u8], source_addr: &str) -> Result<Vec<Radar
     }
 
     if is_address_request(data) {
-        return Err(ParseError::InvalidPacket("Address request, not beacon response".into()));
+        return Err(ParseError::InvalidPacket(
+            "Address request, not beacon response".into(),
+        ));
     }
 
     // Try parsing in order of size (largest first)
@@ -836,8 +844,7 @@ pub fn parse_beacon_response(data: &[u8], source_addr: &str) -> Result<Vec<Radar
 fn parse_beacon_dual(data: &[u8], source_addr: &str) -> Result<Vec<RadarDiscovery>, ParseError> {
     let beacon: BeaconDual = bincode::deserialize(data)?;
 
-    let serial_no = c_string(&beacon.header.serial_no)
-        .ok_or(ParseError::InvalidString)?;
+    let serial_no = c_string(&beacon.header.serial_no).ok_or(ParseError::InvalidString)?;
 
     // Dual-range radars have two independent radar endpoints (A and B)
     Ok(vec![
@@ -881,8 +888,7 @@ fn parse_beacon_dual(data: &[u8], source_addr: &str) -> Result<Vec<RadarDiscover
 fn parse_beacon_single(data: &[u8], source_addr: &str) -> Result<Vec<RadarDiscovery>, ParseError> {
     let beacon: BeaconSingle = bincode::deserialize(data)?;
 
-    let serial_no = c_string(&beacon.header.serial_no)
-        .ok_or(ParseError::InvalidString)?;
+    let serial_no = c_string(&beacon.header.serial_no).ok_or(ParseError::InvalidString)?;
 
     Ok(vec![RadarDiscovery {
         brand: Brand::Navico,
@@ -906,8 +912,7 @@ fn parse_beacon_single(data: &[u8], source_addr: &str) -> Result<Vec<RadarDiscov
 fn parse_beacon_br24(data: &[u8], source_addr: &str) -> Result<Vec<RadarDiscovery>, ParseError> {
     let beacon: BR24Beacon = bincode::deserialize(data)?;
 
-    let serial_no = c_string(&beacon.serial_no)
-        .ok_or(ParseError::InvalidString)?;
+    let serial_no = c_string(&beacon.serial_no).ok_or(ParseError::InvalidString)?;
 
     Ok(vec![RadarDiscovery {
         brand: Brand::Navico,
@@ -933,14 +938,17 @@ pub fn parse_beacon_endpoints(data: &[u8]) -> Result<ParsedBeacon, ParseError> {
     if data.len() < 2 || !is_beacon_response(data) {
         return Err(ParseError::InvalidHeader {
             expected: BEACON_RESPONSE_HEADER.to_vec(),
-            actual: if data.len() >= 2 { data[0..2].to_vec() } else { data.to_vec() },
+            actual: if data.len() >= 2 {
+                data[0..2].to_vec()
+            } else {
+                data.to_vec()
+            },
         });
     }
 
     if data.len() >= BEACON_DUAL_SIZE {
         let beacon: BeaconDual = bincode::deserialize(data)?;
-        let serial_no = c_string(&beacon.header.serial_no)
-            .ok_or(ParseError::InvalidString)?;
+        let serial_no = c_string(&beacon.header.serial_no).ok_or(ParseError::InvalidString)?;
 
         Ok(ParsedBeacon {
             serial_no,
@@ -964,41 +972,35 @@ pub fn parse_beacon_endpoints(data: &[u8]) -> Result<ParsedBeacon, ParseError> {
         })
     } else if data.len() >= BEACON_SINGLE_SIZE {
         let beacon: BeaconSingle = bincode::deserialize(data)?;
-        let serial_no = c_string(&beacon.header.serial_no)
-            .ok_or(ParseError::InvalidString)?;
+        let serial_no = c_string(&beacon.header.serial_no).ok_or(ParseError::InvalidString)?;
 
         Ok(ParsedBeacon {
             serial_no,
             radar_addr: beacon.header.radar_addr.as_string(),
             is_dual_range: false,
             is_br24: false,
-            radars: vec![
-                ParsedRadarEndpoints {
-                    suffix: None,
-                    data_addr: beacon.a.data.as_string(),
-                    send_addr: beacon.a.send.as_string(),
-                    report_addr: beacon.a.report.as_string(),
-                },
-            ],
+            radars: vec![ParsedRadarEndpoints {
+                suffix: None,
+                data_addr: beacon.a.data.as_string(),
+                send_addr: beacon.a.send.as_string(),
+                report_addr: beacon.a.report.as_string(),
+            }],
         })
     } else if data.len() >= BEACON_BR24_SIZE {
         let beacon: BR24Beacon = bincode::deserialize(data)?;
-        let serial_no = c_string(&beacon.serial_no)
-            .ok_or(ParseError::InvalidString)?;
+        let serial_no = c_string(&beacon.serial_no).ok_or(ParseError::InvalidString)?;
 
         Ok(ParsedBeacon {
             serial_no,
             radar_addr: beacon.radar_addr.as_string(),
             is_dual_range: false,
             is_br24: true,
-            radars: vec![
-                ParsedRadarEndpoints {
-                    suffix: None,
-                    data_addr: beacon.data.as_string(),
-                    send_addr: beacon.send.as_string(),
-                    report_addr: beacon.report.as_string(),
-                },
-            ],
+            radars: vec![ParsedRadarEndpoints {
+                suffix: None,
+                data_addr: beacon.data.as_string(),
+                send_addr: beacon.send.as_string(),
+                report_addr: beacon.report.as_string(),
+            }],
         })
     } else {
         Err(ParseError::TooShort {
@@ -1026,8 +1028,10 @@ pub fn parse_report_01(data: &[u8]) -> Result<Status, ParseError> {
         });
     }
 
-    Status::from_byte(report.status)
-        .ok_or(ParseError::InvalidPacket(format!("Unknown status: {}", report.status)))
+    Status::from_byte(report.status).ok_or(ParseError::InvalidPacket(format!(
+        "Unknown status: {}",
+        report.status
+    )))
 }
 
 /// Parse Report 02 (controls)
@@ -1159,11 +1163,15 @@ pub fn parse_report_06_68(data: &[u8]) -> Result<ParsedBlanking, ParseError> {
     }
 
     let name = c_string(&report.name);
-    let sectors = report.blanking.iter().map(|b| ParsedSectorBlanking {
-        enabled: b.enabled > 0,
-        start_angle: i16::from_le_bytes(b.start_angle),
-        end_angle: i16::from_le_bytes(b.end_angle),
-    }).collect();
+    let sectors = report
+        .blanking
+        .iter()
+        .map(|b| ParsedSectorBlanking {
+            enabled: b.enabled > 0,
+            start_angle: i16::from_le_bytes(b.start_angle),
+            end_angle: i16::from_le_bytes(b.end_angle),
+        })
+        .collect();
 
     Ok(ParsedBlanking { name, sectors })
 }
@@ -1188,11 +1196,15 @@ pub fn parse_report_06_74(data: &[u8]) -> Result<ParsedBlanking, ParseError> {
     }
 
     let name = c_string(&report.name);
-    let sectors = report.blanking.iter().map(|b| ParsedSectorBlanking {
-        enabled: b.enabled > 0,
-        start_angle: i16::from_le_bytes(b.start_angle),
-        end_angle: i16::from_le_bytes(b.end_angle),
-    }).collect();
+    let sectors = report
+        .blanking
+        .iter()
+        .map(|b| ParsedSectorBlanking {
+            enabled: b.enabled > 0,
+            start_angle: i16::from_le_bytes(b.start_angle),
+            end_angle: i16::from_le_bytes(b.end_angle),
+        })
+        .collect();
 
     Ok(ParsedBlanking { name, sectors })
 }
@@ -1273,7 +1285,7 @@ pub fn parse_4g_spoke_header(data: &[u8]) -> Result<(u32, u16, Option<u16>), Par
     }
 
     let heading = u16::from_le_bytes(header.heading);
-    let angle = u16::from_le_bytes(header.angle) / 2;  // Convert from 4096 to 2048
+    let angle = u16::from_le_bytes(header.angle) / 2; // Convert from 4096 to 2048
     let large_range = u16::from_le_bytes(header.large_range);
     let small_range = u16::from_le_bytes(header.small_range);
 
@@ -1506,9 +1518,14 @@ pub fn format_heading_packet(heading_deg: f64, counter: u16, timestamp_ms: i64) 
 ///
 /// # Returns
 /// 72-byte packet ready to send to INFO_ADDR:INFO_PORT
-pub fn format_navigation_packet(sog_ms: f64, cog_deg: f64, counter: u16, timestamp_ms: i64) -> [u8; 72] {
-    let sog = (sog_ms * 10.0) as i16;  // 0.01 m/s units
-    let cog = (cog_deg * (63488.0 / 360.0)) as i16;  // 0.01 radians
+pub fn format_navigation_packet(
+    sog_ms: f64,
+    cog_deg: f64,
+    counter: u16,
+    timestamp_ms: i64,
+) -> [u8; 72] {
+    let sog = (sog_ms * 10.0) as i16; // 0.01 m/s units
+    let cog = (cog_deg * (63488.0 / 360.0)) as i16; // 0.01 radians
     let now = timestamp_ms.to_le_bytes();
 
     let packet = HaloNavigationPacket {
@@ -1558,7 +1575,8 @@ pub fn format_speed_packet(sog_ms: f64, cog_deg: f64) -> [u8; 23] {
 
 /// Parse wide string (UTF-16LE) to UTF-8
 fn wide_string_to_string(data: &[u8]) -> String {
-    let u16_iter = data.chunks_exact(2)
+    let u16_iter = data
+        .chunks_exact(2)
         .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
         .take_while(|&c| c != 0);
 
@@ -1630,7 +1648,7 @@ mod tests {
 
     #[test]
     fn test_unpack_spoke_data_doppler() {
-        let packed = vec![0xEF, 0x12];  // low=F, high=E, then low=2, high=1
+        let packed = vec![0xEF, 0x12]; // low=F, high=E, then low=2, high=1
 
         // With Doppler::Both, 0xF->20 (approaching), 0xE->21 (receding)
         let unpacked = unpack_spoke_data_doppler(&packed, DopplerMode::Both, 20, 21);
@@ -1638,7 +1656,7 @@ mod tests {
 
         // With Doppler::Approaching, only 0xF->20
         let unpacked = unpack_spoke_data_doppler(&packed, DopplerMode::Approaching, 20, 21);
-        assert_eq!(unpacked, vec![20, 14, 2, 1]);  // 0xE stays as 14
+        assert_eq!(unpacked, vec![20, 14, 2, 1]); // 0xE stays as 14
 
         // With Doppler::None, no conversion
         let unpacked = unpack_spoke_data_doppler(&packed, DopplerMode::None, 20, 21);
@@ -1648,7 +1666,7 @@ mod tests {
     #[test]
     fn test_is_beacon_response() {
         assert!(is_beacon_response(&[0x01, 0xB2, 0x00]));
-        assert!(!is_beacon_response(&[0x01, 0xB1]));  // Address request
+        assert!(!is_beacon_response(&[0x01, 0xB1])); // Address request
         assert!(!is_beacon_response(&[0x00]));
     }
 
@@ -1752,17 +1770,17 @@ mod tests {
         // Report 08 base packet: 0x08 0xC4 + data
         let data = vec![
             0x08, 0xC4, // what, command
-            0x01,       // sea_state = 1
-            0x02,       // interference_rejection = 2
-            0x01,       // scan_speed = 1
-            0x01,       // sls_auto = 1 (true)
+            0x01, // sea_state = 1
+            0x02, // interference_rejection = 2
+            0x01, // scan_speed = 1
+            0x01, // sls_auto = 1 (true)
             0x00, 0x00, 0x00, // fields 6-8
-            0x50,       // side_lobe_suppression = 80
+            0x50, // side_lobe_suppression = 80
             0x00, 0x00, // field10
-            0x01,       // noise_rejection = 1
-            0x02,       // target_sep = 2
-            0x30,       // sea_clutter = 48
-            0x05,       // auto_sea_clutter = 5
+            0x01, // noise_rejection = 1
+            0x02, // target_sep = 2
+            0x30, // sea_clutter = 48
+            0x05, // auto_sea_clutter = 5
             0x00, 0x00, // fields 16-17
         ];
 
@@ -1786,20 +1804,25 @@ mod tests {
     fn test_parse_report_08_with_doppler() {
         // Report 08 extended packet with Doppler
         let mut data = vec![
-            0x08, 0xC4, // what, command
-            0x01,       // sea_state
-            0x00,       // interference_rejection
-            0x02,       // scan_speed
-            0x00,       // sls_auto
-            0x00, 0x00, 0x00,
-            0x40,       // side_lobe_suppression
-            0x00, 0x00,
-            0x01,       // noise_rejection
-            0x01,       // target_sep
-            0x20,       // sea_clutter
+            0x08,
+            0xC4, // what, command
+            0x01, // sea_state
+            0x00, // interference_rejection
+            0x02, // scan_speed
+            0x00, // sls_auto
+            0x00,
+            0x00,
+            0x00,
+            0x40, // side_lobe_suppression
+            0x00,
+            0x00,
+            0x01,         // noise_rejection
+            0x01,         // target_sep
+            0x20,         // sea_clutter
             0x03i8 as u8, // auto_sea_clutter = 3
-            0x00, 0x00,
-            0x01,       // doppler_state = 1 (Both)
+            0x00,
+            0x00,
+            0x01, // doppler_state = 1 (Both)
         ];
         data.extend_from_slice(&500u16.to_le_bytes()); // doppler_speed = 500
 

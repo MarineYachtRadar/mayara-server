@@ -247,10 +247,7 @@ fn decode_garmin_command(data: &[u8]) -> (String, Option<String>, serde_json::Va
     let value = data.get(4).copied().unwrap_or(0);
 
     let desc = match cmd_type {
-        0x01 => Some(format!(
-            "Power: {}",
-            if value == 1 { "ON" } else { "OFF" }
-        )),
+        0x01 => Some(format!("Power: {}", if value == 1 { "ON" } else { "OFF" })),
         0x02 => Some(format!("Range: {}", value)),
         0x03 => Some(format!("Gain: {}", value)),
         0x04 => Some(format!("Sea: {}", value)),
@@ -280,7 +277,9 @@ mod tests {
     #[test]
     fn test_decode_command() {
         let decoder = GarminDecoder;
-        let data = [0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let data = [
+            0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
         let msg = decoder.decode(&data, IoDirection::Send);
 
         match msg {

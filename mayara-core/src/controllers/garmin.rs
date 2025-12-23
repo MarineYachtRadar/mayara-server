@@ -97,14 +97,19 @@ impl GarminController {
                     self.command_socket = Some(socket);
                     io.debug(&format!(
                         "[{}] Command socket created for {}:{}",
-                        self.radar_id, self.radar_addr, garmin::SEND_PORT
+                        self.radar_id,
+                        self.radar_addr,
+                        garmin::SEND_PORT
                     ));
                 } else {
                     io.udp_close(socket);
                 }
             }
             Err(e) => {
-                io.debug(&format!("[{}] Failed to create command socket: {}", self.radar_id, e));
+                io.debug(&format!(
+                    "[{}] Failed to create command socket: {}",
+                    self.radar_id, e
+                ));
             }
         }
 
@@ -112,15 +117,23 @@ impl GarminController {
         match io.udp_create() {
             Ok(socket) => {
                 if io.udp_bind(&socket, garmin::REPORT_PORT).is_ok() {
-                    if io.udp_join_multicast(&socket, garmin::REPORT_ADDR, "").is_ok() {
+                    if io
+                        .udp_join_multicast(&socket, garmin::REPORT_ADDR, "")
+                        .is_ok()
+                    {
                         self.report_socket = Some(socket);
                         io.debug(&format!(
                             "[{}] Joined report multicast {}:{}",
-                            self.radar_id, garmin::REPORT_ADDR, garmin::REPORT_PORT
+                            self.radar_id,
+                            garmin::REPORT_ADDR,
+                            garmin::REPORT_PORT
                         ));
                         self.state = GarminControllerState::Listening;
                     } else {
-                        io.debug(&format!("[{}] Failed to join report multicast", self.radar_id));
+                        io.debug(&format!(
+                            "[{}] Failed to join report multicast",
+                            self.radar_id
+                        ));
                         io.udp_close(socket);
                     }
                 } else {
@@ -129,7 +142,10 @@ impl GarminController {
                 }
             }
             Err(e) => {
-                io.debug(&format!("[{}] Failed to create report socket: {}", self.radar_id, e));
+                io.debug(&format!(
+                    "[{}] Failed to create report socket: {}",
+                    self.radar_id, e
+                ));
             }
         }
     }
@@ -161,7 +177,10 @@ impl GarminController {
     fn send_command<I: IoProvider>(&self, io: &mut I, data: &[u8]) {
         if let Some(socket) = self.command_socket {
             if let Err(e) = io.udp_send_to(&socket, data, &self.radar_addr, garmin::SEND_PORT) {
-                io.debug(&format!("[{}] Failed to send command: {}", self.radar_id, e));
+                io.debug(&format!(
+                    "[{}] Failed to send command: {}",
+                    self.radar_id, e
+                ));
             }
         }
     }
@@ -179,39 +198,60 @@ impl GarminController {
     pub fn set_range<I: IoProvider>(&mut self, io: &mut I, range_meters: u32) {
         let cmd = garmin::create_range_command(range_meters);
         self.send_command(io, &cmd);
-        io.debug(&format!("[{}] Set range: {} m", self.radar_id, range_meters));
+        io.debug(&format!(
+            "[{}] Set range: {} m",
+            self.radar_id, range_meters
+        ));
     }
 
     /// Set gain (0-100)
     pub fn set_gain<I: IoProvider>(&mut self, io: &mut I, value: u32, auto: bool) {
         let cmd = garmin::create_gain_command(auto, value);
         self.send_command(io, &cmd);
-        io.debug(&format!("[{}] Set gain: {} auto={}", self.radar_id, value, auto));
+        io.debug(&format!(
+            "[{}] Set gain: {} auto={}",
+            self.radar_id, value, auto
+        ));
     }
 
     /// Set sea clutter (0-100)
     pub fn set_sea<I: IoProvider>(&mut self, io: &mut I, value: u32, auto: bool) {
         let cmd = garmin::create_sea_clutter_command(auto, value);
         self.send_command(io, &cmd);
-        io.debug(&format!("[{}] Set sea: {} auto={}", self.radar_id, value, auto));
+        io.debug(&format!(
+            "[{}] Set sea: {} auto={}",
+            self.radar_id, value, auto
+        ));
     }
 
     /// Set rain clutter (0-100)
     pub fn set_rain<I: IoProvider>(&mut self, io: &mut I, value: u32, auto: bool) {
         let cmd = garmin::create_rain_clutter_command(auto, value);
         self.send_command(io, &cmd);
-        io.debug(&format!("[{}] Set rain: {} auto={}", self.radar_id, value, auto));
+        io.debug(&format!(
+            "[{}] Set rain: {} auto={}",
+            self.radar_id, value, auto
+        ));
     }
 
     /// Set bearing alignment in degrees
     pub fn set_bearing_alignment<I: IoProvider>(&mut self, io: &mut I, degrees: f32) {
         let cmd = garmin::create_bearing_alignment_command(degrees);
         self.send_command(io, &cmd);
-        io.debug(&format!("[{}] Set bearing alignment: {}", self.radar_id, degrees));
+        io.debug(&format!(
+            "[{}] Set bearing alignment: {}",
+            self.radar_id, degrees
+        ));
     }
 
     /// Set no-transmit zone
-    pub fn set_ntz<I: IoProvider>(&mut self, io: &mut I, enabled: bool, start_deg: f32, end_deg: f32) {
+    pub fn set_ntz<I: IoProvider>(
+        &mut self,
+        io: &mut I,
+        enabled: bool,
+        start_deg: f32,
+        end_deg: f32,
+    ) {
         let cmd = garmin::create_ntz_command(enabled, start_deg, end_deg);
         self.send_command(io, &cmd);
         io.debug(&format!(

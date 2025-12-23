@@ -8,8 +8,8 @@
 //! - WASM clients for playback/simulation
 //! - Testing frameworks
 
-use super::Model;
 use super::command::range_index_to_meters;
+use super::Model;
 use crate::error::ParseError;
 
 // =============================================================================
@@ -329,7 +329,11 @@ pub fn parse_report(line: &str) -> Result<FurunoReport, ParseError> {
     // Find the start of the report ($ character)
     let line = match line.find('$') {
         Some(pos) => &line[pos..],
-        None => return Err(ParseError::InvalidPacket("No $ found in report".to_string())),
+        None => {
+            return Err(ParseError::InvalidPacket(
+                "No $ found in report".to_string(),
+            ))
+        }
     };
 
     // Minimum length check: $Nxx (4 chars)
@@ -350,13 +354,16 @@ pub fn parse_report(line: &str) -> Result<FurunoReport, ParseError> {
     }
 
     // Trim trailing \r\n
-    let rest = rest.trim_end_matches("\r\n").trim_end_matches('\r').trim_end_matches('\n');
+    let rest = rest
+        .trim_end_matches("\r\n")
+        .trim_end_matches('\r')
+        .trim_end_matches('\n');
 
     // Parse command ID (hex, before first comma or end)
     let mut parts = rest.split(',');
-    let cmd_str = parts.next().ok_or(ParseError::InvalidPacket(
-        "No command ID found".to_string(),
-    ))?;
+    let cmd_str = parts
+        .next()
+        .ok_or(ParseError::InvalidPacket("No command ID found".to_string()))?;
     let cmd = u8::from_str_radix(cmd_str.trim(), 16)
         .map_err(|_| ParseError::InvalidPacket(format!("Invalid command hex: {}", cmd_str)))?;
 
@@ -434,9 +441,7 @@ pub fn parse_report(line: &str) -> Result<FurunoReport, ParseError> {
             // Convert wire index to meters
             let wire_index = numbers[0] as i32;
             let range_meters = range_index_to_meters(wire_index).unwrap_or(0);
-            Ok(FurunoReport::Range(RangeReport {
-                range_meters,
-            }))
+            Ok(FurunoReport::Range(RangeReport { range_meters }))
         }
 
         Some(CommandId::OnTime) => {
@@ -470,13 +475,15 @@ pub fn parse_report(line: &str) -> Result<FurunoReport, ParseError> {
 
         Some(CommandId::AliveCheck) => Ok(FurunoReport::AliveCheck),
 
-        Some(CommandId::CustomPictureAll) => Ok(FurunoReport::CustomPictureAll(
-            CustomPictureAllReport { values: numbers },
-        )),
-
-        Some(CommandId::AntennaType) => {
-            Ok(FurunoReport::AntennaType(AntennaTypeReport { values: numbers }))
+        Some(CommandId::CustomPictureAll) => {
+            Ok(FurunoReport::CustomPictureAll(CustomPictureAllReport {
+                values: numbers,
+            }))
         }
+
+        Some(CommandId::AntennaType) => Ok(FurunoReport::AntennaType(AntennaTypeReport {
+            values: numbers,
+        })),
 
         Some(CommandId::BlindSector) => {
             if numbers.len() < 4 {
@@ -515,21 +522,21 @@ pub fn parse_report(line: &str) -> Result<FurunoReport, ParseError> {
             }))
         }
 
-        Some(CommandId::NearSTC) => {
-            Ok(FurunoReport::NearSTC(numbers.first().copied().unwrap_or(0.0) as i32))
-        }
+        Some(CommandId::NearSTC) => Ok(FurunoReport::NearSTC(
+            numbers.first().copied().unwrap_or(0.0) as i32,
+        )),
 
-        Some(CommandId::MiddleSTC) => {
-            Ok(FurunoReport::MiddleSTC(numbers.first().copied().unwrap_or(0.0) as i32))
-        }
+        Some(CommandId::MiddleSTC) => Ok(FurunoReport::MiddleSTC(
+            numbers.first().copied().unwrap_or(0.0) as i32,
+        )),
 
-        Some(CommandId::FarSTC) => {
-            Ok(FurunoReport::FarSTC(numbers.first().copied().unwrap_or(0.0) as i32))
-        }
+        Some(CommandId::FarSTC) => Ok(FurunoReport::FarSTC(
+            numbers.first().copied().unwrap_or(0.0) as i32,
+        )),
 
-        Some(CommandId::WakeUpCount) => {
-            Ok(FurunoReport::WakeUpCount(numbers.first().copied().unwrap_or(0.0) as i32))
-        }
+        Some(CommandId::WakeUpCount) => Ok(FurunoReport::WakeUpCount(
+            numbers.first().copied().unwrap_or(0.0) as i32,
+        )),
 
         // Unknown or unhandled commands
         _ => Ok(FurunoReport::Unknown {

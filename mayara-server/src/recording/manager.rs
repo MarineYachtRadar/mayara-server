@@ -11,7 +11,7 @@ use std::time::SystemTime;
 
 use crate::config::get_project_dirs;
 
-use super::file_format::{MrrHeader, MrrFooter, FOOTER_SIZE};
+use super::file_format::{MrrFooter, MrrHeader, FOOTER_SIZE};
 
 /// Get the recordings directory path
 pub fn recordings_dir() -> PathBuf {
@@ -156,7 +156,11 @@ impl RecordingManager {
     }
 
     /// Get information about a specific recording
-    pub fn get_recording_info(&self, path: &Path, subdirectory: Option<&str>) -> Option<RecordingInfo> {
+    pub fn get_recording_info(
+        &self,
+        path: &Path,
+        subdirectory: Option<&str>,
+    ) -> Option<RecordingInfo> {
         let filename = path.file_name()?.to_str()?.to_string();
 
         // Get file metadata
@@ -196,7 +200,11 @@ impl RecordingManager {
     }
 
     /// Get recording by filename
-    pub fn get_recording(&self, filename: &str, subdirectory: Option<&str>) -> Option<RecordingInfo> {
+    pub fn get_recording(
+        &self,
+        filename: &str,
+        subdirectory: Option<&str>,
+    ) -> Option<RecordingInfo> {
         let path = match subdirectory {
             Some(sub) => self.base_dir.join(sub).join(filename),
             None => self.base_dir.join(filename),
@@ -218,7 +226,11 @@ impl RecordingManager {
     }
 
     /// Delete a recording
-    pub fn delete_recording(&self, filename: &str, subdirectory: Option<&str>) -> Result<(), String> {
+    pub fn delete_recording(
+        &self,
+        filename: &str,
+        subdirectory: Option<&str>,
+    ) -> Result<(), String> {
         let path = self.get_recording_path(filename, subdirectory);
 
         if !path.exists() {
@@ -266,7 +278,11 @@ impl RecordingManager {
         }
 
         fs::rename(&old_path, &new_path).map_err(|e| format!("Failed to rename: {}", e))?;
-        info!("Renamed recording: {} -> {}", old_path.display(), new_path.display());
+        info!(
+            "Renamed recording: {} -> {}",
+            old_path.display(),
+            new_path.display()
+        );
         Ok(())
     }
 
@@ -285,7 +301,10 @@ impl RecordingManager {
         }
 
         if new_path.exists() {
-            return Err(format!("File already exists in target directory: {}", filename));
+            return Err(format!(
+                "File already exists in target directory: {}",
+                filename
+            ));
         }
 
         // Security check
@@ -299,7 +318,11 @@ impl RecordingManager {
         }
 
         fs::rename(&old_path, &new_path).map_err(|e| format!("Failed to move: {}", e))?;
-        info!("Moved recording: {} -> {}", old_path.display(), new_path.display());
+        info!(
+            "Moved recording: {} -> {}",
+            old_path.display(),
+            new_path.display()
+        );
         Ok(())
     }
 
@@ -340,7 +363,11 @@ impl RecordingManager {
             .collect();
 
         if !entries.is_empty() {
-            return Err(format!("Directory not empty: {} ({} items)", name, entries.len()));
+            return Err(format!(
+                "Directory not empty: {} ({} items)",
+                name,
+                entries.len()
+            ));
         }
 
         fs::remove_dir(&path).map_err(|e| format!("Failed to delete directory: {}", e))?;
@@ -390,7 +417,12 @@ impl RecordingManager {
 
     /// Save uploaded recording data to a file
     /// Handles both .mrr and .mrr.gz (decompresses gzip)
-    pub fn save_upload(&self, filename: &str, data: &[u8], subdirectory: Option<&str>) -> Result<RecordingInfo, String> {
+    pub fn save_upload(
+        &self,
+        filename: &str,
+        data: &[u8],
+        subdirectory: Option<&str>,
+    ) -> Result<RecordingInfo, String> {
         // Determine target filename and whether to decompress
         let (target_filename, needs_decompress) = if filename.ends_with(".mrr.gz") {
             // Strip .gz suffix for storage
@@ -423,7 +455,8 @@ impl RecordingManager {
             use std::io::Read;
             let mut decoder = flate2::read::GzDecoder::new(data);
             let mut decompressed = Vec::new();
-            decoder.read_to_end(&mut decompressed)
+            decoder
+                .read_to_end(&mut decompressed)
                 .map_err(|e| format!("Failed to decompress gzip data: {}", e))?;
             decompressed
         } else {
@@ -435,10 +468,13 @@ impl RecordingManager {
             return Err("Invalid MRR file format".to_string());
         }
 
-        fs::write(&target_path, &final_data)
-            .map_err(|e| format!("Failed to write file: {}", e))?;
+        fs::write(&target_path, &final_data).map_err(|e| format!("Failed to write file: {}", e))?;
 
-        info!("Uploaded recording: {} ({} bytes)", target_path.display(), final_data.len());
+        info!(
+            "Uploaded recording: {} ({} bytes)",
+            target_path.display(),
+            final_data.len()
+        );
 
         // Return info about the saved file
         self.get_recording_info(&target_path, subdirectory)

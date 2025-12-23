@@ -11,14 +11,14 @@ pub enum ParseError {
 
     /// Packet header doesn't match expected format
     #[error("Invalid header: expected {expected:02X?}, got {actual:02X?}")]
-    InvalidHeader {
-        expected: Vec<u8>,
-        actual: Vec<u8>,
-    },
+    InvalidHeader { expected: Vec<u8>, actual: Vec<u8> },
 
     /// Length field doesn't match actual packet length
     #[error("Length mismatch: header says {header_len} bytes, packet has {actual_len}")]
-    LengthMismatch { header_len: usize, actual_len: usize },
+    LengthMismatch {
+        header_len: usize,
+        actual_len: usize,
+    },
 
     /// Failed to deserialize packet structure
     #[error("Deserialization failed: {0}")]

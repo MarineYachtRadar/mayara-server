@@ -292,10 +292,7 @@ pub fn find_nic_for_radar(radar_ip: &Ipv4Addr) -> Option<Ipv4Addr> {
         for addr in &itf.addr {
             if let (IpAddr::V4(nic_ip), Some(IpAddr::V4(netmask))) = (addr.ip(), addr.netmask()) {
                 if !nic_ip.is_loopback() && match_ipv4(&nic_ip, radar_ip, &netmask) {
-                    log::debug!(
-                        "Found NIC {} ({}) for radar {}",
-                        itf.name, nic_ip, radar_ip
-                    );
+                    log::debug!("Found NIC {} ({}) for radar {}", itf.name, nic_ip, radar_ip);
                     return Some(nic_ip);
                 }
             }
@@ -313,7 +310,9 @@ pub fn find_nic_for_radar(radar_ip: &Ipv4Addr) -> Option<Ipv4Addr> {
                     if nic_ip.octets()[0] == 172 && nic_ip.octets()[1] == 31 {
                         log::debug!(
                             "Using Furuno/Navico NIC {} ({}) for link-local radar {}",
-                            itf.name, nic_ip, radar_ip
+                            itf.name,
+                            nic_ip,
+                            radar_ip
                         );
                         return Some(nic_ip);
                     }
@@ -329,7 +328,9 @@ pub fn find_nic_for_radar(radar_ip: &Ipv4Addr) -> Option<Ipv4Addr> {
                         if !nic_ip.is_loopback() {
                             log::debug!(
                                 "Using wired NIC {} ({}) for link-local radar {}",
-                                itf.name, nic_ip, radar_ip
+                                itf.name,
+                                nic_ip,
+                                radar_ip
                             );
                             return Some(nic_ip);
                         }
@@ -346,7 +347,9 @@ pub fn find_nic_for_radar(radar_ip: &Ipv4Addr) -> Option<Ipv4Addr> {
                 if !nic_ip.is_loopback() {
                     log::debug!(
                         "Fallback NIC {} ({}) for radar {} (no subnet match)",
-                        itf.name, nic_ip, radar_ip
+                        itf.name,
+                        nic_ip,
+                        radar_ip
                     );
                     return Some(nic_ip);
                 }

@@ -250,8 +250,15 @@ impl RadarEngine {
         nic_addr: &str,
         model: NavicoModel,
     ) {
-        let controller =
-            NavicoController::new(id, command_addr, command_port, report_addr, report_port, nic_addr, model);
+        let controller = NavicoController::new(
+            id,
+            command_addr,
+            command_port,
+            report_addr,
+            report_port,
+            nic_addr,
+            model,
+        );
         let managed = ManagedRadar::new(id.to_string(), RadarController::Navico(controller));
         self.radars.insert(id.to_string(), managed);
     }
@@ -441,7 +448,9 @@ impl RadarEngine {
 
     /// Get trail settings for a radar
     pub fn get_trail_settings(&self, radar_id: &str) -> Option<TrailSettings> {
-        self.radars.get(radar_id).map(|r| r.trails.settings().clone())
+        self.radars
+            .get(radar_id)
+            .map(|r| r.trails.settings().clone())
     }
 
     /// Update trail settings for a radar
@@ -561,7 +570,9 @@ impl RadarEngine {
 
     /// Get model info for a radar
     pub fn get_model_info(&self, radar_id: &str) -> Option<&ModelInfo> {
-        self.radars.get(radar_id).and_then(|r| r.model_info.as_ref())
+        self.radars
+            .get(radar_id)
+            .and_then(|r| r.model_info.as_ref())
     }
 
     /// Set model info for a radar (after detection)

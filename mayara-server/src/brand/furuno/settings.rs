@@ -114,11 +114,16 @@ pub fn update_when_model_known(info: &mut RadarInfo, model: RadarModel, version:
         .expect("Set valid values");
     // Notify data receiver of ranges - may fail if data receiver not yet started
     // (which is fine, it will use info.ranges when it starts)
-    if let Err(e) = info.controls
+    if let Err(e) = info
+        .controls
         .get_data_update_tx()
         .send(DataUpdate::Ranges(ranges))
     {
-        log::debug!("{}: Ranges update not sent (data receiver not ready): {}", info.key(), e);
+        log::debug!(
+            "{}: Ranges update not sent (data receiver not ready): {}",
+            info.key(),
+            e
+        );
     }
 
     // Only set firmware version if we actually know it (from TCP $N96 response)
@@ -137,19 +142,39 @@ pub fn update_when_model_known(info: &mut RadarInfo, model: RadarModel, version:
     // Uses core definitions for consistent metadata across server and WASM
     info.controls.insert(
         "noTransmitStart1",
-        control_factory::no_transmit_angle_control_for_brand("noTransmitStart1", 1, true, Brand::Furuno),
+        control_factory::no_transmit_angle_control_for_brand(
+            "noTransmitStart1",
+            1,
+            true,
+            Brand::Furuno,
+        ),
     );
     info.controls.insert(
         "noTransmitEnd1",
-        control_factory::no_transmit_angle_control_for_brand("noTransmitEnd1", 1, false, Brand::Furuno),
+        control_factory::no_transmit_angle_control_for_brand(
+            "noTransmitEnd1",
+            1,
+            false,
+            Brand::Furuno,
+        ),
     );
     info.controls.insert(
         "noTransmitStart2",
-        control_factory::no_transmit_angle_control_for_brand("noTransmitStart2", 2, true, Brand::Furuno),
+        control_factory::no_transmit_angle_control_for_brand(
+            "noTransmitStart2",
+            2,
+            true,
+            Brand::Furuno,
+        ),
     );
     info.controls.insert(
         "noTransmitEnd2",
-        control_factory::no_transmit_angle_control_for_brand("noTransmitEnd2", 2, false, Brand::Furuno),
+        control_factory::no_transmit_angle_control_for_brand(
+            "noTransmitEnd2",
+            2,
+            false,
+            Brand::Furuno,
+        ),
     );
 
     // Dynamically add extended controls from mayara-core based on model capabilities

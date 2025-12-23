@@ -1,5 +1,5 @@
-use std::net::{Ipv4Addr, SocketAddrV4};
 use std::io;
+use std::net::{Ipv4Addr, SocketAddrV4};
 use tokio_graceful_shutdown::{SubsystemBuilder, SubsystemHandle};
 
 use crate::locator::LocatorId;
@@ -16,9 +16,8 @@ pub use mayara_core::protocol::navico::Model;
 
 // Use constants from core (single source of truth)
 use mayara_core::protocol::navico::{
+    MAX_SPOKE_LEN as NAVICO_SPOKE_LEN_U16, SPOKES_PER_FRAME,
     SPOKES_PER_REVOLUTION as NAVICO_SPOKES_U16,
-    MAX_SPOKE_LEN as NAVICO_SPOKE_LEN_U16,
-    SPOKES_PER_FRAME,
 };
 
 const NAVICO_SPOKES: usize = NAVICO_SPOKES_U16 as usize;
@@ -375,13 +374,15 @@ pub fn process_discovery(
     };
 
     let report_addr: SocketAddrV4 = if let Some(addr) = &discovery.report_address {
-        parse_socket_addr(addr).unwrap_or_else(|| SocketAddrV4::new(radar_ip, discovery.command_port))
+        parse_socket_addr(addr)
+            .unwrap_or_else(|| SocketAddrV4::new(radar_ip, discovery.command_port))
     } else {
         SocketAddrV4::new(radar_ip, discovery.command_port)
     };
 
     let send_addr: SocketAddrV4 = if let Some(addr) = &discovery.send_address {
-        parse_socket_addr(addr).unwrap_or_else(|| SocketAddrV4::new(radar_ip, discovery.command_port))
+        parse_socket_addr(addr)
+            .unwrap_or_else(|| SocketAddrV4::new(radar_ip, discovery.command_port))
     } else {
         SocketAddrV4::new(radar_ip, discovery.command_port)
     };
@@ -450,12 +451,8 @@ pub fn process_discovery(
     }
 
     let data_receiver = data::NavicoDataReceiver::new(&session, info.clone());
-    let report_receiver = report::NavicoReportReceiver::new(
-        session.clone(),
-        info,
-        radars.clone(),
-        model,
-    );
+    let report_receiver =
+        report::NavicoReportReceiver::new(session.clone(), info, radars.clone(), model);
 
     subsys.start(SubsystemBuilder::new(
         data_name,

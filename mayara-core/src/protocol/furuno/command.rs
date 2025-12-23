@@ -84,10 +84,9 @@ impl CommandId {
 pub const LOGIN_MESSAGE: [u8; 56] = [
     0x08, 0x01, 0x00, 0x38, 0x01, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00,
     // "COPYRIGHT (C) 2001 FURUNO ELECTRIC CO.,LTD. "
-    0x43, 0x4f, 0x50, 0x59, 0x52, 0x49, 0x47, 0x48, 0x54, 0x20, 0x28, 0x43,
-    0x29, 0x20, 0x32, 0x30, 0x30, 0x31, 0x20, 0x46, 0x55, 0x52, 0x55, 0x4e,
-    0x4f, 0x20, 0x45, 0x4c, 0x45, 0x43, 0x54, 0x52, 0x49, 0x43, 0x20, 0x43,
-    0x4f, 0x2e, 0x2c, 0x4c, 0x54, 0x44, 0x2e, 0x20,
+    0x43, 0x4f, 0x50, 0x59, 0x52, 0x49, 0x47, 0x48, 0x54, 0x20, 0x28, 0x43, 0x29, 0x20, 0x32, 0x30,
+    0x30, 0x31, 0x20, 0x46, 0x55, 0x52, 0x55, 0x4e, 0x4f, 0x20, 0x45, 0x4c, 0x45, 0x43, 0x54, 0x52,
+    0x49, 0x43, 0x20, 0x43, 0x4f, 0x2e, 0x2c, 0x4c, 0x54, 0x44, 0x2e, 0x20,
 ];
 
 /// Expected header in login response (8 bytes)
@@ -156,7 +155,11 @@ pub fn format_command(mode: CommandMode, id: CommandId, args: &[i32]) -> String 
 pub fn format_status_command(transmit: bool) -> String {
     let value = if transmit { 2 } else { 1 };
     // Args: status, 0, watchman_on_off, watchman_on_time, watchman_off_time, 0
-    format_command(CommandMode::Set, CommandId::Status, &[value, 0, 0, 60, 300, 0])
+    format_command(
+        CommandMode::Set,
+        CommandId::Status,
+        &[value, 0, 0, 60, 300, 0],
+    )
 }
 
 /// Format range command
@@ -198,7 +201,8 @@ pub const RANGE_TABLE: [(i32, i32); 18] = [
 
 /// Convert wire index to meters
 pub fn range_index_to_meters(wire_index: i32) -> Option<i32> {
-    RANGE_TABLE.iter()
+    RANGE_TABLE
+        .iter()
         .find(|(idx, _)| *idx == wire_index)
         .map(|(_, meters)| *meters)
 }
@@ -235,7 +239,11 @@ pub fn meters_to_range_index(meters: i32) -> i32 {
 pub fn format_gain_command(value: i32, auto: bool) -> String {
     let auto_val = if auto { 1 } else { 0 };
     // From pcap: $S63,{auto},{value},0,80,0
-    format_command(CommandMode::Set, CommandId::Gain, &[auto_val, value, 0, 80, 0])
+    format_command(
+        CommandMode::Set,
+        CommandId::Gain,
+        &[auto_val, value, 0, 80, 0],
+    )
 }
 
 /// Format sea clutter command
@@ -249,7 +257,11 @@ pub fn format_gain_command(value: i32, auto: bool) -> String {
 /// Based on pcap: `$S64,{auto},{value},50,0,0,0`
 pub fn format_sea_command(value: i32, auto: bool) -> String {
     let auto_val = if auto { 1 } else { 0 };
-    format_command(CommandMode::Set, CommandId::Sea, &[auto_val, value, 50, 0, 0, 0])
+    format_command(
+        CommandMode::Set,
+        CommandId::Sea,
+        &[auto_val, value, 50, 0, 0, 0],
+    )
 }
 
 /// Format rain clutter command
@@ -263,7 +275,11 @@ pub fn format_sea_command(value: i32, auto: bool) -> String {
 /// Based on pcap: `$S65,{auto},{value},0,0,0,0`
 pub fn format_rain_command(value: i32, auto: bool) -> String {
     let auto_val = if auto { 1 } else { 0 };
-    format_command(CommandMode::Set, CommandId::Rain, &[auto_val, value, 0, 0, 0, 0])
+    format_command(
+        CommandMode::Set,
+        CommandId::Rain,
+        &[auto_val, value, 0, 0, 0, 0],
+    )
 }
 
 /// Format keep-alive (alive check) command
@@ -362,7 +378,11 @@ pub fn format_scan_speed_command(mode: i32) -> String {
 pub fn format_noise_reduction_command(enabled: bool) -> String {
     let val = if enabled { 1 } else { 0 };
     // Feature 3 = Noise Reduction
-    format_command(CommandMode::Set, CommandId::SignalProcessing, &[0, 3, val, 0])
+    format_command(
+        CommandMode::Set,
+        CommandId::SignalProcessing,
+        &[0, 3, val, 0],
+    )
 }
 
 /// Format interference rejection command
@@ -376,7 +396,11 @@ pub fn format_noise_reduction_command(enabled: bool) -> String {
 pub fn format_interference_rejection_command(enabled: bool) -> String {
     let val = if enabled { 2 } else { 0 };
     // Feature 0 = Interference Rejection
-    format_command(CommandMode::Set, CommandId::SignalProcessing, &[0, 0, val, 0])
+    format_command(
+        CommandMode::Set,
+        CommandId::SignalProcessing,
+        &[0, 0, val, 0],
+    )
 }
 
 /// Format RezBoost command
@@ -414,7 +438,11 @@ pub fn format_bird_mode_command(level: i32, screen: i32) -> String {
 /// Formatted command: `$SEF,{enabled},{mode},{screen}\r\n`
 pub fn format_target_analyzer_command(enabled: bool, mode: i32, screen: i32) -> String {
     let val = if enabled { 1 } else { 0 };
-    format_command(CommandMode::Set, CommandId::TargetAnalyzer, &[val, mode, screen])
+    format_command(
+        CommandMode::Set,
+        CommandId::TargetAnalyzer,
+        &[val, mode, screen],
+    )
 }
 
 /// Format TX Channel command
@@ -1056,8 +1084,7 @@ mod tests {
     fn test_parse_login_response() {
         // Simulated response with port offset 0x0001 = 1
         let response: [u8; 12] = [
-            0x09, 0x01, 0x00, 0x0c, 0x01, 0x00, 0x00, 0x00,
-            0x00, 0x01, // Port offset = 1
+            0x09, 0x01, 0x00, 0x0c, 0x01, 0x00, 0x00, 0x00, 0x00, 0x01, // Port offset = 1
             0x00, 0x00,
         ];
         let port = parse_login_response(&response);
@@ -1388,7 +1415,7 @@ mod tests {
         assert_eq!(parse_main_bang_response("$N83,0,0"), Some(0));
         // ~50%
         assert_eq!(parse_main_bang_response("$N83,127,0"), Some(49)); // 127*100/255 = 49
-        // 100%
+                                                                      // 100%
         assert_eq!(parse_main_bang_response("$N83,255,0"), Some(100));
     }
 

@@ -32,7 +32,12 @@ pub mod manager;
 pub mod player;
 pub mod recorder;
 
-pub use file_format::{MrrHeader, MrrFooter, MrrIndexEntry, MrrReader, MrrWriter};
-pub use manager::{RecordingInfo, RecordingManager, recordings_dir};
-pub use player::{ActivePlayback, PlaybackSettings, PlaybackState, PlaybackStatus, load_recording, unregister_playback_radar};
-pub use recorder::{ActiveRecording, RecordingState, RecordingStatus, start_recording, build_initial_state};
+pub use file_format::{MrrFooter, MrrHeader, MrrIndexEntry, MrrReader, MrrWriter};
+pub use manager::{recordings_dir, RecordingInfo, RecordingManager};
+pub use player::{
+    load_recording, unregister_playback_radar, ActivePlayback, PlaybackSettings, PlaybackState,
+    PlaybackStatus,
+};
+pub use recorder::{
+    build_initial_state, start_recording, ActiveRecording, RecordingState, RecordingStatus,
+};

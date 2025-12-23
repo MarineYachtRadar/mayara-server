@@ -7,11 +7,11 @@ pub mod command;
 pub mod dispatch;
 pub mod report;
 
-use serde::Deserialize;
-use crate::error::ParseError;
-use crate::Brand;
-use crate::radar::RadarDiscovery;
 use super::c_string;
+use crate::error::ParseError;
+use crate::radar::RadarDiscovery;
+use crate::Brand;
+use serde::Deserialize;
 
 // =============================================================================
 // Constants
@@ -75,28 +75,23 @@ pub fn network_requirement_message() -> &'static str {
 
 /// Beacon request packet - send this to discover Furuno radars
 pub const REQUEST_BEACON_PACKET: [u8; 16] = [
-    0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
-    0x01, 0x01, 0x00, 0x08, 0x01, 0x00, 0x00, 0x00,
+    0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x01, 0x01, 0x00, 0x08, 0x01, 0x00, 0x00, 0x00,
 ];
 
 /// Model info request packet
 pub const REQUEST_MODEL_PACKET: [u8; 16] = [
-    0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
-    0x14, 0x01, 0x00, 0x08, 0x01, 0x00, 0x00, 0x00,
+    0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x14, 0x01, 0x00, 0x08, 0x01, 0x00, 0x00, 0x00,
 ];
 
 /// Announce presence packet
 pub const ANNOUNCE_PACKET: [u8; 32] = [
-    0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x01, 0x00, 0x18, 0x01, 0x00, 0x00, 0x00,
-    b'M', b'A', b'Y', b'A', b'R', b'A', 0x00, 0x00,
-    0x01, 0x01, 0x00, 0x02, 0x00, 0x01, 0x00, 0x12,
+    0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x18, 0x01, 0x00, 0x00, 0x00,
+    b'M', b'A', b'Y', b'A', b'R', b'A', 0x00, 0x00, 0x01, 0x01, 0x00, 0x02, 0x00, 0x01, 0x00, 0x12,
 ];
 
 /// Expected header for radar beacon response
 pub const BEACON_RESPONSE_HEADER: [u8; 11] = [
-    0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x01, 0x00,
+    0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00,
 ];
 
 // =============================================================================
@@ -213,9 +208,7 @@ pub struct ModelReport {
 
 /// Check if a packet is a valid Furuno beacon response
 pub fn is_beacon_response(data: &[u8]) -> bool {
-    data.len() >= 32
-        && data[0..11] == BEACON_RESPONSE_HEADER
-        && data[16] == b'R'
+    data.len() >= 32 && data[0..11] == BEACON_RESPONSE_HEADER && data[16] == b'R'
 }
 
 /// Check if a packet is a model report (170 bytes)
@@ -270,8 +263,7 @@ pub fn parse_beacon_response(data: &[u8], source_addr: &str) -> Result<RadarDisc
     }
 
     // Extract name
-    let name = c_string(&response.name)
-        .ok_or(ParseError::InvalidString)?;
+    let name = c_string(&response.name).ok_or(ParseError::InvalidString)?;
 
     Ok(RadarDiscovery {
         brand: Brand::Furuno,
@@ -406,7 +398,10 @@ pub fn parse_spoke_header(data: &[u8]) -> Result<SpokeFrameHeader, ParseError> {
 /// Parse all spokes from a frame
 ///
 /// Returns parsed spokes and updates the previous spoke buffer for delta encoding.
-pub fn parse_spoke_frame(data: &[u8], prev_spoke: &mut Vec<u8>) -> Result<Vec<ParsedSpoke>, ParseError> {
+pub fn parse_spoke_frame(
+    data: &[u8],
+    prev_spoke: &mut Vec<u8>,
+) -> Result<Vec<ParsedSpoke>, ParseError> {
     let header = parse_spoke_header(data)?;
     let mut spokes = Vec::with_capacity(header.sweep_count as usize);
     let sweep_len = header.sweep_len as usize;
@@ -583,30 +578,30 @@ fn decode_encoding_3(data: &[u8], prev_spoke: &[u8], sweep_len: usize) -> (Vec<u
 /// Index 21 = minimum (1/16 nm), Index 15 = maximum (48 nm), Index 19 = 36 nm (out of sequence)
 /// 1 nautical mile = 1852 meters
 pub const RANGE_TABLE: [u32; 24] = [
-    231,    // 0: 1/8 nm
-    463,    // 1: 1/4 nm
-    926,    // 2: 1/2 nm
-    1389,   // 3: 3/4 nm
-    1852,   // 4: 1 nm
-    2778,   // 5: 1.5 nm
-    3704,   // 6: 2 nm
-    5556,   // 7: 3 nm
-    7408,   // 8: 4 nm
-    11112,  // 9: 6 nm
-    14816,  // 10: 8 nm
-    22224,  // 11: 12 nm
-    29632,  // 12: 16 nm
-    44448,  // 13: 24 nm
-    59264,  // 14: 32 nm
-    88896,  // 15: 48 nm (maximum)
-    0,      // 16: unused
-    0,      // 17: unused
-    0,      // 18: unused
-    66672,  // 19: 36 nm (out of sequence!)
-    0,      // 20: unused
-    116,    // 21: 1/16 nm (minimum)
-    0,      // 22: unused
-    0,      // 23: unused
+    231,   // 0: 1/8 nm
+    463,   // 1: 1/4 nm
+    926,   // 2: 1/2 nm
+    1389,  // 3: 3/4 nm
+    1852,  // 4: 1 nm
+    2778,  // 5: 1.5 nm
+    3704,  // 6: 2 nm
+    5556,  // 7: 3 nm
+    7408,  // 8: 4 nm
+    11112, // 9: 6 nm
+    14816, // 10: 8 nm
+    22224, // 11: 12 nm
+    29632, // 12: 16 nm
+    44448, // 13: 24 nm
+    59264, // 14: 32 nm
+    88896, // 15: 48 nm (maximum)
+    0,     // 16: unused
+    0,     // 17: unused
+    0,     // 18: unused
+    66672, // 19: 36 nm (out of sequence!)
+    0,     // 20: unused
+    116,   // 21: 1/16 nm (minimum)
+    0,     // 22: unused
+    0,     // 23: unused
 ];
 
 /// Get range in meters from range index
@@ -624,9 +619,8 @@ mod tests {
 
     // Real packet from DRS4D-NXT
     const SAMPLE_BEACON: [u8; 32] = [
-        0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x01, 0x00, 0x18, 0x01, 0x00, 0x00, 0x00,
-        0x52, 0x44, 0x30, 0x30, 0x33, 0x32, 0x31, 0x32,  // "RD003212"
+        0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x18, 0x01, 0x00, 0x00,
+        0x00, 0x52, 0x44, 0x30, 0x30, 0x33, 0x32, 0x31, 0x32, // "RD003212"
         0x01, 0x01, 0x00, 0x02, 0x00, 0x01, 0x00, 0x12,
     ];
 

@@ -208,12 +208,21 @@ fn decode_navico_fields(data: &[u8], message_type: &str) -> (Option<String>, ser
         }
         "settings" => {
             // Settings report (0x02 0xC4) - contains gain, sea, rain
-            let gain_auto = data.get(settings_report::GAIN_AUTO_OFFSET).copied().unwrap_or(0);
+            let gain_auto = data
+                .get(settings_report::GAIN_AUTO_OFFSET)
+                .copied()
+                .unwrap_or(0);
             let gain = data.get(settings_report::GAIN_OFFSET).copied().unwrap_or(0);
-            let sea_auto = data.get(settings_report::SEA_AUTO_OFFSET).copied().unwrap_or(0);
+            let sea_auto = data
+                .get(settings_report::SEA_AUTO_OFFSET)
+                .copied()
+                .unwrap_or(0);
             let sea = data.get(settings_report::SEA_OFFSET).copied().unwrap_or(0);
             let rain = data.get(settings_report::RAIN_OFFSET).copied().unwrap_or(0);
-            let interference = data.get(settings_report::INTERFERENCE_OFFSET).copied().unwrap_or(0);
+            let interference = data
+                .get(settings_report::INTERFERENCE_OFFSET)
+                .copied()
+                .unwrap_or(0);
 
             let desc = format!(
                 "Gain: {} ({}), Sea: {} ({}), Rain: {}",
@@ -479,7 +488,10 @@ mod tests {
             } => {
                 assert_eq!(message_type, "settings");
                 assert_eq!(fields.get("gain").and_then(|v| v.as_u64()), Some(75));
-                assert_eq!(fields.get("gainAuto").and_then(|v| v.as_bool()), Some(false));
+                assert_eq!(
+                    fields.get("gainAuto").and_then(|v| v.as_bool()),
+                    Some(false)
+                );
                 assert_eq!(fields.get("sea").and_then(|v| v.as_u64()), Some(50));
                 assert_eq!(fields.get("seaAuto").and_then(|v| v.as_u64()), Some(2)); // Calm
                 assert_eq!(fields.get("rain").and_then(|v| v.as_u64()), Some(25));
@@ -546,7 +558,10 @@ mod tests {
             } => {
                 assert_eq!(message_type, "cmd-power");
                 assert_eq!(fields.get("state").and_then(|v| v.as_u64()), Some(1));
-                assert_eq!(fields.get("stateStr").and_then(|v| v.as_str()), Some("transmit"));
+                assert_eq!(
+                    fields.get("stateStr").and_then(|v| v.as_str()),
+                    Some("transmit")
+                );
                 assert!(description.unwrap().contains("transmit"));
             }
             _ => panic!("Expected Navico message"),

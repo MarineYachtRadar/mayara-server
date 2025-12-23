@@ -300,7 +300,12 @@ impl HistoryBuffer {
     }
 
     /// Search for nearest contour in a square pattern around pol
-    pub fn find_nearest_contour(&mut self, doppler: &DopplerState, pol: &mut Polar, dist: i32) -> bool {
+    pub fn find_nearest_contour(
+        &mut self,
+        doppler: &DopplerState,
+        pol: &mut Polar,
+        dist: i32,
+    ) -> bool {
         let a = pol.angle;
         let r = pol.r;
         let distance = dist.max(2);
@@ -355,7 +360,11 @@ impl HistoryBuffer {
     }
 
     /// Get the full contour from a point on the edge of a blob
-    pub fn get_contour(&mut self, doppler: &DopplerState, pol: Polar) -> Result<(Contour, Polar), ContourError> {
+    pub fn get_contour(
+        &mut self,
+        doppler: &DopplerState,
+        pol: Polar,
+    ) -> Result<(Contour, Polar), ContourError> {
         let mut count = 0;
         let mut current = pol;
 
@@ -484,7 +493,9 @@ impl HistoryBuffer {
         const TARGET_DISTANCE_FOR_BLANKING_SHADOW: f64 = 6000.0;
 
         // Clear the blob area
-        for a in (contour.min_angle - DISTANCE_BETWEEN_TARGETS)..=(contour.max_angle + DISTANCE_BETWEEN_TARGETS) {
+        for a in (contour.min_angle - DISTANCE_BETWEEN_TARGETS)
+            ..=(contour.max_angle + DISTANCE_BETWEEN_TARGETS)
+        {
             let a_idx = self.mod_spokes(a);
             let spoke_len = self.spokes[a_idx].sweep.len() as i32;
 

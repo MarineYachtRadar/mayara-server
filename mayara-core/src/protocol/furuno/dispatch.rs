@@ -328,7 +328,10 @@ mod tests {
     #[test]
     fn test_format_request_command() {
         assert_eq!(format_request_command("gain"), Some("$R63\r\n".to_string()));
-        assert_eq!(format_request_command("power"), Some("$R69\r\n".to_string()));
+        assert_eq!(
+            format_request_command("power"),
+            Some("$R69\r\n".to_string())
+        );
         assert_eq!(
             format_request_command("beamSharpening"),
             Some("$REE\r\n".to_string())

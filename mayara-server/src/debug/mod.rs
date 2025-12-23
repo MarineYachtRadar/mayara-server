@@ -21,10 +21,10 @@
 //! └──────────────┘  └──────────────────┘  └──────────────────┘
 //! ```
 
+pub mod change_detection;
+pub mod decoders;
 pub mod hub;
 pub mod io_wrapper;
-pub mod decoders;
-pub mod change_detection;
 pub mod passive_listener;
 pub mod recording;
 
@@ -32,9 +32,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 // Re-exports
+pub use decoders::ProtocolDecoder;
 pub use hub::{DebugHub, DebugHubConfig};
 pub use io_wrapper::DebugIoProvider;
-pub use decoders::ProtocolDecoder;
 
 // =============================================================================
 // Core Types
@@ -74,23 +74,11 @@ pub enum EventSource {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "camelCase")]
 pub enum SocketOperation {
-    Create {
-        socket_type: ProtocolType,
-    },
-    Bind {
-        port: u16,
-    },
-    Connect {
-        addr: String,
-        port: u16,
-    },
-    JoinMulticast {
-        group: String,
-        interface: String,
-    },
-    SetBroadcast {
-        enabled: bool,
-    },
+    Create { socket_type: ProtocolType },
+    Bind { port: u16 },
+    Connect { addr: String, port: u16 },
+    JoinMulticast { group: String, interface: String },
+    SetBroadcast { enabled: bool },
     Close,
 }
 
@@ -297,7 +285,10 @@ pub enum ConnectionState {
 
 /// Encode bytes as hex string.
 pub fn hex_encode(data: &[u8]) -> String {
-    data.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" ")
+    data.iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Encode bytes as printable ASCII (non-printable as dots).

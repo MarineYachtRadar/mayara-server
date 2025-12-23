@@ -11,11 +11,11 @@
 //! - **Quantum**: Q24, Q24C, Q24D (with Doppler)
 //! - **Cyclone/Cyclone Pro**: Next-gen solid state
 
-use serde::Deserialize;
-use crate::error::ParseError;
-use crate::Brand;
-use crate::radar::RadarDiscovery;
 use super::c_string;
+use crate::error::ParseError;
+use crate::radar::RadarDiscovery;
+use crate::Brand;
+use serde::Deserialize;
 
 // =============================================================================
 // Constants
@@ -57,7 +57,7 @@ pub const QUANTUM_WIFI_ADDR: &str = "232.1.1.1";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BaseModel {
     #[default]
-    RD,      // Analog radars: RD, HD, SHD, Magnum
+    RD, // Analog radars: RD, HD, SHD, Magnum
     Quantum, // Solid-state: Quantum, Cyclone
 }
 
@@ -80,7 +80,7 @@ impl std::fmt::Display for BaseModel {
 #[derive(Debug, Clone)]
 pub struct Model {
     pub base: BaseModel,
-    pub hd: bool,                  // HD = 256 bits per pixel
+    pub hd: bool, // HD = 256 bits per pixel
     pub spokes_per_revolution: u16,
     pub max_spoke_len: u16,
     pub doppler: bool,
@@ -91,38 +91,159 @@ pub struct Model {
 impl Model {
     /// Parse model from E-series part number
     pub fn from_part_number(part: &str) -> Option<Self> {
-        let (base, hd, spokes_per_revolution, max_spoke_len, doppler, name, part_number) = match part {
-            // Quantum models
-            "E70210" => (BaseModel::Quantum, true, QUANTUM_SPOKES_PER_REVOLUTION, QUANTUM_SPOKE_LEN, false, "Quantum Q24", "E70210"),
-            "E70344" => (BaseModel::Quantum, true, QUANTUM_SPOKES_PER_REVOLUTION, QUANTUM_SPOKE_LEN, false, "Quantum Q24C", "E70344"),
-            "E70498" => (BaseModel::Quantum, true, QUANTUM_SPOKES_PER_REVOLUTION, QUANTUM_SPOKE_LEN, true, "Quantum Q24D", "E70498"),
+        let (base, hd, spokes_per_revolution, max_spoke_len, doppler, name, part_number) =
+            match part {
+                // Quantum models
+                "E70210" => (
+                    BaseModel::Quantum,
+                    true,
+                    QUANTUM_SPOKES_PER_REVOLUTION,
+                    QUANTUM_SPOKE_LEN,
+                    false,
+                    "Quantum Q24",
+                    "E70210",
+                ),
+                "E70344" => (
+                    BaseModel::Quantum,
+                    true,
+                    QUANTUM_SPOKES_PER_REVOLUTION,
+                    QUANTUM_SPOKE_LEN,
+                    false,
+                    "Quantum Q24C",
+                    "E70344",
+                ),
+                "E70498" => (
+                    BaseModel::Quantum,
+                    true,
+                    QUANTUM_SPOKES_PER_REVOLUTION,
+                    QUANTUM_SPOKE_LEN,
+                    true,
+                    "Quantum Q24D",
+                    "E70498",
+                ),
 
-            // Cyclone models
-            "E70620" => (BaseModel::Quantum, true, QUANTUM_SPOKES_PER_REVOLUTION, QUANTUM_SPOKE_LEN, true, "Cyclone", "E70620"),
-            "E70621" => (BaseModel::Quantum, true, QUANTUM_SPOKES_PER_REVOLUTION, QUANTUM_SPOKE_LEN, true, "Cyclone Pro", "E70621"),
+                // Cyclone models
+                "E70620" => (
+                    BaseModel::Quantum,
+                    true,
+                    QUANTUM_SPOKES_PER_REVOLUTION,
+                    QUANTUM_SPOKE_LEN,
+                    true,
+                    "Cyclone",
+                    "E70620",
+                ),
+                "E70621" => (
+                    BaseModel::Quantum,
+                    true,
+                    QUANTUM_SPOKES_PER_REVOLUTION,
+                    QUANTUM_SPOKE_LEN,
+                    true,
+                    "Cyclone Pro",
+                    "E70621",
+                ),
 
-            // Magnum models
-            "E70484" => (BaseModel::RD, true, RD_SPOKES_PER_REVOLUTION, RD_SPOKE_LEN, false, "Magnum 4kW", "E70484"),
-            "E70487" => (BaseModel::RD, true, RD_SPOKES_PER_REVOLUTION, RD_SPOKE_LEN, false, "Magnum 12kW", "E70487"),
+                // Magnum models
+                "E70484" => (
+                    BaseModel::RD,
+                    true,
+                    RD_SPOKES_PER_REVOLUTION,
+                    RD_SPOKE_LEN,
+                    false,
+                    "Magnum 4kW",
+                    "E70484",
+                ),
+                "E70487" => (
+                    BaseModel::RD,
+                    true,
+                    RD_SPOKES_PER_REVOLUTION,
+                    RD_SPOKE_LEN,
+                    false,
+                    "Magnum 12kW",
+                    "E70487",
+                ),
 
-            // Open Array HD models
-            "E52069" => (BaseModel::RD, true, RD_SPOKES_PER_REVOLUTION, RD_SPOKE_LEN, false, "Open Array HD 4kW", "E52069"),
-            "E92160" => (BaseModel::RD, true, RD_SPOKES_PER_REVOLUTION, RD_SPOKE_LEN, false, "Open Array HD 12kW", "E92160"),
+                // Open Array HD models
+                "E52069" => (
+                    BaseModel::RD,
+                    true,
+                    RD_SPOKES_PER_REVOLUTION,
+                    RD_SPOKE_LEN,
+                    false,
+                    "Open Array HD 4kW",
+                    "E52069",
+                ),
+                "E92160" => (
+                    BaseModel::RD,
+                    true,
+                    RD_SPOKES_PER_REVOLUTION,
+                    RD_SPOKE_LEN,
+                    false,
+                    "Open Array HD 12kW",
+                    "E92160",
+                ),
 
-            // Open Array SHD models
-            "E52081" => (BaseModel::RD, true, RD_SPOKES_PER_REVOLUTION, RD_SPOKE_LEN, false, "Open Array SHD 4kW", "E52081"),
-            "E52082" => (BaseModel::RD, true, RD_SPOKES_PER_REVOLUTION, RD_SPOKE_LEN, false, "Open Array SHD 12kW", "E52082"),
+                // Open Array SHD models
+                "E52081" => (
+                    BaseModel::RD,
+                    true,
+                    RD_SPOKES_PER_REVOLUTION,
+                    RD_SPOKE_LEN,
+                    false,
+                    "Open Array SHD 4kW",
+                    "E52081",
+                ),
+                "E52082" => (
+                    BaseModel::RD,
+                    true,
+                    RD_SPOKES_PER_REVOLUTION,
+                    RD_SPOKE_LEN,
+                    false,
+                    "Open Array SHD 12kW",
+                    "E52082",
+                ),
 
-            // RD HD models
-            "E92142" => (BaseModel::RD, true, RD_SPOKES_PER_REVOLUTION, RD_SPOKE_LEN, false, "RD418HD", "E92142"),
-            "E92143" => (BaseModel::RD, true, RD_SPOKES_PER_REVOLUTION, RD_SPOKE_LEN, false, "RD424HD", "E92143"),
+                // RD HD models
+                "E92142" => (
+                    BaseModel::RD,
+                    true,
+                    RD_SPOKES_PER_REVOLUTION,
+                    RD_SPOKE_LEN,
+                    false,
+                    "RD418HD",
+                    "E92142",
+                ),
+                "E92143" => (
+                    BaseModel::RD,
+                    true,
+                    RD_SPOKES_PER_REVOLUTION,
+                    RD_SPOKE_LEN,
+                    false,
+                    "RD424HD",
+                    "E92143",
+                ),
 
-            // RD D models
-            "E92130" => (BaseModel::RD, true, RD_SPOKES_PER_REVOLUTION, 512, false, "RD418D", "E92130"),
-            "E92132" => (BaseModel::RD, true, RD_SPOKES_PER_REVOLUTION, 512, false, "RD424D", "E92132"),
+                // RD D models
+                "E92130" => (
+                    BaseModel::RD,
+                    true,
+                    RD_SPOKES_PER_REVOLUTION,
+                    512,
+                    false,
+                    "RD418D",
+                    "E92130",
+                ),
+                "E92132" => (
+                    BaseModel::RD,
+                    true,
+                    RD_SPOKES_PER_REVOLUTION,
+                    512,
+                    false,
+                    "RD424D",
+                    "E92132",
+                ),
 
-            _ => return None,
-        };
+                _ => return None,
+            };
 
         Some(Model {
             base,
@@ -337,9 +458,7 @@ pub fn parse_beacon_56(data: &[u8]) -> Result<ParsedBeacon56, ParseError> {
             let name = c_string(&beacon.model_name);
             (name, BaseModel::Quantum)
         }
-        SUBTYPE_RD_56 => {
-            (Some("RD/HD/Eseries".to_string()), BaseModel::RD)
-        }
+        SUBTYPE_RD_56 => (Some("RD/HD/Eseries".to_string()), BaseModel::RD),
         SUBTYPE_WIRELESS => {
             // Wireless variant (Quantum_W3)
             let name = c_string(&beacon.model_name);
@@ -417,7 +536,11 @@ pub fn parse_beacon_response(data: &[u8], source_addr: &str) -> Result<RadarDisc
         let beacon = parse_beacon_56(data)?;
 
         let (spokes, spoke_len, pixels) = match beacon.base_model {
-            BaseModel::Quantum => (QUANTUM_SPOKES_PER_REVOLUTION, QUANTUM_SPOKE_LEN, HD_PIXEL_VALUES),
+            BaseModel::Quantum => (
+                QUANTUM_SPOKES_PER_REVOLUTION,
+                QUANTUM_SPOKE_LEN,
+                HD_PIXEL_VALUES,
+            ),
             BaseModel::RD => (RD_SPOKES_PER_REVOLUTION, RD_SPOKE_LEN, NON_HD_PIXEL_VALUES),
         };
 
@@ -451,18 +574,24 @@ pub fn parse_beacon_response(data: &[u8], source_addr: &str) -> Result<RadarDisc
         };
 
         let (spokes, spoke_len, pixels) = match base_model {
-            BaseModel::Quantum => (QUANTUM_SPOKES_PER_REVOLUTION, QUANTUM_SPOKE_LEN, HD_PIXEL_VALUES),
+            BaseModel::Quantum => (
+                QUANTUM_SPOKES_PER_REVOLUTION,
+                QUANTUM_SPOKE_LEN,
+                HD_PIXEL_VALUES,
+            ),
             BaseModel::RD => (RD_SPOKES_PER_REVOLUTION, RD_SPOKE_LEN, NON_HD_PIXEL_VALUES),
         };
 
         // Parse port from report address
-        let data_port = beacon.report_addr
+        let data_port = beacon
+            .report_addr
             .rsplit(':')
             .next()
             .and_then(|s| s.parse().ok())
             .unwrap_or(0);
 
-        let command_port = beacon.command_addr
+        let command_port = beacon
+            .command_addr
             .rsplit(':')
             .next()
             .and_then(|s| s.parse().ok())
@@ -635,7 +764,12 @@ pub fn parse_quantum_status(data: &[u8]) -> Result<ParsedQuantumStatus, ParseErr
     for i in 0..20 {
         let offset = 148 + i * 4;
         if offset + 4 <= data.len() {
-            let range = u32::from_le_bytes([data[offset], data[offset + 1], data[offset + 2], data[offset + 3]]);
+            let range = u32::from_le_bytes([
+                data[offset],
+                data[offset + 1],
+                data[offset + 2],
+                data[offset + 3],
+            ]);
             ranges.push(range);
         }
     }
@@ -661,14 +795,14 @@ pub fn parse_quantum_status(data: &[u8]) -> Result<ParsedQuantumStatus, ParseErr
 #[derive(Deserialize, Debug, Copy, Clone)]
 #[repr(C, packed)]
 pub struct RdFrameHeader {
-    pub field01: u32,     // 0x00010003
+    pub field01: u32, // 0x00010003
     pub zero_1: u32,
     pub fieldx_1: u32,    // 0x0000001c
     pub nspokes: u32,     // 0x00000008 - usually but changes
     pub spoke_count: u32, // 0x00000000 in regular, counting in HD
     pub zero_3: u32,
-    pub fieldx_3: u32,    // 0x00000001
-    pub fieldx_4: u32,    // 0x00000000 or 0xffffffff in regular, 0x400 in HD
+    pub fieldx_3: u32, // 0x00000001
+    pub fieldx_4: u32, // 0x00000000 or 0xffffffff in regular, 0x400 in HD
 }
 
 pub const RD_FRAME_HEADER_SIZE: usize = std::mem::size_of::<RdFrameHeader>();
@@ -692,7 +826,10 @@ pub fn parse_rd_frame_header(data: &[u8]) -> Result<ParsedRdFrame, ParseError> {
     let header: RdFrameHeader = bincode::deserialize(&data[..RD_FRAME_HEADER_SIZE])?;
 
     // Validate frame header
-    if header.field01 != 0x00010003 || header.fieldx_1 != 0x0000001c || header.fieldx_3 != 0x00000001 {
+    if header.field01 != 0x00010003
+        || header.fieldx_1 != 0x0000001c
+        || header.fieldx_3 != 0x00000001
+    {
         return Err(ParseError::InvalidHeader {
             expected: vec![0x03, 0x00, 0x01, 0x00],
             actual: vec![(header.field01 & 0xFF) as u8],
@@ -760,7 +897,12 @@ pub fn parse_rd_status(data: &[u8]) -> Result<ParsedRdStatus, ParseError> {
     let mut ranges = Vec::with_capacity(11);
     for i in 0..11 {
         let offset = 4 + i * 4;
-        let range = u32::from_le_bytes([data[offset], data[offset + 1], data[offset + 2], data[offset + 3]]);
+        let range = u32::from_le_bytes([
+            data[offset],
+            data[offset + 1],
+            data[offset + 2],
+            data[offset + 3],
+        ]);
         ranges.push(range);
     }
 
@@ -812,7 +954,11 @@ pub fn parse_rd_status(data: &[u8]) -> Result<ParsedRdStatus, ParseError> {
 // =============================================================================
 
 /// Decompress Quantum spoke data using RLE (0x5c escape byte)
-pub fn decompress_quantum_spoke(data: &[u8], doppler_lookup: &[u8; 256], returns_per_line: usize) -> Vec<u8> {
+pub fn decompress_quantum_spoke(
+    data: &[u8],
+    doppler_lookup: &[u8; 256],
+    returns_per_line: usize,
+) -> Vec<u8> {
     let mut unpacked = Vec::with_capacity(1024);
     let mut offset = 0;
 
@@ -913,38 +1059,35 @@ mod tests {
 
     // Real Quantum beacon data from pcap
     const QUANTUM_BEACON_36: [u8; 36] = [
-        0x0, 0x0, 0x0, 0x0, 0x58, 0x6b, 0x80, 0xd6, 0x28, 0x0, 0x0, 0x0, 0x3, 0x0, 0x64, 0x0,
-        0x6, 0x8, 0x10, 0x0, 0x1, 0xf3, 0x1, 0xe8, 0xe, 0xa, 0x11, 0x0, 0xd6, 0x6, 0x12, 0xc6,
-        0xf, 0xa, 0x36, 0x0,
+        0x0, 0x0, 0x0, 0x0, 0x58, 0x6b, 0x80, 0xd6, 0x28, 0x0, 0x0, 0x0, 0x3, 0x0, 0x64, 0x0, 0x6,
+        0x8, 0x10, 0x0, 0x1, 0xf3, 0x1, 0xe8, 0xe, 0xa, 0x11, 0x0, 0xd6, 0x6, 0x12, 0xc6, 0xf, 0xa,
+        0x36, 0x0,
     ];
 
     const QUANTUM_BEACON_56: [u8; 56] = [
-        0x1, 0x0, 0x0, 0x0, 0x66, 0x0, 0x0, 0x0, 0x58, 0x6b, 0x80, 0xd6, 0xf3, 0x0, 0x0, 0x0,
-        0xf3, 0x0, 0xa8, 0xc0, 0x51, 0x75, 0x61, 0x6e, 0x74, 0x75, 0x6d, 0x52, 0x61, 0x64,
-        0x61, 0x72, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
-        0x0, 0x0, 0x0, 0x0, 0x0, 0x2, 0x0, 0x0, 0x0,
+        0x1, 0x0, 0x0, 0x0, 0x66, 0x0, 0x0, 0x0, 0x58, 0x6b, 0x80, 0xd6, 0xf3, 0x0, 0x0, 0x0, 0xf3,
+        0x0, 0xa8, 0xc0, 0x51, 0x75, 0x61, 0x6e, 0x74, 0x75, 0x6d, 0x52, 0x61, 0x64, 0x61, 0x72,
+        0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+        0x0, 0x0, 0x2, 0x0, 0x0, 0x0,
     ];
 
     // RD series beacon data
     const RD_BEACON_36: [u8; 36] = [
-        0x0, 0x0, 0x0, 0x0,     // message_type
+        0x0, 0x0, 0x0, 0x0, // message_type
         0xb1, 0x69, 0xc2, 0xb2, // link_id
-        0x1, 0x0, 0x0, 0x0,     // sub_type 1
-        0x1, 0x0, 0x1e, 0x0,
-        0xb, 0x8, 0x10, 0x0,
-        231, 69, 29, 224, 0x6, 0xa, 0x0, 0x0, // 224.29.69.231:2566
-        47, 234, 0, 10, 11, 8, 0, 0,           // 10.0.234.47:2059
+        0x1, 0x0, 0x0, 0x0, // sub_type 1
+        0x1, 0x0, 0x1e, 0x0, 0xb, 0x8, 0x10, 0x0, 231, 69, 29, 224, 0x6, 0xa, 0x0,
+        0x0, // 224.29.69.231:2566
+        47, 234, 0, 10, 11, 8, 0, 0, // 10.0.234.47:2059
     ];
 
     const RD_BEACON_56: [u8; 56] = [
-        0x1, 0x0, 0x0, 0x0,     // message_type
-        0x1, 0x0, 0x0, 0x0,     // sub_type
+        0x1, 0x0, 0x0, 0x0, // message_type
+        0x1, 0x0, 0x0, 0x0, // sub_type
         0xb1, 0x69, 0xc2, 0xb2, // link_id
-        0xb, 0x2, 0x0, 0x0,
-        0x2f, 0xea, 0x0, 0xa, 0x0,
-        0x31, 0xcc, 0x33, 0xcc, 0x33, 0xcc, 0x33, 0xcc, 0x33, 0x4e, 0x37, 0xcc, 0x27, 0xcc,
-        0x33, 0xcc, 0x33, 0xcc, 0x33, 0xcc, 0x30, 0xcc, 0x13, 0xc8, 0x33, 0xcc, 0x13, 0xcc,
-        0x33, 0xc0, 0x13, 0x2, 0x0, 0x1, 0x0,
+        0xb, 0x2, 0x0, 0x0, 0x2f, 0xea, 0x0, 0xa, 0x0, 0x31, 0xcc, 0x33, 0xcc, 0x33, 0xcc, 0x33,
+        0xcc, 0x33, 0x4e, 0x37, 0xcc, 0x27, 0xcc, 0x33, 0xcc, 0x33, 0xcc, 0x33, 0xcc, 0x30, 0xcc,
+        0x13, 0xc8, 0x33, 0xcc, 0x13, 0xcc, 0x33, 0xc0, 0x13, 0x2, 0x0, 0x1, 0x0,
     ];
 
     #[test]

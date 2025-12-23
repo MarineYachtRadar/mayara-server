@@ -76,7 +76,11 @@ impl CoreLocatorAdapter {
     /// * `session` - Session to update with locator status
     /// * `discovery_tx` - Channel to send radar discoveries to the server
     /// * `poll_interval` - How often to poll for beacons (default: 100ms = 10 polls/sec)
-    pub fn new(session: crate::Session, discovery_tx: mpsc::Sender<LocatorMessage>, poll_interval: Duration) -> Self {
+    pub fn new(
+        session: crate::Session,
+        discovery_tx: mpsc::Sender<LocatorMessage>,
+        poll_interval: Duration,
+    ) -> Self {
         Self {
             locator: RadarLocator::new(),
             io: TokioIoProvider::new(),
@@ -87,7 +91,10 @@ impl CoreLocatorAdapter {
     }
 
     /// Create with default poll interval (100ms).
-    pub fn with_default_interval(session: crate::Session, discovery_tx: mpsc::Sender<LocatorMessage>) -> Self {
+    pub fn with_default_interval(
+        session: crate::Session,
+        discovery_tx: mpsc::Sender<LocatorMessage>,
+    ) -> Self {
         Self::new(session, discovery_tx, Duration::from_millis(100))
     }
 
@@ -101,8 +108,11 @@ impl CoreLocatorAdapter {
         // Without this, multicast only joins on OS-chosen interface (often wrong one)
         let interfaces = find_all_interfaces();
         if interfaces.len() > 1 {
-            log::info!("Multi-NIC setup detected - joining multicast on {} interfaces: {:?}",
-                       interfaces.len(), interfaces);
+            log::info!(
+                "Multi-NIC setup detected - joining multicast on {} interfaces: {:?}",
+                interfaces.len(),
+                interfaces
+            );
         }
         for iface in &interfaces {
             self.locator.add_multicast_interface(iface);
@@ -111,7 +121,10 @@ impl CoreLocatorAdapter {
         // CRITICAL: Configure Furuno interface to prevent cross-NIC broadcast traffic
         // Furuno uses 172.31.x.x subnet - find the NIC that can reach it
         if let Some(furuno_nic) = find_furuno_interface() {
-            log::info!("Found Furuno-capable NIC: {} - broadcasts will use this interface", furuno_nic);
+            log::info!(
+                "Found Furuno-capable NIC: {} - broadcasts will use this interface",
+                furuno_nic
+            );
             self.locator.set_furuno_interface(&furuno_nic.to_string());
         } else {
             log::warn!("No NIC found for Furuno subnet (172.31.x.x) - broadcasts may go to wrong interface");
@@ -122,7 +135,10 @@ impl CoreLocatorAdapter {
         // Update session with locator status
         if let Ok(mut session) = self.session.write() {
             session.locator_status = self.locator.status().clone();
-            log::info!("Updated session with {} brand statuses", session.locator_status.brands.len());
+            log::info!(
+                "Updated session with {} brand statuses",
+                session.locator_status.brands.len()
+            );
         }
     }
 
@@ -156,7 +172,10 @@ impl CoreLocatorAdapter {
     ///
     /// This is the main entry point for running the locator in a tokio task.
     /// It polls the core locator periodically and sends discoveries to the server.
-    pub async fn run(mut self, subsys: SubsystemHandle) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn run(
+        mut self,
+        subsys: SubsystemHandle,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         log::info!("CoreLocatorAdapter: Starting locator task");
 
         // Start the core locator (opens sockets)
@@ -317,7 +336,9 @@ pub fn dispatch_discovery(
 
     // Determine NIC address for this radar
     let radar_addr = parse_address(&discovery.address);
-    let nic_addr = radar_addr.map(|a| get_nic_for_radar(&a)).unwrap_or(Ipv4Addr::UNSPECIFIED);
+    let nic_addr = radar_addr
+        .map(|a| get_nic_for_radar(&a))
+        .unwrap_or(Ipv4Addr::UNSPECIFIED);
 
     log::info!(
         "Processing {} discovery: {} at {} via {}",
@@ -392,11 +413,13 @@ fn find_furuno_interface() -> Option<Ipv4Addr> {
 
                     // Check if this NIC can reach 172.31.x.x
                     // Either the NIC is directly on 172.31.x.x, or its network contains it
-                    if nic_network == furuno_network ||
-                       (u32::from(nic_ip) & u32::from(FURUNO_NETMASK)) == furuno_network {
+                    if nic_network == furuno_network
+                        || (u32::from(nic_ip) & u32::from(FURUNO_NETMASK)) == furuno_network
+                    {
                         log::debug!(
                             "Interface {} ({}) can reach Furuno subnet 172.31.x.x",
-                            itf.name, nic_ip
+                            itf.name,
+                            nic_ip
                         );
                         return Some(nic_ip);
                     }

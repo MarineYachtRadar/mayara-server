@@ -2,8 +2,8 @@
 //!
 //! Efficient storage for target position history using circular buffers.
 
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// A single point in a target's trail
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -60,9 +60,9 @@ impl Default for TrailSettings {
         TrailSettings {
             enabled: true,
             mode: TrailMode::Relative,
-            duration_seconds: 300,  // 5 minutes
+            duration_seconds: 300, // 5 minutes
             max_points: 100,
-            min_interval_ms: 3000,  // 3 seconds
+            min_interval_ms: 3000, // 3 seconds
         }
     }
 }
@@ -161,7 +161,8 @@ impl TrailStore {
         }
 
         // Get or create trail
-        let trail = self.trails
+        let trail = self
+            .trails
             .entry(target_id)
             .or_insert_with(|| TargetTrail::new(self.settings.max_points));
 
@@ -208,8 +209,8 @@ impl TrailStore {
 
     /// Prune old points based on duration setting
     pub fn prune_old_points(&mut self, current_timestamp: u64) {
-        let min_timestamp = current_timestamp
-            .saturating_sub((self.settings.duration_seconds as u64) * 1000);
+        let min_timestamp =
+            current_timestamp.saturating_sub((self.settings.duration_seconds as u64) * 1000);
 
         for trail in self.trails.values_mut() {
             trail.prune_old(min_timestamp);
@@ -318,7 +319,7 @@ mod tests {
     fn test_max_points() {
         let mut settings = test_settings();
         settings.max_points = 3;
-        settings.min_interval_ms = 0;  // Disable rate limiting
+        settings.min_interval_ms = 0; // Disable rate limiting
         let mut store = TrailStore::new(settings);
 
         for i in 0..5 {
@@ -350,7 +351,7 @@ mod tests {
         store.prune_old_points(50_000);
 
         let trail = store.get_trail(1);
-        assert_eq!(trail.len(), 3);  // Points at 20s, 40s, 50s
+        assert_eq!(trail.len(), 3); // Points at 20s, 40s, 50s
         assert_eq!(trail[0].bearing, 20.0);
     }
 

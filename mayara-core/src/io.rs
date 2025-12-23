@@ -136,7 +136,8 @@ pub trait IoProvider {
     /// Enable or disable broadcast mode on a UDP socket.
     ///
     /// Must be called before sending to broadcast addresses.
-    fn udp_set_broadcast(&mut self, socket: &UdpSocketHandle, enabled: bool) -> Result<(), IoError>;
+    fn udp_set_broadcast(&mut self, socket: &UdpSocketHandle, enabled: bool)
+        -> Result<(), IoError>;
 
     /// Join a multicast group.
     ///
@@ -184,7 +185,11 @@ pub trait IoProvider {
     /// correct interface in multi-NIC setups. Call this before `udp_send_to`.
     ///
     /// Default implementation does nothing (uses OS routing).
-    fn udp_bind_interface(&mut self, _socket: &UdpSocketHandle, _interface: &str) -> Result<(), IoError> {
+    fn udp_bind_interface(
+        &mut self,
+        _socket: &UdpSocketHandle,
+        _interface: &str,
+    ) -> Result<(), IoError> {
         Ok(())
     }
 
@@ -283,9 +288,8 @@ pub trait IoProviderExt: IoProvider {
     /// Receive a line as a String from TCP.
     fn tcp_recv_line_string(&mut self, socket: &TcpSocketHandle) -> Option<String> {
         let mut buf = [0u8; 1024];
-        self.tcp_recv_line(socket, &mut buf).map(|len| {
-            String::from_utf8_lossy(&buf[..len]).to_string()
-        })
+        self.tcp_recv_line(socket, &mut buf)
+            .map(|len| String::from_utf8_lossy(&buf[..len]).to_string())
     }
 }
 

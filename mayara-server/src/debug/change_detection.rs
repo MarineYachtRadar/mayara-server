@@ -155,9 +155,8 @@ impl ChangeDetector {
 
     /// Clean up old pending commands.
     fn cleanup_old_commands(&self, commands: &mut VecDeque<PendingCommand>, current_time: u64) {
-        commands.retain(|c| {
-            current_time.saturating_sub(c.timestamp) < self.config.max_pending_age_ms
-        });
+        commands
+            .retain(|c| current_time.saturating_sub(c.timestamp) < self.config.max_pending_age_ms);
     }
 
     /// Get pending commands for a radar (for debugging).

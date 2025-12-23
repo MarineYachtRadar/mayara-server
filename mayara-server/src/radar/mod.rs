@@ -344,8 +344,7 @@ impl RadarInfo {
     }
 
     pub(crate) fn set_ranges(&mut self, ranges: Ranges) -> Result<(), RadarError> {
-        self.controls
-            .set_valid_ranges("range", &ranges)?;
+        self.controls.set_valid_ranges("range", &ranges)?;
         self.ranges = ranges;
         Ok(())
     }
@@ -486,7 +485,10 @@ impl SharedRadars {
                 "Found radar: key '{}' id {} name '{}'",
                 &new_info.key,
                 new_info.id,
-                new_info.controls.user_name().unwrap_or_else(|| new_info.key.clone())
+                new_info
+                    .controls
+                    .user_name()
+                    .unwrap_or_else(|| new_info.key.clone())
             );
             radars.info.insert(key, new_info.clone());
             Some(new_info)
@@ -633,7 +635,11 @@ impl SharedRadars {
         use mayara_core::Brand as CoreBrand;
 
         // Extract IP from discovery address (which may be "ip:port" or just "ip")
-        let discovery_ip = discovery.address.split(':').next().unwrap_or(&discovery.address);
+        let discovery_ip = discovery
+            .address
+            .split(':')
+            .next()
+            .unwrap_or(&discovery.address);
 
         // Find radar by matching address
         let matching_key = {
@@ -663,10 +669,17 @@ impl SharedRadars {
                     #[cfg(feature = "raymarine")]
                     CoreBrand::Raymarine => {
                         // Raymarine model settings applied at discovery time
-                        log::debug!("{}: Raymarine model update ignored (applied at discovery)", key);
+                        log::debug!(
+                            "{}: Raymarine model update ignored (applied at discovery)",
+                            key
+                        );
                     }
                     _ => {
-                        log::debug!("{}: No model update handler for brand {:?}", key, discovery.brand);
+                        log::debug!(
+                            "{}: No model update handler for brand {:?}",
+                            key,
+                            discovery.brand
+                        );
                     }
                 }
             }
@@ -894,9 +907,7 @@ fn default_legend(session: Session, doppler: bool, pixel_values: u8) -> Legend {
         };
 
         // Apply intensity scaling
-        let scale = |c: f64| -> u8 {
-            (MIN_INTENSITY + (MAX_INTENSITY - MIN_INTENSITY) * c) as u8
-        };
+        let scale = |c: f64| -> u8 { (MIN_INTENSITY + (MAX_INTENSITY - MIN_INTENSITY) * c) as u8 };
 
         legend.pixels.push(Lookup {
             r#type: PixelType::Normal,

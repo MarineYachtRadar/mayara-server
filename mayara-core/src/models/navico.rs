@@ -10,56 +10,56 @@ use crate::Brand;
 /// Matches B&G chart plotter range steps for consistent UX
 /// 1 NM = 1852 meters
 static RANGE_TABLE_HALO: &[u32] = &[
-    50,     // 50m
-    75,     // 75m
-    100,    // 100m
-    231,    // 1/8 NM
-    463,    // 1/4 NM
-    926,    // 1/2 NM
-    1389,   // 3/4 NM
-    1852,   // 1 NM
-    2778,   // 1.5 NM
-    3704,   // 2 NM
-    5556,   // 3 NM
-    7408,   // 4 NM
-    11112,  // 6 NM
-    14816,  // 8 NM
-    22224,  // 12 NM
-    29632,  // 16 NM
-    44448,  // 24 NM
-    66672,  // 36 NM
-    88896,  // 48 NM
+    50,    // 50m
+    75,    // 75m
+    100,   // 100m
+    231,   // 1/8 NM
+    463,   // 1/4 NM
+    926,   // 1/2 NM
+    1389,  // 3/4 NM
+    1852,  // 1 NM
+    2778,  // 1.5 NM
+    3704,  // 2 NM
+    5556,  // 3 NM
+    7408,  // 4 NM
+    11112, // 6 NM
+    14816, // 8 NM
+    22224, // 12 NM
+    29632, // 16 NM
+    44448, // 24 NM
+    66672, // 36 NM
+    88896, // 48 NM
 ];
 
 /// Range table for 4G/3G series (in meters)
 /// Matches B&G chart plotter range steps for consistent UX
 /// 1 NM = 1852 meters
 static RANGE_TABLE_4G: &[u32] = &[
-    50,     // 50m
-    75,     // 75m
-    100,    // 100m
-    231,    // 1/8 NM
-    463,    // 1/4 NM
-    926,    // 1/2 NM
-    1389,   // 3/4 NM
-    1852,   // 1 NM
-    2778,   // 1.5 NM
-    3704,   // 2 NM
-    5556,   // 3 NM
-    7408,   // 4 NM
-    11112,  // 6 NM
-    14816,  // 8 NM
-    22224,  // 12 NM
-    29632,  // 16 NM
-    44448,  // 24 NM
-    66672,  // 36 NM
+    50,    // 50m
+    75,    // 75m
+    100,   // 100m
+    231,   // 1/8 NM
+    463,   // 1/4 NM
+    926,   // 1/2 NM
+    1389,  // 3/4 NM
+    1852,  // 1 NM
+    2778,  // 1.5 NM
+    3704,  // 2 NM
+    5556,  // 3 NM
+    7408,  // 4 NM
+    11112, // 6 NM
+    14816, // 8 NM
+    22224, // 12 NM
+    29632, // 16 NM
+    44448, // 24 NM
+    66672, // 36 NM
 ];
 
 /// Extended controls for HALO series
 static CONTROLS_HALO: &[&str] = &[
-    "presetMode",           // Harbor/Offshore/Weather/Custom
-    "dopplerMode",          // VelocityTrack
-    "dopplerSpeed",         // VelocityTrack speed threshold
+    "presetMode",   // Harbor/Offshore/Weather/Custom
+    "dopplerMode",  // VelocityTrack
+    "dopplerSpeed", // VelocityTrack speed threshold
     "targetSeparation",
     "targetExpansion",
     "targetBoost",
@@ -73,7 +73,7 @@ static CONTROLS_HALO: &[&str] = &[
     "bearingAlignment",
     "antennaHeight",
     "scanSpeed",
-    "accentLight",          // Pedestal lighting
+    "accentLight", // Pedestal lighting
 ];
 
 /// Extended controls for 4G/3G series
@@ -191,7 +191,6 @@ pub static MODELS: &[ModelInfo] = &[
         no_transmit_zone_count: 2,
         controls: CONTROLS_HALO,
     },
-
     // 4G Series
     ModelInfo {
         brand: Brand::Navico,
@@ -209,7 +208,6 @@ pub static MODELS: &[ModelInfo] = &[
         no_transmit_zone_count: 2,
         controls: CONTROLS_4G,
     },
-
     // 3G Series
     ModelInfo {
         brand: Brand::Navico,
@@ -227,7 +225,6 @@ pub static MODELS: &[ModelInfo] = &[
         no_transmit_zone_count: 2,
         controls: CONTROLS_4G,
     },
-
     // BR24
     ModelInfo {
         brand: Brand::Navico,

@@ -9,20 +9,16 @@ use std::{
 use strum::{EnumIter, IntoEnumIterator};
 
 use mayara_core::arpa::{
-    ContourError, DopplerState, HistoryPixel,
-    KalmanFilter, LocalPosition, Polar,
-    MIN_CONTOUR_LENGTH, MAX_CONTOUR_LENGTH,
+    ContourError, DopplerState, HistoryPixel, KalmanFilter, LocalPosition, Polar,
+    MAX_CONTOUR_LENGTH, MIN_CONTOUR_LENGTH,
 };
 // Re-export constants for other modules
 pub use mayara_core::arpa::{METERS_PER_DEGREE_LATITUDE, MS_TO_KN};
 use ndarray::Array2;
 
 use crate::{
-    navdata,
-    protos::RadarMessage::radar_message::Spoke,
-    radar::NAUTICAL_MILE_F64,
-    settings::ControlError,
-    Session,
+    navdata, protos::RadarMessage::radar_message::Spoke, radar::NAUTICAL_MILE_F64,
+    settings::ControlError, Session,
 };
 
 use super::{GeoPosition, Legend, RadarInfo};
@@ -170,7 +166,7 @@ struct ServerContour {
     min_r: i32,
     max_r: i32,
     position: Polar,
-    contour: Vec<Polar>,  // Named 'contour' here vs 'points' in core
+    contour: Vec<Polar>, // Named 'contour' here vs 'points' in core
 }
 
 // Use ContourError from core
@@ -478,7 +474,11 @@ impl HistorySpokes {
      *
      *
      */
-    fn get_contour(&mut self, doppler: &Doppler, pol: Polar) -> Result<(ServerContour, Polar), Error> {
+    fn get_contour(
+        &mut self,
+        doppler: &Doppler,
+        pol: Polar,
+    ) -> Result<(ServerContour, Polar), Error> {
         let mut pol = pol;
         let mut count = 0;
         let mut current = pol;
@@ -1532,8 +1532,8 @@ impl ArpaTarget {
                                                         // now set the polar to expected angular position from the expected local position
 
         pol.angle = setup.mod_spokes(
-            (f64::atan2(x_local.lon, x_local.lat) * setup.spokes_per_revolution_f64
-                / (2. * PI)) as i32,
+            (f64::atan2(x_local.lon, x_local.lat) * setup.spokes_per_revolution_f64 / (2. * PI))
+                as i32,
         );
         pol.r = ((x_local.lat * x_local.lat + x_local.lon * x_local.lon).sqrt()
             * setup.pixels_per_meter) as i32;
