@@ -1788,19 +1788,11 @@ pub fn control_rain_for_brand(brand: Brand) -> ControlDefinition {
 pub fn control_bearing_alignment_for_brand(brand: Brand) -> ControlDefinition {
     let mut def = control_bearing_alignment();
     def.wire_hints = Some(match brand {
-        Brand::Furuno => WireProtocolHint {
-            write_only: true, // Cannot reliably read from hardware
-            ..Default::default()
-        },
-        Brand::Navico | Brand::Raymarine => WireProtocolHint {
-            scale_factor: Some(1800.0), // 0.1 degree precision
-            offset: Some(-1.0),
-            step: Some(0.1),
-            write_only: true, // Cannot reliably read from hardware
-            ..Default::default()
-        },
-        Brand::Garmin => WireProtocolHint {
-            write_only: true, // Cannot reliably read from hardware
+        // Navico: Wire protocol uses deci-degrees (0-3599), conversion done in report.rs
+        // Raymarine: Similar wire protocol
+        // All brands: Report 04 provides readable values
+        Brand::Navico | Brand::Raymarine | Brand::Furuno | Brand::Garmin => WireProtocolHint {
+            write_only: false,
             ..Default::default()
         },
     });

@@ -407,7 +407,7 @@ Settings are per-radar (A/B can have different values on dual-range radars).
 | 0 | 1 | Type (0x04) |
 | 1 | 1 | Command (0xC4) |
 | 2 | 4 | Unknown (always 0) |
-| 6 | 2 | Bearing alignment (deci-degrees, u16, 0-3599) |
+| 6 | 2 | Bearing alignment (deci-degrees, i16, -1800 to +1799) |
 | 8 | 2 | Unknown (always 0) |
 | 10 | 2 | Antenna height (decimeters, u16) |
 | 12 | 7 | Unknown (always 0) |
