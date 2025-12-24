@@ -932,13 +932,13 @@ impl NavicoReportReceiver {
                 if report.guard_zone_1.enabled { "ON" } else { "off" },
                 report.guard_zone_1.inner_range_m,
                 report.guard_zone_1.outer_range_m,
-                report.guard_zone_1.bearing_decideg as f32 / 10.0,
-                report.guard_zone_1.width_decideg as f32 / 10.0,
+                wire_deci_degrees_to_angle_degrees(report.guard_zone_1.bearing_decideg),
+                wire_deci_degrees_to_angle_degrees(report.guard_zone_1.width_decideg),
                 if report.guard_zone_2.enabled { "ON" } else { "off" },
                 report.guard_zone_2.inner_range_m,
                 report.guard_zone_2.outer_range_m,
-                report.guard_zone_2.bearing_decideg as f32 / 10.0,
-                report.guard_zone_2.width_decideg as f32 / 10.0,
+                wire_deci_degrees_to_angle_degrees(report.guard_zone_2.bearing_decideg),
+                wire_deci_degrees_to_angle_degrees(report.guard_zone_2.width_decideg),
             );
         }
 
@@ -1013,21 +1013,24 @@ impl NavicoReportReceiver {
 
         // Report 04 returns bearing alignment as signed deci-degrees (i16),
         // convert to degrees for the control (-179 to +179)
-        let bearing_deg = report.bearing_alignment as f32 / 10.0;
+        let bearing_deg = wire_deci_degrees_to_angle_degrees(report.bearing_alignment);
+        let antenna_height = report.antenna_height as f32 / 1000.0;
+        let accent_light = report.accent_light as f32;
         log::debug!(
-            "{}: report 04 - bearing_alignment={} (raw i16) -> {} deg, antenna_height={} dm ({} m)",
+            "{}: report 04 - bearing_alignment={} (raw u16) -> {} deg, antenna_height={} mm ({} m), accent_light={}",
             self.key,
             report.bearing_alignment,
             bearing_deg,
             report.antenna_height,
-            report.antenna_height as f32 / 10.0
+            antenna_height,
+            accent_light,
         );
         self.set_value("bearingAlignment", bearing_deg);
-        // Report 04 returns antenna height in decimeters (same unit as command 0x30 C1),
+        // Report 04 returns antenna height in millimeters (NOT same unit as command 0x30 C1),
         // convert to meters for the control
-        self.set_value("antennaHeight", report.antenna_height as f32 / 10.0);
+        self.set_value("antennaHeight", antenna_height);
         if self.model == Model::HALO {
-            self.set_value("accentLight", report.accent_light as f32);
+            self.set_value("accentLight", accent_light);
         }
 
         Ok(())
@@ -1217,4 +1220,14 @@ impl NavicoReportReceiver {
 
         Ok(())
     }
+}
+
+fn wire_deci_degrees_to_angle_degrees(value: u16) -> f32 {
+    let value = if value >= 1800 {
+        value as i32 - 3600
+    } else {
+        value as i32
+    };
+
+    value as f32 / 10.0
 }

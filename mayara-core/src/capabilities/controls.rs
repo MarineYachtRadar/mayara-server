@@ -937,7 +937,7 @@ pub fn control_antenna_height() -> ControlDefinition {
         range: Some(RangeSpec {
             min: 0.0,
             max: 99.0,
-            step: Some(1.0),
+            step: Some(0.01),
             unit: Some("m".into()),
         }),
         values: None,

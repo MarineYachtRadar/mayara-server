@@ -721,7 +721,7 @@ pub struct ParsedModelInfo {
 /// Parsed Report 04 (installation settings)
 #[derive(Debug, Clone)]
 pub struct ParsedInstallation {
-    pub bearing_alignment: i16,
+    pub bearing_alignment: u16,
     pub antenna_height: u16,
     pub accent_light: u8,
 }
@@ -1137,7 +1137,7 @@ pub fn parse_report_04(data: &[u8]) -> Result<ParsedInstallation, ParseError> {
     }
 
     Ok(ParsedInstallation {
-        bearing_alignment: i16::from_le_bytes(report.bearing_alignment),
+        bearing_alignment: u16::from_le_bytes(report.bearing_alignment),
         antenna_height: u16::from_le_bytes(report.antenna_height),
         accent_light: report.accent_light,
     })
@@ -1750,7 +1750,7 @@ mod tests {
         // Report 04 packet: 0x04 0xC4 + data
         let mut data = vec![0x04, 0xC4];
         data.extend_from_slice(&[0; 4]); // _u00
-        data.extend_from_slice(&(-50i16).to_le_bytes()); // bearing_alignment = -50
+        data.extend_from_slice(&(3600u16 - 50u16).to_le_bytes()); // bearing_alignment = -50
         data.extend_from_slice(&[0; 2]); // _u01
         data.extend_from_slice(&100u16.to_le_bytes()); // antenna_height = 100
         data.extend_from_slice(&[0; 7]); // _u02
@@ -1760,7 +1760,7 @@ mod tests {
         let result = parse_report_04(&data);
         assert!(result.is_ok());
         let parsed = result.unwrap();
-        assert_eq!(parsed.bearing_alignment, -50);
+        assert_eq!(parsed.bearing_alignment, 3600u16 - 50u16);
         assert_eq!(parsed.antenna_height, 100);
         assert_eq!(parsed.accent_light, 3);
     }
