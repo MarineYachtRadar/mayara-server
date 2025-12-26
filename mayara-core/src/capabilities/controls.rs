@@ -1813,14 +1813,50 @@ pub fn control_rain_for_brand(brand: Brand) -> ControlDefinition {
     def
 }
 
-/// Bearing alignment control with brand-specific wire hints
+/// Bearing alignment control with brand-specific range and wire hints
 pub fn control_bearing_alignment_for_brand(brand: Brand) -> ControlDefinition {
     let mut def = control_bearing_alignment();
+
+    // Set brand-specific range limits
+    def.range = Some(match brand {
+        // Navico: -180 to +180 degrees in 0.1 degree steps (wire uses deci-degrees 0-3599)
+        Brand::Navico => RangeSpec {
+            min: -180.0,
+            max: 180.0,
+            step: Some(0.1),
+            unit: Some("degrees".into()),
+        },
+        // Furuno: -179 to +180 degrees in 0.1 degree steps (wire uses tenths)
+        Brand::Furuno => RangeSpec {
+            min: -179.0,
+            max: 180.0,
+            step: Some(0.1),
+            unit: Some("degrees".into()),
+        },
+        // Raymarine/Garmin: -180 to +180 in 1 degree steps
+        Brand::Raymarine | Brand::Garmin => RangeSpec {
+            min: -180.0,
+            max: 180.0,
+            step: Some(1.0),
+            unit: Some("degrees".into()),
+        },
+    });
+
     def.wire_hints = Some(match brand {
         // Navico: Wire protocol uses deci-degrees (0-3599), conversion done in report.rs
-        // Raymarine: Similar wire protocol
-        // All brands: Report 04 provides readable values
-        Brand::Navico | Brand::Raymarine | Brand::Furuno | Brand::Garmin => WireProtocolHint {
+        Brand::Navico => WireProtocolHint {
+            scale_factor: Some(3600.0), // 360 degrees * 10 = 3600 deci-degrees
+            write_only: false,
+            ..Default::default()
+        },
+        // Furuno: Wire protocol uses tenths of degrees
+        Brand::Furuno => WireProtocolHint {
+            scale_factor: Some(1800.0), // ±180 degrees * 10 = 1800 tenths
+            write_only: false,
+            ..Default::default()
+        },
+        // Raymarine/Garmin: degrees directly
+        Brand::Raymarine | Brand::Garmin => WireProtocolHint {
             write_only: false,
             ..Default::default()
         },
@@ -1828,14 +1864,52 @@ pub fn control_bearing_alignment_for_brand(brand: Brand) -> ControlDefinition {
     def
 }
 
-/// Antenna height control with brand-specific wire hints
+/// Antenna height control with brand-specific range and wire hints
 pub fn control_antenna_height_for_brand(brand: Brand) -> ControlDefinition {
     let mut def = control_antenna_height();
+
+    // Set brand-specific range limits
+    def.range = Some(match brand {
+        // Navico: 0-99m in 0.1m steps (wire uses decimeters 0-990)
+        Brand::Navico => RangeSpec {
+            min: 0.0,
+            max: 99.0,
+            step: Some(0.1),
+            unit: Some("m".into()),
+        },
+        // Furuno: 0-30m in 1m steps (integer meters)
+        Brand::Furuno => RangeSpec {
+            min: 0.0,
+            max: 30.0,
+            step: Some(1.0),
+            unit: Some("m".into()),
+        },
+        // Raymarine: 0-30m in 0.1m steps
+        Brand::Raymarine => RangeSpec {
+            min: 0.0,
+            max: 30.0,
+            step: Some(0.1),
+            unit: Some("m".into()),
+        },
+        // Garmin: 0-30m in 0.1m steps
+        Brand::Garmin => RangeSpec {
+            min: 0.0,
+            max: 30.0,
+            step: Some(0.1),
+            unit: Some("m".into()),
+        },
+    });
+
     def.wire_hints = Some(match brand {
         // Navico: Wire protocol uses decimeters (0-990), control uses meters (0-99).
         // Conversion is done in report.rs when reading Report 04.
-        Brand::Navico | Brand::Furuno | Brand::Raymarine | Brand::Garmin => WireProtocolHint {
-            write_only: false, // Navico Report 04 provides readable antenna height
+        Brand::Navico => WireProtocolHint {
+            scale_factor: Some(990.0), // 99m * 10 = 990 decimeters
+            write_only: false,
+            ..Default::default()
+        },
+        Brand::Furuno | Brand::Raymarine | Brand::Garmin => WireProtocolHint {
+            write_only: false,
             ..Default::default()
         },
     });
@@ -1910,9 +1984,35 @@ pub fn control_ftc_for_brand(brand: Brand) -> ControlDefinition {
     def
 }
 
-/// Doppler speed control with brand-specific wire hints
+/// Doppler speed control with brand-specific range and wire hints
 pub fn control_doppler_speed_for_brand(brand: Brand) -> ControlDefinition {
     let mut def = control_doppler_speed();
+
+    // Set brand-specific range limits
+    def.range = Some(match brand {
+        // Navico HALO: 0.5-16 knots in 0.5 knot steps
+        Brand::Navico => RangeSpec {
+            min: 0.5,
+            max: 16.0,
+            step: Some(0.5),
+            unit: Some("knots".into()),
+        },
+        // Furuno NXT: 0.2-15 knots in 0.1 knot steps
+        Brand::Furuno => RangeSpec {
+            min: 0.2,
+            max: 15.0,
+            step: Some(0.1),
+            unit: Some("knots".into()),
+        },
+        // Raymarine/Garmin: similar range
+        Brand::Raymarine | Brand::Garmin => RangeSpec {
+            min: 0.5,
+            max: 20.0,
+            step: Some(0.5),
+            unit: Some("knots".into()),
+        },
+    });
+
     def.wire_hints = Some(match brand {
         Brand::Navico => WireProtocolHint {
             scale_factor: Some(99.0 * 16.0), // cm/s units
