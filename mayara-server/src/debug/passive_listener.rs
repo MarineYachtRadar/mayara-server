@@ -133,7 +133,8 @@ async fn listen_multicast(
     );
 
     let decoder = create_decoder(brand);
-    let mut buf = [0u8; 65536];
+    // Use Box to avoid 64KB stack allocation in async context
+    let mut buf = vec![0u8; 65536].into_boxed_slice();
 
     loop {
         match socket.recv_from(&mut buf).await {
