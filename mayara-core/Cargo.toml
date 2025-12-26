@@ -32,5 +32,6 @@ thiserror = "1.0"
 bincode = "1.3"
 bitflags = "2.4"
 nalgebra = "0.32"
+strum = { version = "0.27", features = ["derive"] }
 
 # Note: NO tokio, NO socket2, NO network-interface, NO platform crates

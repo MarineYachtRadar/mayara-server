@@ -4,6 +4,7 @@
 //! (Simrad, Lowrance, B&G branded radars).
 
 use super::ModelInfo;
+use crate::capabilities::ControlId;
 use crate::Brand;
 
 /// Range table for HALO series (in meters)
@@ -56,39 +57,39 @@ static RANGE_TABLE_4G: &[u32] = &[
 ];
 
 /// Extended controls for HALO series
-static CONTROLS_HALO: &[&str] = &[
-    "presetMode",   // Harbor/Offshore/Weather/Custom
-    "dopplerMode",  // VelocityTrack
-    "dopplerSpeed", // VelocityTrack speed threshold
-    "targetSeparation",
-    "targetExpansion",
-    "targetBoost",
-    "seaState",
-    "noiseRejection",
-    "interferenceRejection",
-    "localInterferenceRejection",
-    "sidelobeSuppression",
-    "birdMode",
-    "noTransmitZones",
-    "bearingAlignment",
-    "antennaHeight",
-    "scanSpeed",
-    "accentLight", // Pedestal lighting
+static CONTROLS_HALO: &[ControlId] = &[
+    ControlId::PresetMode,   // Harbor/Offshore/Weather/Custom
+    ControlId::DopplerMode,  // VelocityTrack
+    ControlId::DopplerSpeed, // VelocityTrack speed threshold
+    ControlId::TargetSeparation,
+    ControlId::TargetExpansion,
+    ControlId::TargetBoost,
+    ControlId::SeaState,
+    ControlId::NoiseRejection,
+    ControlId::InterferenceRejection,
+    ControlId::LocalInterferenceRejection,
+    ControlId::SidelobeSuppression,
+    ControlId::BirdMode,
+    ControlId::NoTransmitZones,
+    ControlId::BearingAlignment,
+    ControlId::AntennaHeight,
+    ControlId::ScanSpeed,
+    ControlId::AccentLight, // Pedestal lighting
 ];
 
 /// Extended controls for 4G/3G series
-static CONTROLS_4G: &[&str] = &[
-    "presetMode",
-    "targetSeparation",
-    "targetExpansion",
-    "targetBoost",
-    "seaState",
-    "noiseRejection",
-    "interferenceRejection",
-    "sidelobeSuppression",
-    "noTransmitZones",
-    "bearingAlignment",
-    "antennaHeight",
+static CONTROLS_4G: &[ControlId] = &[
+    ControlId::PresetMode,
+    ControlId::TargetSeparation,
+    ControlId::TargetExpansion,
+    ControlId::TargetBoost,
+    ControlId::SeaState,
+    ControlId::NoiseRejection,
+    ControlId::InterferenceRejection,
+    ControlId::SidelobeSuppression,
+    ControlId::NoTransmitZones,
+    ControlId::BearingAlignment,
+    ControlId::AntennaHeight,
 ];
 
 /// All known Navico radar models
@@ -240,7 +241,7 @@ pub static MODELS: &[ModelInfo] = &[
         has_dual_range: false,
         max_dual_range: 0,
         no_transmit_zone_count: 2,
-        controls: &["interferenceRejection", "bearingAlignment"],
+        controls: &[ControlId::InterferenceRejection, ControlId::BearingAlignment],
     },
 ];
 
@@ -258,13 +259,13 @@ mod tests {
         let model = get_model("HALO24").unwrap();
         assert_eq!(model.family, "HALO");
         assert!(model.has_doppler);
-        assert!(model.controls.contains(&"dopplerMode"));
+        assert!(model.controls.contains(&ControlId::DopplerMode));
     }
 
     #[test]
     fn test_4g() {
         let model = get_model("4G").unwrap();
         assert!(!model.has_doppler);
-        assert!(model.controls.contains(&"presetMode"));
+        assert!(model.controls.contains(&ControlId::PresetMode));
     }
 }

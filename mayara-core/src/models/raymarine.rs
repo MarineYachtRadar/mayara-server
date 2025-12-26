@@ -3,6 +3,7 @@
 //! This module contains specifications for Raymarine radar models.
 
 use super::ModelInfo;
+use crate::capabilities::ControlId;
 use crate::Brand;
 
 /// Range table for Quantum series (in meters)
@@ -17,40 +18,40 @@ static RANGE_TABLE_RD: &[u32] = &[
 ];
 
 /// Extended controls for Quantum 2 (Doppler capable)
-static CONTROLS_QUANTUM2: &[&str] = &[
-    "presetMode",       // Harbor/Coastal/Offshore
-    "dopplerMode",      // True Echo Trail
-    "targetSeparation", // ATX
-    "targetExpansion",
-    "mainBangSuppression",
-    "colorGain", // Quantum-specific
-    "interferenceRejection",
-    "noTransmitZones",
-    "bearingAlignment",
-    "antennaHeight",
+static CONTROLS_QUANTUM2: &[ControlId] = &[
+    ControlId::PresetMode,       // Harbor/Coastal/Offshore
+    ControlId::DopplerMode,      // True Echo Trail
+    ControlId::TargetSeparation, // ATX
+    ControlId::TargetExpansion,
+    ControlId::MainBangSuppression,
+    ControlId::ColorGain, // Quantum-specific
+    ControlId::InterferenceRejection,
+    ControlId::NoTransmitZones,
+    ControlId::BearingAlignment,
+    ControlId::AntennaHeight,
 ];
 
 /// Extended controls for Quantum (non-Doppler)
-static CONTROLS_QUANTUM: &[&str] = &[
-    "presetMode",
-    "targetSeparation",
-    "targetExpansion",
-    "mainBangSuppression",
-    "colorGain", // Quantum-specific
-    "interferenceRejection",
-    "noTransmitZones",
-    "bearingAlignment",
-    "antennaHeight",
+static CONTROLS_QUANTUM: &[ControlId] = &[
+    ControlId::PresetMode,
+    ControlId::TargetSeparation,
+    ControlId::TargetExpansion,
+    ControlId::MainBangSuppression,
+    ControlId::ColorGain, // Quantum-specific
+    ControlId::InterferenceRejection,
+    ControlId::NoTransmitZones,
+    ControlId::BearingAlignment,
+    ControlId::AntennaHeight,
 ];
 
 /// Extended controls for RD series
-static CONTROLS_RD: &[&str] = &[
-    "interferenceRejection",
-    "targetExpansion",
-    "mainBangSuppression",
-    "ftc",  // Fast Time Constant
-    "tune", // Receiver tuning
-    "bearingAlignment",
+static CONTROLS_RD: &[ControlId] = &[
+    ControlId::InterferenceRejection,
+    ControlId::TargetExpansion,
+    ControlId::MainBangSuppression,
+    ControlId::Ftc,  // Fast Time Constant
+    ControlId::Tune, // Receiver tuning
+    ControlId::BearingAlignment,
 ];
 
 /// All known Raymarine radar models
@@ -169,7 +170,7 @@ mod tests {
     fn test_quantum2() {
         let model = get_model("Quantum 2").unwrap();
         assert!(model.has_doppler);
-        assert!(model.controls.contains(&"dopplerMode"));
+        assert!(model.controls.contains(&ControlId::DopplerMode));
     }
 
     #[test]
