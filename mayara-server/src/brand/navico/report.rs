@@ -467,7 +467,9 @@ impl NavicoReportReceiver {
                 controller.set_range(&mut self.io, deci_value);
             }
             "bearingAlignment" => {
-                controller.set_bearing_alignment(&mut self.io, mod_deci_degrees(deci_value));
+                // Bearing alignment uses signed deci-degrees (-1790 to +1790)
+                // No modulo conversion needed - just cast to i16
+                controller.set_bearing_alignment(&mut self.io, deci_value as i16);
             }
             "gain" => {
                 controller.set_gain(&mut self.io, scale_100_to_byte(value), auto);
