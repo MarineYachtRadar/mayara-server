@@ -2012,10 +2012,10 @@ pub fn get_all_controls_for_model(
         if let Some(model_info) = models::get_model(brand, name) {
             for control_id in model_info.controls {
                 // Skip special compound controls
-                if *control_id == "noTransmitZones" {
+                if *control_id == super::ControlId::NoTransmitZones {
                     continue;
                 }
-                if let Some(def) = get_extended_control_for_brand(control_id, brand) {
+                if let Some(def) = get_extended_control_for_brand(control_id.as_ref(), brand) {
                     controls.push(def);
                 }
             }

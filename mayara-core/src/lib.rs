@@ -122,6 +122,7 @@ pub mod trails;
 
 // Re-export commonly used types
 pub use brand::Brand;
+pub use capabilities::ControlId;
 pub use connection::{ConnectionManager, ConnectionState, ReceiveSocketType};
 pub use controllers::{
     ControllerEvent, ControllerState, FurunoController, GarminController, GarminControllerState,

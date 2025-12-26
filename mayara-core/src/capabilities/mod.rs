@@ -6,9 +6,119 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
+use strum::{AsRefStr, Display, EnumString, IntoStaticStr};
 
 pub mod builder;
 pub mod controls;
+
+/// Strongly-typed control identifiers.
+///
+/// Using an enum instead of string literals ensures compile-time checking
+/// for control IDs and enables IDE autocompletion. The strum derive macros
+/// provide automatic String conversion for API compatibility.
+///
+/// # API Serialization
+/// Control IDs are serialized as camelCase strings in the JSON API.
+/// Use `.as_ref()` or `.to_string()` to get the string representation.
+///
+/// # Example
+/// ```
+/// use mayara_core::capabilities::ControlId;
+///
+/// let id = ControlId::BearingAlignment;
+/// assert_eq!(id.as_ref(), "bearingAlignment");
+/// assert_eq!(id.to_string(), "bearingAlignment");
+///
+/// // Parse from string
+/// let parsed: ControlId = "bearingAlignment".parse().unwrap();
+/// assert_eq!(parsed, ControlId::BearingAlignment);
+/// ```
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, AsRefStr, Display, EnumString, IntoStaticStr,
+)]
+#[strum(serialize_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub enum ControlId {
+    // Base controls (all radars)
+    /// Radar power state (off/standby/transmit/warming)
+    Power,
+    /// Detection range in meters
+    Range,
+    /// Signal amplification (auto/manual with value)
+    Gain,
+    /// Sea clutter suppression (auto/manual with value)
+    Sea,
+    /// Rain clutter suppression
+    Rain,
+
+    // Read-only info controls
+    /// Serial number (read-only)
+    SerialNumber,
+    /// Firmware version (read-only)
+    FirmwareVersion,
+    /// Operating hours counter (read-only)
+    OperatingHours,
+    /// Transmit hours counter (read-only)
+    TransmitHours,
+
+    // Extended controls (model-specific)
+    /// Antenna rotation speed
+    RotationSpeed,
+    /// Beam sharpening / RezBoost
+    BeamSharpening,
+    /// Doppler mode (off/approaching/both)
+    DopplerMode,
+    /// Bird detection mode
+    BirdMode,
+    /// TX channel selection
+    TxChannel,
+    /// Interference rejection level
+    InterferenceRejection,
+    /// Preset display mode
+    PresetMode,
+    /// Target separation level
+    TargetSeparation,
+    /// Scan/rotation speed control
+    ScanSpeed,
+    /// Automatic target acquisition
+    AutoAcquire,
+    /// Noise reduction level
+    NoiseReduction,
+    /// Main bang suppression
+    MainBangSuppression,
+    /// Target expansion/stretching
+    TargetExpansion,
+    /// Target boost/enhancement
+    TargetBoost,
+    /// Sea state conditions
+    SeaState,
+    /// Sidelobe suppression level
+    SidelobeSuppression,
+    /// Noise rejection level
+    NoiseRejection,
+    /// Crosstalk rejection
+    CrosstalkRejection,
+    /// Fast Time Constant filter
+    Ftc,
+    /// Manual tuning control
+    Tune,
+    /// Color/contrast gain
+    ColorGain,
+    /// Accent/status light control
+    AccentLight,
+    /// Doppler speed threshold
+    DopplerSpeed,
+    /// Local interference rejection
+    LocalInterferenceRejection,
+
+    // Installation controls (schema only, not in /state)
+    /// Bearing/heading alignment offset (degrees)
+    BearingAlignment,
+    /// Antenna height above waterline
+    AntennaHeight,
+    /// No-transmit/blanking zones configuration
+    NoTransmitZones,
+}
 
 /// Optional features a radar provider may implement.
 ///

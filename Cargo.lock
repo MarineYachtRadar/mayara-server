@@ -1518,6 +1518,7 @@ dependencies = [
  "nalgebra 0.32.6",
  "serde",
  "serde_json",
+ "strum",
  "thiserror 1.0.69",
 ]
 

@@ -187,25 +187,26 @@ pub fn update_when_model_known(info: &mut RadarInfo, model: RadarModel, version:
 
         for control_id in model_info.controls {
             // Skip controls that are already added (like noTransmitZones which maps to Start/End controls)
-            if *control_id == "noTransmitZones" {
+            if *control_id == mayara_core::ControlId::NoTransmitZones {
                 continue;
             }
 
             // Get control definition from mayara-core
-            if let Some(core_def) = get_control_for_brand(control_id, Brand::Furuno) {
+            let control_id_str = control_id.as_ref();
+            if let Some(core_def) = get_control_for_brand(control_id_str, Brand::Furuno) {
                 log::info!(
                     "{}: Building control '{}' (type: {:?})",
                     info.key(),
-                    control_id,
+                    control_id_str,
                     core_def.control_type
                 );
                 let control = control_factory::build_control(&core_def);
                 log::info!(
                     "{}: Adding extended control '{}' from core definition",
                     info.key(),
-                    control_id
+                    control_id_str
                 );
-                info.controls.insert(control_id, control);
+                info.controls.insert(control_id_str, control);
             } else {
                 log::warn!(
                     "{}: Control '{}' listed in model capabilities but not found in mayara-core",

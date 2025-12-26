@@ -458,10 +458,11 @@ pub fn build_extended_controls_for_model(
     if let Some(model_info) = models::get_model(brand, model_name) {
         for control_id in model_info.controls {
             // Skip special compound controls that map to multiple controls
-            if *control_id == "noTransmitZones" {
+            if *control_id == mayara_core::ControlId::NoTransmitZones {
                 continue;
             }
-            if let Some(def) = controls::get_extended_control_for_brand(control_id, brand) {
+            if let Some(def) = controls::get_extended_control_for_brand(control_id.as_ref(), brand)
+            {
                 result.insert(control_id.to_string(), build_control(&def));
             }
         }

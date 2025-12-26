@@ -8,7 +8,7 @@ use crate::radar::RadarDiscovery;
 use super::controls::*;
 use super::{
     CapabilityManifest, Characteristics, ConstraintCondition, ConstraintEffect, ConstraintType,
-    ControlConstraint, ControlDefinition, SupportedFeature,
+    ControlConstraint, ControlDefinition, ControlId, SupportedFeature,
 };
 
 /// Build a capability manifest for a discovered radar
@@ -194,19 +194,21 @@ fn build_controls(model: &ModelInfo, has_serial_number: bool) -> Vec<ControlDefi
     // in capabilities so clients can see the schema, but they won't appear in /state
     // since they're configuration values stored locally, not queried from the radar.
     for control_id in model.controls {
-        if *control_id == "noTransmitZones" {
+        if *control_id == ControlId::NoTransmitZones {
             if let Some(def) =
-                get_extended_control_with_zones(control_id, model.no_transmit_zone_count)
+                get_extended_control_with_zones(control_id.as_ref(), model.no_transmit_zone_count)
             {
                 controls.push(def);
             }
-        } else if *control_id == "interferenceRejection" && model.brand == crate::Brand::Furuno {
+        } else if *control_id == ControlId::InterferenceRejection
+            && model.brand == crate::Brand::Furuno
+        {
             // Furuno has simple on/off interference rejection
             controls.push(control_interference_rejection_furuno());
-        } else if *control_id == "scanSpeed" && model.brand == crate::Brand::Furuno {
+        } else if *control_id == ControlId::ScanSpeed && model.brand == crate::Brand::Furuno {
             // Furuno uses 0=24RPM, 2=Auto
             controls.push(control_scan_speed_furuno());
-        } else if let Some(def) = get_extended_control(control_id) {
+        } else if let Some(def) = get_extended_control(control_id.as_ref()) {
             controls.push(def);
         }
     }
@@ -220,13 +222,18 @@ fn build_constraints(model: &ModelInfo) -> Vec<ControlConstraint> {
     let mut constraints = vec![];
 
     // If preset mode is available, add constraints for controls it locks
-    if model.controls.contains(&"presetMode") {
-        let locked_controls = ["gain", "sea", "rain", "interferenceRejection"];
+    if model.controls.contains(&ControlId::PresetMode) {
+        let locked_controls = [
+            ControlId::Gain,
+            ControlId::Sea,
+            ControlId::Rain,
+            ControlId::InterferenceRejection,
+        ];
 
         for control_id in locked_controls {
             // Only add constraint if the control exists on this model
-            if control_id == "interferenceRejection"
-                && !model.controls.contains(&"interferenceRejection")
+            if control_id == ControlId::InterferenceRejection
+                && !model.controls.contains(&ControlId::InterferenceRejection)
             {
                 continue;
             }
@@ -235,7 +242,7 @@ fn build_constraints(model: &ModelInfo) -> Vec<ControlConstraint> {
                 control_id: control_id.to_string(),
                 condition: ConstraintCondition {
                     condition_type: ConstraintType::ReadOnlyWhen,
-                    depends_on: "presetMode".into(),
+                    depends_on: ControlId::PresetMode.to_string(),
                     operator: "!=".into(),
                     value: "custom".into(),
                 },
@@ -250,7 +257,7 @@ fn build_constraints(model: &ModelInfo) -> Vec<ControlConstraint> {
     }
 
     // Doppler mode constraint: only available when radar has Doppler
-    if model.has_doppler && model.controls.contains(&"dopplerMode") {
+    if model.has_doppler && model.controls.contains(&ControlId::DopplerMode) {
         // No additional constraint needed - presence in controls indicates availability
     }
 

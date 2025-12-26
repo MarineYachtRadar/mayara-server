@@ -3,6 +3,7 @@
 //! This module contains specifications for Furuno radar models.
 
 use super::ModelInfo;
+use crate::capabilities::ControlId;
 use crate::Brand;
 
 /// Range table for DRS-NXT series (in meters)
@@ -68,39 +69,39 @@ static RANGE_TABLE_FAR: &[u32] = &[
 /// Extended controls available on NXT series
 /// Note: bearingAlignment and antennaHeight are installation config values,
 /// not live controls - they're stored in SignalK plugin config
-static CONTROLS_NXT: &[&str] = &[
-    "beamSharpening", // RezBoost
-    "dopplerMode",    // Target Analyzer (enabled + target/rain mode)
-    "birdMode",
-    "interferenceRejection",
-    "noiseReduction",      // Command 0x67 feature 3
-    "mainBangSuppression", // Command 0x83
-    "scanSpeed",
-    "noTransmitZones",
-    "autoAcquire",      // Auto target acquisition
-    "txChannel",        // TX channel selection
-    "bearingAlignment", // Installation config - schema only, not in /state
-    "antennaHeight",    // Installation config - schema only, not in /state
+static CONTROLS_NXT: &[ControlId] = &[
+    ControlId::BeamSharpening, // RezBoost
+    ControlId::DopplerMode,    // Target Analyzer (enabled + target/rain mode)
+    ControlId::BirdMode,
+    ControlId::InterferenceRejection,
+    ControlId::NoiseReduction,      // Command 0x67 feature 3
+    ControlId::MainBangSuppression, // Command 0x83
+    ControlId::ScanSpeed,
+    ControlId::NoTransmitZones,
+    ControlId::AutoAcquire,      // Auto target acquisition
+    ControlId::TxChannel,        // TX channel selection
+    ControlId::BearingAlignment, // Installation config - schema only, not in /state
+    ControlId::AntennaHeight,    // Installation config - schema only, not in /state
 ];
 
 /// Extended controls available on standard DRS series
 /// Note: bearingAlignment and antennaHeight are installation config values
-static CONTROLS_DRS: &[&str] = &[
-    "interferenceRejection",
-    "scanSpeed",
-    "noTransmitZones",
-    "bearingAlignment", // Installation config - schema only, not in /state
-    "antennaHeight",    // Installation config - schema only, not in /state
+static CONTROLS_DRS: &[ControlId] = &[
+    ControlId::InterferenceRejection,
+    ControlId::ScanSpeed,
+    ControlId::NoTransmitZones,
+    ControlId::BearingAlignment, // Installation config - schema only, not in /state
+    ControlId::AntennaHeight,    // Installation config - schema only, not in /state
 ];
 
 /// Extended controls available on FAR series
 /// Note: bearingAlignment and antennaHeight are installation config values
-static CONTROLS_FAR: &[&str] = &[
-    "interferenceRejection",
-    "noTransmitZones",
-    "txChannel",
-    "bearingAlignment", // Installation config - schema only, not in /state
-    "antennaHeight",    // Installation config - schema only, not in /state
+static CONTROLS_FAR: &[ControlId] = &[
+    ControlId::InterferenceRejection,
+    ControlId::NoTransmitZones,
+    ControlId::TxChannel,
+    ControlId::BearingAlignment, // Installation config - schema only, not in /state
+    ControlId::AntennaHeight,    // Installation config - schema only, not in /state
 ];
 
 /// All known Furuno radar models
@@ -302,8 +303,8 @@ mod tests {
         assert!(model.has_doppler);
         assert!(model.has_dual_range);
         assert_eq!(model.no_transmit_zone_count, 2);
-        assert!(model.controls.contains(&"dopplerMode"));
-        assert!(model.controls.contains(&"beamSharpening"));
+        assert!(model.controls.contains(&ControlId::DopplerMode));
+        assert!(model.controls.contains(&ControlId::BeamSharpening));
     }
 
     #[test]

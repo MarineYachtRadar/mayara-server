@@ -3,6 +3,7 @@
 //! This module contains specifications for Garmin radar models.
 
 use super::ModelInfo;
+use crate::capabilities::ControlId;
 use crate::Brand;
 
 /// Range table for xHD series (in meters)
@@ -18,25 +19,25 @@ static RANGE_TABLE_FANTOM: &[u32] = &[
 ];
 
 /// Extended controls for Fantom series (Doppler capable)
-static CONTROLS_FANTOM: &[&str] = &[
-    "dopplerMode", // MotionScope
-    "targetSeparation",
-    "interferenceRejection",
-    "crosstalkRejection", // Garmin-specific
-    "noTransmitZones",
-    "bearingAlignment",
-    "antennaHeight",
-    "scanSpeed",
+static CONTROLS_FANTOM: &[ControlId] = &[
+    ControlId::DopplerMode, // MotionScope
+    ControlId::TargetSeparation,
+    ControlId::InterferenceRejection,
+    ControlId::CrosstalkRejection, // Garmin-specific
+    ControlId::NoTransmitZones,
+    ControlId::BearingAlignment,
+    ControlId::AntennaHeight,
+    ControlId::ScanSpeed,
 ];
 
 /// Extended controls for xHD series
-static CONTROLS_XHD: &[&str] = &[
-    "targetSeparation",
-    "interferenceRejection",
-    "crosstalkRejection", // Garmin-specific
-    "noTransmitZones",
-    "bearingAlignment",
-    "antennaHeight",
+static CONTROLS_XHD: &[ControlId] = &[
+    ControlId::TargetSeparation,
+    ControlId::InterferenceRejection,
+    ControlId::CrosstalkRejection, // Garmin-specific
+    ControlId::NoTransmitZones,
+    ControlId::BearingAlignment,
+    ControlId::AntennaHeight,
 ];
 
 /// All known Garmin radar models
@@ -186,7 +187,7 @@ mod tests {
     fn test_fantom_24() {
         let model = get_model("Fantom 24").unwrap();
         assert!(model.has_doppler);
-        assert!(model.controls.contains(&"dopplerMode"));
+        assert!(model.controls.contains(&ControlId::DopplerMode));
     }
 
     #[test]

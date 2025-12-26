@@ -4,6 +4,7 @@
 //! range tables, and available controls. This information is used to build
 //! capability manifests for the v5 API.
 
+use crate::capabilities::ControlId;
 use crate::Brand;
 
 pub mod furuno;
@@ -46,8 +47,9 @@ pub struct ModelInfo {
     pub no_transmit_zone_count: u8,
 
     // Available extended controls (semantic IDs)
-    /// List of extended control IDs available on this model
-    pub controls: &'static [&'static str],
+    /// List of extended control IDs available on this model.
+    /// Uses strongly-typed `ControlId` enum for compile-time safety.
+    pub controls: &'static [ControlId],
 }
 
 /// Unknown/generic model used when a radar model isn't in the database
