@@ -10,6 +10,7 @@ use strum::{AsRefStr, Display, EnumString, IntoStaticStr};
 
 pub mod builder;
 pub mod controls;
+pub mod range_format;
 
 /// Strongly-typed control identifiers.
 ///
