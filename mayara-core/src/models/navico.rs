@@ -78,6 +78,7 @@ static CONTROLS_HALO: &[ControlId] = &[
 ];
 
 /// Extended controls for 4G/3G series
+/// NOTE: NoTransmitZones NOT supported on 4G/3G (no_transmit_zone_count=0)
 static CONTROLS_4G: &[ControlId] = &[
     ControlId::PresetMode,
     ControlId::TargetSeparation,
@@ -87,7 +88,6 @@ static CONTROLS_4G: &[ControlId] = &[
     ControlId::NoiseRejection,
     ControlId::InterferenceRejection,
     ControlId::SidelobeSuppression,
-    ControlId::NoTransmitZones,
     ControlId::BearingAlignment,
     ControlId::AntennaHeight,
 ];
@@ -192,7 +192,7 @@ pub static MODELS: &[ModelInfo] = &[
         no_transmit_zone_count: 2,
         controls: CONTROLS_HALO,
     },
-    // 4G Series
+    // 4G Series (no transmit zones not supported on 4G)
     ModelInfo {
         brand: Brand::Navico,
         model: "4G",
@@ -206,10 +206,10 @@ pub static MODELS: &[ModelInfo] = &[
         has_doppler: false,
         has_dual_range: false,
         max_dual_range: 0,
-        no_transmit_zone_count: 2,
+        no_transmit_zone_count: 0,
         controls: CONTROLS_4G,
     },
-    // 3G Series
+    // 3G Series (no transmit zones not supported on 3G)
     ModelInfo {
         brand: Brand::Navico,
         model: "3G",
@@ -223,10 +223,10 @@ pub static MODELS: &[ModelInfo] = &[
         has_doppler: false,
         has_dual_range: false,
         max_dual_range: 0,
-        no_transmit_zone_count: 2,
+        no_transmit_zone_count: 0,
         controls: CONTROLS_4G,
     },
-    // BR24
+    // BR24 (no transmit zones not supported on BR24)
     ModelInfo {
         brand: Brand::Navico,
         model: "BR24",
@@ -240,7 +240,7 @@ pub static MODELS: &[ModelInfo] = &[
         has_doppler: false,
         has_dual_range: false,
         max_dual_range: 0,
-        no_transmit_zone_count: 2,
+        no_transmit_zone_count: 0,
         controls: &[ControlId::InterferenceRejection, ControlId::BearingAlignment],
     },
 ];

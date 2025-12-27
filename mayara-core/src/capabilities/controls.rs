@@ -1864,10 +1864,15 @@ pub fn get_extended_control(id: &str) -> Option<ControlDefinition> {
 }
 
 /// Get extended control with customization for no-transmit zones
+/// Returns None if zone_count is 0 (model doesn't support no-transmit zones)
 #[inline(never)]
 pub fn get_extended_control_with_zones(id: &str, zone_count: u8) -> Option<ControlDefinition> {
     if id == "noTransmitZones" {
-        Some(control_no_transmit_zones(zone_count))
+        if zone_count == 0 {
+            None // Model doesn't support no-transmit zones
+        } else {
+            Some(control_no_transmit_zones(zone_count))
+        }
     } else {
         get_extended_control(id)
     }
