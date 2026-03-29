@@ -46,6 +46,14 @@ pub struct Cli {
     #[arg(short, long, default_value_t = 6502)]
     pub port: u16,
 
+    /// TLS certificate file (PEM format). Enables HTTPS when set with --tls-key.
+    #[arg(long, requires = "tls_key")]
+    pub tls_cert: Option<std::path::PathBuf>,
+
+    /// TLS private key file (PEM format). Enables HTTPS when set with --tls-cert.
+    #[arg(long, requires = "tls_cert")]
+    pub tls_key: Option<std::path::PathBuf>,
+
     /// Limit radar location to a single interface
     #[arg(short, long)]
     pub interface: Option<String>,

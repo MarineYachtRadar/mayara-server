@@ -33,6 +33,23 @@ services:
   #     - ALL
   #   restart: unless-stopped
 
+  # Example: with TLS certificates
+  # mayara-tls:
+  #   image: ghcr.io/marineyachtradar/mayara-server:latest
+  #   command: ["mayara-server", "--emulator", "--tls-cert", "/certs/cert.pem", "--tls-key", "/certs/key.pem"]
+  #   ports:
+  #     - "6502:6502"
+  #   volumes:
+  #     - ./certs:/certs:ro
+  #   tmpfs:
+  #     - /tmp
+  #   read_only: true
+  #   security_opt:
+  #     - no-new-privileges:true
+  #   cap_drop:
+  #     - ALL
+  #   restart: unless-stopped
+
   # Example: shore-based radar with fixed position
   # mayara-stationary:
   #   image: ghcr.io/marineyachtradar/mayara-server:latest

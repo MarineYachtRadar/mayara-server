@@ -1,6 +1,6 @@
 use axum::{
     Json, Router, debug_handler,
-    extract::{ConnectInfo, Path, State},
+    extract::{Path, State},
     response::{IntoResponse, Redirect, Response},
     routing::get,
 };
@@ -15,12 +15,14 @@ use std::{
     io,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     str::FromStr,
+    sync::Arc,
 };
 use thiserror::Error;
 use tokio::{
-    net::TcpListener,
+    net::{TcpListener, TcpStream},
     sync::{broadcast, mpsc},
 };
+use tokio_rustls::{TlsAcceptor, server::TlsStream};
 use tokio_graceful_shutdown::SubsystemHandle;
 use tower_http::trace::TraceLayer;
 use utoipa::ToSchema;
@@ -48,12 +50,70 @@ pub enum WebError {
     PortInUse(u16),
     #[error("Socket operation failed: {0}")]
     Io(#[from] io::Error),
+    #[error("TLS configuration error: {0}")]
+    Tls(#[from] rustls::Error),
+    #[error("No private key found in {0}")]
+    NoPrivateKey(String),
+}
+
+struct TlsListener {
+    listener: TcpListener,
+    acceptor: TlsAcceptor,
+}
+
+impl axum::serve::Listener for TlsListener {
+    type Io = TlsStream<TcpStream>;
+    type Addr = SocketAddr;
+
+    async fn accept(&mut self) -> (Self::Io, Self::Addr) {
+        loop {
+            let (stream, addr) = match self.listener.accept().await {
+                Ok(conn) => conn,
+                Err(e) => {
+                    log::warn!("TCP accept failed: {}", e);
+                    continue;
+                }
+            };
+            match self.acceptor.accept(stream).await {
+                Ok(tls_stream) => return (tls_stream, addr),
+                Err(e) => {
+                    log::debug!("TLS handshake failed from {}: {}", addr, e);
+                }
+            }
+        }
+    }
+
+    fn local_addr(&self) -> io::Result<Self::Addr> {
+        self.listener.local_addr()
+    }
+}
+
+fn load_tls_config(
+    cert_path: &std::path::Path,
+    key_path: &std::path::Path,
+) -> Result<rustls::ServerConfig, WebError> {
+    let cert_file = std::fs::File::open(cert_path)
+        .map_err(|e| io::Error::new(e.kind(), format!("{}: {}", cert_path.display(), e)))?;
+    let key_file = std::fs::File::open(key_path)
+        .map_err(|e| io::Error::new(e.kind(), format!("{}: {}", key_path.display(), e)))?;
+
+    let certs: Vec<_> = rustls_pemfile::certs(&mut io::BufReader::new(cert_file))
+        .collect::<Result<_, _>>()?;
+    let key = rustls_pemfile::private_key(&mut io::BufReader::new(key_file))?
+        .ok_or_else(|| WebError::NoPrivateKey(key_path.display().to_string()))?;
+
+    let config = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, key)?;
+
+    Ok(config)
 }
 
 #[derive(Clone)]
 pub struct Web {
     radars: SharedRadars,
     args: Cli,
+    tls: bool,
     shutdown_tx: broadcast::Sender<()>,
     tx_interface_request: broadcast::Sender<Option<mpsc::Sender<InterfaceApi>>>,
 }
@@ -62,11 +122,13 @@ impl Web {
     pub async fn new(subsys: &SubsystemHandle, args: Cli) -> Self {
         let (shutdown_tx, _) = broadcast::channel(1);
 
+        let tls = args.tls_cert.is_some();
         let (radars, tx_interface_request) = start_session(subsys, args.clone()).await;
 
         Web {
             radars,
             args,
+            tls,
             shutdown_tx,
             tx_interface_request,
         }
@@ -74,20 +136,26 @@ impl Web {
 
     pub async fn run(self, subsys: SubsystemHandle) -> Result<(), WebError> {
         let port = self.args.port;
-        let listener =
-            TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), port))
-                .await
-                .map_err(|e| {
-                    if e.kind() == io::ErrorKind::AddrInUse {
-                        WebError::PortInUse(port)
-                    } else {
-                        WebError::Io(e)
-                    }
-                })?;
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), port);
+        let listener = TcpListener::bind(addr).await.map_err(|e| {
+            if e.kind() == io::ErrorKind::AddrInUse {
+                WebError::PortInUse(port)
+            } else {
+                WebError::Io(e)
+            }
+        })?;
+
+        let tls_acceptor = match (&self.args.tls_cert, &self.args.tls_key) {
+            (Some(cert), Some(key)) => {
+                let config = load_tls_config(cert, key)?;
+                Some(TlsAcceptor::from(Arc::new(config)))
+            }
+            _ => None,
+        };
 
         let serve_assets = ServeEmbed::<Assets>::new();
         let mut shutdown_rx = self.shutdown_tx.subscribe();
-        let shutdown_tx = self.shutdown_tx.clone(); // Clone as self used in with_state() and with_graceful_shutdown() below
+        let shutdown_tx = self.shutdown_tx.clone();
 
         let router = Router::new()
             .route("/", get(root_redirect))
@@ -95,29 +163,43 @@ impl Web {
             .route("/quit", get(quit_handler));
         let router = signalk::v2::routes(router);
 
-        let app = router
+        let router = router
             .fallback_service(serve_assets)
             .layer(TraceLayer::new_for_http())
-            .with_state(self)
-            .into_make_service_with_connect_info::<SocketAddr>();
+            .with_state(self);
 
-        log::info!(
-            "Starting HTTP web server on port {} (pid {})",
-            port,
-            std::process::id()
-        );
+        let shutdown = async move { _ = shutdown_rx.recv().await };
 
-        tokio::select! { biased;
-            _ = subsys.on_shutdown_requested() => {
-                let _ = shutdown_tx.send(());
-            },
-            r = axum::serve(listener, app)
-                    .with_graceful_shutdown(
-                        async move {
-                            _ = shutdown_rx.recv().await;
-                        }
-                    ) => {
-                return r.map_err(|e| WebError::Io(e));
+        let app = router.into_make_service();
+
+        if let Some(acceptor) = tls_acceptor {
+            log::info!(
+                "Starting HTTPS web server on port {} (pid {})",
+                port,
+                std::process::id()
+            );
+            let tls_listener = TlsListener { listener, acceptor };
+            tokio::select! { biased;
+                _ = subsys.on_shutdown_requested() => {
+                    let _ = shutdown_tx.send(());
+                },
+                r = axum::serve(tls_listener, app).with_graceful_shutdown(shutdown) => {
+                    return r.map_err(WebError::Io);
+                }
+            }
+        } else {
+            log::info!(
+                "Starting HTTP web server on port {} (pid {})",
+                port,
+                std::process::id()
+            );
+            tokio::select! { biased;
+                _ = subsys.on_shutdown_requested() => {
+                    let _ = shutdown_tx.send(());
+                },
+                r = axum::serve(listener, app).with_graceful_shutdown(shutdown) => {
+                    return r.map_err(WebError::Io);
+                }
             }
         }
         Ok(())
@@ -197,12 +279,17 @@ async fn endpoints(
             id: PACKAGE,
         },
     };
+    let (http_scheme, ws_scheme) = if state.tls {
+        ("https", "wss")
+    } else {
+        ("http", "ws")
+    };
     endpoints.endpoints.insert(
         "v2".to_string(),
         Endpoint {
             version: "v2".to_string(),
-            http: format!("http://{}{}", host, signalk::v2::BASE_URI),
-            ws: format!("ws://{}{}", host, signalk::v2::CONTROL_URI),
+            http: format!("{}://{}{}", http_scheme, host, signalk::v2::BASE_URI),
+            ws: format!("{}://{}{}", ws_scheme, host, signalk::v2::CONTROL_URI),
         },
     );
 
@@ -217,11 +304,10 @@ struct WebSocketHandlerParameters {
 #[debug_handler]
 async fn spokes_handler(
     State(state): State<Web>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Path(params): Path<WebSocketHandlerParameters>,
     ws: WebSocketUpgrade,
 ) -> Response {
-    debug!("stream request from {} for {}", addr, params.id);
+    debug!("stream request for {}", params.id);
 
     let ws = ws.accept_compression(true);
 

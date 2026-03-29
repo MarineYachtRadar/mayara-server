@@ -41,6 +41,8 @@ Command Line Options
 | Option                        | Description                                                                                             |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------- |
 | `-p, --port <PORT>`           | HTTP/WebSocket server port (default: 6502)                                                              |
+| `--tls-cert <FILE>`           | TLS certificate file (PEM format). Enables HTTPS when set with `--tls-key`.                             |
+| `--tls-key <FILE>`            | TLS private key file (PEM format). Enables HTTPS when set with `--tls-cert`.                            |
 | `-i, --interface <INTERFACE>` | Limit radar discovery to a specific network interface                                                   |
 | `--allow-wifi`                | Allow radar discovery on WiFi interfaces (not recommended for most brands due to multicast limitations) |
 
@@ -139,6 +141,13 @@ mayara-server --multiple-radar --merge-targets
 ```bash
 # Replay captured radar data (requires tcpreplay of pcap file)
 mayara-server --replay
+```
+
+### HTTPS with TLS
+
+```bash
+# Serve over HTTPS with PEM certificate and key
+mayara-server --tls-cert /path/to/cert.pem --tls-key /path/to/key.pem
 ```
 
 ### Custom navigation source
