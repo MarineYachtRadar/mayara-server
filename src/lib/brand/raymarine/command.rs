@@ -73,36 +73,19 @@ impl Command {
     /// Send the 1-second keep-alive heartbeat. Without this the radar
     /// drops the connection after 60 seconds.
     pub async fn send_heartbeat(&mut self) -> Result<(), RadarError> {
+        use super::protocol::*;
         match self.model {
-            BaseModel::Quantum => {
-                // "Radar" (lowercase) — Quantum 1-second keep-alive
-                self.send(&[0x00, 0x00, 0x28, 0x00, 0x52, 0x61, 0x64, 0x61, 0x72, 0x00, 0x00, 0x00]).await
-            }
-            BaseModel::RD => {
-                // "RADAR" (uppercase) — RD/E120 1-second keep-alive
-                self.send(&[0x00, 0x80, 0x01, 0x00, 0x52, 0x41, 0x44, 0x41, 0x52, 0x00, 0x00, 0x00]).await
-            }
+            BaseModel::Quantum => self.send(&HEARTBEAT_QUANTUM_1S).await,
+            BaseModel::RD => self.send(&HEARTBEAT_RD_1S).await,
         }
     }
 
-    /// Send the 5-second extended keep-alive. Contains option/config
-    /// data that the radar uses for MARPA/AIS setup.
+    /// Send the 5-second extended keep-alive with MARPA/AIS option data.
     pub async fn send_heartbeat_5s(&mut self) -> Result<(), RadarError> {
+        use super::protocol::*;
         match self.model {
-            BaseModel::Quantum => {
-                self.send(&[
-                    0x03, 0x89, 0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                    0x9e, 0x03, 0x00, 0x00, 0xb4, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                ]).await
-            }
-            BaseModel::RD => {
-                self.send(&[
-                    0x03, 0x89, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x68, 0x01, 0x00, 0x00,
-                    0x9e, 0x03, 0x00, 0x00, 0xb4, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                ]).await
-            }
+            BaseModel::Quantum => self.send(&HEARTBEAT_QUANTUM_5S).await,
+            BaseModel::RD => self.send(&HEARTBEAT_RD_5S).await,
         }
     }
 

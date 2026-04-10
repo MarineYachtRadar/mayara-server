@@ -17,13 +17,10 @@ use tokio_graceful_shutdown::SubsystemHandle;
 use crate::navdata::{get_cog, get_heading_true, get_position, get_sog};
 use crate::radar::RadarError;
 
-/// NavData is sent every 100ms.
-const NAVDATA_INTERVAL: Duration = Duration::from_millis(100);
+use super::protocol;
 
-/// The sub-ID prepended to the NavData payload. The Quantum protocol
-/// wraps this in a CQuantumMsg envelope, but the wire bytes are just
-/// the 32-byte payload sent as a UDP datagram to the command address.
-const NAVDATA_SUB_ID: u32 = 0x28000018;
+/// NavData is sent every 100ms.
+const NAVDATA_INTERVAL: Duration = Duration::from_millis(protocol::NAVDATA_INTERVAL_MS);
 
 // Flags indicating which fields are valid
 const FLAG_HEADING: u32 = 0x01;
@@ -66,7 +63,7 @@ pub async fn run(
 
 fn build_navdata_message() -> Vec<u8> {
     let mut buf = vec![0u8; 32];
-    buf[0..4].copy_from_slice(&NAVDATA_SUB_ID.to_le_bytes());
+    buf[0..4].copy_from_slice(&protocol::NAVDATA_SUB_ID.to_le_bytes());
 
     let mut flags: u32 = 0;
 

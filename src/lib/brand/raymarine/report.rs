@@ -79,20 +79,20 @@ pub(crate) struct FeatureFlags {
 }
 
 impl FeatureFlags {
-    fn has(&self, bit: u32) -> bool {
-        (self.raw >> bit) & 1 != 0
+    fn has_flag(&self, mask: u32) -> bool {
+        (self.raw & mask) != 0
     }
-    pub fn is_quantum(&self) -> bool { self.has(4) }
-    pub fn is_cyclone(&self) -> bool { self.has(17) }
-    pub fn has_doppler(&self) -> bool { self.has(19) }
-    pub fn has_doppler_auto_acquire(&self) -> bool { self.has(20) }
-    pub fn has_doppler_bird_mode(&self) -> bool { self.has(25) }
-    pub fn has_bird_mode(&self) -> bool { self.has(10) }
-    pub fn has_auto_rain(&self) -> bool { self.has(18) }
-    pub fn has_marpa(&self) -> bool { self.has(14) }
-    pub fn has_dual_range_marpa(&self) -> bool { self.has(16) }
-    pub fn is_analogue(&self) -> bool { self.has(0) }
-    pub fn is_digital(&self) -> bool { self.has(2) }
+    pub fn is_quantum(&self) -> bool { self.has_flag(super::protocol::FEATURE_QUANTUM) }
+    pub fn is_cyclone(&self) -> bool { self.has_flag(super::protocol::FEATURE_CYCLONE) }
+    pub fn has_doppler(&self) -> bool { self.has_flag(super::protocol::FEATURE_DOPPLER) }
+    pub fn has_doppler_auto_acquire(&self) -> bool { self.has_flag(super::protocol::FEATURE_DOPPLER_AUTO_ACQUIRE) }
+    pub fn has_doppler_bird_mode(&self) -> bool { self.has_flag(super::protocol::FEATURE_DOPPLER_BIRD_MODE) }
+    pub fn has_bird_mode(&self) -> bool { self.has_flag(super::protocol::FEATURE_BIRD_MODE) }
+    pub fn has_auto_rain(&self) -> bool { self.has_flag(super::protocol::FEATURE_AUTO_RAIN) }
+    pub fn has_marpa(&self) -> bool { self.has_flag(super::protocol::FEATURE_MARPA) }
+    pub fn has_dual_range_marpa(&self) -> bool { self.has_flag(super::protocol::FEATURE_DUAL_RANGE_MARPA) }
+    pub fn is_analogue(&self) -> bool { self.has_flag(super::protocol::FEATURE_ANALOGUE) }
+    pub fn is_digital(&self) -> bool { self.has_flag(super::protocol::FEATURE_DIGITAL) }
 }
 
 pub(crate) struct RaymarineReportReceiver {
@@ -278,6 +278,7 @@ impl RaymarineReportReceiver {
 
         let id = u32::from_le_bytes(data[0..4].try_into().unwrap());
         match id {
+            // RD (magnetron) messages
             0x010001 | 0x018801 => {
                 rd::process_status_report(self, data);
             }
@@ -290,6 +291,7 @@ impl RaymarineReportReceiver {
             0x010006 => {
                 rd::process_info_report(self, data);
             }
+            // Quantum messages
             0x280001 => {
                 quantum::process_info_report(self, data);
             }
@@ -299,15 +301,38 @@ impl RaymarineReportReceiver {
             0x280003 => {
                 quantum::process_frame(self, data);
             }
+            0x280005 => {
+                log::trace!("{}: Quantum radar mode report", self.common.key);
+            }
+            0x280006 => {
+                log::trace!("{}: Quantum signal strength report", self.common.key);
+            }
             0x280007 => {
                 self.process_features(data);
+            }
+            0x280008 => {
+                log::trace!("{}: Quantum parameters report", self.common.key);
             }
             0x280030 => {
                 quantum::process_doppler_report(self, data);
             }
+            // Guard zone messages — logged but not acted on
+            id if (id & 0xFFFF0000 == 0x28000000 || id & 0xFFFF0000 == 0x01000000)
+                && data.len() >= 8 => {
+                // Check for guard zone, alarm, MARPA, self-test, etc.
+                if self.reported_unknown.get(&id).is_none() {
+                    log::debug!(
+                        "{}: Unhandled report ID 0x{:08X} len={}",
+                        self.common.key,
+                        id,
+                        data.len()
+                    );
+                    self.reported_unknown.insert(id, true);
+                }
+            }
             _ => {
                 if self.reported_unknown.get(&id).is_none() {
-                    log::warn!("{}: Unknown report ID {:08X?}", self.common.key, id);
+                    log::debug!("{}: Unknown report ID 0x{:08X}", self.common.key, id);
                     self.reported_unknown.insert(id, true);
                 }
             }

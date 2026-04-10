@@ -18,6 +18,7 @@ use super::LocatorId;
 
 mod command;
 mod navdata;
+mod protocol;
 mod report;
 mod settings;
 
