@@ -123,12 +123,12 @@ jobs:
         cp /tmp/CHANGELOG.md CHANGELOG.md
         git add CHANGELOG.md
         if ! git diff --staged --quiet; then
-          BRANCH="docs-changelog-${{ github.ref_name }}"
+          BRANCH="docs-changelog-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}"
           git switch -C "$BRANCH"
           git commit -m "docs: update CHANGELOG.md for ${{ github.ref_name }}"
-          git push origin "$BRANCH"
-          gh pr create --title "docs: update CHANGELOG.md for ${{ github.ref_name }}" --body "Auto-generated changelog update." --base main --head "$BRANCH"
-          gh pr merge "$BRANCH" --squash --delete-branch
+          git push --set-upstream origin "$BRANCH"
+          PR_URL="$(gh pr create --title "docs: update CHANGELOG.md for ${{ github.ref_name }}" --body "Auto-generated changelog update." --base main --head "$BRANCH")"
+          gh pr merge "$PR_URL" --squash --delete-branch --auto
         fi
 
   docker:
