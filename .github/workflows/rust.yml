@@ -24,6 +24,10 @@ jobs:
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
 
+    - uses: swatinem/rust-cache@v2
+      with:
+        key: ${{ matrix.target }}
+
     - name: Install Cross
       run: cargo install cross
 
@@ -40,6 +44,7 @@ jobs:
     runs-on: windows-latest
     steps:
     - uses: actions/checkout@v6
+    - uses: swatinem/rust-cache@v2
     - name: Build
       run: cargo build --release
     - name: Run tests
