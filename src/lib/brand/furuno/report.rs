@@ -1214,9 +1214,8 @@ impl FurunoReportReceiver {
     /// and `src_effective == src.len()` — the stretch becomes a no-op copy.
     ///
     /// The DRS4W is special: every spoke carries 430 samples on the wire, but
-    /// only the first N of those cover the configured display range (see
-    /// `docs/brand/furuno/drs4w-distance.md` for the reverse-engineering
-    /// details). N varies per wire_index because the radar changes pulse
+    /// only the first N of those cover the configured display range.
+    /// N varies per wire_index because the radar changes pulse
     /// width with range. Callers pass `src_effective = effective_samples(wi)`
     /// for DRS4W and `src_effective = src.len()` otherwise, so sample `i` of
     /// the output always represents physical distance
