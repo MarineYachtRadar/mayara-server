@@ -75,7 +75,7 @@ enum ReceiverState {
 /// hardware actually supports.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct FeatureFlags {
-    raw: u32,
+    pub(super) raw: u32,
 }
 
 impl FeatureFlags {

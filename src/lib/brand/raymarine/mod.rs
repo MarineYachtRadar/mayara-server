@@ -236,6 +236,17 @@ impl RaymarineLocator {
         match deserialize::<RaymarineBeacon36>(report) {
             Ok(data) => {
                 let beacon_type = u32::from_le_bytes(data.beacon_type);
+                let link_id_preview = u32::from_le_bytes(data.link_id);
+                let subtype_preview = u32::from_le_bytes(data.subtype);
+                log::debug!(
+                    "{}: Beacon 36: type=0x{:x} link_id=0x{:08x} subtype=0x{:x} report={} cmd={}",
+                    from,
+                    beacon_type,
+                    link_id_preview,
+                    subtype_preview,
+                    Into::<SocketAddrV4>::into(data.report),
+                    Into::<SocketAddrV4>::into(data.command),
+                );
                 if beacon_type != 0 {
                     log::warn!(
                         "{}: Raymarine 36 report: unexpected beacon type {}",
@@ -339,6 +350,16 @@ impl RaymarineLocator {
         match deserialize::<RaymarineBeacon56>(report) {
             Ok(data) => {
                 let beacon_type = u32::from_le_bytes(data.beacon_type);
+                let subtype = u32::from_le_bytes(data.subtype);
+                let link_id = u32::from_le_bytes(data.link_id);
+                log::debug!(
+                    "{}: Beacon 56: type=0x{:x} subtype=0x{:x} link_id=0x{:08x} model={:?}",
+                    from,
+                    beacon_type,
+                    subtype,
+                    link_id,
+                    c_string(&data.model_name),
+                );
                 if beacon_type != 0x01 {
                     log::warn!(
                         "{}: Raymarine 56 report: unexpected beacon type {}",
@@ -749,5 +770,113 @@ mod tests {
             r.report_addr,
             SocketAddrV4::new(Ipv4Addr::new(224, 29, 69, 231), 2566)
         );
+    }
+
+    /// Parse fixture lines: `timestamp src_ip dst_ip:port payload_hex`
+    fn parse_fixture(text: &str) -> Vec<(Ipv4Addr, Ipv4Addr, u16, Vec<u8>)> {
+        let mut packets = Vec::new();
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let parts: Vec<&str> = line.splitn(4, ' ').collect();
+            if parts.len() < 4 {
+                continue;
+            }
+            let src_ip: Ipv4Addr = parts[1].parse().expect("bad src ip");
+            let dst_parts: Vec<&str> = parts[2].splitn(2, ':').collect();
+            let dst_ip: Ipv4Addr = dst_parts[0].parse().expect("bad dst ip");
+            let dst_port: u16 = dst_parts[1].parse().expect("bad port");
+            // Decode hex without external crate
+            let hex = parts[3];
+            let payload: Vec<u8> = (0..hex.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).expect("bad hex"))
+                .collect();
+            packets.push((src_ip, dst_ip, dst_port, payload));
+        }
+        packets
+    }
+
+    const PELAGIA_FIXTURE: &str = include_str!("testdata/quantum-boot.txt");
+
+    #[test]
+    fn w3_beacon_is_ignored() {
+        let args = Cli::parse_from(["mayara-server"]);
+        let mut locator = RaymarineLocator::new(args);
+        let packets = parse_fixture(PELAGIA_FIXTURE);
+
+        // Find the W3 56-byte beacon (subtype 0x4d in bytes 4..8)
+        for (src, _, port, data) in &packets {
+            if *port == 5800 && data.len() == 56 {
+                let subtype = u32::from_le_bytes(data[4..8].try_into().unwrap());
+                if subtype == 0x4d {
+                    locator.process_beacon_56_report(data, src).unwrap();
+                    assert!(
+                        locator.ids.is_empty(),
+                        "W3 beacon should not register a link_id"
+                    );
+                    return;
+                }
+            }
+        }
+        // No W3 beacon in fixture — skip
+    }
+
+    #[test]
+    fn pelagia_full_discovery() {
+        let args = Cli::parse_from(["mayara-server"]);
+        let mut locator = RaymarineLocator::new(args);
+        let radars = &SharedRadars::new();
+        let packets = parse_fixture(PELAGIA_FIXTURE);
+
+        for (src, _, port, data) in &packets {
+            if *port != 5800 {
+                continue;
+            }
+            match data.len() {
+                56 => {
+                    let _ = locator.process_beacon_56_report(data, src);
+                }
+                36 => {
+                    if let Ok(Some(info)) =
+                        locator.process_beacon_36_report(data, src, radars)
+                    {
+                        assert_eq!(
+                            info.report_addr,
+                            SocketAddrV4::new(Ipv4Addr::new(232, 1, 160, 1), 2574),
+                            "report address should be the direct Quantum multicast"
+                        );
+                        assert_eq!(
+                            info.send_command_addr,
+                            SocketAddrV4::new(Ipv4Addr::new(198, 18, 0, 158), 2575),
+                        );
+                        return;
+                    }
+                }
+                _ => {}
+            }
+        }
+        panic!("No radar was created from the pelagia fixture beacons");
+    }
+
+    #[test]
+    fn features_flags_parsed() {
+        let packets = parse_fixture(PELAGIA_FIXTURE);
+        let features_pkt = packets
+            .iter()
+            .find(|(_, _, port, data)| {
+                *port == 2574
+                    && data.len() >= 8
+                    && u32::from_le_bytes(data[0..4].try_into().unwrap()) == 0x280007
+            })
+            .expect("no features message in fixture");
+
+        let flags = u32::from_le_bytes(features_pkt.3[4..8].try_into().unwrap());
+        let features = super::report::FeatureFlags { raw: flags };
+        assert!(!features.is_cyclone(), "Q24D is not a Cyclone");
+        assert!(features.has_doppler(), "Q24D has Doppler");
+        assert!(features.has_marpa(), "Q24D has MARPA");
     }
 }
