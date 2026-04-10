@@ -1472,7 +1472,11 @@ impl CommonRadar {
                 Some(self.spoke_time),
                 generic_spoke,
             );
-            apply_antenna_offset(&mut spoke, &self.info.controls);
+            apply_antenna_offset(
+                &mut spoke,
+                &self.info.controls,
+                self.info.spokes_per_revolution as usize,
+            );
             self.spoke_count += 1;
             self.max_spoke_length = max(self.max_spoke_length, spoke.data.len() as u32);
 
@@ -1737,11 +1741,20 @@ impl CommonRadar {
 fn apply_antenna_offset(
     spoke: &mut crate::protos::RadarMessage::radar_message::Spoke,
     controls: &SharedControls,
+    spokes_per_revolution: usize,
 ) {
     let (Some(lat), Some(lon)) = (spoke.lat, spoke.lon) else {
         return;
     };
-    let Some(heading) = crate::navdata::get_heading_true() else {
+    // Prefer the spoke's own heading over the global navdata heading to avoid
+    // a one-spoke lag on startup or when heading only comes from the radar feed.
+    let heading = if let Some(bearing) = spoke.bearing {
+        let heading_spokes = (bearing as i32 - spoke.angle as i32)
+            .rem_euclid(spokes_per_revolution as i32) as f64;
+        heading_spokes / spokes_per_revolution as f64 * std::f64::consts::TAU
+    } else if let Some(h) = crate::navdata::get_heading_true() {
+        h
+    } else {
         return;
     };
 
