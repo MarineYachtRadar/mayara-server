@@ -798,32 +798,22 @@ impl FurunoReportReceiver {
                 }
             }
 
-            CommandId::NearSTC => {
+            CommandId::NearSTC | CommandId::MiddleSTC | CommandId::FarSTC | CommandId::STCRange => {
                 if let Some(&value) = numbers.first() {
-                    let drid = self.extract_drid(&command_id, &numbers);
-                    self.common_for_range(drid)
-                        .set_value(&ControlId::NearStcCurve, value);
-                }
-            }
-            CommandId::MiddleSTC => {
-                if let Some(&value) = numbers.first() {
-                    let drid = self.extract_drid(&command_id, &numbers);
-                    self.common_for_range(drid)
-                        .set_value(&ControlId::MiddleStcCurve, value);
-                }
-            }
-            CommandId::FarSTC => {
-                if let Some(&value) = numbers.first() {
-                    let drid = self.extract_drid(&command_id, &numbers);
-                    self.common_for_range(drid)
-                        .set_value(&ControlId::FarStcCurve, value);
-                }
-            }
-            CommandId::STCRange => {
-                if let Some(&value) = numbers.first() {
-                    let drid = self.extract_drid(&command_id, &numbers);
-                    self.common_for_range(drid)
-                        .set_value(&ControlId::StcRange, value);
+                    // Single-field responses ($N85,2) have no drid — default to range A.
+                    // Multi-field responses include drid as the last field.
+                    let drid = if numbers.len() > 1 {
+                        self.extract_drid(&command_id, &numbers)
+                    } else {
+                        0
+                    };
+                    let control_id = match command_id {
+                        CommandId::NearSTC => ControlId::NearStcCurve,
+                        CommandId::MiddleSTC => ControlId::MiddleStcCurve,
+                        CommandId::FarSTC => ControlId::FarStcCurve,
+                        _ => ControlId::StcRange,
+                    };
+                    self.common_for_range(drid).set_value(&control_id, value);
                 }
             }
 
