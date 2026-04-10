@@ -130,7 +130,7 @@ jobs:
           git commit -m "docs: update CHANGELOG.md for ${{ github.ref_name }}"
           git push --set-upstream origin "$BRANCH"
           PR_URL="$(gh pr create --title "docs: update CHANGELOG.md for ${{ github.ref_name }}" --body "Auto-generated changelog update." --base main --head "$BRANCH")"
-          gh pr merge "$PR_URL" --squash --delete-branch --auto
+          gh pr merge "$PR_URL" --squash --delete-branch --auto || gh pr merge "$PR_URL" --squash --delete-branch
         fi
 
   docker:
