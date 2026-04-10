@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **furuno:** API support current pulse width from radar ([PR #71](https://github.com/MarineYachtRadar/mayara-server/pull/71))
 - **furuno:** send guard zone geometry to radar hardware
 - **furuno:** send guard zone geometry to radar hardware ([PR #70](https://github.com/MarineYachtRadar/mayara-server/pull/70))
+- **furuno:** add STC curve controls for sea clutter suppression (#74) ([PR #74](https://github.com/MarineYachtRadar/mayara-server/pull/74))
 
 ### Changed
 
