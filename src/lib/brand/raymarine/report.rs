@@ -301,6 +301,10 @@ impl RaymarineReportReceiver {
             0x280003 => {
                 quantum::process_frame(self, data);
             }
+            0x288942 => {
+                // Database report — not spoke data. Ignore.
+                log::trace!("{}: Quantum database report len={}", self.common.key, data.len());
+            }
             0x280005 => {
                 log::trace!("{}: Quantum radar mode report", self.common.key);
             }

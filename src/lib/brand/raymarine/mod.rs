@@ -263,8 +263,8 @@ impl RaymarineLocator {
                     match model {
                         BaseModel::Quantum => {
                             if subtype != 0x28 {
-                                log::warn!(
-                                    "{}: Raymarine 36 report: unexpected subtype {} for Quantum",
+                                log::trace!(
+                                    "{}: Raymarine 36 report: ignoring subtype 0x{:02x} for Quantum (not 0x28)",
                                     from,
                                     subtype
                                 );
@@ -296,8 +296,9 @@ impl RaymarineLocator {
                         BaseModel::RD => (RD_SPOKES_PER_REVOLUTION, RD_SPOKE_LEN),
                     };
 
-                    let radar_addr: SocketAddrV4 = data.report.into();
+                    let mut radar_addr: SocketAddrV4 = data.report.into();
                     let radar_send: SocketAddrV4 = data.command.into();
+
                     let location_info: RadarInfo = RadarInfo::new(
                         radars,
                         &self.args,
@@ -420,7 +421,14 @@ impl RaymarineLocator {
                         }
                     }
                     0x4d => {
-                        // This is some sort of Wireless version (Quantum_W3)
+                        // W3 wireless bridge beacon — the radar also sends
+                        // a direct Quantum beacon (subtype 0x66) with the
+                        // correct data addresses. Ignore the W3 identity
+                        // and let the direct path handle discovery.
+                        log::trace!(
+                            "{}: W3 bridge beacon (ignored, using direct Quantum)",
+                            from,
+                        );
                     }
                     0x11 => {
                         // Request from an MFD, ignore it
