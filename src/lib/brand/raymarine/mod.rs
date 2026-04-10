@@ -17,6 +17,7 @@ use crate::{Brand, Cli};
 use super::LocatorId;
 
 mod command;
+mod navdata;
 mod report;
 mod settings;
 
@@ -446,6 +447,20 @@ impl RaymarineLocator {
 
             let report_name = info.key();
             radars.update(&mut info);
+
+            // Start the NavData sender to feed position/heading to the
+            // radar every 100ms. Required for Doppler and MARPA.
+            let send_addr = info.send_command_addr;
+            let navdata_name = format!("{}-navdata", report_name);
+            subsys.start(SubsystemBuilder::new(navdata_name, move |s| async move {
+                match crate::network::create_multicast_send(&send_addr, &Ipv4Addr::UNSPECIFIED) {
+                    Ok(sock) => navdata::run(s, sock).await.map_err(|e| e.into()),
+                    Err(e) => {
+                        log::warn!("Failed to create NavData socket: {}", e);
+                        Ok::<(), anyhow::Error>(())
+                    }
+                }
+            }));
 
             let report_receiver =
                 report::RaymarineReportReceiver::new(&self.args, info, radars.clone());
