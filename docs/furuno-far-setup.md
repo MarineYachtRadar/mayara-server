@@ -13,10 +13,11 @@ Recommended configuration:
 - Subnet mask: `255.255.0.0`
 - No default gateway required (local subnet only)
 
-The radar broadcasts discovery beacons on `172.31.255.255:10010` and echo
-data on `172.31.255.255:10024` (or multicast `239.255.0.2:10024`). If the
-mayara machine is not on the `172.31.0.0/16` subnet, it will not receive
-these broadcasts and the radar will not be detected.
+The radar broadcasts discovery beacons on `172.31.255.255:10010` and streams
+echo data via multicast on `239.255.0.2:10024`. Login and control commands
+use TCP on port 10010. If the mayara machine is not on the `172.31.0.0/16`
+subnet, it will not receive beacon broadcasts and the radar will not be
+detected.
 
 ## FAR-2xx7 IMO Mode Configuration
 
@@ -59,7 +60,7 @@ code and model name so it can be added to the lookup table.
 1. Verify the mayara machine has a `172.31.x.x` IP address
 2. Check that the Ethernet cable is connected to the radar's network port
 3. For FAR-2xx7: verify IMO mode is set to W (not A)
-4. Check firewall rules — UDP ports 10010 and 10024 must be open
+4. Check firewall rules — UDP 10010/10024 and TCP 10010 must be open
 5. Run `tcpdump -i <interface> udp port 10010` to verify beacon packets
    are arriving
 
