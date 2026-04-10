@@ -33,7 +33,9 @@ impl CommandSender for Command {
         // SharedControls since no emulator state loop echoes it back.
         if cv.id == ControlId::RangeUnits {
             if let Some(v) = cv.value.as_ref().and_then(|v| v.as_f64()) {
-                let _ = controls.set_value(&ControlId::RangeUnits, v.into());
+                controls
+                    .set_value(&ControlId::RangeUnits, v.into())
+                    .map_err(RadarError::ControlError)?;
             }
         }
         // Emulator just acknowledges the command - actual state is managed in report.rs
