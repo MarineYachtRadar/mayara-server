@@ -238,6 +238,7 @@ impl RadarModel {
             "0359355" => RadarModel::DRS6AXCLASS,
             "0359344" => RadarModel::FAR15x3,
             "0359397" => RadarModel::FAR14x6,
+            "0359560" => RadarModel::FAR21x7,
             _ => RadarModel::Unknown,
         }
     }
