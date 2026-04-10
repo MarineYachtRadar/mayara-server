@@ -168,6 +168,10 @@ pub enum ControlId {
     ParkPosition,
     TransmitChannel,
     PulseWidth,
+    NearStcCurve,
+    MiddleStcCurve,
+    FarStcCurve,
+    StcRange,
 }
 
 impl Display for ControlId {
@@ -273,7 +277,11 @@ impl ControlId {
             | ControlId::SpokeProcessing
             | ControlId::DopplerSpeedThreshold
             | ControlId::TimedIdle
-            | ControlId::TimedRun => Category::Advanced,
+            | ControlId::TimedRun
+            | ControlId::NearStcCurve
+            | ControlId::MiddleStcCurve
+            | ControlId::FarStcCurve
+            | ControlId::StcRange => Category::Advanced,
         }
     }
 
@@ -366,6 +374,10 @@ impl ControlId {
             ControlId::ScanAverageSensitivity => "Threshold for scan averaging filter",
             ControlId::ParkPosition => "Antenna park position when entering standby",
             ControlId::TransmitChannel => "Transmit frequency channel selection (auto or manual)",
+            ControlId::NearStcCurve => "Near-range STC suppression curve",
+            ControlId::MiddleStcCurve => "Middle-range STC suppression curve",
+            ControlId::FarStcCurve => "Far-range STC suppression curve",
+            ControlId::StcRange => "Distance boundary between STC range bands",
         }
     }
 
@@ -454,6 +466,10 @@ impl ControlId {
             ControlId::ScanAverageSensitivity => "Scan average sensitivity",
             ControlId::ParkPosition => "Park position",
             ControlId::TransmitChannel => "Transmit channel",
+            ControlId::NearStcCurve => "Near STC curve",
+            ControlId::MiddleStcCurve => "Middle STC curve",
+            ControlId::FarStcCurve => "Far STC curve",
+            ControlId::StcRange => "STC range",
         }
     }
 
@@ -534,6 +550,10 @@ impl ControlId {
             ControlId::ScanAverageSensitivity => ControlDestination::Command,
             ControlId::ParkPosition => ControlDestination::Command,
             ControlId::TransmitChannel => ControlDestination::Command,
+            ControlId::NearStcCurve => ControlDestination::Command,
+            ControlId::MiddleStcCurve => ControlDestination::Command,
+            ControlId::FarStcCurve => ControlDestination::Command,
+            ControlId::StcRange => ControlDestination::Command,
         }
     }
 }

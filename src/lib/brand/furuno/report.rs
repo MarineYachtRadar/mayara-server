@@ -798,6 +798,35 @@ impl FurunoReportReceiver {
                 }
             }
 
+            CommandId::NearSTC => {
+                if let Some(&value) = numbers.first() {
+                    let drid = self.extract_drid(&command_id, &numbers);
+                    self.common_for_range(drid)
+                        .set_value(&ControlId::NearStcCurve, value);
+                }
+            }
+            CommandId::MiddleSTC => {
+                if let Some(&value) = numbers.first() {
+                    let drid = self.extract_drid(&command_id, &numbers);
+                    self.common_for_range(drid)
+                        .set_value(&ControlId::MiddleStcCurve, value);
+                }
+            }
+            CommandId::FarSTC => {
+                if let Some(&value) = numbers.first() {
+                    let drid = self.extract_drid(&command_id, &numbers);
+                    self.common_for_range(drid)
+                        .set_value(&ControlId::FarStcCurve, value);
+                }
+            }
+            CommandId::STCRange => {
+                if let Some(&value) = numbers.first() {
+                    let drid = self.extract_drid(&command_id, &numbers);
+                    self.common_for_range(drid)
+                        .set_value(&ControlId::StcRange, value);
+                }
+            }
+
             // Silently handled (no state to update)
             CommandId::AliveCheck
             | CommandId::Heartbeat

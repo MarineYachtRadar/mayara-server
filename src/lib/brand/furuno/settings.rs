@@ -272,6 +272,16 @@ pub fn update_when_model_known(info: &mut RadarInfo, model: RadarModel, version:
         info.controls.add(new_string(ControlId::PulseWidth));
     }
 
+    // STC (Sensitivity Time Control) — all models support this
+    info.controls
+        .add(new_list(ControlId::NearStcCurve, &["0", "1", "2", "3", "4"]));
+    info.controls
+        .add(new_list(ControlId::MiddleStcCurve, &["0", "1", "2", "3"]));
+    info.controls
+        .add(new_list(ControlId::FarStcCurve, &["0", "1", "2"]));
+    // StcRange ($RD2) is not registered: DRS4D-NXT does not respond to $RD2.
+    // Re-enable when a model that supports it is available for testing.
+
     // Tuning
     if cap.tune {
         info.controls.add(new_auto(

@@ -208,6 +208,16 @@ impl Command {
         self.send(CommandMode::Request, CommandId::BlindSector, &[])
             .await?; // $R77
 
+        // STC (Sensitivity Time Control) curves
+        if self.controls.contains_key(&ControlId::NearStcCurve) {
+            self.send(CommandMode::Request, CommandId::NearSTC, &[])
+                .await?; // $R85
+            self.send(CommandMode::Request, CommandId::MiddleSTC, &[])
+                .await?; // $R86
+            self.send(CommandMode::Request, CommandId::FarSTC, &[])
+                .await?; // $R87
+        }
+
         if self.controls.contains_key(&ControlId::BirdMode) {
             // NXT-specific features (query signal processing features)
             self.send(CommandMode::Request, CommandId::SignalProcessing, &[0, 3])
@@ -488,6 +498,27 @@ impl CommandSender for Command {
                 cmd.push(mode);
                 cmd.push(0); // screen: 0=Primary
                 CommandId::TargetAnalyzer
+            }
+
+            ControlId::NearStcCurve => {
+                cmd.push(value);
+                cmd.push(self.dual_range_id);
+                CommandId::NearSTC
+            }
+            ControlId::MiddleStcCurve => {
+                cmd.push(value);
+                cmd.push(self.dual_range_id);
+                CommandId::MiddleSTC
+            }
+            ControlId::FarStcCurve => {
+                cmd.push(value);
+                cmd.push(self.dual_range_id);
+                CommandId::FarSTC
+            }
+            ControlId::StcRange => {
+                cmd.push(value);
+                cmd.push(self.dual_range_id);
+                CommandId::STCRange
             }
 
             ControlId::GuardZone1 | ControlId::GuardZone2 => {
