@@ -1,34 +1,128 @@
 # Changelog
+
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-Sections can be: Added Changed Deprecated Removed Fixed Security.
-
 ## [Unreleased]
 
 ### Added
 
-- Furuno pulse width display: shows current transmit pulse width (S1/S2/M1/M2/M3/L) as reported by the radar
-- Furuno hardware guard zone support: fan zone geometry is sent to the radar antenna processor when guard zones are configured in the GUI
-
-### Fixed 
+- **recording:** Re-implement radar recording and playback ([PR #33](https://github.com/MarineYachtRadar/mayara-server/pull/33))
+- add Docker setup with CI and production hardening
+- add optional TLS support
+- **arpa:** require 4 updates for promotion, revolution-based deletion, dedup
+- **arpa:** strong-return blobs, Doppler auto-track, ClearTargets command
+- **arpa:** persist doppler_auto_track setting across restarts
+- **furuno:** add DRS4W model detection
+- **emulator:** loop simulation when targets leave radar range (closes #38)
+- **web:** listen on IPv6 dual-stack socket for IPv4+IPv6 support
+- **furuno:** add range units support for NM and km modes
+- **furuno:** add dual range support for NXT models
+- **furuno:** add per-model capabilities, tuning, and new command IDs
+- **furuno:** add timed idle (watchman) controls for NXT radars
+- **furuno:** add DRS4W full spoke support (#48)
+- **navico:** add antenna offset controls (forward/starboard)
+- **radar:** apply antenna offset to spoke positions
+- **garmin:** comprehensive Garmin radar support
+- **furuno:** display current pulse width from radar
+- **furuno:** API support current pulse width from radar ([PR #71](https://github.com/MarineYachtRadar/mayara-server/pull/71))
+- **furuno:** send guard zone geometry to radar hardware
+- **furuno:** send guard zone geometry to radar hardware ([PR #70](https://github.com/MarineYachtRadar/mayara-server/pull/70))
 
 ### Changed
 
-### Deleted
-
-### Changed
-
-- Furuno protocol constants, command IDs, wire index tables, and model identification consolidated into `protocol.rs`
+- **api:** unwrap /radars response, remove version wrapper
+- **agents:** require CHANGELOG entry for each change
+- **docker:** add deployment instructions for Docker
+- **furuno:** clarify start_data_socket control flow
+- **furuno:** simplify run() retry loop
+- **target:** include result in blob processing log
+- update USAGE.md for navigation address formats
+- replace 2*PI with TAU
+- add ARPA target tracking overview
+- **furuno:** add wire protocol reference and dual range architecture
+- **furuno:** add TCP command reference and convert capture files
+- **furuno:** update research docs with live DRS4D-NXT findings
+- **furuno:** add source attribution and dual range pcap capture
+- **target:** use detector-wide spatial index for blob adjacency
+- **changelog:** add Furuno DRS4D-NXT image quality fixes
+- **navico:** replace fixed beacon structs with dynamic parser
+- **navico:** rename state packet structs to match NRP protocol names
+- **navico:** collect protocol constants in a dedicated module
+- **furuno:** consolidate protocol constants into protocol.rs
+- **furuno:** consolidate protocol constants into protocol.rs #68 ([PR #68](https://github.com/MarineYachtRadar/mayara-server/pull/68))
+- **agents:** add CR review and test requirements before PR
 
 ### Fixed
 
-- Garmin HD interference rejection and scan speed commands were sending to each other's opcodes
-- Garmin bearing alignment and no-transmit zone angles now preserve negative values correctly
-- Garmin gain auto flag now reflects the radar's actual state
-- Furuno DRS4W range table restricted to wire indices 3-13 (0.75-24 NM), matching the hardware's actual supported ranges
+- **openapi:** align schema names and readOnly fields with openApi.ts
+- Show all IPv4 addresses per interface in Interfaces API
+- **api:** correct HTTP status codes and improve error messages
+- return 404 for NoSuchRadar and InvalidControlId errors
+- TLS compatibility for WebSocket URLs and handlers
+- make TLS certificate bypass opt-in in client examples
+- **ws:** resume spokes stream on broadcast lag instead of disconnecting
+- **navico:** accept 0xc2 as valid spoke status (#27)
+- **docker:** add writable mount for recordings data directory
+- **furuno:** retry spoke data sockets on creation failure ([PR #44](https://github.com/MarineYachtRadar/mayara-server/pull/44))
+- **controls:** set timestamps on all control value changes
+- **controls:** skip button controls in state broadcasts
+- **controls:** prevent duplicate broadcasts for unchanged values
+- **spoke:** decouple blob detection from spoke broadcasting
+- **navico:** use correct nibble in doppler lookup table
+- **spoke:** validate pixel values against full legend size
+- **gui:** show disconnected state and fix standby overlay
+- **replay:** allow target controls to be set in replay mode
+- **gui:** correct target acquire endpoint URL
+- **target:** increase max blob size to 1000m
+- **controls:** handle all target controls in process_control_update
+- **spoke:** broadcast heading from spoke data for GUI
+- **navdata:** convert NMEA HDT heading to radians
+- **navdata:** validate heading and COG range
+- **gui:** log heading changes and loss
+- **nmea:** convert VTG COG from degrees to radians
+- **tracker:** use Kalman SOG for turn rejection speed gate
+- **furuno:** accept non-NM range display units
+- **gui:** handle do_change before control state is received from server
+- **gui:** clear known targets when radar goes to disconnected state
+- **spoke:** replace panic with error log in pixel validation
+- **spoke:** replace panic with error log in pixel validation
+- **navico:** accept HALO20+ spoke status 0xC2
+- **gui:** avoid DISCONNECTED flash when spoke stream restarts in Firefox
+- **network:** set IP_MULTICAST_IF for reliable multicast on multi-homed hosts
+- **raymarine:** add main bang suppression control for HD models (fixes #35)
+- **recordings:** add missing upload endpoint
+- **recordings:** add missing upload endpoint ([PR #45](https://github.com/MarineYachtRadar/mayara-server/pull/45))
+- **furuno:** correct spoke frame header field extraction
+- **furuno:** correct dual range spoke routing and header parsing
+- **furuno:** correct drid field positions for dual range commands
+- **furuno:** pad short spokes and correct drid field positions
+- **furuno:** stretch DRS4W spokes to FURUNO_SPOKE_LEN
+- **range:** classify 125m as metric so it doesn't pollute the nautical list
+- **furuno:** size FURUNO_SPOKE_LEN for DRS4D-NXT sweep_len=884
+- **webui:** count unique angles in Reduce processor calibration
+- **target:** circular arithmetic for blob spoke extent and center
+- **web:** use numeric input for meter and degree controls
+- **navico:** use i32 (not u16) for antenna height
+- **navico:** align HALO heading/nav transmission with real MFDs
+- **navico:** align HALO heading/nav/speed transmission with radar_pi
+- **furuno:** DRS4W per-wire-index effective sample count
+- **furuno:** use header scale field for spoke-to-range mapping
+- **furuno:** apply 2x software gain for DRS4W/DRS echo intensity
+- **furuno:** preserve control state when updating definitions at model detection
+- **furuno:** handle auto-only control requests and address CR feedback
+- **furuno:** restrict DRS4W range table to hardware-supported ranges
+- **furuno:** restrict DRS4W range table to hardware-supported ranges #67 ([PR #67](https://github.com/MarineYachtRadar/mayara-server/pull/67))
+- **furuno:** guard length check on $N70 guard status notification
+- **ci:** address CR feedback on changelog workflow
+- **ci:** use PR for changelog commit to respect branch protection (#73) ([PR #73](https://github.com/MarineYachtRadar/mayara-server/pull/73))
+- **ci:** fall back to immediate merge when auto-merge not needed (#77) ([PR #77](https://github.com/MarineYachtRadar/mayara-server/pull/77))
+
+[Unreleased]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.4.1...HEAD
+
+
 
 ## [3.4.1]
 
@@ -185,17 +279,16 @@ Sections can be: Added Changed Deprecated Removed Fixed Security.
 
 ### Fixed
 
-#23 - Fix recursive call of error handler
+- Fix recursive call of error handler (#23)
 
 ### Added
 
-#21 - Add Garmin support for old Garmin radars (HD, xHD)
-
+- Garmin support for old Garmin radars (HD, xHD) (#21)
 
 ## [3.1.0]
 
-First semver version. From here on all additions and fixed will be
-logged as github issues.
+First semver version. From here on all additions and fixes will be
+logged as GitHub issues.
 
 ### Added
 
@@ -203,7 +296,6 @@ logged as github issues.
 
 ## Versions
 
-[Unreleased]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.4.1...HEAD
 [3.4.1]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.4.0...v3.4.1
 [3.4.0]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.3.0...v3.4.0
 [3.3.0]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.2.0...v3.3.0
