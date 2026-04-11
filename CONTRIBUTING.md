@@ -44,6 +44,10 @@ Use **hyphens** in branch names, not slashes (e.g. `furuno-drs4w-fix`, not `fix/
 
 Use `gh pr create` or the GitHub web UI. The PR must target `main` — there is no `develop` branch. If your change depends on another open PR, open it as a stacked PR against that PR's branch and note the dependency in the description.
 
+**Draft PRs are not needed.** Open a regular PR and iterate in the open — maintainers would rather see work-in-progress than have you sit on a draft waiting for "readiness". The only use case for draft is if you specifically want to suppress CodeRabbit auto-review (see [`.coderabbit.yaml`](.coderabbit.yaml): `drafts: false`).
+
+**Leave "Allow edits and access to secrets by maintainers" checked.** It is on by default for PRs from forks. Maintainers appreciate being able to push small fixes (a typo, a rebase, a missing `cargo fmt` hunk) directly onto your branch instead of asking you to do a round-trip. Nothing controversial ever lands that way — anything beyond a nit gets discussed.
+
 ## What happens after you open a PR
 
 Three things run automatically:
@@ -104,7 +108,7 @@ Mayara Server uses **Angular-style conventional commits**:
 | `chore` | — | Skipped from changelog |
 | `ci` | — | Skipped from changelog |
 
-A handful of special cases are also skipped by `cliff.toml`: `chore(release)`, `chore(deps)`, `docs: update CHANGELOG`, and any commit matching `address.*CR.*findings` or `address.*CodeRabbit` — so the conventional way to name a fixup commit that addresses CodeRabbit feedback is `fix(furuno): address CodeRabbit findings`, and it will not appear in the changelog.
+A handful of special cases are also skipped by `cliff.toml`: `chore(release)`, `chore(deps)`, `docs(changelog): update CHANGELOG`, and any commit matching `address.*CR.*findings` or `address.*CodeRabbit` — so the conventional way to name a fixup commit that addresses CodeRabbit feedback is `fix(furuno): address CodeRabbit findings`, and it will not appear in the changelog.
 
 The full list of accepted types (per [`AGENTS.md`](AGENTS.md#git-commit-conventions)) is `feat | fix | docs | style | refactor | test | chore | perf`. `cliff.toml` also recognizes `ci`.
 
@@ -112,7 +116,7 @@ The full list of accepted types (per [`AGENTS.md`](AGENTS.md#git-commit-conventi
 
 [`CHANGELOG.md`](CHANGELOG.md) is regenerated from commit history by [git-cliff](https://git-cliff.org/) via two workflows:
 
-- `.github/workflows/changelog.yml` — runs on every push to `main`, generates the current changelog, opens a `docs: update CHANGELOG.md` PR, and auto-merges it.
+- `.github/workflows/changelog.yml` — runs on every push to `main`, generates the current changelog, opens a `docs(changelog): update CHANGELOG.md` PR, and auto-merges it.
 - `.github/workflows/release.yml` — runs on every `v*` tag push, generates release notes from the range since the previous tag, creates a GitHub Release, and opens an auto-merged changelog PR for the tagged version.
 
 **Never edit `CHANGELOG.md` manually.** If your PR touches it, a maintainer will ask you to remove the hunk. The only way to change what appears in the changelog is to change your **commit message** — that's why conventional commits matter. Historical entries before the git-cliff migration live in [`CHANGELOG.manual.md`](CHANGELOG.manual.md) and are appended to every generated changelog.
@@ -125,7 +129,7 @@ The full list of accepted types (per [`AGENTS.md`](AGENTS.md#git-commit-conventi
 
 1. A maintainer bumps the version in `Cargo.toml`, commits as `chore(release): vX.Y.Z`, pushes to `main`.
 2. Maintainer tags that commit with `git tag vX.Y.Z && git push --tags`.
-3. `release.yml` runs: cross-builds Linux (x86_64 + arm64 musl) and Windows binaries, generates release notes from commits since the previous non-skipped tag, creates a GitHub Release, uploads binaries, and opens an auto-merged `docs: update CHANGELOG.md for vX.Y.Z` PR.
+3. `release.yml` runs: cross-builds Linux (x86_64 + arm64 musl) and Windows binaries, generates release notes from commits since the previous non-skipped tag, creates a GitHub Release, uploads binaries, and opens an auto-merged `docs(changelog): update CHANGELOG.md for vX.Y.Z` PR.
 4. `docker.yml` runs (triggered by `release.yml`), builds and pushes `ghcr.io/marineyachtradar/mayara-server:latest` and `:vX.Y.Z` for `linux/amd64` and `linux/arm64`.
 
 Contributors do not need to do anything for a release beyond writing good conventional commits.

@@ -62,7 +62,7 @@ split_commits = false
 commit_parsers = [
     { message = "^chore\\(release\\)", skip = true },
     { message = "^chore\\(deps\\)", skip = true },
-    { message = "^docs: update CHANGELOG", skip = true },
+    { message = "^docs(\\(changelog\\))?: update CHANGELOG", skip = true },
     { message = "address.*CR.*findings", skip = true },
     { message = "address.*CodeRabbit", skip = true },
     { message = "^feat", group = "Added" },
