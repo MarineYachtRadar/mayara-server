@@ -345,7 +345,7 @@ impl RadarInfo {
         let (targets, replay, output) = {
             (
                 args.targets.clone(),
-                args.replay.clone(),
+                args.is_replay(),
                 args.output.clone(),
             )
         };

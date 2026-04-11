@@ -334,7 +334,7 @@ impl NavicoLocator {
                 info.set_doppler(model == Model::HALO);
             }
             // In replay mode, use default Navico ranges if none are set
-            if info.ranges.is_empty() && self.args.replay {
+            if info.ranges.is_empty() && self.args.is_replay() {
                 info.set_ranges(default_navico_ranges());
             }
             radars.update(&mut info);
@@ -375,7 +375,7 @@ impl RadarLocator for NavicoLocator {
 pub(super) fn new(args: &Cli, addresses: &mut Vec<LocatorAddress>) {
     if !addresses.iter().any(|i| i.id == LocatorId::Gen3Plus) {
         let mut beacon_request_packets: Vec<&'static [u8]> = Vec::new();
-        if !args.replay {
+        if !args.is_replay() {
             beacon_request_packets.push(&DISCOVERY_QUERY_PACKET);
         };
         addresses.push(LocatorAddress::new(
@@ -389,7 +389,7 @@ pub(super) fn new(args: &Cli, addresses: &mut Vec<LocatorAddress>) {
 
     if !addresses.iter().any(|i| i.id == LocatorId::GenBR24) {
         let mut beacon_request_packets: Vec<&'static [u8]> = Vec::new();
-        if !args.replay {
+        if !args.is_replay() {
             beacon_request_packets.push(&DISCOVERY_QUERY_PACKET);
         };
         addresses.push(LocatorAddress::new(

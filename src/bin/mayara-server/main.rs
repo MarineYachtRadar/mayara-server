@@ -3,7 +3,7 @@ extern crate tokio;
 use clap::Parser;
 use env_logger::Env;
 use log::{info, warn};
-use miette::Result;
+use miette::{IntoDiagnostic, Result};
 use std::time::Duration;
 use tokio_graceful_shutdown::{SubsystemBuilder, Toplevel};
 use web::Web;
@@ -11,7 +11,7 @@ use web::Web;
 mod web;
 
 use mayara;
-use mayara::{Cli, network};
+use mayara::{Cli, network, replay};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -31,10 +31,14 @@ async fn main() -> Result<()> {
         .filter_module("tower_http", log_level)
         .init();
 
-    network::set_replay(args.replay);
+    network::set_replay(args.is_replay());
+
+    if let Some(pcap_path) = args.pcap_file() {
+        replay::init(std::path::Path::new(pcap_path)).into_diagnostic()?;
+    }
 
     info!("Mayara {} loglevel {}", mayara::VERSION, log_level);
-    if args.replay {
+    if args.is_replay() {
         warn!("Replay mode activated, this does the following:");
         warn!(" * A circle is drawn at the last two pixels in each spoke");
         warn!(" * Timestamp on each spoke is as if received now");

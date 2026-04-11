@@ -15,7 +15,7 @@ use std::time::Duration;
 use miette::Result;
 use network_interface::{NetworkInterface, NetworkInterfaceConfig};
 use tokio::sync::{broadcast, mpsc};
-use tokio::{net::UdpSocket, task::JoinSet, time::sleep};
+use tokio::{task::JoinSet, time::sleep};
 use tokio_graceful_shutdown::SubsystemHandle;
 
 use crate::brand::{LocatorId, RadarLocator, create_brand_listeners};
@@ -55,7 +55,7 @@ impl LocatorAddress {
 }
 
 struct LocatorSocket {
-    sock: UdpSocket,
+    sock: crate::replay::RadarSocket,
     nic_addr: Ipv4Addr,
     state: Box<dyn RadarLocator>,
 }
@@ -231,7 +231,7 @@ impl Locator {
                                         break;
                                     }
                                     RadarError::Timeout => {
-                                        if !self.args.replay {
+                                        if !self.args.is_replay() {
                                             let _ = send_beacon_requests(
                                                 &beacon_messages,
                                                 &interface_state.active_nic_addresses,
@@ -307,6 +307,12 @@ impl Locator {
         listen_addresses: &Vec<LocatorAddress>,
         interface_state: &mut InterfaceState,
     ) -> Result<Vec<LocatorSocket>, RadarError> {
+        // In pcap replay mode, skip real NIC enumeration and create a
+        // fake interface with replay-backed sockets for all listen addresses.
+        if crate::replay::is_active() {
+            return self.create_replay_sockets(listen_addresses, interface_state);
+        }
+
         let only_interface = &self.args.interface;
         let avoid_wifi = !self.args.allow_wifi;
 
@@ -380,10 +386,10 @@ impl Locator {
                                                 continue;
                                             }
 
-                                            let socket = network::create_udp_listen(
+                                            let socket = crate::network::create_udp_listen(
                                                 &listen_addr,
                                                 &nic_ip,
-                                                true, // we don't write to this socket ever, so no SO_BROADCAST needed
+                                                crate::network::SocketType::Any,
                                             );
 
                                             let status = match socket {
@@ -491,6 +497,62 @@ impl Locator {
             Err(_) => Err(RadarError::EnumerationFailed),
         }
     }
+
+    /// Create replay-backed sockets for all listen addresses using a
+    /// fake interface. This bypasses real NIC enumeration entirely —
+    /// in pcap replay mode, packets come from the dispatcher, not the
+    /// network, so no real interface is needed.
+    fn create_replay_sockets(
+        &self,
+        listen_addresses: &Vec<LocatorAddress>,
+        interface_state: &mut InterfaceState,
+    ) -> Result<Vec<LocatorSocket>, RadarError> {
+        let fake_nic = Ipv4Addr::new(10, 0, 0, 1);
+        let mut sockets = Vec::new();
+
+        for addr in listen_addresses {
+            if let SocketAddr::V4(listen_addr) = addr.address {
+                match crate::network::create_udp_listen(
+                    &listen_addr,
+                    &fake_nic,
+                    crate::network::SocketType::Any,
+                ) {
+                    Ok(socket) => {
+                        sockets.push(LocatorSocket {
+                            sock: socket,
+                            nic_addr: fake_nic,
+                            state: addr.locator.clone(),
+                        });
+                        log::debug!("Replay: listening for {}", listen_addr);
+                    }
+                    Err(e) => {
+                        log::warn!("Replay: failed to create socket for {}: {}", listen_addr, e);
+                    }
+                }
+            }
+        }
+
+        debug_assert!(
+            !sockets.is_empty(),
+            "Replay: no sockets created — listen_addresses may be empty"
+        );
+
+        interface_state.first_loop = false;
+        interface_state
+            .interface_api
+            .interfaces
+            .insert(
+                InterfaceId::new("replay", Some(fake_nic)),
+                RadarInterfaceApi::new(
+                    InterfaceStatus::Ok,
+                    Some(fake_nic),
+                    Some(Ipv4Addr::new(255, 0, 0, 0)),
+                    None,
+                ),
+            );
+
+        Ok(sockets)
+    }
 }
 
 fn spawn_interface_request_handler(
@@ -506,7 +568,7 @@ fn spawn_interface_request_handler(
     });
 }
 
-fn spawn_receive(set: &mut JoinSet<Result<ResultType, RadarError>>, socket: LocatorSocket) {
+fn spawn_receive(set: &mut JoinSet<Result<ResultType, RadarError>>, mut socket: LocatorSocket) {
     set.spawn(async move {
         let mut buf: Vec<u8> = Vec::with_capacity(LOCATOR_PACKET_BUFFER_LEN);
         let res = socket.sock.recv_buf_from(&mut buf).await;

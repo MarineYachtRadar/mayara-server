@@ -94,7 +94,7 @@ impl FurunoLocator {
         if let Some(mut info) = radars.add(info) {
             // It's new, start the RadarProcessor thread
 
-            let port: u16 = if !self.args.replay {
+            let port: u16 = if !self.args.is_replay() {
                 match login_to_radar(info.addr) {
                     Err(e) => {
                         log::error!("{}: Unable to connect for login: {}", info.key(), e);
@@ -118,7 +118,7 @@ impl FurunoLocator {
 
             info.start_forwarding_radar_messages_to_stdout(&subsys);
 
-            if self.args.replay {
+            if self.args.is_replay() {
                 let model = RadarModel::DRS4DNXT; // Default model for replay
                 let version = "01.05";
                 log::info!(
@@ -136,7 +136,7 @@ impl FurunoLocator {
                 ib.send_command_addr.set_port(port);
                 ib.report_addr.set_port(port);
                 ib.start_forwarding_radar_messages_to_stdout(&subsys);
-                if self.args.replay {
+                if self.args.is_replay() {
                     let model = RadarModel::DRS4DNXT;
                     let version = "01.05";
                     settings::update_when_model_known(ib, model, version);

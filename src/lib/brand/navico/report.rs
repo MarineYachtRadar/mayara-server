@@ -8,7 +8,6 @@ use std::io;
 use std::mem::transmute;
 use std::net::SocketAddr;
 use std::time::Duration;
-use tokio::net::UdpSocket;
 use tokio::time::{Instant, sleep, sleep_until};
 use tokio_graceful_shutdown::SubsystemHandle;
 
@@ -26,7 +25,8 @@ use crate::Cli;
 use crate::brand::CommandSender;
 use crate::brand::navico::info::{HaloHeadingPacket, HaloNavigationPacket, Information};
 use crate::brand::navico::{HALO_HEADING_INFO_ADDRESS, HaloMode};
-use crate::network::create_udp_multicast_listen;
+use crate::network;
+use crate::replay::RadarSocket;
 use crate::radar::range::{RangeDetection, RangeDetectionResult};
 use crate::radar::settings::{ControlId, ControlValue};
 use crate::radar::spoke::GenericSpoke;
@@ -175,9 +175,9 @@ pub struct NavicoReportReceiver {
     common: CommonRadar,
     transmit_after_range_detection: bool,
     report_buf: Vec<u8>,
-    report_socket: Option<UdpSocket>,
+    report_socket: Option<RadarSocket>,
     info_buf: Vec<u8>,
-    info_socket: Option<UdpSocket>,
+    info_socket: Option<RadarSocket>,
     model: Model,
     command_sender: Option<Command>,
     info_sender: Option<Information>,
@@ -188,7 +188,7 @@ pub struct NavicoReportReceiver {
 
     // For data (spokes)
     data_buf: Vec<u8>,
-    data_socket: Option<UdpSocket>,
+    data_socket: Option<RadarSocket>,
     doppler: DopplerMode,
     pixel_to_blob: PixelToBlobType,
 }
@@ -466,7 +466,7 @@ impl NavicoReportReceiver {
     ) -> NavicoReportReceiver {
         let key = info.key();
 
-        let replay = args.replay;
+        let replay = args.is_replay();
         log::debug!(
             "{}: Creating NavicoReportReceiver with args {:?}",
             key,
@@ -541,7 +541,7 @@ impl NavicoReportReceiver {
     }
 
     fn start_report_socket(&mut self) -> io::Result<()> {
-        match create_udp_multicast_listen(&self.common.info.report_addr, &self.common.info.nic_addr)
+        match network::create_udp_listen(&self.common.info.report_addr, &self.common.info.nic_addr, network::SocketType::Multicast)
         {
             Ok(socket) => {
                 self.report_socket = Some(socket);
@@ -570,7 +570,7 @@ impl NavicoReportReceiver {
         if self.info_socket.is_some() {
             return Ok(()); // Already started
         }
-        match create_udp_multicast_listen(&HALO_HEADING_INFO_ADDRESS, &self.common.info.nic_addr) {
+        match network::create_udp_listen(&HALO_HEADING_INFO_ADDRESS, &self.common.info.nic_addr, network::SocketType::Multicast) {
             Ok(socket) => {
                 self.info_socket = Some(socket);
                 log::debug!(
@@ -598,9 +598,10 @@ impl NavicoReportReceiver {
         if self.data_socket.is_some() {
             return Ok(()); // Already started
         }
-        match create_udp_multicast_listen(
+        match network::create_udp_listen(
             &self.common.info.spoke_data_addr,
             &self.common.info.nic_addr,
+            network::SocketType::Multicast,
         ) {
             Ok(sock) => {
                 self.data_socket = Some(sock);
@@ -662,7 +663,7 @@ impl NavicoReportReceiver {
                     }
                 },
 
-                r = self.report_socket.as_ref().unwrap().recv_buf_from(&mut self.report_buf)  => {
+                r = self.report_socket.as_mut().unwrap().recv_buf_from(&mut self.report_buf)  => {
                     match r {
                         Ok((_len, _addr)) => {
                             if let Err(e) = self.process_report().await {
@@ -677,7 +678,7 @@ impl NavicoReportReceiver {
                     }
                 },
 
-                Some(r) = Self::conditional_receive(&self.info_socket, &mut self.info_buf) => {
+                Some(r) = Self::conditional_receive(&mut self.info_socket, &mut self.info_buf) => {
                     match r {
                         Ok((_len, addr)) => {
                             self.process_info(&addr);
@@ -690,7 +691,7 @@ impl NavicoReportReceiver {
                     }
                 },
 
-                r = self.data_socket.as_ref().unwrap().recv_buf_from(&mut self.data_buf)  => {
+                r = self.data_socket.as_mut().unwrap().recv_buf_from(&mut self.data_buf)  => {
                     match r {
                         Ok(_) => {
                             self.process_frame();
@@ -715,7 +716,7 @@ impl NavicoReportReceiver {
     }
 
     async fn conditional_receive(
-        socket: &Option<UdpSocket>,
+        socket: &mut Option<RadarSocket>,
         buf: &mut Vec<u8>,
     ) -> Option<io::Result<(usize, SocketAddr)>> {
         match socket {

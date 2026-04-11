@@ -19,6 +19,8 @@ pub mod brand;
 pub mod config;
 pub mod locator;
 pub mod navdata;
+pub mod pcap;
+pub mod replay;
 pub mod network;
 pub mod protos;
 pub mod radar;
@@ -83,9 +85,17 @@ pub struct Cli {
     #[arg(long, default_value_t = false)]
     pub output: bool,
 
-    /// Replay mode, see below
+    /// Legacy replay mode (read-only controls, no beacon sending)
     #[arg(short, long, default_value_t = false)]
     pub replay: bool,
+
+    /// Replay a pcap file through the full radar pipeline
+    #[arg(long, value_name = "FILE")]
+    pub pcap: Option<String>,
+
+    /// Repeat pcap replay in a loop (only with --pcap)
+    #[arg(long, default_value_t = false, requires = "pcap")]
+    pub repeat: bool,
 
     /// Fake error mode, see below
     #[arg(long, default_value_t = false)]
@@ -138,6 +148,16 @@ pub struct StaticPosition {
 }
 
 impl Cli {
+    /// Returns true if any replay mode is active (pcap or legacy).
+    pub fn is_replay(&self) -> bool {
+        self.replay || self.pcap.is_some()
+    }
+
+    /// Returns the pcap file path if `--pcap <file>` was specified.
+    pub fn pcap_file(&self) -> Option<&str> {
+        self.pcap.as_deref()
+    }
+
     /// Get the static position if specified
     pub fn get_static_position(&self) -> Option<StaticPosition> {
         self.static_position.as_ref().and_then(|v| {
@@ -438,6 +458,20 @@ pub async fn start_session(
     subsystem.start(SubsystemBuilder::new("Locator", |subsys| {
         locator.run(subsys, tx_ip_change, tx_interface_request_clone)
     }));
+
+    // Start pcap replay dispatcher after the locator (which registers listeners)
+    if replay::is_active() {
+        let repeat = args.repeat;
+        subsystem.start(SubsystemBuilder::new("PcapReplay", move |subsys| async move {
+            tokio::select! { biased;
+                _ = subsys.on_shutdown_requested() => {
+                    log::debug!("PcapReplay shutdown requested");
+                },
+                _ = replay::run(true, repeat) => {}
+            }
+            Ok::<(), miette::Report>(())
+        }));
+    }
 
     (radars, tx_interface_request)
 }

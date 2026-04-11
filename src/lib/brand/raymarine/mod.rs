@@ -22,13 +22,6 @@ mod protocol;
 mod report;
 mod settings;
 
-const RD_SPOKES_PER_REVOLUTION: usize = 2048;
-
-// Length of a spoke in pixels. Every pixel is 4 bits (one nibble.)
-const RD_SPOKE_LEN: usize = 1024;
-
-const QUANTUM_SPOKES_PER_REVOLUTION: usize = 250;
-const QUANTUM_SPOKE_LEN: usize = 252;
 
 const NON_HD_PIXEL_VALUES: u8 = 16; // Old radars have one nibble
 const HD_PIXEL_VALUES_RAW: u16 = 256; // New radars have one byte pixels
@@ -66,69 +59,69 @@ impl RaymarineModel {
             "E70210" => (
                 BaseModel::Quantum,
                 true,
-                QUANTUM_SPOKE_LEN,
+                protocol::QUANTUM_MAX_SPOKE_LEN,
                 false,
                 "Quantum Q24",
             ),
             "E70344" => (
                 BaseModel::Quantum,
                 true,
-                QUANTUM_SPOKE_LEN,
+                protocol::QUANTUM_MAX_SPOKE_LEN,
                 false,
                 "Quantum Q24C",
             ),
             "E70498" => (
                 BaseModel::Quantum,
                 true,
-                QUANTUM_SPOKE_LEN,
+                protocol::QUANTUM_MAX_SPOKE_LEN,
                 true,
                 "Quantum Q24D",
             ),
             // Cyclone and Cyclone Pro models, untested, assume works as Quantum
             // Probably supports higher resulution though...
-            "E70620" => (BaseModel::Quantum, true, QUANTUM_SPOKE_LEN, true, "Cyclone"),
+            "E70620" => (BaseModel::Quantum, true, protocol::QUANTUM_MAX_SPOKE_LEN, true, "Cyclone"),
             "E70621" => (
                 BaseModel::Quantum,
                 true,
-                QUANTUM_SPOKE_LEN,
+                protocol::QUANTUM_MAX_SPOKE_LEN,
                 true,
                 "Cyclone Pro",
             ),
             // Magnum, untested, assume works as RD
-            "E70484" => (BaseModel::RD, true, RD_SPOKE_LEN, false, "Magnum 4kW"),
-            "E70487" => (BaseModel::RD, true, RD_SPOKE_LEN, false, "Magnum 12kW"),
+            "E70484" => (BaseModel::RD, true, protocol::RD_HD_MAX_SPOKE_LEN, false, "Magnum 4kW"),
+            "E70487" => (BaseModel::RD, true, protocol::RD_HD_MAX_SPOKE_LEN, false, "Magnum 12kW"),
             // Open Array HD and SHD, introduced circa 2007
             "E52069" => (
                 BaseModel::RD,
                 true,
-                RD_SPOKE_LEN,
+                protocol::RD_HD_MAX_SPOKE_LEN,
                 false,
                 "Open Array HD 4kW",
             ),
             "E92160" => (
                 BaseModel::RD,
                 true,
-                RD_SPOKE_LEN,
+                protocol::RD_HD_MAX_SPOKE_LEN,
                 false,
                 "Open Array HD 12kW",
             ),
             "E52081" => (
                 BaseModel::RD,
                 true,
-                RD_SPOKE_LEN,
+                protocol::RD_HD_MAX_SPOKE_LEN,
                 false,
                 "Open Array SHD 4kW",
             ),
             "E52082" => (
                 BaseModel::RD,
                 true,
-                RD_SPOKE_LEN,
+                protocol::RD_HD_MAX_SPOKE_LEN,
                 false,
                 "Open Array SHD 12kW",
             ),
             // And the actual RD models, introduced circa 2004
-            "E92142" => (BaseModel::RD, true, RD_SPOKE_LEN, false, "RD418HD"),
-            "E92143" => (BaseModel::RD, true, RD_SPOKE_LEN, false, "RD424HD"),
+            "E92142" => (BaseModel::RD, true, protocol::RD_HD_MAX_SPOKE_LEN, false, "RD418HD"),
+            "E92143" => (BaseModel::RD, true, protocol::RD_HD_MAX_SPOKE_LEN, false, "RD424HD"),
             "E92130" => (BaseModel::RD, true, 512, false, "RD418D"),
             "E92132" => (BaseModel::RD, true, 512, false, "RD424D"),
 
@@ -273,7 +266,7 @@ impl RaymarineLocator {
 
                     match model {
                         BaseModel::Quantum => {
-                            if subtype != 0x28 {
+                            if subtype != protocol::beacon36::QUANTUM {
                                 log::trace!(
                                     "{}: Raymarine 36 report: ignoring subtype 0x{:02x} for Quantum (not 0x28)",
                                     from,
@@ -284,7 +277,7 @@ impl RaymarineLocator {
                         }
                         BaseModel::RD => {
                             match subtype {
-                                0x01 => {} // Continue
+                                protocol::beacon36::RD => {} // Continue
                                 8 | 21 | 26 | 27 | 30 | 35 => {
                                     // Known unknowns
                                     return Ok(None);
@@ -303,8 +296,8 @@ impl RaymarineLocator {
                     let doppler = false; // Improved later when model is known better
 
                     let (spokes_per_revolution, max_spoke_len) = match model {
-                        BaseModel::Quantum => (QUANTUM_SPOKES_PER_REVOLUTION, QUANTUM_SPOKE_LEN),
-                        BaseModel::RD => (RD_SPOKES_PER_REVOLUTION, RD_SPOKE_LEN),
+                        BaseModel::Quantum => (protocol::QUANTUM_SPOKES_PER_REVOLUTION as usize, protocol::QUANTUM_MAX_SPOKE_LEN),
+                        BaseModel::RD => (protocol::RD_SPOKES_PER_REVOLUTION as usize, protocol::RD_HD_MAX_SPOKE_LEN),
                     };
 
                     let radar_addr: SocketAddrV4 = data.report.into();
@@ -373,7 +366,7 @@ impl RaymarineLocator {
                 let subtype = u32::from_le_bytes(data.subtype);
 
                 match subtype {
-                    0x66 => {
+                    protocol::beacon56::QUANTUM => {
                         let model = BaseModel::Quantum;
                         let model_name: Option<String> =
                             c_string(&data.model_name).map(String::from);
@@ -411,7 +404,7 @@ impl RaymarineLocator {
                             log::debug!("{}: data {:?}", from, data);
                         }
                     }
-                    0x01 => {
+                    protocol::beacon56::RD => {
                         let model = BaseModel::RD;
                         let model_name = Some(model.to_string());
 
@@ -441,18 +434,16 @@ impl RaymarineLocator {
                             );
                         }
                     }
-                    0x4d => {
-                        // W3 wireless bridge beacon — the radar also sends
-                        // a direct Quantum beacon (subtype 0x66) with the
-                        // correct data addresses. Ignore the W3 identity
-                        // and let the direct path handle discovery.
-                        log::trace!("{}: W3 bridge beacon (ignored, using direct Quantum)", from,);
+                    protocol::beacon56::W3 => {
+                        // W3 wireless bridge — the radar also sends a direct
+                        // Quantum beacon (0x66) with the correct addresses.
+                        log::debug!("{}: W3 bridge beacon (ignored, using direct Quantum)", from);
                     }
-                    0x11 => {
-                        // Request from an MFD, ignore it
+                    protocol::beacon56::MFD => {
+                        log::debug!("{}: MFD announcement (ignored)", from);
                     }
                     _ => {
-                        // log::w   arn!("{}: Raymarine 56 report: unknown subtype {}", from, subtype);
+                        log::debug!("{}: unknown 56-byte beacon subtype 0x{:02x}", from, subtype);
                     }
                 }
             }
@@ -521,9 +512,7 @@ impl RadarLocator for RaymarineLocator {
         log::trace!("{}: printable:     {}", from, PrintableSlice::new(report));
 
         match report.len() {
-            36 => {
-                // Common Raymarine message
-
+            protocol::beacon36::LEN => {
                 match Self::process_beacon_36_report(self, report, nic_addr, radars) {
                     Ok(Some(info)) => {
                         self.found(info, radars, subsys);
@@ -534,7 +523,7 @@ impl RadarLocator for RaymarineLocator {
                     }
                 }
             }
-            56 => match Self::process_beacon_56_report(self, report, nic_addr) {
+            protocol::beacon56::LEN => match Self::process_beacon_56_report(self, report, nic_addr) {
                 Ok(()) => {}
 
                 Err(e) => {
@@ -607,6 +596,7 @@ mod tests {
 
     use clap::Parser;
 
+    use super::protocol;
     use crate::{Cli, brand::raymarine::RaymarineLocator, radar::SharedRadars};
 
     #[test]
@@ -806,9 +796,9 @@ mod tests {
 
         // Find the W3 56-byte beacon (subtype 0x4d in bytes 4..8)
         for (src, _, port, data) in &packets {
-            if *port == 5800 && data.len() == 56 {
+            if *port == 5800 && data.len() == protocol::beacon56::LEN {
                 let subtype = u32::from_le_bytes(data[4..8].try_into().unwrap());
-                if subtype == 0x4d {
+                if subtype == protocol::beacon56::W3 {
                     locator.process_beacon_56_report(data, src).unwrap();
                     assert!(
                         locator.ids.is_empty(),
@@ -833,10 +823,10 @@ mod tests {
                 continue;
             }
             match data.len() {
-                56 => {
+                protocol::beacon56::LEN => {
                     let _ = locator.process_beacon_56_report(data, src);
                 }
-                36 => {
+                protocol::beacon36::LEN => {
                     if let Ok(Some(info)) = locator.process_beacon_36_report(data, src, radars) {
                         assert_eq!(
                             info.report_addr,

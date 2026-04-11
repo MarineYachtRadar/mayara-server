@@ -2,13 +2,13 @@ use anyhow::{Error, bail};
 use std::collections::HashMap;
 use std::io;
 use std::time::Duration;
-use tokio::net::UdpSocket;
 use tokio::time::{Instant, sleep, sleep_until};
 use tokio_graceful_shutdown::SubsystemHandle;
 
 use crate::Cli;
 use crate::brand::raymarine::RaymarineModel;
-use crate::network::create_udp_multicast_listen;
+use crate::network;
+use crate::replay::RadarSocket;
 use crate::radar::range::Ranges;
 use crate::radar::{BYTE_LOOKUP_LENGTH, CommonRadar, Legend, RadarError, RadarInfo, SharedRadars};
 
@@ -78,6 +78,7 @@ pub(crate) struct FeatureFlags {
     pub(super) raw: u32,
 }
 
+#[allow(dead_code)]
 impl FeatureFlags {
     fn has_flag(&self, mask: u32) -> bool {
         (self.raw & mask) != 0
@@ -97,7 +98,7 @@ impl FeatureFlags {
 
 pub(crate) struct RaymarineReportReceiver {
     common: CommonRadar,
-    report_socket: Option<UdpSocket>,
+    report_socket: Option<RadarSocket>,
     state: ReceiverState,
     model: Option<RaymarineModel>,
     command_sender: Option<Command>,
@@ -120,7 +121,7 @@ impl RaymarineReportReceiver {
     ) -> RaymarineReportReceiver {
         let key = info.key();
 
-        let replay = args.replay;
+        let replay = args.is_replay();
         log::debug!(
             "{}: Creating RaymarineReportReceiver with args {:?}",
             key,
@@ -161,7 +162,7 @@ impl RaymarineReportReceiver {
     }
 
     async fn start_report_socket(&mut self) -> io::Result<()> {
-        match create_udp_multicast_listen(&self.common.info.report_addr, &self.common.info.nic_addr)
+        match network::create_udp_listen(&self.common.info.report_addr, &self.common.info.nic_addr, network::SocketType::Multicast)
         {
             Ok(socket) => {
                 self.report_socket = Some(socket);
@@ -206,7 +207,7 @@ impl RaymarineReportReceiver {
                     self.send_heartbeat().await?;
                 },
 
-                r = self.report_socket.as_ref().unwrap().recv_buf_from(&mut buf)  => {
+                r = self.report_socket.as_mut().unwrap().recv_buf_from(&mut buf)  => {
                     match r {
                         Ok((_len, _addr)) => {
                             if buf.len() == buf.capacity() {
@@ -241,10 +242,10 @@ impl RaymarineReportReceiver {
 
             // Every 5th heartbeat (every 5 seconds), also send the
             // extended keep-alive with MARPA/AIS option data.
+            self.heartbeat_counter += 1;
             if self.heartbeat_counter % 5 == 0 {
                 cs.send_heartbeat_5s().await?;
             }
-            self.heartbeat_counter += 1;
         }
         self.heartbeat_deadline += HEARTBEAT_INTERVAL;
         Ok(())
@@ -320,10 +321,8 @@ impl RaymarineReportReceiver {
             0x280030 => {
                 quantum::process_doppler_report(self, data);
             }
-            // Guard zone messages — logged but not acted on
-            id if (id & 0xFFFF0000 == 0x28000000 || id & 0xFFFF0000 == 0x01000000)
-                && data.len() >= 8 => {
-                // Check for guard zone, alarm, MARPA, self-test, etc.
+            // Guard zone, alarm, MARPA, self-test, etc. — logged but not acted on
+            id if (id & 0xFFFF0000 == 0x28000000 || id & 0xFFFF0000 == 0x01000000) => {
                 if self.reported_unknown.get(&id).is_none() {
                     log::debug!(
                         "{}: Unhandled report ID 0x{:08X} len={}",

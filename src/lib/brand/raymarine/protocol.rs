@@ -24,20 +24,58 @@ pub const DISCOVERY_ADDRESS_WIRED: &str = "224.0.0.1:5800";
 /// WiFi discovery address (Quantum WiFi radars).
 pub const DISCOVERY_ADDRESS_WIFI: &str = "232.1.1.1:5800";
 
-/// Beacon subtype for Quantum radars.
-pub const BEACON_SUBTYPE_QUANTUM: u8 = 0x28;
+// =============================================================================
+// Beacon discovery protocol
+//
+// Raymarine radars broadcast beacons on 224.0.0.1:5800 (wired) or
+// 232.1.1.1:5800 (WiFi). Three beacon formats exist:
+//
+// 36-byte beacon (beacon_type = 0):
+//   Contains the radar's multicast report and unicast command addresses.
+//   The locator uses these to create a RadarInfo and start the report
+//   receiver. Only processed if the link_id was previously registered
+//   by a 56-byte beacon.
+//
+// 56-byte beacon (beacon_type = 1):
+//   Contains a 32-byte model name string. Registers the radar's link_id
+//   and base model (Quantum or RD) so that subsequent 36-byte beacons
+//   can be matched.
+//
+// 70-byte beacon (beacon_type = 2):
+//   Extended Quantum beacon with additional address fields. Not currently
+//   processed — the 56+36 byte pair is sufficient for discovery.
+//
+// A Quantum WiFi radar with a W3 wireless bridge sends both W3 beacons
+// (subtype 0x4d/0x29 with its own link_id) and direct Quantum beacons
+// (subtype 0x66/0x28 with the radar's link_id). The W3 beacons are
+// ignored; the direct beacons are authoritative.
+// =============================================================================
 
-/// Beacon subtype for RD radars.
-pub const BEACON_SUBTYPE_RD: u8 = 0x01;
+/// Subtypes in the 36-byte beacon (beacon_type = 0).
+pub mod beacon36 {
+    /// Quantum radar — carries the multicast report and command addresses.
+    pub const QUANTUM: u32 = 0x28;
+    /// RD (magnetron) radar.
+    pub const RD: u32 = 0x01;
+    /// W3 wireless bridge forwarding a Quantum (different link_id). Ignored.
+    pub const W3: u32 = 0x29;
 
-/// Beacon subtype for MFD identification.
-pub const BEACON_SUBTYPE_MFD: u8 = 0x11;
+    pub const LEN: usize = 36;
+}
 
-/// Beacon subtype for W3 wireless adapter.
-pub const BEACON_SUBTYPE_W3: u8 = 0x4d;
+/// Subtypes in the 56-byte beacon (beacon_type = 1).
+pub mod beacon56 {
+    /// Quantum radar identity — model name e.g. "QuantumRadar".
+    pub const QUANTUM: u32 = 0x66;
+    /// RD (magnetron) radar identity.
+    pub const RD: u32 = 0x01;
+    /// W3 wireless bridge identity — model name "Quantum_W3". Ignored.
+    pub const W3: u32 = 0x4d;
+    /// MFD announcement. Ignored.
+    pub const MFD: u32 = 0x11;
 
-/// Model identification subtype in 56-byte beacon.
-pub const BEACON_56_SUBTYPE_QUANTUM: u8 = 0x66;
+    pub const LEN: usize = 56;
+}
 
 // =============================================================================
 // Quantum report message IDs (radar → MFD)

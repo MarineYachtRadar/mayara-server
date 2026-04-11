@@ -2,7 +2,6 @@ use anyhow::{Error, bail};
 use std::collections::HashMap;
 use std::io;
 use std::time::Duration;
-use tokio::net::UdpSocket;
 use tokio::time::sleep;
 use tokio_graceful_shutdown::SubsystemHandle;
 
@@ -12,7 +11,8 @@ use super::command::Command;
 use super::protocol::*;
 use super::range_table;
 use crate::Cli;
-use crate::network::create_udp_multicast_listen;
+use crate::network;
+use crate::replay::RadarSocket;
 use crate::radar::settings::ControlId;
 use crate::radar::spoke::GenericSpoke;
 use crate::radar::{
@@ -96,8 +96,8 @@ pub(crate) struct GarminReportReceiver {
     common_b: Option<CommonRadar>,
     command_sender_b: Option<Command>,
     radar_type: GarminRadarType,
-    report_socket: Option<UdpSocket>,
-    data_socket: Option<UdpSocket>,
+    report_socket: Option<RadarSocket>,
+    data_socket: Option<RadarSocket>,
     command_sender: Option<Command>,
     reported_unknown: HashMap<u32, bool>,
 
@@ -154,7 +154,7 @@ impl GarminReportReceiver {
     pub fn new(args: &Cli, info: RadarInfo, radars: SharedRadars) -> GarminReportReceiver {
         let key = info.key();
 
-        let replay = args.replay;
+        let replay = args.is_replay();
         log::debug!(
             "{}: Creating GarminReportReceiver with args {:?}",
             key,
@@ -220,7 +220,7 @@ impl GarminReportReceiver {
     /// locator after constructing the second RadarInfo.
     pub fn set_range_b(&mut self, args: &Cli, info: RadarInfo, radars: SharedRadars) {
         let key = info.key();
-        let replay = args.replay;
+        let replay = args.is_replay();
         let control_update_rx = info.control_update_subscribe();
         let blob_tx = radars.get_blob_tx();
         let pixel_to_blob =
@@ -248,7 +248,7 @@ impl GarminReportReceiver {
 
     async fn start_sockets(&mut self) -> io::Result<()> {
         // Report socket (239.254.2.0:50100)
-        match create_udp_multicast_listen(&self.common.info.report_addr, &self.common.info.nic_addr)
+        match network::create_udp_listen(&self.common.info.report_addr, &self.common.info.nic_addr, network::SocketType::Multicast)
         {
             Ok(socket) => {
                 self.report_socket = Some(socket);
@@ -273,9 +273,10 @@ impl GarminReportReceiver {
 
         // uses a separate data socket
         if self.radar_type == GarminRadarType::XHD {
-            match create_udp_multicast_listen(
+            match network::create_udp_listen(
                 &self.common.info.spoke_data_addr,
                 &self.common.info.nic_addr,
+                network::SocketType::Multicast,
             ) {
                 Ok(socket) => {
                     self.data_socket = Some(socket);
@@ -320,7 +321,7 @@ impl GarminReportReceiver {
                     return Err(RadarError::Shutdown);
                 },
                 r = async {
-                    if let Some(sock) = self.report_socket.as_ref() {
+                    if let Some(sock) = self.report_socket.as_mut() {
                         sock.recv_buf_from(&mut report_buf).await
                     } else {
                         std::future::pending().await
@@ -340,7 +341,7 @@ impl GarminReportReceiver {
                     }
                 },
                 r = async {
-                    if let Some(sock) = self.data_socket.as_ref() {
+                    if let Some(sock) = self.data_socket.as_mut() {
                         sock.recv_buf_from(&mut data_buf).await
                     } else {
                         std::future::pending().await

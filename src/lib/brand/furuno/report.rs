@@ -7,7 +7,6 @@ use std::time::Duration;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
 use tokio::io::ReadHalf;
-use tokio::net::UdpSocket;
 use tokio::net::{TcpSocket, TcpStream};
 use tokio::time::{Instant, sleep, sleep_until};
 use tokio_graceful_shutdown::SubsystemHandle;
@@ -23,7 +22,8 @@ use super::protocol::{
 };
 use super::settings;
 use crate::Cli;
-use crate::network::{create_udp_listen, create_udp_multicast_listen};
+use crate::network;
+use crate::replay::RadarSocket;
 use crate::radar::CommonRadar;
 use crate::radar::SharedRadars;
 use crate::radar::SpokeBearing;
@@ -65,8 +65,8 @@ pub struct FurunoReportReceiver {
     model: RadarModel,
 
     receive_type: ReceiveAddressType,
-    multicast_socket: Option<UdpSocket>,
-    broadcast_socket: Option<UdpSocket>,
+    multicast_socket: Option<RadarSocket>,
+    broadcast_socket: Option<RadarSocket>,
 
     // Delta-decoding state kept per range (index 0 = A, 1 = B) because
     // dual-range interleaves two independent spoke streams on the same UDP
@@ -79,7 +79,7 @@ pub struct FurunoReportReceiver {
 impl FurunoReportReceiver {
     pub fn new(args: &Cli, radars: SharedRadars, info: RadarInfo) -> FurunoReportReceiver {
         let key = info.key();
-        let command_sender = if args.replay {
+        let command_sender = if args.is_replay() {
             None
         } else {
             Some(Command::new(&info, false))
@@ -94,7 +94,7 @@ impl FurunoReportReceiver {
             info.clone(),
             radars.clone(),
             control_update_rx,
-            args.replay,
+            args.is_replay(),
             blob_tx,
         );
 
@@ -126,7 +126,7 @@ impl FurunoReportReceiver {
             info_b,
             radars.clone(),
             control_update_rx_b,
-            args.replay,
+            args.is_replay(),
             blob_tx_b,
         ));
 
@@ -258,7 +258,7 @@ impl FurunoReportReceiver {
                     }
                 },
 
-                Some(r) = conditional_receive(&multicast_socket, &mut buf)  => {
+                Some(r) = conditional_receive(&mut multicast_socket, &mut buf)  => {
                     log::trace!("Furuno data multicast recv {:?}", r);
                     match r {
                         Ok((len, addr)) => {
@@ -276,7 +276,7 @@ impl FurunoReportReceiver {
                     buf.clear();
                 },
 
-                Some(r) = conditional_receive(&broadcast_socket, &mut buf2)  => {
+                Some(r) = conditional_receive(&mut broadcast_socket, &mut buf2)  => {
                     log::trace!("Furuno data broadcast recv {:?}", r);
                     match r {
                         Ok((len, addr)) => {
@@ -825,9 +825,10 @@ impl FurunoReportReceiver {
     }
 
     async fn start_multicast_socket(&mut self) -> io::Result<()> {
-        match create_udp_multicast_listen(
+        match network::create_udp_listen(
             &self.common.info.spoke_data_addr,
             &self.common.info.nic_addr,
+            network::SocketType::Multicast,
         ) {
             Ok(sock) => {
                 self.multicast_socket = Some(sock);
@@ -851,10 +852,10 @@ impl FurunoReportReceiver {
     }
 
     async fn start_broadcast_socket(&mut self) -> io::Result<()> {
-        match create_udp_listen(
+        match network::create_udp_listen(
             &DATA_BROADCAST_ADDRESS,
             &self.common.info.nic_addr,
-            true,
+            network::SocketType::Broadcast,
         ) {
             Ok(sock) => {
                 self.broadcast_socket = Some(sock);
@@ -1378,7 +1379,7 @@ impl FurunoReportReceiver {
 }
 
 async fn conditional_receive(
-    socket: &Option<UdpSocket>,
+    socket: &mut Option<RadarSocket>,
     buf: &mut Vec<u8>,
 ) -> Option<io::Result<(usize, SocketAddr)>> {
     match socket {

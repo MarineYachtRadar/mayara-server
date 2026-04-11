@@ -208,40 +208,64 @@ fn bind_to_broadcast(
     Ok(())
 }
 
-pub fn create_udp_multicast_listen(
-    addr: &SocketAddrV4,
-    nic_addr: &Ipv4Addr,
-) -> io::Result<UdpSocket> {
-    let socket: socket2::Socket = new_socket()?;
-
-    socket.set_reuse_address(true)?;
-
-    bind_to_multicast(&socket, addr, nic_addr)?;
-
-    let socket = UdpSocket::from_std(socket.into())?;
-    Ok(socket)
+/// Socket type for `create_udp_listen`.
+pub enum SocketType {
+    /// Auto-detect from address: multicast if the IP is in a multicast
+    /// range, broadcast if in a broadcast range, unicast otherwise.
+    Any,
+    /// Unicast/plain: bind to INADDR_ANY on the given port.
+    Unicast,
+    /// Broadcast: set SO_BROADCAST and bind to the broadcast address.
+    Broadcast,
+    /// Multicast: join the multicast group on the given NIC.
+    Multicast,
 }
 
+/// Create a `RadarSocket` for a listen address. If pcap replay is
+/// active, returns a replay-backed socket. Otherwise creates a real
+/// UDP socket bound according to `socket_type`.
 pub fn create_udp_listen(
     addr: &SocketAddrV4,
     nic_addr: &Ipv4Addr,
-    no_broadcast: bool,
-) -> io::Result<UdpSocket> {
+    socket_type: SocketType,
+) -> io::Result<crate::replay::RadarSocket> {
+    if let Some(rx) = crate::replay::create_listen(addr) {
+        return Ok(crate::replay::RadarSocket::Replay(rx));
+    }
+
     let socket: socket2::Socket = new_socket()?;
 
-    if addr.ip().is_multicast() {
-        bind_to_multicast(&socket, addr, nic_addr)?;
-    } else if !no_broadcast {
-        bind_to_broadcast(&socket, addr, nic_addr)?;
-    } else {
-        let socketaddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), addr.port());
+    debug_assert!(
+        matches!(socket_type, SocketType::Any)
+            || matches!(socket_type, SocketType::Multicast) == addr.ip().is_multicast(),
+        "SocketType::Multicast mismatch for address {}",
+        addr,
+    );
+    debug_assert!(
+        matches!(socket_type, SocketType::Any | SocketType::Multicast)
+            || matches!(socket_type, SocketType::Broadcast) == addr.ip().is_broadcast(),
+        "SocketType::Broadcast mismatch for address {}",
+        addr,
+    );
 
-        socket.bind(&socket2::SockAddr::from(socketaddr))?;
-        log::trace!("Binding socket to {}", socketaddr);
+    let effective = match socket_type {
+        SocketType::Any if addr.ip().is_multicast() => SocketType::Multicast,
+        SocketType::Any if addr.ip().is_broadcast() => SocketType::Broadcast,
+        other => other,
+    };
+
+    match effective {
+        SocketType::Multicast => bind_to_multicast(&socket, addr, nic_addr)?,
+        SocketType::Broadcast => bind_to_broadcast(&socket, addr, nic_addr)?,
+        SocketType::Unicast | SocketType::Any => {
+            let socketaddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), addr.port());
+            socket.bind(&socket2::SockAddr::from(socketaddr))?;
+            log::trace!("Binding socket to {}", socketaddr);
+        }
     }
 
     let socket = UdpSocket::from_std(socket.into())?;
-    Ok(socket)
+    Ok(crate::replay::RadarSocket::Udp(socket))
 }
 
 pub fn create_multicast_send(addr: &SocketAddrV4, nic_addr: &Ipv4Addr) -> io::Result<UdpSocket> {

@@ -612,7 +612,7 @@ impl Controls {
             .read_only(true)
             .build(&mut controls);
 
-        if args.replay {
+        if args.is_replay() {
             controls.iter_mut().for_each(|(_k, v)| {
                 if v.item.control_id.get_destination() != ControlDestination::Target {
                     v.item.is_read_only = true;
@@ -674,7 +674,7 @@ impl Controls {
         let (control_update_tx, _) = tokio::sync::broadcast::channel(32);
 
         Controls {
-            replay: args.replay,
+            replay: args.is_replay(),
             controls,
             radar_id,
             all_ranges: Ranges::empty(),
