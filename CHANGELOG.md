@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **furuno:** add FAR radar setup guide (#85) ([PR #85](https://github.com/MarineYachtRadar/mayara-server/pull/85))
 
+### Fixed
+
+- prefer spoke heading over stale global heading in antenna offset (#82) ([PR #82](https://github.com/MarineYachtRadar/mayara-server/pull/82))
+
 ## [3.4.2] - 2026-04-10
 
 ### Added
