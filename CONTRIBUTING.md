@@ -62,7 +62,7 @@ There is no Docker build on PRs — the Docker workflow only fires on push to `m
 
 Per [`AGENTS.md`](AGENTS.md#pull-request-guidelines) — this is the minimum:
 
-- `cargo test` passes locally (Linux tests only run in CI on the Windows job, so local is your only Linux signal)
+- `cargo test` passes locally. CI runs `cargo test --release` only on the Windows native job; the Linux cross-build jobs are build-only. That makes your local `cargo test` the only pre-merge signal on Linux-specific behaviour.
 - Rebase onto `origin/main`, squash fixup commits, leave only intentional commits in history
 - Self-review the diff: the PR description should explain **why**, not **what**
 
@@ -110,7 +110,7 @@ Mayara Server uses **Angular-style conventional commits**:
 
 A handful of special cases are also skipped by `cliff.toml`: `chore(release)`, `chore(deps)`, `docs(changelog): update CHANGELOG`, and any commit matching `address.*CR.*findings` or `address.*CodeRabbit` — so the conventional way to name a fixup commit that addresses CodeRabbit feedback is `fix(furuno): address CodeRabbit findings`, and it will not appear in the changelog.
 
-The full list of accepted types (per [`AGENTS.md`](AGENTS.md#git-commit-conventions)) is `feat | fix | docs | style | refactor | test | chore | perf`. `cliff.toml` also recognizes `ci`.
+The full list of accepted types (per [`AGENTS.md`](AGENTS.md#git-commit-conventions)) is `feat | fix | docs | style | refactor | test | chore | perf | ci`.
 
 ## CHANGELOG is auto-generated — do not edit
 

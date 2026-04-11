@@ -12,8 +12,10 @@ jobs:
   changelog:
     name: Update Changelog
     runs-on: ubuntu-latest
-    # Skip if the merge came from a changelog PR or is a changelog commit
-    if: "!startsWith(github.event.head_commit.message, 'docs(changelog): update CHANGELOG.md')"
+    # Skip if the merge came from a changelog PR or is a changelog commit.
+    # Match both the current scoped form and the legacy unscoped form so
+    # in-flight old-style PRs and rebased old commits don't trigger a re-run.
+    if: "!startsWith(github.event.head_commit.message, 'docs(changelog): update CHANGELOG.md') && !startsWith(github.event.head_commit.message, 'docs: update CHANGELOG.md')"
     permissions:
       contents: write
       pull-requests: write

@@ -39,7 +39,7 @@ Do not add error handling, fallbacks, or validation for scenarios that cannot ha
 
 ## Git Commit Conventions
 
-Use conventional format: `<type>(<scope>): <subject>` where type = feat|fix|docs|style|refactor|test|chore|perf. Subject: 50 chars max, imperative mood ("add" not "added"), no period. For small changes: one-line commit only. For complex changes: add body explaining what/why (72-char lines) and reference issues.
+Use conventional format: `<type>(<scope>): <subject>` where type = feat|fix|docs|style|refactor|test|chore|perf|ci. Subject: 50 chars max, imperative mood ("add" not "added"), no period. For small changes: one-line commit only. For complex changes: add body explaining what/why (72-char lines) and reference issues.
 
 Keep commits small and atomic - one logical change per commit. Split unrelated changes into separate commits. The commit history tells a story; each commit should be a meaningful, self-contained step.
 
@@ -53,7 +53,7 @@ Before opening a PR:
 
 - Branch from latest `main`
 - Run `cargo test` - all tests must pass
-- If `cr` (CodeRabbit CLI) is available, run `cr review --plain` and address any findings before creating the PR
+- Optionally, if `cr` (CodeRabbit CLI) is available, run `cr review --plain` against your branch to catch findings before pushing. This is good practice for non-trivial code changes but not required — CodeRabbit runs on every PR automatically via the GitHub App, so the findings arrive either way. Skip it for docs-only PRs, formatting fixes, or one-liners.
 - Rebase and clean up commit history (squash intermediate commits)
 - Self-review your changes
 - **NEVER change version numbers** - maintainers will update versions when publishing releases
