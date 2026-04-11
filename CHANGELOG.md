@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - prefer spoke heading over stale global heading in antenna offset (#82) ([PR #82](https://github.com/MarineYachtRadar/mayara-server/pull/82))
+- **emulator:** propagate RangeUnits set_value errors (#83) ([PR #83](https://github.com/MarineYachtRadar/mayara-server/pull/83))
 
 ## [3.4.2] - 2026-04-10
 
