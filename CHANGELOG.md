@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **emulator:** propagate RangeUnits set_value errors (#83) ([PR #83](https://github.com/MarineYachtRadar/mayara-server/pull/83))
 - **stream:** dedupe per-client radar metadata tracking (#87) ([PR #87](https://github.com/MarineYachtRadar/mayara-server/pull/87))
 - **stream:** handle navigation and target paths in desubscribe (#88) ([PR #88](https://github.com/MarineYachtRadar/mayara-server/pull/88))
+- **furuno:** restore DRS4W short ranges (1/8, 1/4, 1/2 NM) (#93) ([PR #93](https://github.com/MarineYachtRadar/mayara-server/pull/93))
 
 ## [3.4.2] - 2026-04-10
 
