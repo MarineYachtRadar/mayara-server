@@ -367,10 +367,13 @@ impl ActiveSubscriptions {
                     radar_id,
                     target_pattern
                 );
-                self.target_subscriptions
+                let patterns = self
+                    .target_subscriptions
                     .entry(radar_id.to_string())
-                    .or_default()
-                    .push(target_pattern.to_string());
+                    .or_default();
+                if !patterns.iter().any(|p| p == target_pattern) {
+                    patterns.push(target_pattern.to_string());
+                }
                 continue;
             }
 
@@ -439,6 +442,30 @@ impl ActiveSubscriptions {
         self.mode = Subscribe::Some;
         for path_desubscription in subscription.desubscribe {
             let path = &path_desubscription.path;
+
+            // Handle navigation desubscriptions (e.g., "navigation.headingTrue")
+            if path.starts_with("navigation.") {
+                log::debug!("Desubscribing from navigation path: {}", path);
+                self.navigation_subscriptions.retain(|p| p != path);
+                continue;
+            }
+
+            // Handle target desubscriptions (e.g., "radars.nav1.targets.*")
+            if path.contains(".targets.") {
+                let (radar_id, target_pattern) = extract_path(path);
+                log::debug!(
+                    "Desubscribing from targets for radar '{}' pattern '{}'",
+                    radar_id,
+                    target_pattern
+                );
+                if let Some(patterns) = self.target_subscriptions.get_mut(radar_id) {
+                    patterns.retain(|p| p != target_pattern);
+                    if patterns.is_empty() {
+                        self.target_subscriptions.remove(radar_id);
+                    }
+                }
+                continue;
+            }
 
             // Handle vessel (AIS) desubscriptions (e.g., "vessels.*")
             if path.starts_with("vessels.") {
@@ -864,5 +891,75 @@ mod test {
                 panic!("{}", e);
             }
         }
+    }
+
+    fn path(p: &str) -> PathSubscribe {
+        PathSubscribe {
+            path: p.to_string(),
+            period: None,
+            policy: None,
+            min_period: None,
+            last_sent: None,
+        }
+    }
+
+    #[test]
+    fn target_subscribe_dedupes_repeated_patterns() {
+        let mut subs = ActiveSubscriptions::new(Subscribe::Some);
+        for _ in 0..100 {
+            subs.subscribe(Subscription {
+                subscribe: vec![path("radars.nav1.targets.*")],
+            })
+            .unwrap();
+        }
+        let patterns = subs.target_subscriptions.get("nav1").unwrap();
+        assert_eq!(patterns.len(), 1);
+        assert_eq!(patterns[0], "targets.*");
+    }
+
+    #[test]
+    fn target_desubscribe_removes_pattern_and_empty_bucket() {
+        let mut subs = ActiveSubscriptions::new(Subscribe::Some);
+        subs.subscribe(Subscription {
+            subscribe: vec![
+                path("radars.nav1.targets.*"),
+                path("radars.nav1.targets.5"),
+            ],
+        })
+        .unwrap();
+        assert_eq!(subs.target_subscriptions.get("nav1").unwrap().len(), 2);
+
+        subs.desubscribe(Desubscription {
+            desubscribe: vec![path("radars.nav1.targets.*")],
+        })
+        .unwrap();
+        let remaining = subs.target_subscriptions.get("nav1").unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0], "targets.5");
+
+        subs.desubscribe(Desubscription {
+            desubscribe: vec![path("radars.nav1.targets.5")],
+        })
+        .unwrap();
+        assert!(!subs.target_subscriptions.contains_key("nav1"));
+    }
+
+    #[test]
+    fn navigation_desubscribe_removes_path() {
+        let mut subs = ActiveSubscriptions::new(Subscribe::Some);
+        subs.subscribe(Subscription {
+            subscribe: vec![
+                path("navigation.headingTrue"),
+                path("navigation.position"),
+            ],
+        })
+        .unwrap();
+        assert_eq!(subs.navigation_subscriptions.len(), 2);
+
+        subs.desubscribe(Desubscription {
+            desubscribe: vec![path("navigation.headingTrue")],
+        })
+        .unwrap();
+        assert_eq!(subs.navigation_subscriptions, vec!["navigation.position"]);
     }
 }
