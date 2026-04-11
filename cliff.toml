@@ -63,8 +63,14 @@ commit_parsers = [
     { message = "^chore\\(release\\)", skip = true },
     { message = "^chore\\(deps\\)", skip = true },
     { message = "^docs(\\(changelog\\))?: update CHANGELOG", skip = true },
-    { message = "address.*CR.*findings", skip = true },
-    { message = "address.*CodeRabbit", skip = true },
+    # Skip "address CR findings" / "address CodeRabbit findings" fixup commits.
+    # The pattern is anchored to the start of the commit message and requires a
+    # conventional-commit prefix, so it only matches fixup-commit SUBJECTS. An
+    # unanchored version would also match squash-merge commit BODIES that
+    # concatenate intermediate commit subjects, silently dropping whole PRs
+    # from the changelog (see regression in PR #95 against the previous
+    # pattern `address.*CodeRabbit`).
+    { message = "^[a-z]+(\\([a-z]+\\))?: address .*(CR|CodeRabbit)", skip = true },
     { message = "^feat", group = "Added" },
     { message = "^fix", group = "Fixed" },
     { message = "^refactor", group = "Changed" },
