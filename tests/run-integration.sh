@@ -39,12 +39,9 @@ fi
 
 echo "Server ready (pid ${SERVER_PID}), running tests..."
 
-# Run unit tests
-cargo test --quiet
-
-# Run integration tests
+# Run all tests including integration tests
 MAYARA_TEST_URL="${BASE_URL}" \
 MAYARA_TEST_WS_URL="ws://localhost:${PORT}" \
-cargo test --test api_rest --test api_stream -- --ignored
+cargo test -- --include-ignored
 
 echo "All tests passed."

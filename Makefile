@@ -7,7 +7,7 @@
 #   make          - Build release with docs (recommended)
 #   make release  - Build release with docs
 #   make debug    - Build debug with docs
-#   make dev      - Build debug with live GUI reload (requires ../mayara-gui)
+#   make test     - Build and run tests
 #   make docs     - Generate rustdoc only
 #   make run      - Build and run server
 #   make run-dev  - Build and run dev server (live GUI reload)

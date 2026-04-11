@@ -24,7 +24,7 @@ const NAVDATA_INTERVAL: Duration = Duration::from_millis(protocol::NAVDATA_INTER
 
 // Flags indicating which fields are valid
 const FLAG_HEADING: u32 = 0x01;
-const FLAG_STW: u32 = 0x02;
+// FLAG_STW (0x02) is not used — speed through water is not available from Signal K nav data
 const FLAG_COG: u32 = 0x04;
 const FLAG_SOG: u32 = 0x08;
 const FLAG_POSITION: u32 = 0x10;
@@ -41,10 +41,7 @@ fn radians_to_fixed(rad: f64) -> i32 {
 
 /// Run the NavData sender loop. Sends position/heading to the radar
 /// every 100ms for as long as the subsystem is alive.
-pub async fn run(
-    subsys: SubsystemHandle,
-    socket: UdpSocket,
-) -> Result<(), RadarError> {
+pub async fn run(subsys: SubsystemHandle, socket: UdpSocket) -> Result<(), RadarError> {
     let mut deadline = Instant::now() + NAVDATA_INTERVAL;
 
     loop {
