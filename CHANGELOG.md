@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **furuno:** add FAR radar setup guide (#85) ([PR #85](https://github.com/MarineYachtRadar/mayara-server/pull/85))
+- **contributing:** add workflow guide, CodeRabbit config, scoped changelog (#95) ([PR #95](https://github.com/MarineYachtRadar/mayara-server/pull/95))
 
 ### Fixed
 
@@ -18,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **stream:** dedupe per-client radar metadata tracking (#87) ([PR #87](https://github.com/MarineYachtRadar/mayara-server/pull/87))
 - **stream:** handle navigation and target paths in desubscribe (#88) ([PR #88](https://github.com/MarineYachtRadar/mayara-server/pull/88))
 - **furuno:** restore DRS4W short ranges (1/8, 1/4, 1/2 NM) (#93) ([PR #93](https://github.com/MarineYachtRadar/mayara-server/pull/93))
+- **cliff:** anchor CodeRabbit-fixup skip rules to commit subject (#96) ([PR #96](https://github.com/MarineYachtRadar/mayara-server/pull/96))
 
 ## [3.4.2] - 2026-04-10
 
@@ -131,7 +133,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **furuno:** restrict DRS4W range table to hardware-supported ranges
 - **furuno:** restrict DRS4W range table to hardware-supported ranges #67 ([PR #67](https://github.com/MarineYachtRadar/mayara-server/pull/67))
 - **furuno:** guard length check on $N70 guard status notification
-- **ci:** address CR feedback on changelog workflow
 - **ci:** use PR for changelog commit to respect branch protection (#73) ([PR #73](https://github.com/MarineYachtRadar/mayara-server/pull/73))
 - **ci:** fall back to immediate merge when auto-merge not needed (#77) ([PR #77](https://github.com/MarineYachtRadar/mayara-server/pull/77))
 
