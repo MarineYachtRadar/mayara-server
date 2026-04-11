@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::min,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     str::FromStr,
     time::{Duration, SystemTime},
 };
@@ -44,7 +44,7 @@ impl SignalKDelta {
     //
     // Used when starting a websocket, we always check radars for unsent
     //
-    pub fn add_meta_updates(&mut self, radars: &SharedRadars, meta_sent: &mut Vec<String>) {
+    pub fn add_meta_updates(&mut self, radars: &SharedRadars, meta_sent: &mut HashSet<String>) {
         if let Some(updates) = get_meta_delta(radars, meta_sent) {
             self.updates.push(updates);
         }
@@ -53,7 +53,11 @@ impl SignalKDelta {
     //
     // Every time we send a SignalKDelta, we check for unsent meta data
     //
-    pub fn add_meta_from_updates(&mut self, radars: &SharedRadars, meta_sent: &mut Vec<String>) {
+    pub fn add_meta_from_updates(
+        &mut self,
+        radars: &SharedRadars,
+        meta_sent: &mut HashSet<String>,
+    ) {
         let mut needs_meta = false;
         for update in &self.updates {
             for dv in &update.values {
@@ -64,7 +68,7 @@ impl SignalKDelta {
                     continue;
                 }
                 if let Some(radar_id) = path.split('.').nth(1) {
-                    if !meta_sent.iter().any(|x| x == radar_id) {
+                    if !meta_sent.contains(radar_id) {
                         // Found a radar whose meta hasn't been sent yet
                         needs_meta = true;
                         break;
@@ -269,11 +273,17 @@ pub struct DeltaMeta {
     value: ControlDefinition,
 }
 
-fn get_meta_delta(radars: &SharedRadars, meta_sent: &mut Vec<String>) -> Option<DeltaUpdate> {
+fn get_meta_delta(
+    radars: &SharedRadars,
+    meta_sent: &mut HashSet<String>,
+) -> Option<DeltaUpdate> {
     let mut meta = Vec::new();
 
     for radar in radars.get_active() {
         let radar_id = radar.key();
+        if !meta_sent.insert(radar_id.clone()) {
+            continue;
+        }
         let controls = radar.controls.get_controls();
 
         for (k, v) in controls.iter() {
@@ -281,7 +291,6 @@ fn get_meta_delta(radars: &SharedRadars, meta_sent: &mut Vec<String>) -> Option<
             let value = v.item().clone();
             meta.push(DeltaMeta { path, value });
         }
-        meta_sent.push(radar_id);
     }
 
     if meta.len() == 0 {
