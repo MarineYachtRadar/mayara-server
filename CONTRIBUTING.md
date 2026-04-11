@@ -29,7 +29,7 @@ Read `AGENTS.md` before opening your first PR. The rules there are enforced — 
 
 ### `main` is protected — all changes go through a pull request
 
-Direct pushes to `main` are blocked by a repository ruleset. Every change — including docs, chores, and small fixes — must go through a pull request. There is **no required reviewer count** and **no required CI check** configured at the branch-protection level, so in practice a maintainer can merge once they are satisfied with the PR, but the PR step is mandatory.
+Direct pushes to `main` are blocked by a repository ruleset — verified. Every change, including docs, chores, and small fixes, must go through a pull request.
 
 Branch from the latest `main`:
 
