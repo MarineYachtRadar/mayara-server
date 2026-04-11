@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **furuno:** add FAR radar setup guide (#85) ([PR #85](https://github.com/MarineYachtRadar/mayara-server/pull/85))
+
 ## [3.4.2] - 2026-04-10
 
 ### Added
@@ -121,6 +127,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **ci:** use PR for changelog commit to respect branch protection (#73) ([PR #73](https://github.com/MarineYachtRadar/mayara-server/pull/73))
 - **ci:** fall back to immediate merge when auto-merge not needed (#77) ([PR #77](https://github.com/MarineYachtRadar/mayara-server/pull/77))
 
+[Unreleased]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.4.2...HEAD
 [3.4.2]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.4.1...v3.4.2
 
 
