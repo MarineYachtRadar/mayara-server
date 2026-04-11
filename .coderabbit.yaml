@@ -83,11 +83,15 @@ reviews:
         project history.
 
         ## Implementation status in documentation
-        Flag any .md file that describes implementation progress, status, or
-        build steps (e.g. "Step 3: implement X", "TODO: add Y", "currently
+        Flag implementation-progress narratives in product and reference
+        documentation (e.g. "Step 3: implement X", "TODO: add Y", "currently
         implemented as Z"). This belongs in PR descriptions or commit
         messages, not in documentation. Architecture decisions and design
-        rationale are fine. Build narratives are not.
+        rationale are fine. Build-progress narratives are not.
+        Do NOT flag stable user/maintainer workflow documentation that is
+        intentionally procedural — CONTRIBUTING.md, BUILDING.md, USAGE.md,
+        release-flow sections, and similar. Procedural content is their
+        job.
 
         ## Scope
         Focus on files changed since main. Think carefully about how changes

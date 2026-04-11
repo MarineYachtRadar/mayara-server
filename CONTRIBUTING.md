@@ -48,7 +48,7 @@ Use `gh pr create` or the GitHub web UI. The PR must target `main` — there is 
 
 Three things run automatically:
 
-1. **CodeRabbit review** — a GitHub App posts an automatic review within a minute or two. It summarizes your changes, flags issues, and suggests fixes. **Treat CodeRabbit as a first-pass review**: address its findings or explain why you are leaving them. The review profile is "CHILL" (defaults, no in-repo config). CodeRabbit is advisory and non-blocking at the branch-protection level, but unresolved findings will slow down human review. If you want to catch findings before pushing, you can run `cr review --plain` locally against your branch — this is optional, not required; CodeRabbit runs on the PR either way. See [Before opening the PR](#before-opening-the-pr) below.
+1. **CodeRabbit review** — a GitHub App posts an automatic review within a minute or two. It summarizes your changes, flags issues, and suggests fixes. **Treat CodeRabbit as a first-pass review**: address its findings or explain why you are leaving them. The review profile is `assertive` and the project-specific rules (conventional-commit PR title, no manual CHANGELOG edits, no version bumps in contribution PRs, echo-comment and AI-attribution-footer blocks, etc.) are pinned in [`.coderabbit.yaml`](.coderabbit.yaml). CodeRabbit is advisory and non-blocking at the branch-protection level, but unresolved findings will slow down human review. If you want to catch findings before pushing, you can run `cr review --plain` locally against your branch — this is optional, not required; CodeRabbit runs on the PR either way. See [Before opening the PR](#before-opening-the-pr) below.
 2. **Rust CI** (`.github/workflows/rust.yml`) — cross-builds `--release` for `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`, and `x86_64-pc-windows-gnu`, plus a native build on `windows-latest` that **also runs `cargo test --release`**. Note that tests only run on the Windows job; the Linux cross-build does not run tests, so your local `cargo test` is the primary quality gate on Linux-specific code. Run it before pushing.
 3. **Copilot code review** — the ruleset enables Copilot code review on PRs (non-blocking, informational).
 
@@ -76,7 +76,7 @@ Do not include AI-generated footers (`🤖 Generated with Claude Code`, `Co-Auth
 
 Mayara Server uses **Angular-style conventional commits**:
 
-```
+```text
 <type>(<scope>): <subject>
 
 <optional body — 72-char wrap, explain why>
