@@ -203,6 +203,7 @@ do_release() {
 do_beta() {
     ensure_clean
     ensure_on_main
+    git fetch --tags --quiet
 
     local current
     current=$(get_version)
