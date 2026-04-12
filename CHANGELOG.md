@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **furuno:** add anti-jamming filter control (0xE8) (#102) ([PR #102](https://github.com/MarineYachtRadar/mayara-server/pull/102))
+- **replay:** pcap replay infrastructure for all radar brands (#99) ([PR #99](https://github.com/MarineYachtRadar/mayara-server/pull/99))
 
 ### Changed
 
