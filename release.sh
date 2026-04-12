@@ -56,7 +56,7 @@ confirm() {
 }
 
 ensure_clean() {
-    if ! git diff --quiet || ! git diff --cached --quiet; then
+    if [ -n "$(git status --porcelain)" ]; then
         echo "Error: working tree is not clean. Commit or stash changes first."
         exit 1
     fi
@@ -128,7 +128,8 @@ create_release_pr() {
 
     if [ $elapsed -ge 1800 ]; then
         echo "Timeout waiting for PR merge. Tag manually with:"
-        echo "  git tag ${tag} origin/main && git push origin ${tag}"
+        echo "  merge_sha=\$(gh pr view \"$branch\" --json mergeCommit -q '.mergeCommit.oid')"
+        echo "  git tag ${tag} \"\$merge_sha\" && git push origin ${tag}"
         git checkout main
         git branch -D "$branch" 2>/dev/null || true
         exit 1
@@ -231,7 +232,25 @@ do_beta() {
     create_release_pr "$beta_version"
 
     echo ""
-    bump_to_dev "$base"
+    set_version "${base}-dev"
+
+    local dev_version="${base}-dev"
+    local dev_branch="post-beta-${dev_version}"
+    git checkout -b "$dev_branch"
+    git add "$CARGO_TOML" Cargo.lock
+    git commit -m "chore(release): resume ${dev_version}"
+    git push -u origin "$dev_branch"
+
+    gh pr create \
+        --base main \
+        --head "$dev_branch" \
+        --title "chore(release): resume ${dev_version}" \
+        --body "Return version to ${dev_version} after beta ${beta_version}."
+
+    git checkout main
+    echo ""
+    echo "Development version PR created for $dev_version."
+    echo "Merge it to continue development."
 }
 
 do_bump() {
@@ -314,7 +333,7 @@ Workflow:
   1. ./release.sh --minor       # PR: 3.4.2 → 3.5.0-dev
   2. (development happens)
   3. ./release.sh --release     # PR: 3.5.0, tag v3.5.0, PR: 3.5.1-dev
-  4. ./release.sh --beta        # PR: 3.5.0-beta.1, tag, PR: 3.5.1-dev
+  4. ./release.sh --beta        # PR: 3.5.0-beta.1, tag, PR: 3.5.0-dev
 
 Requires: gh CLI (authenticated)
 EOF
