@@ -172,6 +172,7 @@ pub enum ControlId {
     MiddleStcCurve,
     FarStcCurve,
     StcRange,
+    AntiJamming,
 }
 
 impl Display for ControlId {
@@ -281,7 +282,8 @@ impl ControlId {
             | ControlId::NearStcCurve
             | ControlId::MiddleStcCurve
             | ControlId::FarStcCurve
-            | ControlId::StcRange => Category::Advanced,
+            | ControlId::StcRange
+            | ControlId::AntiJamming => Category::Advanced,
         }
     }
 
@@ -378,6 +380,7 @@ impl ControlId {
             ControlId::MiddleStcCurve => "Middle-range STC suppression curve",
             ControlId::FarStcCurve => "Far-range STC suppression curve",
             ControlId::StcRange => "Distance boundary between STC range bands",
+            ControlId::AntiJamming => "Anti-jamming filter reduces interference from other radars on the same frequency",
         }
     }
 
@@ -470,6 +473,7 @@ impl ControlId {
             ControlId::MiddleStcCurve => "Middle STC curve",
             ControlId::FarStcCurve => "Far STC curve",
             ControlId::StcRange => "STC range",
+            ControlId::AntiJamming => "Anti-jamming",
         }
     }
 
@@ -554,6 +558,7 @@ impl ControlId {
             ControlId::MiddleStcCurve => ControlDestination::Command,
             ControlId::FarStcCurve => ControlDestination::Command,
             ControlId::StcRange => ControlDestination::Command,
+            ControlId::AntiJamming => ControlDestination::Command,
         }
     }
 }

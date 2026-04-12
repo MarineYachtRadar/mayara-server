@@ -208,6 +208,9 @@ impl Command {
         self.send(CommandMode::Request, CommandId::BlindSector, &[])
             .await?; // $R77
 
+        self.send(CommandMode::Request, CommandId::JammingAble, &[])
+            .await?; // $RE8
+
         // STC (Sensitivity Time Control) curves
         if self.controls.contains_key(&ControlId::NearStcCurve) {
             self.send(CommandMode::Request, CommandId::NearSTC, &[])
@@ -483,6 +486,11 @@ impl CommandSender for Command {
                 cmd.push(value);
                 cmd.push(0); // screen: 0=Primary
                 CommandId::BirdMode
+            }
+            ControlId::AntiJamming => {
+                // Format: $SE8,{value}  (0=Off, 1=On)
+                cmd.push(value);
+                CommandId::JammingAble
             }
             ControlId::Doppler => {
                 // Format: $SEF,{enabled},{mode},0

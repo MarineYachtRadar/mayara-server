@@ -718,6 +718,15 @@ impl FurunoReportReceiver {
                 }
                 self.common.set_value(&ControlId::BirdMode, numbers[0]);
             }
+            CommandId::JammingAble => {
+                if numbers.is_empty() {
+                    bail!(
+                        "Insufficient ({}) arguments for JammingAble command",
+                        numbers.len()
+                    );
+                }
+                self.common.set_value(&ControlId::AntiJamming, numbers[0]);
+            }
             CommandId::TargetAnalyzer => {
                 // Response format: $NEF,{enabled},{mode},{screen}
                 // Wire format: enabled=0/1, mode=0(Target)/1(Rain)

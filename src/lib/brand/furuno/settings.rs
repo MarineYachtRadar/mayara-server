@@ -282,6 +282,9 @@ pub fn update_when_model_known(info: &mut RadarInfo, model: RadarModel, version:
     // StcRange ($RD2) is not registered: DRS4D-NXT does not respond to $RD2.
     // Re-enable when a model that supports it is available for testing.
 
+    info.controls
+        .add(new_list(ControlId::AntiJamming, &["Off", "On"]));
+
     // Tuning
     if cap.tune {
         info.controls.add(new_auto(

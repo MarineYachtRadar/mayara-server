@@ -394,6 +394,8 @@ pub enum CommandId {
     CustomATFSettings = 0xE0,
     /// `0xE3` — Alive check (keepalive ping).
     AliveCheck = 0xE3,
+    /// `0xE8` — Anti-jamming filter: `$SE8,<value>`. Supported on all Furuno models.
+    JammingAble = 0xE8,
     /// `0xEA` — ATF settings (NXT, 6 params).
     ATFSettings = 0xEA,
     /// `0xED` — Bird mode (NXT: 0 = Off, 1 = Low, 2 = Med, 3 = High).
