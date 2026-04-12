@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **furuno:** add anti-jamming filter control (0xE8) (#102) ([PR #102](https://github.com/MarineYachtRadar/mayara-server/pull/102))
+
 ### Changed
 
 - **furuno:** add FAR radar setup guide (#85) ([PR #85](https://github.com/MarineYachtRadar/mayara-server/pull/85))
