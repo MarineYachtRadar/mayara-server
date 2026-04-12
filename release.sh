@@ -32,6 +32,7 @@ get_version() {
 set_version() {
     local new="$1"
     sedi "s/^version = \".*\"/version = \"${new}\"/" "$CARGO_TOML"
+    cargo update --workspace
     echo "Version set to $new"
 }
 
@@ -72,7 +73,7 @@ ensure_on_main() {
 
 check_changelog() {
     local version="$1"
-    if grep -q "## \[Unreleased\]" CHANGELOG.md; then
+    if [ -f CHANGELOG.md ] && grep -q "## \[Unreleased\]" CHANGELOG.md; then
         echo "Note: CHANGELOG.md [Unreleased] section exists."
         echo "      CI (git-cliff) will generate the [${version}] entry on merge."
     fi
@@ -83,10 +84,10 @@ check_changelog() {
 create_release_pr() {
     local version="$1"
     local tag="v${version}"
-    local branch="release/${version}"
+    local branch="release-${version}"
 
     git checkout -b "$branch"
-    git add "$CARGO_TOML"
+    git add "$CARGO_TOML" Cargo.lock
     git commit -m "chore(release): ${version}"
     git push -u origin "$branch"
 
@@ -155,9 +156,9 @@ bump_to_dev() {
 
     set_version "$dev_version"
 
-    local branch="post-release/${dev_version}"
+    local branch="post-release-${dev_version}"
     git checkout -b "$branch"
-    git add "$CARGO_TOML"
+    git add "$CARGO_TOML" Cargo.lock
     git commit -m "chore(release): begin ${dev_version}"
     git push -u origin "$branch"
 
@@ -268,9 +269,9 @@ do_bump() {
 
     set_version "$new_version"
 
-    local branch="bump/${new_version}"
+    local branch="bump-${new_version}"
     git checkout -b "$branch"
-    git add "$CARGO_TOML"
+    git add "$CARGO_TOML" Cargo.lock
     git commit -m "chore(release): bump to ${new_version}"
     git push -u origin "$branch"
 
