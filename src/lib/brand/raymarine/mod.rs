@@ -469,9 +469,10 @@ impl RaymarineLocator {
             // Start the NavData sender to feed position/heading to the
             // radar every 100ms. Required for Doppler and MARPA.
             let send_addr = info.send_command_addr;
+            let nic_addr = info.nic_addr;
             let navdata_name = format!("{}-navdata", report_name);
             subsys.start(SubsystemBuilder::new(navdata_name, move |s| async move {
-                match crate::network::create_multicast_send(&send_addr, &Ipv4Addr::UNSPECIFIED) {
+                match crate::network::create_multicast_send(&send_addr, &nic_addr) {
                     Ok(sock) => navdata::run(s, sock).await.map_err(|e| e.into()),
                     Err(e) => {
                         log::warn!("Failed to create NavData socket: {}", e);
@@ -792,23 +793,20 @@ mod tests {
     fn w3_beacon_is_ignored() {
         let args = Cli::parse_from(["mayara-server"]);
         let mut locator = RaymarineLocator::new(args);
-        let packets = parse_fixture(PELAGIA_FIXTURE);
 
-        // Find the W3 56-byte beacon (subtype 0x4d in bytes 4..8)
-        for (src, _, port, data) in &packets {
-            if *port == 5800 && data.len() == protocol::beacon56::LEN {
-                let subtype = u32::from_le_bytes(data[4..8].try_into().unwrap());
-                if subtype == protocol::beacon56::W3 {
-                    locator.process_beacon_56_report(data, src).unwrap();
-                    assert!(
-                        locator.ids.is_empty(),
-                        "W3 beacon should not register a link_id"
-                    );
-                    return;
-                }
-            }
-        }
-        // No W3 beacon in fixture — skip
+        // Synthetic W3 56-byte beacon: beacon_type=1, subtype=0x4d, link_id=0xAABBCCDD
+        let mut w3_beacon = [0u8; protocol::beacon56::LEN];
+        w3_beacon[0..4].copy_from_slice(&1u32.to_le_bytes()); // beacon_type
+        w3_beacon[4..8].copy_from_slice(&(protocol::beacon56::W3).to_le_bytes());
+        w3_beacon[8..12].copy_from_slice(&0xAABBCCDDu32.to_le_bytes());
+        w3_beacon[20..31].copy_from_slice(b"Quantum_W3\0");
+
+        let src = Ipv4Addr::new(198, 18, 0, 1);
+        locator.process_beacon_56_report(&w3_beacon, &src).unwrap();
+        assert!(
+            locator.ids.is_empty(),
+            "W3 beacon should not register a link_id"
+        );
     }
 
     #[test]

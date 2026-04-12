@@ -11,7 +11,11 @@ use http::StatusCode;
 use hyper;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::HashMap, net::Ipv4Addr, str::FromStr};
+use std::{
+    collections::{HashMap, HashSet},
+    net::Ipv4Addr,
+    str::FromStr,
+};
 use strum::EnumCount;
 use tokio::sync::{
     broadcast::{self},
@@ -1180,7 +1184,7 @@ async fn ws_signalk_delta(
 ) -> Result<(), RadarError> {
     let mut broadcast_control_rx = radars.new_sk_client_subscription();
     let (reply_tx, mut reply_rx) = tokio::sync::mpsc::channel::<ControlValue>(ControlId::COUNT);
-    let mut meta_radar_data_sent = Vec::new();
+    let mut meta_radar_data_sent: HashSet<String> = HashSet::new();
 
     log::debug!(
         "Starting /signalk/v1/stream websocket subscribe={:?} send_cached_values={:?}",

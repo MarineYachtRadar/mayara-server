@@ -167,6 +167,12 @@ pub enum ControlId {
     ScanAverageSensitivity,
     ParkPosition,
     TransmitChannel,
+    PulseWidth,
+    NearStcCurve,
+    MiddleStcCurve,
+    FarStcCurve,
+    StcRange,
+    AntiJamming,
 }
 
 impl Display for ControlId {
@@ -250,7 +256,8 @@ impl ControlId {
             | ControlId::SerialNumber
             | ControlId::SignalStrength
             | ControlId::Spokes
-            | ControlId::SpokeLength => Category::Info,
+            | ControlId::SpokeLength
+            | ControlId::PulseWidth => Category::Info,
             ControlId::SupplyVoltage | ControlId::DeviceTemperature => Category::Info,
             ControlId::ScanAverageMode | ControlId::ScanAverageSensitivity => Category::Advanced,
             ControlId::ParkPosition => Category::Installation,
@@ -271,7 +278,12 @@ impl ControlId {
             | ControlId::SpokeProcessing
             | ControlId::DopplerSpeedThreshold
             | ControlId::TimedIdle
-            | ControlId::TimedRun => Category::Advanced,
+            | ControlId::TimedRun
+            | ControlId::NearStcCurve
+            | ControlId::MiddleStcCurve
+            | ControlId::FarStcCurve
+            | ControlId::StcRange
+            | ControlId::AntiJamming => Category::Advanced,
         }
     }
 
@@ -356,6 +368,7 @@ impl ControlId {
             ControlId::SpokeProcessing => "How to process spoke data for display",
             ControlId::TimedIdle => "Periodically switch between transmit and standby",
             ControlId::TimedRun => "How long the radar transmits during timed idle",
+            ControlId::PulseWidth => "Current transmit pulse width selected by the radar",
             ControlId::UserName => "User defined name for the radar",
             ControlId::SupplyVoltage => "DC supply voltage at the radar",
             ControlId::DeviceTemperature => "Internal temperature of the radar",
@@ -363,6 +376,11 @@ impl ControlId {
             ControlId::ScanAverageSensitivity => "Threshold for scan averaging filter",
             ControlId::ParkPosition => "Antenna park position when entering standby",
             ControlId::TransmitChannel => "Transmit frequency channel selection (auto or manual)",
+            ControlId::NearStcCurve => "Near-range STC suppression curve",
+            ControlId::MiddleStcCurve => "Middle-range STC suppression curve",
+            ControlId::FarStcCurve => "Far-range STC suppression curve",
+            ControlId::StcRange => "Distance boundary between STC range bands",
+            ControlId::AntiJamming => "Anti-jamming filter reduces interference from other radars on the same frequency",
         }
     }
 
@@ -441,6 +459,7 @@ impl ControlId {
             ControlId::Spokes => "Spokes",
             ControlId::SpokeLength => "Spoke length",
             ControlId::SpokeProcessing => "Spoke Processing",
+            ControlId::PulseWidth => "Pulse width",
             ControlId::RangeUnits => "Range Units",
             ControlId::UserName => "Custom name",
             ControlId::WarmupTime => "Warmup time",
@@ -450,6 +469,11 @@ impl ControlId {
             ControlId::ScanAverageSensitivity => "Scan average sensitivity",
             ControlId::ParkPosition => "Park position",
             ControlId::TransmitChannel => "Transmit channel",
+            ControlId::NearStcCurve => "Near STC curve",
+            ControlId::MiddleStcCurve => "Middle STC curve",
+            ControlId::FarStcCurve => "Far STC curve",
+            ControlId::StcRange => "STC range",
+            ControlId::AntiJamming => "Anti-jamming",
         }
     }
 
@@ -519,6 +543,7 @@ impl ControlId {
             ControlId::Spokes => ControlDestination::ReadOnly,
             ControlId::SpokeLength => ControlDestination::ReadOnly,
             ControlId::SpokeProcessing => ControlDestination::Internal,
+            ControlId::PulseWidth => ControlDestination::ReadOnly,
             ControlId::TimedIdle => ControlDestination::Command,
             ControlId::TimedRun => ControlDestination::Command,
             ControlId::RangeUnits => ControlDestination::Command,
@@ -529,6 +554,11 @@ impl ControlId {
             ControlId::ScanAverageSensitivity => ControlDestination::Command,
             ControlId::ParkPosition => ControlDestination::Command,
             ControlId::TransmitChannel => ControlDestination::Command,
+            ControlId::NearStcCurve => ControlDestination::Command,
+            ControlId::MiddleStcCurve => ControlDestination::Command,
+            ControlId::FarStcCurve => ControlDestination::Command,
+            ControlId::StcRange => ControlDestination::Command,
+            ControlId::AntiJamming => ControlDestination::Command,
         }
     }
 }

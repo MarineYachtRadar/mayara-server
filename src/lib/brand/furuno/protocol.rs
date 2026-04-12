@@ -238,6 +238,7 @@ impl RadarModel {
             "0359355" => RadarModel::DRS6AXCLASS,
             "0359344" => RadarModel::FAR15x3,
             "0359397" => RadarModel::FAR14x6,
+            "0359560" => RadarModel::FAR21x7,
             _ => RadarModel::Unknown,
         }
     }
@@ -322,14 +323,18 @@ pub enum CommandId {
     /// `0x6E` — Antenna type (read-only, 7 params).
     AntennaType = 0x6E,
 
+    /// `0x70` — Guard zone alarm status: `$N70,<count>,<status0>,<status1>`.
+    GuardStatus = 0x70,
+
     /// `0x75` — Tuning: `$S75,<auto>,<value>,<drid>`.
     Tune = 0x75,
     /// `0x76` — Tune indicator feedback (read-only).
     TuneIndicator = 0x76,
     /// `0x77` — No-transmit sector (sector blanking).
     BlindSector = 0x77,
-    /// `0x7D` — DRS4W-specific heartbeat (~1 Hz).
-    DRS4WHeartbeat = 0x7D,
+    /// `0x7D` — Radar alarm: `$N7D,<type>,<d1>,<d2>,<d3>`.
+    /// Generic across all Furuno models; idle = `$N7D,0,0,0,0`.
+    Alarm = 0x7D,
 
     /// `0x80` — Attenuation.
     Att = 0x80,
@@ -358,6 +363,11 @@ pub enum CommandId {
 
     /// `0x96` — Firmware/model query.
     Modules = 0x96,
+    /// `0x98` — Guard zone mode: `$S98,<mode>,<param>,<zoneIndex>`.
+    GuardMode = 0x98,
+    /// `0x99` — Guard zone fan parameters:
+    /// `$S99,<zoneNo>,<startAngle>,<endAngle>,<innerRange>,<outerRange>`.
+    GuardFan = 0x99,
 
     /// `0x9E` — Drift.
     Drift = 0x9E,
@@ -367,8 +377,8 @@ pub enum CommandId {
     ConningPosition = 0xAA,
     /// `0xAC` — Wake-up count.
     WakeUpCount = 0xAC,
-    /// `0xAF` — Frequent radar heartbeat (`$NAF,256`).
-    Heartbeat = 0xAF,
+    /// `0xAF` — ARPA subsystem alarm/status bitmask: `$NAF,<bits>`.
+    ArpaAlarm = 0xAF,
 
     /// `0xD2` — STC range.
     STCRange = 0xD2,
@@ -384,6 +394,8 @@ pub enum CommandId {
     CustomATFSettings = 0xE0,
     /// `0xE3` — Alive check (keepalive ping).
     AliveCheck = 0xE3,
+    /// `0xE8` — Anti-jamming filter: `$SE8,<value>`. Supported on all Furuno models.
+    JammingAble = 0xE8,
     /// `0xEA` — ATF settings (NXT, 6 params).
     ATFSettings = 0xEA,
     /// `0xED` — Bird mode (NXT: 0 = Off, 1 = Low, 2 = Med, 3 = High).
@@ -602,3 +614,13 @@ pub const ECHO_GAIN_LOW_POWER: u8 = 2;
 
 /// Software echo gain for full-power radars (NXT, FAR).
 pub const ECHO_GAIN_DEFAULT: u8 = 1;
+
+// =============================================================================
+// Guard zone constants
+// =============================================================================
+
+/// Guard mode value: zone disabled.
+pub const GUARD_MODE_OFF: i32 = 0;
+
+/// Guard mode value: fan (sector) zone.
+pub const GUARD_MODE_FAN: i32 = 1;

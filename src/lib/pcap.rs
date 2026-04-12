@@ -149,6 +149,11 @@ fn parse_udp_packet(data: &[u8], timestamp: Duration) -> Option<PcapPacket> {
     if protocol != IP_PROTO_UDP {
         return None;
     }
+    // Skip fragmented packets — non-initial fragments lack a UDP header
+    let frag = u16::from_be_bytes(ip[6..8].try_into().ok()?);
+    if frag & 0x3FFF != 0 {
+        return None;
+    }
     let src_ip = Ipv4Addr::new(ip[12], ip[13], ip[14], ip[15]);
     let dst_ip = Ipv4Addr::new(ip[16], ip[17], ip[18], ip[19]);
 
@@ -189,6 +194,10 @@ pub fn write_file(path: &Path, packets: &[PcapPacket]) -> io::Result<()> {
     data.extend_from_slice(&1u32.to_le_bytes()); // linktype (Ethernet)
 
     for pkt in packets {
+        debug_assert!(
+            pkt.payload.len() <= u16::MAX as usize - IP_HEADER_MIN_LEN - UDP_HEADER_LEN,
+            "payload too large for UDP/IPv4: {} bytes", pkt.payload.len()
+        );
         let udp_len = (UDP_HEADER_LEN + pkt.payload.len()) as u16;
         let ip_total_len = (IP_HEADER_MIN_LEN + UDP_HEADER_LEN + pkt.payload.len()) as u16;
         let frame_len = ETH_HEADER_LEN + IP_HEADER_MIN_LEN + UDP_HEADER_LEN + pkt.payload.len();
@@ -278,9 +287,21 @@ mod tests {
 
     /// Generate filtered pcap fixtures for integration tests.
     /// Run with: cargo test generate_fixtures -- --ignored --nocapture
+    /// Set RADAR_RECORDINGS to the path of the radar-recordings repo.
     #[test]
     #[ignore]
     fn generate_fixtures() {
+        let recordings = std::env::var("RADAR_RECORDINGS").unwrap_or_else(|_| {
+            // Default: sibling directory of the project root
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .join("radar-recordings")
+                .to_string_lossy()
+                .into_owned()
+        });
+        let base = Path::new(&recordings);
+
         let fixture_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("testdata")
             .join("pcap");
@@ -289,9 +310,7 @@ mod tests {
         // Raymarine: beacons (224.0.0.1:5800) + report data (232.1.160.1:2574)
         // Limit to first 500 relevant packets to keep fixture small
         generate_fixture(
-            Path::new(
-                "/Users/kees/src/github/radar-recordings/raymarine/Quantum2/pelagia/raymarine1.pcap",
-            ),
+            &base.join("raymarine/Quantum2/pelagia/raymarine1.pcap"),
             &fixture_dir.join("raymarine-quantum.pcap.gz"),
             &|p| p.dst_addr.port() == 5800 || p.dst_addr.port() == 2574,
             500,
@@ -300,9 +319,7 @@ mod tests {
         // Navico: discovery beacons (236.6.7.5:6878 or 236.6.7.4:6768) +
         // report/spoke data (varies per beacon, but common are 236.6.7.x ports)
         generate_fixture(
-            Path::new(
-                "/Users/kees/src/github/radar-recordings/navico/4g/4g-boot-with-opencpn.pcap",
-            ),
+            &base.join("navico/4g/4g-boot-with-opencpn.pcap"),
             &fixture_dir.join("navico-4g.pcap.gz"),
             &|p| {
                 let ip = p.dst_addr.ip();
@@ -315,7 +332,7 @@ mod tests {
         // Garmin: CDM heartbeat (239.254.2.2:50050) + reports (239.254.2.0:50100) +
         // spoke data (239.254.2.0:50102)
         generate_fixture(
-            Path::new("/Users/kees/src/github/radar-recordings/garmin/garmin_xhd.pcap"),
+            &base.join("garmin/garmin_xhd.pcap"),
             &fixture_dir.join("garmin-xhd.pcap.gz"),
             &|p| {
                 let port = p.dst_addr.port();
@@ -327,7 +344,7 @@ mod tests {
         // Furuno: beacons (172.31.255.255:10010) + multicast data (239.255.0.2:10024) +
         // status reports (172.31.255.255:10034)
         generate_fixture(
-            Path::new("/Users/kees/src/github/radar-recordings/furuno/moin/furuno1.pcap"),
+            &base.join("furuno/moin/furuno1.pcap"),
             &fixture_dir.join("furuno-drs4dnxt.pcap.gz"),
             &|p| {
                 let port = p.dst_addr.port();

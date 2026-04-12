@@ -23,6 +23,10 @@ jobs:
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
 
+    - uses: swatinem/rust-cache@v2
+      with:
+        key: ${{ matrix.target }}
+
     - name: Install Cross
       run: cargo install cross
 
@@ -48,6 +52,8 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v6
 
+    - uses: swatinem/rust-cache@v2
+
     - name: Build
       run: cargo build --release
 
@@ -66,8 +72,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: write
 
     steps:
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        fetch-depth: 0
+
     - name: Download all artifacts
       uses: actions/download-artifact@v8
       with:
@@ -76,14 +88,56 @@ jobs:
     - name: List artifacts
       run: find artifacts -type f
 
+    - name: Generate release notes
+      uses: orhun/git-cliff-action@v4
+      with:
+        config: cliff.toml
+        args: --latest --strip header --tag ${{ github.ref_name }}
+      env:
+        OUTPUT: CHANGES.md
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Generate full changelog
+      uses: orhun/git-cliff-action@v4
+      with:
+        config: cliff.toml
+        args: --output CHANGELOG.md --tag ${{ github.ref_name }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Append historical changelog
+      run: |
+        printf '\n' >> CHANGELOG.md
+        cat CHANGELOG.manual.md >> CHANGELOG.md
+
     - name: Create Release
       uses: softprops/action-gh-release@v2
       with:
-        generate_release_notes: true
+        body_path: CHANGES.md
         files: |
           artifacts/mayara-server-x86_64-unknown-linux-musl/*.tar.gz
           artifacts/mayara-server-aarch64-unknown-linux-musl/*.tar.gz
           artifacts/mayara-server-windows/*.zip
+
+    - name: Commit changelog
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        cp CHANGELOG.md /tmp/CHANGELOG.md
+        git fetch origin main
+        git switch -C main origin/main
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        cp /tmp/CHANGELOG.md CHANGELOG.md
+        git add CHANGELOG.md
+        if ! git diff --staged --quiet; then
+          BRANCH="docs-changelog-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}"
+          git switch -C "$BRANCH"
+          git commit -m "docs(changelog): update CHANGELOG.md for ${{ github.ref_name }}"
+          git push --set-upstream origin "$BRANCH"
+          PR_URL="$(gh pr create --title "docs(changelog): update CHANGELOG.md for ${{ github.ref_name }}" --body "Auto-generated changelog update." --base main --head "$BRANCH")"
+          gh pr merge "$PR_URL" --squash --delete-branch --auto || gh pr merge "$PR_URL" --squash --delete-branch
+        fi
 
   docker:
     name: Publish Docker Image

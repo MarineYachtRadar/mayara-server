@@ -3,9 +3,11 @@ use std::fmt::Write;
 use tokio::io::{AsyncWriteExt, WriteHalf};
 use tokio::net::TcpStream;
 
+use std::f64::consts::TAU;
+
 use super::protocol::{
-    CommandId, CommandMode, WIRE_UNIT_KM, WIRE_UNIT_NM, meters_to_wire_index_for_unit,
-    wire_unit_for_meters,
+    CommandId, CommandMode, GUARD_MODE_FAN, GUARD_MODE_OFF, SPOKES, WIRE_UNIT_KM, WIRE_UNIT_NM,
+    meters_to_wire_index_for_unit, wire_unit_for_meters,
 };
 use crate::brand::CommandSender;
 use crate::radar::range::Ranges;
@@ -177,6 +179,11 @@ impl Command {
         self.send(CommandMode::Request, CommandId::Range, &[])
             .await?; // $R62
 
+        if self.controls.contains_key(&ControlId::PulseWidth) {
+            self.send(CommandMode::Request, CommandId::PulseWidth, &[])
+                .await?; // $R68
+        }
+
         self.send(CommandMode::Request, CommandId::Gain, &[])
             .await?; // $R63
 
@@ -200,6 +207,19 @@ impl Command {
 
         self.send(CommandMode::Request, CommandId::BlindSector, &[])
             .await?; // $R77
+
+        self.send(CommandMode::Request, CommandId::JammingAble, &[])
+            .await?; // $RE8
+
+        // STC (Sensitivity Time Control) curves
+        if self.controls.contains_key(&ControlId::NearStcCurve) {
+            self.send(CommandMode::Request, CommandId::NearSTC, &[])
+                .await?; // $R85
+            self.send(CommandMode::Request, CommandId::MiddleSTC, &[])
+                .await?; // $R86
+            self.send(CommandMode::Request, CommandId::FarSTC, &[])
+                .await?; // $R87
+        }
 
         if self.controls.contains_key(&ControlId::BirdMode) {
             // NXT-specific features (query signal processing features)
@@ -467,6 +487,11 @@ impl CommandSender for Command {
                 cmd.push(0); // screen: 0=Primary
                 CommandId::BirdMode
             }
+            ControlId::AntiJamming => {
+                // Format: $SE8,{value}  (0=Off, 1=On)
+                cmd.push(value);
+                CommandId::JammingAble
+            }
             ControlId::Doppler => {
                 // Format: $SEF,{enabled},{mode},0
                 // Target Analyzer: value 0=Off, 1=Target, 2=Rain
@@ -483,6 +508,79 @@ impl CommandSender for Command {
                 CommandId::TargetAnalyzer
             }
 
+            ControlId::NearStcCurve => {
+                cmd.push(value);
+                cmd.push(self.dual_range_id);
+                CommandId::NearSTC
+            }
+            ControlId::MiddleStcCurve => {
+                cmd.push(value);
+                cmd.push(self.dual_range_id);
+                CommandId::MiddleSTC
+            }
+            ControlId::FarStcCurve => {
+                cmd.push(value);
+                cmd.push(self.dual_range_id);
+                CommandId::FarSTC
+            }
+            ControlId::StcRange => {
+                cmd.push(value);
+                cmd.push(self.dual_range_id);
+                CommandId::STCRange
+            }
+
+            ControlId::GuardZone1 | ControlId::GuardZone2 => {
+                let zone_index: i32 = if cv.id == ControlId::GuardZone1 {
+                    0
+                } else {
+                    1
+                };
+
+                if let Some(zone) = controls.guard_zone(&cv.id) {
+                    if zone.enabled {
+                        let start_spoke = radians_to_spokes(zone.start_angle);
+                        let end_spoke = radians_to_spokes(zone.end_angle);
+                        // TODO: verify range unit empirically on hardware
+                        let inner_range = zone.start_distance as i32;
+                        let outer_range = zone.end_distance as i32;
+
+                        self.send(
+                            CommandMode::Set,
+                            CommandId::GuardFan,
+                            &[zone_index, start_spoke, end_spoke, inner_range, outer_range],
+                        )
+                        .await?;
+                        self.send(
+                            CommandMode::Set,
+                            CommandId::GuardMode,
+                            &[GUARD_MODE_FAN, 0, zone_index],
+                        )
+                        .await?;
+                    } else {
+                        self.send(
+                            CommandMode::Set,
+                            CommandId::GuardMode,
+                            &[GUARD_MODE_OFF, 0, zone_index],
+                        )
+                        .await?;
+                    }
+                } else {
+                    self.send(
+                        CommandMode::Set,
+                        CommandId::GuardMode,
+                        &[GUARD_MODE_OFF, 0, zone_index],
+                    )
+                    .await?;
+                }
+
+                log::info!(
+                    "{}: Guard zone {} sent to hardware",
+                    self.key,
+                    zone_index + 1
+                );
+                return Ok(());
+            }
+
             // Non-hardware settings
             _ => return Err(RadarError::CannotSetControlId(cv.id)),
         };
@@ -497,6 +595,15 @@ impl CommandSender for Command {
         self.send(CommandMode::Set, id, &cmd).await?;
         self.send(CommandMode::Request, CommandId::CustomPictureAll, &[])
             .await?; // $R66
+        if self.controls.contains_key(&ControlId::PulseWidth) {
+            self.send(CommandMode::Request, CommandId::PulseWidth, &[])
+                .await?; // $R68
+        }
         Ok(())
     }
+}
+
+/// Convert an angle in radians to Furuno spoke units (0–8191).
+fn radians_to_spokes(radians: f64) -> i32 {
+    ((radians / TAU * SPOKES as f64).round() as i32).rem_euclid(SPOKES as i32)
 }

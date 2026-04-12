@@ -65,6 +65,7 @@ struct Capabilities {
     tune: bool,
     antenna_height: bool,
     watchman: bool,
+    pulse_width: bool,
 }
 
 fn capabilities(model: &RadarModel) -> Capabilities {
@@ -90,6 +91,7 @@ fn capabilities(model: &RadarModel) -> Capabilities {
             tune: true,
             antenna_height: true,
             watchman: true,
+            pulse_width: false, // solid-state, no selectable pulse
         },
         // DRS6A X-Class: DRS + bird mode
         RadarModel::DRS6AXCLASS => Capabilities {
@@ -109,6 +111,7 @@ fn capabilities(model: &RadarModel) -> Capabilities {
             tune: true,
             antenna_height: false,
             watchman: false,
+            pulse_width: true,
         },
         // DRS4DL: limited (no auto gain, no scan speed, no dual range)
         RadarModel::DRS4DL => Capabilities {
@@ -128,6 +131,7 @@ fn capabilities(model: &RadarModel) -> Capabilities {
             tune: true,
             antenna_height: false,
             watchman: false,
+            pulse_width: true,
         },
         // Standard DRS
         RadarModel::DRS | RadarModel::DRS4W => Capabilities {
@@ -147,6 +151,7 @@ fn capabilities(model: &RadarModel) -> Capabilities {
             tune: true,
             antenna_height: false,
             watchman: false,
+            pulse_width: false, // DRS4W firmware disables pulse width
         },
         // FAR series: commercial, 4-level IR, no NXT features
         RadarModel::FAR21x7 | RadarModel::FAR14x7 | RadarModel::FAR14x6 => Capabilities {
@@ -166,6 +171,7 @@ fn capabilities(model: &RadarModel) -> Capabilities {
             tune: true,
             antenna_height: false,
             watchman: false,
+            pulse_width: true,
         },
         // FAR-15x3 / FAR-3000: auto sea/rain, noise rejection
         RadarModel::FAR15x3 | RadarModel::FAR3000 => Capabilities {
@@ -185,6 +191,7 @@ fn capabilities(model: &RadarModel) -> Capabilities {
             tune: true,
             antenna_height: false,
             watchman: false,
+            pulse_width: true,
         },
         // Unknown: basic capabilities
         RadarModel::Unknown => Capabilities {
@@ -204,6 +211,7 @@ fn capabilities(model: &RadarModel) -> Capabilities {
             tune: true,
             antenna_height: false,
             watchman: false,
+            pulse_width: false,
         },
     }
 }
@@ -260,6 +268,22 @@ pub fn update_when_model_known(info: &mut RadarInfo, model: RadarModel, version:
     info.controls
         .set_string(&ControlId::FirmwareVersion, version.to_string())
         .expect("FirmwareVersion");
+    if cap.pulse_width {
+        info.controls.add(new_string(ControlId::PulseWidth));
+    }
+
+    // STC (Sensitivity Time Control) — all models support this
+    info.controls
+        .add(new_list(ControlId::NearStcCurve, &["0", "1", "2", "3", "4"]));
+    info.controls
+        .add(new_list(ControlId::MiddleStcCurve, &["0", "1", "2", "3"]));
+    info.controls
+        .add(new_list(ControlId::FarStcCurve, &["0", "1", "2"]));
+    // StcRange ($RD2) is not registered: DRS4D-NXT does not respond to $RD2.
+    // Re-enable when a model that supports it is available for testing.
+
+    info.controls
+        .add(new_list(ControlId::AntiJamming, &["Off", "On"]));
 
     // Tuning
     if cap.tune {
@@ -493,9 +517,14 @@ static RANGE_TABLE_FAR_KM: &[i32] = &[
     96000, // 96 km
 ];
 
-/// Range table for DRS4W WiFi radar (wire indices 3-13 only, 0.75-24 NM)
-/// Extracted from FEC::DRS4WRanges() static array at kiss VA 0xdda388.
+/// Range table for DRS4W WiFi radar (1/8–24 NM).
+/// Matches the 14 ranges exposed by the Furuno DRS4W official app.
+/// Wire index 21 (1/16 NM) is not supported on DRS4W; 32/36 NM are
+/// out of reach for this 4 kW WiFi radar.
 static RANGE_TABLE_DRS4W: &[i32] = &[
+    231,   // 1/8 NM
+    463,   // 1/4 NM
+    926,   // 1/2 NM
     1389,  // 3/4 NM
     1852,  // 1 NM
     2778,  // 1.5 NM
@@ -509,8 +538,11 @@ static RANGE_TABLE_DRS4W: &[i32] = &[
     44448, // 24 NM
 ];
 
-/// Range table for DRS4W WiFi radar in km mode (wire indices 3-13 only)
+/// Range table for DRS4W WiFi radar in km mode (0.125–24 km).
 static RANGE_TABLE_DRS4W_KM: &[i32] = &[
+    125,   // 0.125 km
+    250,   // 0.25 km
+    500,   // 0.5 km
     750,   // 0.75 km
     1000,  // 1 km
     1500,  // 1.5 km
@@ -589,7 +621,7 @@ fn get_ranges_by_model(model: &RadarModel) -> Vec<i32> {
         | RadarModel::FAR14x6
         | RadarModel::FAR14x7 => (RANGE_TABLE_FAR, RANGE_TABLE_FAR_KM),
 
-        // DRS4W WiFi radar: restricted to wire indices 3-13 (0.75-24 NM)
+        // DRS4W WiFi radar: 1/8–24 NM (matches official DRS4W app)
         RadarModel::DRS4W => (RANGE_TABLE_DRS4W, RANGE_TABLE_DRS4W_KM),
 
         // Standard DRS series and unknown models

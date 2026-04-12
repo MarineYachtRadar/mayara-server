@@ -39,11 +39,11 @@ Do not add error handling, fallbacks, or validation for scenarios that cannot ha
 
 ## Git Commit Conventions
 
-Use conventional format: `<type>(<scope>): <subject>` where type = feat|fix|docs|style|refactor|test|chore|perf. Subject: 50 chars max, imperative mood ("add" not "added"), no period. For small changes: one-line commit only. For complex changes: add body explaining what/why (72-char lines) and reference issues.
+Use conventional format: `<type>(<scope>): <subject>` where type = feat|fix|docs|style|refactor|test|chore|perf|ci. Subject: 50 chars max, imperative mood ("add" not "added"), no period. For small changes: one-line commit only. For complex changes: add body explaining what/why (72-char lines) and reference issues.
 
 Keep commits small and atomic - one logical change per commit. Split unrelated changes into separate commits. The commit history tells a story; each commit should be a meaningful, self-contained step.
 
-**MANDATORY:** Always add a one line update to CHANGELOG.md for each set of commits pertaining to a separate issue, PR or general change.
+**DO NOT** edit CHANGELOG.md — it is auto-generated from conventional commits at release time by git-cliff.
 **MANDATORY:** Never amend commits that have already been pushed to GitHub. Only amend local, unpushed commits.
 **MANDATORY:** Always rebase and clean up commit history before creating a PR or pushing changes. Amend fixes and corrections to the relevant existing commit instead of creating chains of "fix typo" or "oops" commits. The final history should contain only intentional, complete commits - no work-in-progress artifacts.
 
@@ -51,13 +51,14 @@ Keep commits small and atomic - one logical change per commit. Split unrelated c
 
 Before opening a PR:
 
-- Branch from latest `master`
-- Run `cargo test` - all checks must pass
+- Branch from latest `main`
+- Run `cargo test` - all tests must pass
+- Optionally, if `cr` (CodeRabbit CLI) is available, run `cr review --plain` against your branch to catch findings before pushing. This is good practice for non-trivial code changes but not required — CodeRabbit runs on every PR automatically via the GitHub App, so the findings arrive either way. Skip it for docs-only PRs, formatting fixes, or one-liners.
 - Rebase and clean up commit history (squash intermediate commits)
 - Self-review your changes
 - **NEVER change version numbers** - maintainers will update versions when publishing releases
 
-PR titles are used to generate release notes. Make them **descriptive, informative, and easy to understand**. Ask yourself: "If someone only read the title, would they understand what this PR does?"
+PR titles are used to auto-generate the changelog and release notes. They **must** follow the same conventional commit format as commits: `<type>(<scope>): <subject>` (e.g., `feat(furuno): add guard zone support`). With squash merge, the PR title becomes the commit message on `main`, so it directly becomes the changelog entry. Make them **descriptive, informative, and easy to understand**. Ask yourself: "If someone only read the title, would they understand what this PR does?"
 
 PR descriptions must be **succinct and straight to the point**. Explain the motivation (why) and summarize the solution approach (how), but not the mechanics (what) - the diff shows what changed. Do not pad descriptions with unnecessary detail, verbose explanations, or self-congratulatory comments. If there are breaking changes, mention them explicitly. If a PR description includes a test plan with checkboxes, **all items must be checked** before the PR is ready for review - remove or complete any unchecked items.
 
@@ -71,5 +72,5 @@ When updating a branch with upstream changes, **always use rebase, never merge c
 
 ```shell
 git fetch origin
-git rebase origin/master
+git rebase origin/main
 ```

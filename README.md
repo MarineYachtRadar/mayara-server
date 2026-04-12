@@ -77,10 +77,13 @@ The following radars are fully supported right now:
 
 * Navico: all digital models e.g. BR24, 3G, 4G, HALO20, HALO24, HALO3/4/6, HALO3000+. 
 * Raymarine Quantum 2 (Q24C, Q24D).
+* Furuno DRS-NXT series (DRS4D-NXT, DRS6A-NXT, DRS12A-NXT, DRS25A-NXT) including dual range.
+* Furuno DRS4W WiFi radar ("1st Watch").
+* Furuno FAR-2xx7 series (see [FAR setup guide](docs/furuno-far-setup.md) for network and IMO mode requirements).
 
 We are working on:
 
-* Furuno, many models, but certainly and primarily DRS4D-NXT. Seems to work but needs extensive testing.
+* Furuno DRS, DRS4DL, DRS6A X-Class, FAR-15x3, FAR-3000 — implemented but need testing with real hardware.
 * Garmin HD, xHD, xHD2, xHD3, Fantom, and Fantom Pro. All models are supported including dual range, MotionScope/Doppler, and per-model feature detection. Needs testing with real hardware — PCAP files welcome!
 * Raymarine HD digital radars are likewise implemented but fully untested.
 

@@ -74,6 +74,8 @@ pub struct FurunoReportReceiver {
     // delta-decoded spoke after every switch.
     prev_spoke: [Vec<u8>; 2],
     prev_angle: [u16; 2],
+    guard_zone_alarm: [bool; 2],
+    alarm_active: bool,
 }
 
 impl FurunoReportReceiver {
@@ -111,6 +113,8 @@ impl FurunoReportReceiver {
             broadcast_socket: None,
             prev_spoke: [Vec::new(), Vec::new()],
             prev_angle: [0, 0],
+            guard_zone_alarm: [false, false],
+            alarm_active: false,
         }
     }
 
@@ -714,6 +718,15 @@ impl FurunoReportReceiver {
                 }
                 self.common.set_value(&ControlId::BirdMode, numbers[0]);
             }
+            CommandId::JammingAble => {
+                if numbers.is_empty() {
+                    bail!(
+                        "Insufficient ({}) arguments for JammingAble command",
+                        numbers.len()
+                    );
+                }
+                self.common.set_value(&ControlId::AntiJamming, numbers[0]);
+            }
             CommandId::TargetAnalyzer => {
                 // Response format: $NEF,{enabled},{mode},{screen}
                 // Wire format: enabled=0/1, mode=0(Target)/1(Rain)
@@ -750,14 +763,110 @@ impl FurunoReportReceiver {
                 }
             }
 
+            CommandId::PulseWidth => {
+                // $N68,<pulse>,<range>,<unit>,<imgNo>,<screen>
+                if let Some(&pulse) = numbers.first() {
+                    let name = match pulse as i32 {
+                        0 => "S1",
+                        1 => "S2",
+                        2 => "M1",
+                        3 => "M2",
+                        4 => "M3",
+                        5 => "L",
+                        _ => "Unknown",
+                    };
+                    let drid = self.extract_drid(&command_id, &numbers);
+                    let _ = self
+                        .common_for_range(drid)
+                        .info
+                        .controls
+                        .set_string(&ControlId::PulseWidth, name.to_string());
+                }
+            }
+
+            CommandId::Alarm => {
+                // $N7D,<type>,<d1>,<d2>,<d3> — generic radar alarm; idle = all zero.
+                // Bit meanings not yet decoded; log raw values on state change.
+                if numbers.len() >= 4 {
+                    let alarm_type = numbers[0] as u32;
+                    if alarm_type != 0 && !self.alarm_active {
+                        log::warn!(
+                            "{}: radar alarm type {} details {} {} {}",
+                            self.common.key,
+                            alarm_type,
+                            numbers[1] as u32,
+                            numbers[2] as u32,
+                            numbers[3] as u32,
+                        );
+                        self.alarm_active = true;
+                    } else if self.alarm_active {
+                        log::info!("{}: radar alarm cleared", self.common.key);
+                        self.alarm_active = false;
+                    }
+                }
+            }
+
+            CommandId::ArpaAlarm => {
+                // $NAF,<bitmask> — ARPA subsystem status bits. Bit meanings not yet decoded.
+                if let Some(&bits) = numbers.first() {
+                    log::debug!(
+                        "{}: ARPA alarm status 0x{:04x}",
+                        self.common.key,
+                        bits as u32
+                    );
+                }
+            }
+
+            CommandId::GuardStatus => {
+                // $N70,<count>,<status0>,<status1> — log on state change only
+                if numbers.len() >= 3 {
+                    let alarms = [numbers[1] as i32 != 0, numbers[2] as i32 != 0];
+                    for (i, &active) in alarms.iter().enumerate() {
+                        if active != self.guard_zone_alarm[i] {
+                            self.guard_zone_alarm[i] = active;
+                            if active {
+                                log::warn!(
+                                    "{}: Guard zone {} alarm ACTIVE",
+                                    self.common.key,
+                                    i + 1
+                                );
+                            } else {
+                                log::info!(
+                                    "{}: Guard zone {} alarm cleared",
+                                    self.common.key,
+                                    i + 1
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
+            CommandId::NearSTC | CommandId::MiddleSTC | CommandId::FarSTC | CommandId::STCRange => {
+                if let Some(&value) = numbers.first() {
+                    // Single-field responses ($N85,2) have no drid — default to range A.
+                    // Multi-field responses include drid as the last field.
+                    let drid = if numbers.len() > 1 {
+                        self.extract_drid(&command_id, &numbers)
+                    } else {
+                        0
+                    };
+                    let control_id = match command_id {
+                        CommandId::NearSTC => ControlId::NearStcCurve,
+                        CommandId::MiddleSTC => ControlId::MiddleStcCurve,
+                        CommandId::FarSTC => ControlId::FarStcCurve,
+                        _ => ControlId::StcRange,
+                    };
+                    self.common_for_range(drid).set_value(&control_id, value);
+                }
+            }
+
             // Silently handled (no state to update)
             CommandId::AliveCheck
-            | CommandId::Heartbeat
             | CommandId::NN3Command
             | CommandId::CustomPictureAll
             | CommandId::AntennaType
             | CommandId::DispMode
-            | CommandId::PulseWidth
             | CommandId::RingSuppression
             | CommandId::TrailMode
             | CommandId::TrailProcess
@@ -765,7 +874,8 @@ impl FurunoReportReceiver {
             | CommandId::ATFSettings
             | CommandId::AutoAcquire
             | CommandId::TuneIndicator
-            | CommandId::DRS4WHeartbeat => {}
+            | CommandId::GuardMode
+            | CommandId::GuardFan => {}
 
             _ => {
                 log::debug!(
@@ -1166,9 +1276,8 @@ impl FurunoReportReceiver {
     /// and `src_effective == src.len()` — the stretch becomes a no-op copy.
     ///
     /// The DRS4W is special: every spoke carries 430 samples on the wire, but
-    /// only the first N of those cover the configured display range (see
-    /// `docs/brand/furuno/drs4w-distance.md` for the reverse-engineering
-    /// details). N varies per wire_index because the radar changes pulse
+    /// only the first N of those cover the configured display range.
+    /// N varies per wire_index because the radar changes pulse
     /// width with range. Callers pass `src_effective = effective_samples(wi)`
     /// for DRS4W and `src_effective = src.len()` otherwise, so sample `i` of
     /// the output always represents physical distance
