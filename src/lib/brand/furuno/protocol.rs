@@ -332,8 +332,9 @@ pub enum CommandId {
     TuneIndicator = 0x76,
     /// `0x77` — No-transmit sector (sector blanking).
     BlindSector = 0x77,
-    /// `0x7D` — DRS4W-specific heartbeat (~1 Hz).
-    DRS4WHeartbeat = 0x7D,
+    /// `0x7D` — Radar alarm: `$N7D,<type>,<d1>,<d2>,<d3>`.
+    /// Generic across all Furuno models; idle = `$N7D,0,0,0,0`.
+    Alarm = 0x7D,
 
     /// `0x80` — Attenuation.
     Att = 0x80,

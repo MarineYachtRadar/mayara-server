@@ -75,6 +75,7 @@ pub struct FurunoReportReceiver {
     prev_spoke: [Vec<u8>; 2],
     prev_angle: [u16; 2],
     guard_zone_alarm: [bool; 2],
+    alarm_active: bool,
 }
 
 impl FurunoReportReceiver {
@@ -113,6 +114,7 @@ impl FurunoReportReceiver {
             prev_spoke: [Vec::new(), Vec::new()],
             prev_angle: [0, 0],
             guard_zone_alarm: [false, false],
+            alarm_active: false,
         }
     }
 
@@ -773,6 +775,28 @@ impl FurunoReportReceiver {
                 }
             }
 
+            CommandId::Alarm => {
+                // $N7D,<type>,<d1>,<d2>,<d3> — generic radar alarm; idle = all zero.
+                // Bit meanings not yet decoded; log raw values on state change.
+                if numbers.len() >= 4 {
+                    let alarm_type = numbers[0] as u32;
+                    if alarm_type != 0 {
+                        log::warn!(
+                            "{}: radar alarm type {} details {} {} {}",
+                            self.common.key,
+                            alarm_type,
+                            numbers[1] as u32,
+                            numbers[2] as u32,
+                            numbers[3] as u32,
+                        );
+                        self.alarm_active = true;
+                    } else if self.alarm_active {
+                        log::info!("{}: radar alarm cleared", self.common.key);
+                        self.alarm_active = false;
+                    }
+                }
+            }
+
             CommandId::GuardStatus => {
                 // $N70,<count>,<status0>,<status1> — log on state change only
                 if numbers.len() >= 3 {
@@ -831,7 +855,6 @@ impl FurunoReportReceiver {
             | CommandId::ATFSettings
             | CommandId::AutoAcquire
             | CommandId::TuneIndicator
-            | CommandId::DRS4WHeartbeat
             | CommandId::GuardMode
             | CommandId::GuardFan => {}
 
