@@ -142,7 +142,7 @@ create_release_pr() {
     git pull origin main
     git tag "$tag" "$merge_sha"
     git push origin "$tag"
-    git branch -d "$branch"
+    git branch -D "$branch" 2>/dev/null || true
     echo "Tagged and pushed ${tag}"
 }
 
@@ -213,7 +213,7 @@ do_beta() {
     local last_beta
     last_beta=$(git tag -l "v${base}-beta.*" \
         | sed "s/v${base}-beta\.//" \
-        | grep -E '^[0-9]+$' \
+        | awk '/^[0-9]+$/' \
         | sort -n | tail -1)
     local next_beta
     if [ -z "$last_beta" ]; then
@@ -323,7 +323,7 @@ Commands:
   --beta        Create a beta pre-release:
                   • strips suffix, appends -beta.N (auto-incremented)
                   • creates a PR, waits for merge, tags the result
-                  • opens a follow-up PR to bump to next -dev version
+                  • opens a follow-up PR to return to <base>-dev
 
   --major       Bump major version (N+1.0.0-dev) via PR
   --minor       Bump minor version (x.N+1.0-dev) via PR
