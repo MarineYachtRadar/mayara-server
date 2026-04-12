@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **stream:** handle navigation and target paths in desubscribe (#88) ([PR #88](https://github.com/MarineYachtRadar/mayara-server/pull/88))
 - **furuno:** restore DRS4W short ranges (1/8, 1/4, 1/2 NM) (#93) ([PR #93](https://github.com/MarineYachtRadar/mayara-server/pull/93))
 - **cliff:** anchor CodeRabbit-fixup skip rules to commit subject (#96) ([PR #96](https://github.com/MarineYachtRadar/mayara-server/pull/96))
+- **furuno:** handle 0x7D as radar alarm, not DRS4W heartbeat (#100) ([PR #100](https://github.com/MarineYachtRadar/mayara-server/pull/100))
 
 ## [3.4.2] - 2026-04-10
 
