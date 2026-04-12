@@ -303,7 +303,7 @@ pub struct RadarInfo {
     pub spoke_data_addr: SocketAddrV4,   // Where the radar will send data spokes
     pub report_addr: SocketAddrV4,       // Where the radar will send reports
     pub send_command_addr: SocketAddrV4, // Where displays will send commands to the radar
-    legend: Legend,                      // What pixel values mean
+    pub(crate) legend: Legend,            // What pixel values mean
     pub controls: SharedControls,        // Which controls there are, not complete in beginning
     pub ranges: Ranges,                  // Ranges for this radar, empty in beginning
     pub(crate) range_detection: Option<RangeDetection>, // if Some, then ranges are flexible, detected and persisted

@@ -13,12 +13,12 @@ use tokio_graceful_shutdown::SubsystemHandle;
 
 use super::command::Command;
 use super::protocol::{
-    CommandId, DATA_BROADCAST_ADDRESS, ECHO_GAIN_DEFAULT, ECHO_GAIN_LOW_POWER,
-    ENCODING_1_REPEAT_DEFAULT, ENCODING_3_REPEAT_DEFAULT, FRAME_DUAL_RANGE_BIT,
-    FRAME_ENCODING_MASK, FRAME_ENCODING_SHIFT, FRAME_HEADING_VALID_BIT, FRAME_MAGIC,
-    FRAME_SCALE_HIGH_MASK, FRAME_SPOKE_DATA_LEN_HIGH_BIT, FRAME_SWEEP_LEN_HIGH_MASK,
-    FRAME_WIRE_INDEX_MASK, RadarModel, SPOKE_ALIGNMENT_MASK, SPOKE_ANGLE_HIGH_MASK, SPOKE_LEN,
-    SPOKES, WIRE_UNIT_KM, WIRE_UNIT_NM, wire_index_to_meters_for_unit,
+    CommandId, DATA_BROADCAST_ADDRESS, ENCODING_1_REPEAT_DEFAULT, ENCODING_3_REPEAT_DEFAULT,
+    FRAME_DUAL_RANGE_BIT, FRAME_ENCODING_MASK, FRAME_ENCODING_SHIFT, FRAME_HEADING_VALID_BIT,
+    FRAME_MAGIC, FRAME_SCALE_HIGH_MASK, FRAME_SPOKE_DATA_LEN_HIGH_BIT,
+    FRAME_SWEEP_LEN_HIGH_MASK, FRAME_WIRE_INDEX_MASK, PIXEL_VALUES, RadarModel,
+    SPOKE_ALIGNMENT_MASK, SPOKE_ANGLE_HIGH_MASK, SPOKE_LEN, SPOKES, WIRE_UNIT_KM, WIRE_UNIT_NM,
+    wire_index_to_meters_for_unit,
 };
 use super::settings;
 use crate::Cli;
@@ -1116,17 +1116,6 @@ impl FurunoReportReceiver {
                 SPOKE_LEN,
             );
 
-            // Low-power radars (DRS4W: 2.2 kW WiFi) produce raw echo values
-            // well below the encoding maximum (~124 vs 252), so the 64-color
-            // palette is only half-utilised and targets appear uniformly blue.
-            // A software gain of 2× doubles the palette spread without
-            // affecting full-power models (NXT, FAR) where values already
-            // reach the encoding ceiling.
-            let echo_gain: u8 = match self.model {
-                RadarModel::DRS4W | RadarModel::DRS => ECHO_GAIN_LOW_POWER,
-                _ => ECHO_GAIN_DEFAULT,
-            };
-
             if is_range_b {
                 Self::add_spoke_to_common(
                     self.common_b.as_mut().unwrap(),
@@ -1134,7 +1123,6 @@ impl FurunoReportReceiver {
                     angle,
                     heading,
                     &send_spoke,
-                    echo_gain,
                 );
             } else {
                 Self::add_spoke_to_common(
@@ -1143,7 +1131,6 @@ impl FurunoReportReceiver {
                     angle,
                     heading,
                     &send_spoke,
-                    echo_gain,
                 );
             }
 
@@ -1304,7 +1291,6 @@ impl FurunoReportReceiver {
         angle: SpokeBearing,
         heading: SpokeBearing,
         sweep: &[u8],
-        echo_gain: u8,
     ) {
         if common.replay {
             let _ = common
@@ -1325,21 +1311,24 @@ impl FurunoReportReceiver {
             heading.map(|h| (h * SPOKES as f64 / TAU) as u16)
         };
 
-        let pixel_max = common.info.pixel_values.saturating_sub(1) as u16;
+        let pixel_max = common.info.legend.pixel_colors.saturating_sub(1) as u16;
         let mut data = vec![0; sweep.len()];
 
+        // Furuno-specific: lift weak echoes so they are visually distinct from
+        // black. With 219 palette entries the linear blue ramp has ~72 levels,
+        // making raw values 1-20 near-invisible. Map the raw 0-252 range into
+        // a narrower palette window that skips the dimmest indices.
+        // Index 0 stays transparent; everything else starts at ECHO_FLOOR.
+        const ECHO_FLOOR: u16 = 10;
+        let usable = pixel_max.saturating_sub(ECHO_FLOOR);
+
         for (i, b) in sweep.iter().enumerate() {
-            // Map raw echo byte to palette index. The raw value range depends
-            // on the encoding (max 252 for encoding 3, 254 for encoding 1/2).
-            // Low-power radars (DRS4W: 2.2 kW) produce values well below the
-            // hardware maximum, so echo_gain > 1 applies software amplification
-            // before the palette mapping. Clamped to pixel_max (63 for the
-            // default 64-color palette).
-            let amplified = (*b as u16 * echo_gain as u16) >> 2;
-            data[i] = amplified.min(pixel_max) as u8;
-        }
-        if common.replay {
-            data[sweep.len() - 1] = 64;
+            let raw = *b as u16;
+            data[i] = if raw == 0 {
+                0
+            } else {
+                (ECHO_FLOOR + raw * usable / PIXEL_VALUES as u16).min(pixel_max) as u8
+            };
         }
 
         log::trace!(

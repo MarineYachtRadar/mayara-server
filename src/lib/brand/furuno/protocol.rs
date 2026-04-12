@@ -44,8 +44,14 @@ pub const SPOKES: usize = 8192;
 /// round upper bound that accommodates all known Furuno models.
 pub const SPOKE_LEN: usize = 1024;
 
-/// Number of colors in the echo palette.
-pub const PIXEL_VALUES: u8 = 64;
+/// Number of echo intensity levels in the palette.
+///
+/// Encoding 3 uses 8-bit values with the two LSBs as a marker field, so the
+/// maximum literal value is 0xFC = 252. Raw echo bytes pass straight through
+/// to the palette — no shift, no gain. The `default_legend()` function may
+/// cap the effective palette size if reserved slots (ARPA, Doppler, history)
+/// would push the total beyond 255.
+pub const PIXEL_VALUES: u8 = 252;
 
 // =============================================================================
 // Network — ports and addresses
@@ -603,17 +609,6 @@ pub const ENCODING_3_REPEAT_DEFAULT: usize = 0x40;
 /// Bitmask for rounding consumed bytes up to 4-byte alignment:
 /// `used = (used + 3) & SPOKE_ALIGNMENT_MASK`.
 pub const SPOKE_ALIGNMENT_MASK: usize = !3;
-
-// =============================================================================
-// Echo processing
-// =============================================================================
-
-/// Software echo gain for low-power radars (DRS4W 2.2 kW, DRS).
-/// Applied as a multiplier before the `>> 2` palette shift.
-pub const ECHO_GAIN_LOW_POWER: u8 = 2;
-
-/// Software echo gain for full-power radars (NXT, FAR).
-pub const ECHO_GAIN_DEFAULT: u8 = 1;
 
 // =============================================================================
 // Guard zone constants
