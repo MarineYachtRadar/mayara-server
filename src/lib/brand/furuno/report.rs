@@ -780,7 +780,7 @@ impl FurunoReportReceiver {
                 // Bit meanings not yet decoded; log raw values on state change.
                 if numbers.len() >= 4 {
                     let alarm_type = numbers[0] as u32;
-                    if alarm_type != 0 {
+                    if alarm_type != 0 && !self.alarm_active {
                         log::warn!(
                             "{}: radar alarm type {} details {} {} {}",
                             self.common.key,
