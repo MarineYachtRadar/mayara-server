@@ -797,6 +797,17 @@ impl FurunoReportReceiver {
                 }
             }
 
+            CommandId::ArpaAlarm => {
+                // $NAF,<bitmask> — ARPA subsystem status bits. Bit meanings not yet decoded.
+                if let Some(&bits) = numbers.first() {
+                    log::debug!(
+                        "{}: ARPA alarm status 0x{:04x}",
+                        self.common.key,
+                        bits as u32
+                    );
+                }
+            }
+
             CommandId::GuardStatus => {
                 // $N70,<count>,<status0>,<status1> — log on state change only
                 if numbers.len() >= 3 {
@@ -843,7 +854,6 @@ impl FurunoReportReceiver {
 
             // Silently handled (no state to update)
             CommandId::AliveCheck
-            | CommandId::Heartbeat
             | CommandId::NN3Command
             | CommandId::CustomPictureAll
             | CommandId::AntennaType

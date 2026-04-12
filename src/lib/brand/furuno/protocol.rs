@@ -377,8 +377,8 @@ pub enum CommandId {
     ConningPosition = 0xAA,
     /// `0xAC` — Wake-up count.
     WakeUpCount = 0xAC,
-    /// `0xAF` — Frequent radar heartbeat (`$NAF,256`).
-    Heartbeat = 0xAF,
+    /// `0xAF` — ARPA subsystem alarm/status bitmask: `$NAF,<bits>`.
+    ArpaAlarm = 0xAF,
 
     /// `0xD2` — STC range.
     STCRange = 0xD2,
