@@ -173,6 +173,7 @@ pub enum ControlId {
     FarStcCurve,
     StcRange,
     AntiJamming,
+    EchoFormat,
 }
 
 impl Display for ControlId {
@@ -283,7 +284,8 @@ impl ControlId {
             | ControlId::MiddleStcCurve
             | ControlId::FarStcCurve
             | ControlId::StcRange
-            | ControlId::AntiJamming => Category::Advanced,
+            | ControlId::AntiJamming
+            | ControlId::EchoFormat => Category::Advanced,
         }
     }
 
@@ -381,6 +383,7 @@ impl ControlId {
             ControlId::FarStcCurve => "Far-range STC suppression curve",
             ControlId::StcRange => "Distance boundary between STC range bands",
             ControlId::AntiJamming => "Anti-jamming filter reduces interference from other radars on the same frequency",
+            ControlId::EchoFormat => "Echo data encoding format (NXT only: IMO or Tile)",
         }
     }
 
@@ -474,6 +477,7 @@ impl ControlId {
             ControlId::FarStcCurve => "Far STC curve",
             ControlId::StcRange => "STC range",
             ControlId::AntiJamming => "Anti-jamming",
+            ControlId::EchoFormat => "Echo format",
         }
     }
 
@@ -559,6 +563,7 @@ impl ControlId {
             ControlId::FarStcCurve => ControlDestination::Command,
             ControlId::StcRange => ControlDestination::Command,
             ControlId::AntiJamming => ControlDestination::Command,
+            ControlId::EchoFormat => ControlDestination::Command,
         }
     }
 }

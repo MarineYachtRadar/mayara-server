@@ -370,6 +370,10 @@ pub fn update_when_model_known(info: &mut RadarInfo, model: RadarModel, version:
         info.controls
             .add(new_numeric(ControlId::TimedRun, 10., 120.).wire_units(Units::Seconds));
     }
+    if model.is_nxt() {
+        info.controls
+            .add(new_list(ControlId::EchoFormat, &["IMO", "Tile"]));
+    }
     if cap.dual_range {
         info.dual_range = true;
     }

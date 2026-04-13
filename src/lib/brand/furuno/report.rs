@@ -13,12 +13,12 @@ use tokio_graceful_shutdown::SubsystemHandle;
 
 use super::command::Command;
 use super::protocol::{
-    CommandId, DATA_BROADCAST_ADDRESS, ENCODING_1_REPEAT_DEFAULT, ENCODING_3_REPEAT_DEFAULT,
-    FRAME_DUAL_RANGE_BIT, FRAME_ENCODING_MASK, FRAME_ENCODING_SHIFT, FRAME_HEADING_VALID_BIT,
-    FRAME_MAGIC, FRAME_SCALE_HIGH_MASK, FRAME_SPOKE_DATA_LEN_HIGH_BIT,
+    CommandId, DATA_BROADCAST_ADDRESS, ENCODING_1_REPEAT_DEFAULT,
+    ENCODING_3_REPEAT_DEFAULT, FRAME_DUAL_RANGE_BIT, FRAME_ENCODING_MASK, FRAME_ENCODING_SHIFT,
+    FRAME_HEADING_VALID_BIT, FRAME_MAGIC, FRAME_SCALE_HIGH_MASK, FRAME_SPOKE_DATA_LEN_HIGH_BIT,
     FRAME_SWEEP_LEN_HIGH_MASK, FRAME_WIRE_INDEX_MASK, PIXEL_VALUES, RadarModel,
-    SPOKE_ALIGNMENT_MASK, SPOKE_ANGLE_HIGH_MASK, SPOKE_LEN, SPOKES, WIRE_UNIT_KM, WIRE_UNIT_NM,
-    wire_index_to_meters_for_unit,
+    SPOKE_ALIGNMENT_MASK, SPOKE_ANGLE_HIGH_MASK, SPOKE_LEN, SPOKES, TILE_MAGIC,
+    TILE_REPEAT_DEFAULT, TILE_SCALE, WIRE_UNIT_KM, WIRE_UNIT_NM, wire_index_to_meters_for_unit,
 };
 use super::settings;
 use crate::Cli;
@@ -214,6 +214,12 @@ impl FurunoReportReceiver {
                                     }
                                     first_report_received = true;
                                 }
+
+                                // NXT models support Tile echo format via ImoEchoSwitch (0xC8).
+                                // Not auto-switched: the radar may not respond to this command
+                                // on all firmware versions. The user can try switching manually
+                                // via the EchoFormat control. If the radar does switch, the
+                                // Tile frame detector and decoder in process_frame() handle it.
                             }
                             line.clear();
                         }
@@ -1028,8 +1034,22 @@ impl FurunoReportReceiver {
     }
 
     fn process_frame(&mut self, data: &[u8]) {
-        if data.len() < 16 || data[0] != FRAME_MAGIC {
-            log::debug!("Dropping invalid frame");
+        if data.len() < 16 {
+            log::debug!("Dropping short frame ({} bytes)", data.len());
+            return;
+        }
+
+        // Tile echo format: first uint32 bits 29-31 == TILE_MAGIC (2)
+        if data.len() >= 12 {
+            let header_word = u32::from_le_bytes([data[8], data[9], data[10], data[11]]);
+            if (header_word >> 29) == TILE_MAGIC {
+                self.process_tile_frame(data);
+                return;
+            }
+        }
+
+        if data[0] != FRAME_MAGIC {
+            log::debug!("Dropping invalid frame (magic={:#04x})", data[0]);
             return;
         }
 
@@ -1136,6 +1156,137 @@ impl FurunoReportReceiver {
 
             self.prev_angle[range_idx] = angle;
             self.prev_spoke[range_idx] = generic_spoke;
+        }
+
+        if is_range_b {
+            self.common_b.as_mut().unwrap().send_spoke_message();
+        } else {
+            self.common.send_spoke_message();
+        }
+    }
+
+    /// Decode a Tile echo frame (NXT-only format).
+    ///
+    /// The Tile format uses bitstream-packed headers and a different RLE scheme
+    /// from IMO. Each frame contains one or more spoke strips (64 or 256 cells).
+    /// The literal pixel encoding uses a bit-twist:
+    /// `decoded = (byte & 0x7F) >> 1 | (byte & 1) << 7`.
+    ///
+    /// Reference: `DecodeTileEchoFormat` @ 0x5eda0 in libNAVNETDLL.so.
+    fn process_tile_frame(&mut self, data: &[u8]) {
+        if data.len() < 24 {
+            log::debug!("Tile frame too short ({} bytes)", data.len());
+            return;
+        }
+
+        // First header word at byte offset 8
+        let header_word = u32::from_le_bytes([data[8], data[9], data[10], data[11]]);
+        let content_length = (header_word & 0x7FF) as usize; // bits 0-10
+
+        // Read range from the control state (updated by $N62 on the TCP stream).
+        // Tile format doesn't carry wire_index in its header the same way IMO does.
+        let range = self
+            .common
+            .info
+            .controls
+            .get(&ControlId::Range)
+            .and_then(|c| c.value)
+            .unwrap_or(0.0) as u32;
+
+        // Dual range ID: check byte 15 bit 6, same position as IMO format.
+        // If this turns out wrong for Tile, we fall back to Range A only.
+        let radar_no = (data[15] >> 6) & 0x01;
+        let is_range_b = radar_no == 1 && self.common_b.is_some();
+
+        if is_range_b {
+            self.common_b.as_mut().unwrap().new_spoke_message();
+        } else {
+            self.common.new_spoke_message();
+        }
+
+        // Per-spoke records start after the header words (byte offset 24)
+        let mut pos: usize = 24;
+        let frame_end = (content_length + 7).min(data.len());
+
+        while pos + 3 <= frame_end {
+            // Per-spoke sub-header: angle, heading/flags, first pixel + strip size
+            let angle = ((data[pos] as u16) | ((data[pos + 1] as u16 & 0x1F) << 8)) as u16;
+            let heading = ((data[pos + 2] as u16) | ((data[pos + 3] as u16 & 0x1F) << 8)) as u16;
+            pos += 4;
+
+            if pos >= frame_end {
+                break;
+            }
+
+            let flag = data[pos];
+            pos += 1;
+            let pixel_count = if flag & 0x80 != 0 { 256 } else { 64 };
+
+            // First pixel is a bit-twisted literal from `flag` bits 0-6
+            let first_pixel = (flag & 0x7F) >> 1 | (flag & 1) << 7;
+            let mut spoke = Vec::with_capacity(pixel_count);
+            spoke.push(first_pixel);
+
+            // Decode remaining pixels via Tile RLE
+            while spoke.len() < pixel_count && pos < frame_end {
+                let byte = data[pos];
+                pos += 1;
+
+                if byte & 0x80 == 0 {
+                    // Literal: bit-twist the 7-bit value
+                    let value = (byte & 0x7F) >> 1 | (byte & 1) << 7;
+                    spoke.push(value);
+                } else {
+                    // RLE: repeat previous value
+                    let mut count = (byte & 0x7F) as usize;
+                    if count == 0 {
+                        count = TILE_REPEAT_DEFAULT;
+                    }
+                    let prev = *spoke.last().unwrap_or(&0);
+                    for _ in 0..count {
+                        if spoke.len() >= pixel_count {
+                            break;
+                        }
+                        spoke.push(prev);
+                    }
+                }
+            }
+
+            // Pad to pixel_count if decoder ran short
+            spoke.resize(pixel_count, 0);
+
+            // Stretch to SPOKE_LEN using TILE_SCALE as the effective sample count
+            let send_spoke = Self::stretch_spoke(&spoke, TILE_SCALE as usize, SPOKE_LEN);
+
+            let metadata = FurunoSpokeMetadata {
+                sweep_count: 1,
+                sweep_len: pixel_count as u32,
+                encoding: 0,
+                have_heading: 1,
+                range,
+                radar_no,
+                scale: TILE_SCALE,
+            };
+
+            if is_range_b {
+                Self::add_spoke_to_common(
+                    self.common_b.as_mut().unwrap(),
+                    &metadata,
+                    angle,
+                    heading,
+                    &send_spoke,
+                );
+            } else {
+                Self::add_spoke_to_common(
+                    &mut self.common,
+                    &metadata,
+                    angle,
+                    heading,
+                    &send_spoke,
+                );
+            }
+
+            self.prev_angle[if is_range_b { 1 } else { 0 }] = angle;
         }
 
         if is_range_b {

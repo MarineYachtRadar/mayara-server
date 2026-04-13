@@ -248,6 +248,19 @@ impl RadarModel {
             _ => RadarModel::Unknown,
         }
     }
+
+    /// Whether this model belongs to the DRS-NXT family and supports the
+    /// Tile echo format via `ImoEchoSwitch`.
+    pub fn is_nxt(&self) -> bool {
+        matches!(
+            self,
+            RadarModel::DRS4DNXT
+                | RadarModel::DRS6ANXT
+                | RadarModel::DRS12ANXT
+                | RadarModel::DRS25ANXT
+                | RadarModel::DRS6AXCLASS
+        )
+    }
 }
 
 // =============================================================================
@@ -385,6 +398,11 @@ pub enum CommandId {
     WakeUpCount = 0xAC,
     /// `0xAF` — ARPA subsystem alarm/status bitmask: `$NAF,<bits>`.
     ArpaAlarm = 0xAF,
+
+    /// `0xB8` — IMO/Tile echo format switch (NXT only).
+    /// `$SB8,1` = request Tile format, `$SB8,0` = request IMO format.
+    /// From firmware `rmMakeComImoEchoSwitch` at libNAVNETDLL.so.
+    ImoEchoSwitch = 0xB8,
 
     /// `0xD2` — STC range.
     STCRange = 0xD2,
@@ -609,6 +627,20 @@ pub const ENCODING_3_REPEAT_DEFAULT: usize = 0x40;
 /// Bitmask for rounding consumed bytes up to 4-byte alignment:
 /// `used = (used + 3) & SPOKE_ALIGNMENT_MASK`.
 pub const SPOKE_ALIGNMENT_MASK: usize = !3;
+
+// =============================================================================
+// Tile echo format (NXT only)
+// =============================================================================
+
+/// Bits 29-31 of the first header word must equal this value for a Tile frame.
+pub const TILE_MAGIC: u32 = 2;
+
+/// Tile echo format uses a hardcoded scale of 496 at all ranges.
+/// From `DecodeTileEchoFormat` in libNAVNETDLL.so (Ghidra decompilation).
+pub const TILE_SCALE: u32 = 496;
+
+/// Tile RLE: a zero repeat count (low 7 bits) means 128 repeats.
+pub const TILE_REPEAT_DEFAULT: usize = 128;
 
 // =============================================================================
 // Guard zone constants
