@@ -90,6 +90,7 @@ impl FurunoLocator {
         info_b: Option<RadarInfo>,
         radars: &SharedRadars,
         subsys: &SubsystemHandle,
+        beacon_model: &str,
     ) {
         if let Some(mut info) = radars.add(info) {
             // It's new, start the RadarProcessor thread
@@ -119,12 +120,14 @@ impl FurunoLocator {
             info.start_forwarding_radar_messages_to_stdout(&subsys);
 
             if self.args.is_replay() {
-                let model_name = info.controls.model_name().unwrap_or_default();
-                let model = RadarModel::from_model_name(&model_name);
+                // Detect model from the original beacon model string, not from
+                // controls which persistence may have overwritten.
+                let model = RadarModel::from_model_name(beacon_model);
                 log::info!(
-                    "{}: Radar model {} detected for replay mode",
+                    "{}: Radar model {} detected for replay mode (from beacon {:?})",
                     info.key(),
                     model,
+                    beacon_model,
                 );
                 settings::update_when_model_known(&mut info, model, "00.00");
                 radars.update(&mut info);
@@ -137,8 +140,7 @@ impl FurunoLocator {
                 ib.report_addr.set_port(port);
                 ib.start_forwarding_radar_messages_to_stdout(&subsys);
                 if self.args.is_replay() {
-                    let model_name = ib.controls.model_name().unwrap_or_default();
-                    let model = RadarModel::from_model_name(&model_name);
+                    let model = RadarModel::from_model_name(beacon_model);
                     settings::update_when_model_known(ib, model, "00.00");
                     radars.update(ib);
                 }
@@ -331,7 +333,7 @@ impl FurunoLocator {
                     None
                 };
 
-                self.found(radar_info, info_b, radars, subsys);
+                self.found(radar_info, info_b, radars, subsys, &model);
             }
             Err(e) => {
                 log::error!(
