@@ -1206,7 +1206,9 @@ impl FurunoReportReceiver {
             self.common.new_spoke_message();
         }
 
-        // Per-spoke records start after the header words (byte offset 24)
+        // Per-spoke records start after the header words (byte offset 24).
+        // The firmware loop condition is `offset <= content_length + 7` where
+        // offset starts at 8, so content_length + 7 is the frame boundary.
         let mut pos: usize = 24;
         let frame_end = (content_length + 7).min(data.len());
 
