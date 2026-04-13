@@ -91,6 +91,16 @@ impl FurunoReportReceiver {
             Some(Command::new(&info, false))
         };
 
+        // In replay mode the model is already set on RadarInfo by mod.rs.
+        // In live mode, model_name may not be set yet (identified later via $N96).
+        let model_name = info.controls.model_name();
+        let model = model_name
+            .as_deref()
+            .map(RadarModel::from_model_name)
+            .unwrap_or(RadarModel::Unknown);
+        let low_power = matches!(model, RadarModel::DRS4W | RadarModel::DRS);
+        let echo_lut = Self::build_echo_lut(info.pixel_colors(), low_power);
+
         let control_update_rx = info.control_update_subscribe();
         let blob_tx = radars.get_blob_tx();
 
@@ -110,8 +120,8 @@ impl FurunoReportReceiver {
             stream: None,
             command_sender,
             report_request_interval: Duration::from_millis(5000),
-            model_known: false,
-            model: RadarModel::Unknown,
+            model_known: model != RadarModel::Unknown,
+            model,
             receive_type: ReceiveAddressType::Both,
             multicast_socket: None,
             broadcast_socket: None,
@@ -119,7 +129,7 @@ impl FurunoReportReceiver {
             prev_angle: [0, 0],
             guard_zone_alarm: [false, false],
             alarm_active: false,
-            echo_lut: Self::build_echo_lut(info.pixel_colors(), false),
+            echo_lut,
         }
     }
 
@@ -1474,9 +1484,10 @@ impl FurunoReportReceiver {
     /// Build the raw-byte → palette-index lookup table.
     ///
     /// Low-power radars (DRS4W, DRS) have a bottom-heavy echo distribution
-    /// where 95% of returns are below raw value 64. A sqrt curve spreads
-    /// those low values across more of the palette. Full-power models (NXT,
-    /// FAR) have a more even distribution and use a linear mapping.
+    /// where 95% of returns are below raw value 64. An 18th-root (gamma 0.056)
+    /// curve aggressively compresses the range so that even weak returns
+    /// reach red, matching the Furuno iOS app's vivid visual output.
+    /// Full-power models (NXT, FAR) use a linear mapping.
     fn build_echo_lut(pixel_colors: u8, low_power: bool) -> [u8; 256] {
         let pixel_max = pixel_colors.saturating_sub(1) as u16;
         let usable = pixel_max.saturating_sub(ECHO_FLOOR);
@@ -1484,7 +1495,7 @@ impl FurunoReportReceiver {
         for raw in 1u16..256 {
             let mapped = if low_power {
                 let normalized = raw as f64 / PIXEL_VALUES as f64;
-                ECHO_FLOOR + (normalized.sqrt() * usable as f64) as u16
+                ECHO_FLOOR + (normalized.powf(1.0 / 18.0) * usable as f64) as u16
             } else {
                 ECHO_FLOOR + raw * usable / PIXEL_VALUES as u16
             };

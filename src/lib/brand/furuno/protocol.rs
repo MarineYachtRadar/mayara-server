@@ -249,6 +249,41 @@ impl RadarModel {
         }
     }
 
+    /// Map a human-readable model name from the 170-byte beacon model report
+    /// to a [`RadarModel`]. Matches on substrings to handle variations like
+    /// "DRS4D-NXT" vs "DRS4DNXT".
+    pub(crate) fn from_model_name(name: &str) -> RadarModel {
+        if name.contains("DRS4D-NXT") || name.contains("DRS4DNXT") {
+            RadarModel::DRS4DNXT
+        } else if name.contains("DRS6A-NXT") || name.contains("DRS6ANXT") {
+            RadarModel::DRS6ANXT
+        } else if name.contains("DRS12A-NXT") || name.contains("DRS12ANXT") {
+            RadarModel::DRS12ANXT
+        } else if name.contains("DRS25A-NXT") || name.contains("DRS25ANXT") {
+            RadarModel::DRS25ANXT
+        } else if name.contains("DRS6A") && name.contains("CLASS") {
+            RadarModel::DRS6AXCLASS
+        } else if name.contains("DRS4W") {
+            RadarModel::DRS4W
+        } else if name.contains("DRS4DL") {
+            RadarModel::DRS4DL
+        } else if name.starts_with("DRS") {
+            RadarModel::DRS
+        } else if name.contains("FAR-21") || name.contains("FAR21") {
+            RadarModel::FAR21x7
+        } else if name.contains("FAR-14") && name.contains("7") {
+            RadarModel::FAR14x7
+        } else if name.contains("FAR-14") && name.contains("6") {
+            RadarModel::FAR14x6
+        } else if name.contains("FAR-15") || name.contains("FAR15") {
+            RadarModel::FAR15x3
+        } else if name.contains("FAR-3") || name.contains("FAR3") {
+            RadarModel::FAR3000
+        } else {
+            RadarModel::Unknown
+        }
+    }
+
     /// Whether this model belongs to the DRS-NXT family and supports the
     /// Tile echo format via `ImoEchoSwitch`.
     pub(crate) fn is_nxt(&self) -> bool {

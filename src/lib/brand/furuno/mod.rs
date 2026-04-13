@@ -119,14 +119,14 @@ impl FurunoLocator {
             info.start_forwarding_radar_messages_to_stdout(&subsys);
 
             if self.args.is_replay() {
-                let model = RadarModel::DRS4DNXT; // Default model for replay
-                let version = "01.05";
+                let model_name = info.controls.model_name().unwrap_or_default();
+                let model = RadarModel::from_model_name(&model_name);
                 log::info!(
-                    "{}: Radar model {} assumed for replay mode",
+                    "{}: Radar model {} detected for replay mode",
                     info.key(),
                     model,
                 );
-                settings::update_when_model_known(&mut info, model, version);
+                settings::update_when_model_known(&mut info, model, "00.00");
                 radars.update(&mut info);
             }
 
@@ -137,9 +137,9 @@ impl FurunoLocator {
                 ib.report_addr.set_port(port);
                 ib.start_forwarding_radar_messages_to_stdout(&subsys);
                 if self.args.is_replay() {
-                    let model = RadarModel::DRS4DNXT;
-                    let version = "01.05";
-                    settings::update_when_model_known(ib, model, version);
+                    let model_name = ib.controls.model_name().unwrap_or_default();
+                    let model = RadarModel::from_model_name(&model_name);
+                    settings::update_when_model_known(ib, model, "00.00");
                     radars.update(ib);
                 }
             }
