@@ -258,7 +258,6 @@ impl RadarModel {
                 | RadarModel::DRS6ANXT
                 | RadarModel::DRS12ANXT
                 | RadarModel::DRS25ANXT
-                | RadarModel::DRS6AXCLASS
         )
     }
 }

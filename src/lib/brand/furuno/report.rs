@@ -1227,7 +1227,7 @@ impl FurunoReportReceiver {
             let pixel_count = if flag & 0x80 != 0 { 256 } else { 64 };
 
             // First pixel is a bit-twisted literal from `flag` bits 0-6
-            let first_pixel = (flag & 0x7F) >> 1 | (flag & 1) << 7;
+            let first_pixel = Self::tile_literal(flag);
             let mut spoke = Vec::with_capacity(pixel_count);
             spoke.push(first_pixel);
 
@@ -1237,9 +1237,7 @@ impl FurunoReportReceiver {
                 pos += 1;
 
                 if byte & 0x80 == 0 {
-                    // Literal: bit-twist the 7-bit value
-                    let value = (byte & 0x7F) >> 1 | (byte & 1) << 7;
-                    spoke.push(value);
+                    spoke.push(Self::tile_literal(byte));
                 } else {
                     // RLE: repeat previous value
                     let mut count = (byte & 0x7F) as usize;
@@ -1256,10 +1254,11 @@ impl FurunoReportReceiver {
                 }
             }
 
-            // Pad to pixel_count if decoder ran short
-            spoke.resize(pixel_count, 0);
+            // Pad to TILE_SCALE samples: the first pixel_count are echo data,
+            // the rest are zero (outside display range), matching IMO's scale
+            // semantics where only the first `scale` samples cover 0..range.
+            spoke.resize(TILE_SCALE as usize, 0);
 
-            // Stretch to SPOKE_LEN using TILE_SCALE as the effective sample count
             let send_spoke = Self::stretch_spoke(&spoke, TILE_SCALE as usize, SPOKE_LEN);
 
             let metadata = FurunoSpokeMetadata {
@@ -1298,6 +1297,12 @@ impl FurunoReportReceiver {
         } else {
             self.common.send_spoke_message();
         }
+    }
+
+    /// Decode a Tile-format bit-twisted literal: rotates bit 0 to bit 7.
+    #[inline]
+    fn tile_literal(byte: u8) -> u8 {
+        (byte & 0x7F) >> 1 | (byte & 1) << 7
     }
 
     fn decode_sweep_encoding_0(sweep: &[u8]) -> (Vec<u8>, usize) {
@@ -1466,7 +1471,7 @@ impl FurunoReportReceiver {
             heading.map(|h| (h * SPOKES as f64 / TAU) as u16)
         };
 
-        let pixel_max = common.info.legend.pixel_colors.saturating_sub(1) as u16;
+        let pixel_max = common.info.pixel_colors().saturating_sub(1) as u16;
         let mut data = vec![0; sweep.len()];
 
         // Furuno-specific: lift weak echoes so they are visually distinct from
