@@ -76,6 +76,10 @@ pub struct FurunoReportReceiver {
     prev_angle: [u16; 2],
     guard_zone_alarm: [bool; 2],
     alarm_active: bool,
+    /// Precomputed raw-byte → palette-index lookup table. Built when the model
+    /// and legend are known. DRS4W/DRS use a sqrt curve to spread the
+    /// bottom-heavy echo distribution; other models use a linear mapping.
+    echo_lut: [u8; 256],
 }
 
 impl FurunoReportReceiver {
@@ -115,6 +119,7 @@ impl FurunoReportReceiver {
             prev_angle: [0, 0],
             guard_zone_alarm: [false, false],
             alarm_active: false,
+            echo_lut: Self::build_echo_lut(info.pixel_colors(), false),
         }
     }
 
@@ -914,6 +919,14 @@ impl FurunoReportReceiver {
                 version
             );
             self.model = model;
+            let low_power = matches!(model, RadarModel::DRS4W | RadarModel::DRS);
+            self.echo_lut = Self::build_echo_lut(
+                self.common.info.pixel_colors(),
+                low_power,
+            );
+            if low_power {
+                log::info!("{}: using sqrt echo curve for low-power radar", self.common.key);
+            }
             settings::update_when_model_known(&mut self.common.info, model, version);
             if let Some(cs) = &mut self.command_sender {
                 cs.set_ranges(self.common.info.ranges.clone());
@@ -1135,6 +1148,7 @@ impl FurunoReportReceiver {
                 SPOKE_LEN,
             );
 
+            let echo_lut = &self.echo_lut;
             if is_range_b {
                 Self::add_spoke_to_common(
                     self.common_b.as_mut().unwrap(),
@@ -1142,6 +1156,7 @@ impl FurunoReportReceiver {
                     angle,
                     heading,
                     &send_spoke,
+                    echo_lut,
                 );
             } else {
                 Self::add_spoke_to_common(
@@ -1150,6 +1165,7 @@ impl FurunoReportReceiver {
                     angle,
                     heading,
                     &send_spoke,
+                    echo_lut,
                 );
             }
 
@@ -1275,6 +1291,7 @@ impl FurunoReportReceiver {
                 scale: TILE_SCALE,
             };
 
+            let echo_lut = &self.echo_lut;
             if is_range_b {
                 Self::add_spoke_to_common(
                     self.common_b.as_mut().unwrap(),
@@ -1282,6 +1299,7 @@ impl FurunoReportReceiver {
                     angle,
                     heading,
                     &send_spoke,
+                    echo_lut,
                 );
             } else {
                 Self::add_spoke_to_common(
@@ -1290,6 +1308,7 @@ impl FurunoReportReceiver {
                     angle,
                     heading,
                     &send_spoke,
+                    echo_lut,
                 );
             }
 
@@ -1452,12 +1471,35 @@ impl FurunoReportReceiver {
         out
     }
 
+    /// Build the raw-byte → palette-index lookup table.
+    ///
+    /// Low-power radars (DRS4W, DRS) have a bottom-heavy echo distribution
+    /// where 95% of returns are below raw value 64. A sqrt curve spreads
+    /// those low values across more of the palette. Full-power models (NXT,
+    /// FAR) have a more even distribution and use a linear mapping.
+    fn build_echo_lut(pixel_colors: u8, low_power: bool) -> [u8; 256] {
+        let pixel_max = pixel_colors.saturating_sub(1) as u16;
+        let usable = pixel_max.saturating_sub(ECHO_FLOOR);
+        let mut lut = [0u8; 256];
+        for raw in 1u16..256 {
+            let mapped = if low_power {
+                let normalized = raw as f64 / PIXEL_VALUES as f64;
+                ECHO_FLOOR + (normalized.sqrt() * usable as f64) as u16
+            } else {
+                ECHO_FLOOR + raw * usable / PIXEL_VALUES as u16
+            };
+            lut[raw as usize] = mapped.min(pixel_max) as u8;
+        }
+        lut
+    }
+
     fn add_spoke_to_common(
         common: &mut CommonRadar,
         metadata: &FurunoSpokeMetadata,
         angle: SpokeBearing,
         heading: SpokeBearing,
         sweep: &[u8],
+        echo_lut: &[u8; 256],
     ) {
         if common.replay {
             let _ = common
@@ -1478,23 +1520,10 @@ impl FurunoReportReceiver {
             heading.map(|h| (h * SPOKES as f64 / TAU) as u16)
         };
 
-        let pixel_max = common.info.pixel_colors().saturating_sub(1) as u16;
         let mut data = vec![0; sweep.len()];
 
-        // Furuno-specific: lift weak echoes so they are visually distinct from
-        // black. With 219 palette entries the linear blue ramp has ~72 levels,
-        // making raw values 1-20 near-invisible. Map the raw 0-252 range into
-        // a narrower palette window that skips the dimmest indices.
-        // Index 0 stays transparent; everything else starts at ECHO_FLOOR.
-        let usable = pixel_max.saturating_sub(ECHO_FLOOR);
-
         for (i, b) in sweep.iter().enumerate() {
-            let raw = *b as u16;
-            data[i] = if raw == 0 {
-                0
-            } else {
-                (ECHO_FLOOR + raw * usable / PIXEL_VALUES as u16).min(pixel_max) as u8
-            };
+            data[i] = echo_lut[*b as usize];
         }
 
         log::trace!(
