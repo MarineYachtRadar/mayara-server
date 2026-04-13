@@ -13,7 +13,7 @@ use tokio_graceful_shutdown::SubsystemHandle;
 
 use super::command::Command;
 use super::protocol::{
-    CommandId, DATA_BROADCAST_ADDRESS, ENCODING_1_REPEAT_DEFAULT,
+    CommandId, DATA_BROADCAST_ADDRESS, ECHO_FLOOR, ENCODING_1_REPEAT_DEFAULT,
     ENCODING_3_REPEAT_DEFAULT, FRAME_DUAL_RANGE_BIT, FRAME_ENCODING_MASK, FRAME_ENCODING_SHIFT,
     FRAME_HEADING_VALID_BIT, FRAME_MAGIC, FRAME_SCALE_HIGH_MASK, FRAME_SPOKE_DATA_LEN_HIGH_BIT,
     FRAME_SWEEP_LEN_HIGH_MASK, FRAME_WIRE_INDEX_MASK, PIXEL_VALUES, RadarModel,
@@ -215,11 +215,10 @@ impl FurunoReportReceiver {
                                     first_report_received = true;
                                 }
 
-                                // NXT models support Tile echo format via ImoEchoSwitch (0xC8).
-                                // Not auto-switched: the radar may not respond to this command
-                                // on all firmware versions. The user can try switching manually
-                                // via the EchoFormat control. If the radar does switch, the
-                                // Tile frame detector and decoder in process_frame() handle it.
+                                // NXT models support Tile echo format via ImoEchoSwitch (0xB8).
+                                // Not auto-switched: the DRS4D-NXT (fw v01.05) acknowledges
+                                // but does not change format. The user can experiment via the
+                                // EchoFormat control; process_frame() detects and decodes Tile.
                             }
                             line.clear();
                         }
@@ -1300,6 +1299,9 @@ impl FurunoReportReceiver {
     }
 
     /// Decode a Tile-format bit-twisted literal: rotates bit 0 to bit 7.
+    /// Only 7 input bits are used (bit 7 is the RLE marker), so the output
+    /// has bit 6 always zero — max value is 191, giving 128 distinct levels.
+    /// This is inherent to the Tile wire format, not a bug.
     #[inline]
     fn tile_literal(byte: u8) -> u8 {
         (byte & 0x7F) >> 1 | (byte & 1) << 7
@@ -1479,7 +1481,6 @@ impl FurunoReportReceiver {
         // making raw values 1-20 near-invisible. Map the raw 0-252 range into
         // a narrower palette window that skips the dimmest indices.
         // Index 0 stays transparent; everything else starts at ECHO_FLOOR.
-        const ECHO_FLOOR: u16 = 10;
         let usable = pixel_max.saturating_sub(ECHO_FLOOR);
 
         for (i, b) in sweep.iter().enumerate() {

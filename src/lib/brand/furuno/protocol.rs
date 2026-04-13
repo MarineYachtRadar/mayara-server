@@ -627,6 +627,10 @@ pub const ENCODING_3_REPEAT_DEFAULT: usize = 0x40;
 /// `used = (used + 3) & SPOKE_ALIGNMENT_MASK`.
 pub const SPOKE_ALIGNMENT_MASK: usize = !3;
 
+/// Minimum palette index for non-zero echo values. Skips the dimmest
+/// indices so weak returns are visually distinct from transparent black.
+pub const ECHO_FLOOR: u16 = 10;
+
 // =============================================================================
 // Tile echo format (NXT only)
 // =============================================================================
