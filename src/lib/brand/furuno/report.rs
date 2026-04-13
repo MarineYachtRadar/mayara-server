@@ -120,7 +120,7 @@ impl FurunoReportReceiver {
             stream: None,
             command_sender,
             report_request_interval: Duration::from_millis(5000),
-            model_known: model != RadarModel::Unknown,
+            model_known: args.is_replay() && model != RadarModel::Unknown,
             model,
             receive_type: ReceiveAddressType::Both,
             multicast_socket: None,
@@ -935,7 +935,7 @@ impl FurunoReportReceiver {
                 low_power,
             );
             if low_power {
-                log::info!("{}: using sqrt echo curve for low-power radar", self.common.key);
+                log::info!("{}: using gamma echo curve for low-power radar", self.common.key);
             }
             settings::update_when_model_known(&mut self.common.info, model, version);
             if let Some(cs) = &mut self.command_sender {
