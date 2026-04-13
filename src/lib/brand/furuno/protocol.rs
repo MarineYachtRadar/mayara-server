@@ -251,7 +251,7 @@ impl RadarModel {
 
     /// Whether this model belongs to the DRS-NXT family and supports the
     /// Tile echo format via `ImoEchoSwitch`.
-    pub fn is_nxt(&self) -> bool {
+    pub(crate) fn is_nxt(&self) -> bool {
         matches!(
             self,
             RadarModel::DRS4DNXT

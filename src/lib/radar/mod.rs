@@ -539,7 +539,7 @@ impl RadarInfo {
         self.legend.clone()
     }
 
-    pub fn pixel_colors(&self) -> u8 {
+    pub(crate) fn pixel_colors(&self) -> u8 {
         self.legend.pixel_colors
     }
 }
