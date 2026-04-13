@@ -1183,20 +1183,22 @@ impl FurunoReportReceiver {
         let header_word = u32::from_le_bytes([data[8], data[9], data[10], data[11]]);
         let content_length = (header_word & 0x7FF) as usize; // bits 0-10
 
-        // Read range from the control state (updated by $N62 on the TCP stream).
-        // Tile format doesn't carry wire_index in its header the same way IMO does.
-        let range = self
-            .common
-            .info
-            .controls
-            .get(&ControlId::Range)
-            .and_then(|c| c.value)
-            .unwrap_or(0.0) as u32;
-
         // Dual range ID: check byte 15 bit 6, same position as IMO format.
         // If this turns out wrong for Tile, we fall back to Range A only.
         let radar_no = (data[15] >> 6) & 0x01;
         let is_range_b = radar_no == 1 && self.common_b.is_some();
+
+        // Read range from the correct control state (A or B) since Tile
+        // format doesn't carry wire_index in its header like IMO does.
+        let range_controls = if is_range_b {
+            &self.common_b.as_ref().unwrap().info.controls
+        } else {
+            &self.common.info.controls
+        };
+        let range = range_controls
+            .get(&ControlId::Range)
+            .and_then(|c| c.value)
+            .unwrap_or(0.0) as u32;
 
         if is_range_b {
             self.common_b.as_mut().unwrap().new_spoke_message();
@@ -1208,7 +1210,7 @@ impl FurunoReportReceiver {
         let mut pos: usize = 24;
         let frame_end = (content_length + 7).min(data.len());
 
-        while pos + 3 <= frame_end {
+        while pos + 4 <= frame_end {
             // Per-spoke sub-header: angle, heading/flags, first pixel + strip size
             let angle = ((data[pos] as u16) | ((data[pos + 1] as u16 & 0x1F) << 8)) as u16;
             let heading = ((data[pos + 2] as u16) | ((data[pos + 3] as u16 & 0x1F) << 8)) as u16;

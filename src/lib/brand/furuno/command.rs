@@ -493,7 +493,6 @@ impl CommandSender for Command {
                 CommandId::JammingAble
             }
             ControlId::EchoFormat => {
-                // Format: $SC8,{value}  (0=IMO, 1=Tile)
                 cmd.push(value);
                 CommandId::ImoEchoSwitch
             }
