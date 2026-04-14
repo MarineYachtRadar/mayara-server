@@ -1,4 +1,4 @@
-//! Integration test: replay Garmin xHD pcap fixture.
+//! Integration test: replay Navico 4G pcap fixture.
 //!
 //! Verifies that replaying the fixture through the full pipeline
 //! detects the radar with the correct brand.
@@ -15,7 +15,7 @@ fn test_args() -> Cli {
         tls_cert: None,
         tls_key: None,
         interface: None,
-        brand: Some(mayara::Brand::Garmin),
+        brand: Some(mayara::Brand::Navico),
         targets: mayara::TargetMode::None,
         navigation_address: None,
         nmea0183: false,
@@ -37,11 +37,11 @@ fn test_args() -> Cli {
 }
 
 #[tokio::test]
-async fn replay_garmin_xhd() {
+async fn replay_navico_4g() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("testdata")
         .join("pcap")
-        .join("garmin-xhd.pcap.gz");
+        .join("navico-4g.pcap.gz");
     if !fixture.exists() {
         panic!(
             "Fixture not found: {}. Run: cargo test --lib generate_fixtures -- --ignored",
@@ -49,6 +49,7 @@ async fn replay_garmin_xhd() {
         );
     }
 
+    let _ = env_logger::builder().is_test(true).try_init();
     replay::init(&fixture).expect("init replay");
     replay::set_instant_timing();
     let args = test_args();
@@ -63,12 +64,12 @@ async fn replay_garmin_xhd() {
                 if !keys.is_empty() {
                     let key = &keys[0];
                     assert!(
-                        key.starts_with("gar"),
-                        "expected Garmin key, got: {}",
+                        key.starts_with("nav"),
+                        "expected Navico key, got: {}",
                         key
                     );
                     let info = radars.get_by_key(key).expect("radar info");
-                    assert_eq!(info.brand, mayara::Brand::Garmin);
+                    assert_eq!(info.brand, mayara::Brand::Navico);
                     break;
                 }
                 if tokio::time::Instant::now() > deadline {

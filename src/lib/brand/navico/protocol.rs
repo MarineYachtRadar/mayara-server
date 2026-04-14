@@ -140,29 +140,71 @@ pub const STATE_MODE: u8 = 0x01;
 /// `0xC402` — Range, gain, sea clutter, rain clutter, mode. 99 bytes. All models.
 pub const STATE_SETUP: u8 = 0x02;
 
-/// `0xC403` — Model byte, operating hours, firmware date/time. 129 bytes. All models.
-pub const STATE_CONFIG: u8 = 0x03;
+/// `0xC403` — Scanner type, operating hours, firmware version. 129 bytes. All models.
+pub const STATE_PROPERTIES: u8 = 0x03;
 
 /// `0xC404` — Bearing alignment, antenna height, accent light. 66 bytes. All models.
-pub const STATE_FEATURES: u8 = 0x04;
+pub const STATE_CONFIG: u8 = 0x04;
 
 /// `0xC405` — BR24-only extended status block. 564 bytes.
 pub const STATE_BR24_EXTENDED: u8 = 0x05;
 
-/// `0xC406` — Transceiver name, antenna offset, sector blanking. 68 or 74 bytes. HALO only.
-pub const STATE_PROPERTIES: u8 = 0x06;
+/// `0xC406` — Sector blanking, antenna offsets, transceiver name. 68 or 74 bytes. HALO only.
+pub const STATE_INSTALLATION: u8 = 0x06;
 
 /// `0xC407` — Extended properties. Variable length (BR24: 780, 4G: 188, HALO: varies).
 pub const STATE_PROPERTIES_EXTENDED: u8 = 0x07;
 
 /// `0xC408` — Sea state, scan speed, sidelobe, doppler. 18/21/22/32 bytes.
-pub const STATE_INSTALLATION: u8 = 0x08;
+pub const STATE_SETUP_EXTENDED: u8 = 0x08;
 
 /// `0xC409` — TLV-encoded feature/capability advertisement. Variable length. HALO only.
-pub const STATE_DATA_BLOCK: u8 = 0x09;
+pub const STATE_FEATURES: u8 = 0x09;
 
 /// `0xC40A` — Additional HALO state. Variable length.
 pub const STATE_ADDITIONAL: u8 = 0x0A;
+
+// =============================================================================
+// 0xC409 TLV feature type IDs
+//
+// Each TLV entry in the StateDataBlock is: [type:u8][reserved:u8][length:u8][payload...]
+// =============================================================================
+
+/// TLV type IDs for the 0xC409 StateDataBlock.
+pub mod tlv {
+    /// Bitmask of supported operating modes.
+    /// 4 bytes LE: bit0=custom, 1=harbor, 2=offshore, 3=weather, 4=bird, 5=doppler, 6=buoy.
+    pub const SUPPORTED_USE_MODES: u8 = 2;
+    /// Interference rejection level count. 5 bytes: `[count:u8][_:3B][flags:u8]`.
+    pub const INTERFERENCE_REJECT: u8 = 3;
+    /// Noise rejection level count. 5 bytes.
+    pub const NOISE_REJECT: u8 = 4;
+    /// Target boost (expansion) level count. 5 bytes.
+    pub const TARGET_BOOST: u8 = 5;
+    /// STC curve level count. 5 bytes.
+    pub const STC_CURVE: u8 = 6;
+    /// Beam sharpening (target separation) level count. 5 bytes.
+    pub const BEAM_SHARPENING: u8 = 7;
+    /// Fast scan (scan speed) level count. 5 bytes.
+    pub const FAST_SCAN: u8 = 8;
+    /// Sidelobe gain min/max range. 4 bytes: `[min:u8][_:u8][max:u8][_:u8]`.
+    pub const SIDELOBE_GAIN_RANGE: u8 = 9;
+    /// Supported antenna types. Variable: dome=`00`, array=`[count:u8][size_mm:u16 LE]...`.
+    pub const SUPPORTED_ANTENNAS: u8 = 10;
+    /// Instrumented range min/max in decimeters. 8 bytes: `[min:u32 LE][max:u32 LE]`.
+    pub const INSTRUMENTED_RANGE: u8 = 11;
+    /// Local interference rejection level count. 5 bytes.
+    pub const LOCAL_INTERFERENCE_REJECT: u8 = 12;
+
+    /// Mode bitmask bit positions.
+    pub const MODE_CUSTOM: u32 = 1 << 0;
+    pub const MODE_HARBOR: u32 = 1 << 1;
+    pub const MODE_OFFSHORE: u32 = 1 << 2;
+    pub const MODE_WEATHER: u32 = 1 << 3;
+    pub const MODE_BIRD: u32 = 1 << 4;
+    pub const MODE_DOPPLER: u32 = 1 << 5;
+    pub const MODE_BUOY: u32 = 1 << 6;
+}
 
 // =============================================================================
 // Control command sub-opcodes (MFD → radar, category 0xC1)
@@ -258,20 +300,20 @@ pub const INSTALL_TAG_ANTENNA_OFFSET: u8 = 0x04;
 pub const QUERY_REPORTS_BATCH: u8 = 0x01;
 
 /// `0xC202` — Request StateFeatures.
-pub const QUERY_STATE_FEATURES: u8 = 0x02;
+pub const QUERY_STATE_CONFIG: u8 = 0x02;
 
 /// `0xC203` — Request StateSetup and StateInstallation.
 pub const QUERY_SETUP_AND_INSTALLATION: u8 = 0x03;
 
 /// `0xC204` — Request StateConfig (model info and firmware).
-pub const QUERY_STATE_CONFIG: u8 = 0x04;
+pub const QUERY_STATE_PROPERTIES: u8 = 0x04;
 
 // =============================================================================
 // Packet constructors — common discovery / query byte sequences
 // =============================================================================
 
 /// Request a StateConfig report (`0xC204`).
-pub const REQUEST_STATE_CONFIG: [u8; 2] = [QUERY_STATE_CONFIG, CATEGORY_QUERY];
+pub const REQUEST_STATE_PROPERTIES: [u8; 2] = [QUERY_STATE_PROPERTIES, CATEGORY_QUERY];
 
 /// Request a batch of state reports (`0xC201`).
 pub const REQUEST_STATE_BATCH: [u8; 2] = [QUERY_REPORTS_BATCH, CATEGORY_QUERY];

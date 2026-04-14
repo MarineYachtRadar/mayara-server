@@ -15,7 +15,7 @@ use super::protocol::{
     CMD_NOISE_REJECTION, CMD_NOTRANSMIT_ENABLE, CMD_NOTRANSMIT_SECTOR, CMD_POWER_ON, CMD_RANGE,
     CMD_SCAN_SPEED, CMD_SEA_STATE, CMD_TARGET_BOOST, CMD_TARGET_EXPANSION, CMD_TARGET_SEPARATION,
     CMD_TRANSMIT, CMD_USE_MODE, COMMAND_STAY_ON_A, INSTALL_TAG_ANTENNA_HEIGHT,
-    INSTALL_TAG_ANTENNA_OFFSET, REQUEST_STATE_BATCH, REQUEST_STATE_CONFIG,
+    INSTALL_TAG_ANTENNA_OFFSET, REQUEST_STATE_BATCH, REQUEST_STATE_PROPERTIES,
 };
 
 pub struct Command {
@@ -27,14 +27,18 @@ pub struct Command {
 }
 
 impl Command {
-    pub fn new(fake_errors: bool, info: RadarInfo, model: Model) -> Self {
+    pub fn new(fake_errors: bool, info: RadarInfo) -> Self {
         Command {
             key: info.key(),
             info,
-            model,
+            model: Model::Unknown,
             sock: None,
             fake_errors,
         }
+    }
+
+    pub fn set_model(&mut self, model: Model) {
+        self.model = model;
     }
 
     async fn start_socket(&mut self) -> Result<(), RadarError> {
@@ -126,7 +130,7 @@ impl Command {
     }
 
     pub(super) async fn send_report_requests(&mut self) -> Result<(), RadarError> {
-        self.send(&REQUEST_STATE_CONFIG).await?;
+        self.send(&REQUEST_STATE_PROPERTIES).await?;
         self.send(&REQUEST_STATE_BATCH).await?;
         self.send(&COMMAND_STAY_ON_A).await?;
         Ok(())
@@ -198,7 +202,7 @@ impl CommandSender for Command {
                 cmd.extend_from_slice(&v.to_le_bytes());
             }
             ControlId::Sea => {
-                if self.model == Model::HALO {
+                if self.model.is_halo() {
                     // Capture data:
                     // Data: 11c101000004 = Auto
                     // Data: 11c10100ff04 = Auto-1
@@ -253,7 +257,7 @@ impl CommandSender for Command {
                 cmd.extend_from_slice(&[CMD_INTERFERENCE_REJECTION, CATEGORY_CONTROL, value as u8]);
             }
             ControlId::TargetExpansion => {
-                if self.model == Model::HALO {
+                if self.model.is_halo() {
                     cmd.extend_from_slice(&[
                         CMD_HALO_TARGET_EXPANSION, CATEGORY_CONTROL, value as u8,
                     ]);
@@ -297,7 +301,10 @@ impl CommandSender for Command {
                 cmd.extend_from_slice(&[CMD_SCAN_SPEED, CATEGORY_CONTROL, value as u8]);
             }
             ControlId::Mode => {
-                cmd.extend_from_slice(&[CMD_USE_MODE, CATEGORY_CONTROL, value as u8]);
+                // Bird Plus (value 6) maps to tUseMode { mode: 5, variant: 1 }
+                // All other modes: variant 0
+                let (mode, variant) = if value as u8 == 6 { (5u8, 1u8) } else { (value as u8, 0u8) };
+                cmd.extend_from_slice(&[CMD_USE_MODE, CATEGORY_CONTROL, mode, variant]);
             }
             ControlId::NoiseRejection => {
                 cmd.extend_from_slice(&[CMD_NOISE_REJECTION, CATEGORY_CONTROL, value as u8]);

@@ -999,6 +999,22 @@ impl SharedControls {
                     cv_orig,
                     cv
                 );
+
+                // Reject values not in the valid set (e.g. sparse capability bitmasks)
+                if let Some(ref valid_values) = c.item.valid_values {
+                    if let Some(ref v) = cv.value {
+                        if let Some(f) = v.as_f64() {
+                            let i = f as i32;
+                            if !valid_values.contains(&i) {
+                                return Err(RadarError::ControlError(ControlError::Invalid(
+                                    cv.id,
+                                    format!("{}", i),
+                                )));
+                            }
+                        }
+                    }
+                }
+
                 // Handle zone controls specially - they have multiple values and are stored directly
                 // This applies to both Internal and Target destinations (guard zones are Target)
                 if c.item.data_type == ControlDataType::Zone {
@@ -1280,6 +1296,25 @@ impl SharedControls {
             Ok(Some(()))
         } else {
             Ok(None)
+        }
+    }
+
+    /// Update the valid values of a list control from a bitmask.
+    /// Set bits indicate which values the radar accepts. Descriptions are
+    /// left as-is (set when the control was created).
+    pub fn set_valid_values_bitmask(&self, control_id: &ControlId, mask: u8) {
+        if mask == 0 {
+            return;
+        }
+        let mut locked = self.controls.write().unwrap();
+        if let Some(control) = locked.controls.get_mut(control_id) {
+            let values: Vec<i32> = (0..8u8)
+                .filter(|bit| mask & (1 << bit) != 0)
+                .map(|bit| bit as i32)
+                .collect();
+            control.item.min_value = Some(*values.first().unwrap() as f64);
+            control.item.max_value = Some(*values.last().unwrap() as f64);
+            control.item.valid_values = Some(values);
         }
     }
 
@@ -2664,6 +2699,9 @@ impl Control {
     }
 
     pub(crate) fn set_valid_ranges(&mut self, ranges: &Vec<Range>) {
+        if ranges.is_empty() {
+            return;
+        }
         let mut values = Vec::new();
         let mut descriptions = HashMap::new();
         for range in ranges.iter() {

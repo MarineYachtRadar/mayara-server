@@ -15,7 +15,7 @@ fn test_args() -> Cli {
         tls_cert: None,
         tls_key: None,
         interface: None,
-        brand: None,
+        brand: Some(mayara::Brand::Raymarine),
         targets: mayara::TargetMode::None,
         navigation_address: None,
         nmea0183: false,

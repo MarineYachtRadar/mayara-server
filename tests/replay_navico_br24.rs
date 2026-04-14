@@ -1,4 +1,4 @@
-//! Integration test: replay Navico 4G pcap fixture.
+//! Integration test: replay Navico br24 pcap fixture.
 //!
 //! Verifies that replaying the fixture through the full pipeline
 //! detects the radar with the correct brand.
@@ -15,7 +15,7 @@ fn test_args() -> Cli {
         tls_cert: None,
         tls_key: None,
         interface: None,
-        brand: None,
+        brand: Some(mayara::Brand::Navico),
         targets: mayara::TargetMode::None,
         navigation_address: None,
         nmea0183: false,
@@ -37,11 +37,11 @@ fn test_args() -> Cli {
 }
 
 #[tokio::test]
-async fn replay_navico_4g() {
+async fn replay_navico_br24() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("testdata")
         .join("pcap")
-        .join("navico-4g.pcap.gz");
+        .join("navico-br24.pcap.gz");
     if !fixture.exists() {
         panic!(
             "Fixture not found: {}. Run: cargo test --lib generate_fixtures -- --ignored",
@@ -49,6 +49,7 @@ async fn replay_navico_4g() {
         );
     }
 
+    let _ = env_logger::builder().is_test(true).try_init();
     replay::init(&fixture).expect("init replay");
     replay::set_instant_timing();
     let args = test_args();

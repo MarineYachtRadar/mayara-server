@@ -1146,12 +1146,8 @@ impl FurunoReportReceiver {
             // The radar always transmits `sweep_len` total samples per spoke,
             // but only the first `metadata.scale` of them cover the configured
             // display range (0..range_meters). Samples beyond `scale` are
-            // oversampled data outside the display range. Verified against
-            // radar.dll disassembly and ARM MFD firmware (imoecho.c).
+            // oversampled data outside the display range.
             //
-            // Stretch the first `scale` samples to fill SPOKE_LEN so
-            // that sample i in the output represents physical distance
-            // `i / SPOKE_LEN * range_meters`.
             let send_spoke: Vec<u8> = Self::stretch_spoke(
                 &generic_spoke,
                 metadata.scale as usize,

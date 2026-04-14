@@ -108,6 +108,17 @@ pub(crate) struct Persistence {
 
 impl Persistence {
     pub fn new() -> Self {
+        if crate::replay::is_active() {
+            debug!("persistence disabled in pcap replay mode");
+            return Persistence {
+                config: Config {
+                    radars: HashMap::new(),
+                },
+                timestamp: SystemTime::UNIX_EPOCH,
+                path: PathBuf::new(),
+            };
+        }
+
         let project_dirs = get_project_dirs();
         let mut settings_path = project_dirs.config_dir().to_owned();
         fs::create_dir_all(&settings_path).expect("Cannot create settings directory");
@@ -206,6 +217,9 @@ impl Persistence {
     }
 
     pub fn store(&mut self, radar_info: &RadarInfo) {
+        if self.path.as_os_str().is_empty() {
+            return; // Pcap replay mode — no persistence
+        }
         let mut modified = false;
 
         let radar = self

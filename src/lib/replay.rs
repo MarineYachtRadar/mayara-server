@@ -181,7 +181,15 @@ pub async fn run(realistic_timing: bool, repeat: bool) {
         repeat,
     );
 
+    let mut first_pass = true;
     loop {
+        let listeners_before: usize = state
+            .channels
+            .lock()
+            .unwrap()
+            .values()
+            .map(|v| v.len())
+            .sum();
         let mut prev_ts = Duration::ZERO;
         let mut sent = 0u64;
         let mut unrouted = 0u64;
@@ -213,6 +221,53 @@ pub async fn run(realistic_timing: bool, repeat: bool) {
             sent,
             unrouted
         );
+
+        // After the first pass, wait for new listeners that may have
+        // been registered by report receivers created during discovery,
+        // then re-send so they get state reports (0xC403, 0xC409, etc.).
+        if first_pass {
+            first_pass = false;
+            let wait_deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+            loop {
+                let listeners_now: usize = state
+                    .channels
+                    .lock()
+                    .unwrap()
+                    .values()
+                    .map(|v| v.len())
+                    .sum();
+                if listeners_now > listeners_before {
+                    // Give a short grace period for remaining listeners
+                    sleep(Duration::from_millis(50)).await;
+                    let listeners_final: usize = state
+                        .channels
+                        .lock()
+                        .unwrap()
+                        .values()
+                        .map(|v| v.len())
+                        .sum();
+                    log::info!(
+                        "Replay: {} new listeners registered (total {}), re-sending",
+                        listeners_final - listeners_before,
+                        listeners_final,
+                    );
+                    break;
+                }
+                if tokio::time::Instant::now() > wait_deadline {
+                    log::debug!(
+                        "Replay: no new listeners after 2s (before={}, now={})",
+                        listeners_before,
+                        listeners_now,
+                    );
+                    break;
+                }
+                sleep(Duration::from_millis(10)).await;
+            }
+            let listeners_now = state.channels.lock().unwrap().len();
+            if listeners_now > listeners_before {
+                continue;
+            }
+        }
 
         if !repeat {
             break;

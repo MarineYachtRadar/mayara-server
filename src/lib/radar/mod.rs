@@ -38,7 +38,7 @@ use crate::radar::target::{BlobDetector, BlobMessage, SpokeContext, TrackerComma
 use crate::radar::trail::TrailBuffer;
 use crate::stream::SignalKDelta;
 use crate::{Brand, Cli, TargetMode};
-use range::{RangeDetection, Ranges};
+use range::Ranges;
 
 pub const NAUTICAL_MILE: i32 = 1852; // 1 nautical mile in meters
 pub const NAUTICAL_MILE_F64: f64 = 1852.; // 1 nautical mile in meters
@@ -306,7 +306,6 @@ pub struct RadarInfo {
     legend: Legend,                      // What pixel values mean
     pub controls: SharedControls,        // Which controls there are, not complete in beginning
     pub ranges: Ranges,                  // Ranges for this radar, empty in beginning
-    pub(crate) range_detection: Option<RangeDetection>, // if Some, then ranges are flexible, detected and persisted
     pub doppler: bool,      // Does it support Doppler?
     doppler_levels: u8,     // Intensity sub-levels per direction (0, 1, or 4)
     pub dual_range: bool,                               // Is it dual range capable?
@@ -384,7 +383,6 @@ impl RadarInfo {
             legend: legend,
             message_tx,
             ranges: Ranges::empty(),
-            range_detection: None,
             controls,
             doppler,
             doppler_levels,
@@ -1164,7 +1162,6 @@ impl CommonRadar {
             );
         }
         self.info.ranges = ranges;
-        self.info.range_detection = None;
         self.info.controls.set_valid_ranges(&self.info.ranges);
         self.update();
     }

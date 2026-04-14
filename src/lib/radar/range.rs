@@ -142,13 +142,6 @@ impl Range {
         !Self::metric(self.distance)
     }
 
-    fn mark(&mut self) {
-        self.index = 1; // Mark this range as used
-    }
-
-    fn is_marked(&self) -> bool {
-        self.index > 0
-    }
 }
 
 impl PartialOrd for Range {
@@ -262,6 +255,22 @@ impl Ranges {
         }
     }
 
+    /// Build a range list from all known metric and nautical distances
+    /// that fall within [min_m, max_m]. Used when the radar advertises
+    /// its instrumented range directly (e.g. Navico 0xC409 TLV).
+    pub(crate) fn from_range(min_m: i32, max_m: i32) -> Self {
+        let mut distances: Vec<i32> = ALL_POSSIBLE_METRIC_RANGES
+            .all
+            .iter()
+            .chain(ALL_POSSIBLE_NAUTICAL_RANGES.all.iter())
+            .map(|r| r.distance)
+            .filter(|&d| d >= min_m && d <= max_m)
+            .collect();
+        distances.sort();
+        distances.dedup();
+        Self::new_by_distance(&distances)
+    }
+
     pub(crate) fn new_by_distance(distances: &[i32]) -> Self {
         let mut r = Vec::new();
         for (i, &value) in distances.iter().enumerate() {
@@ -291,18 +300,6 @@ impl Ranges {
             }
         }
         true
-    }
-
-    fn mark(&mut self, range: &Range) -> bool {
-        if self.ordered {
-            // If the ranges are ordered, we cannot mark them
-            return false;
-        }
-        if let Some(index) = self.all.iter().position(|r| r.distance == range.distance) {
-            self.all[index].mark();
-            return true;
-        }
-        false
     }
 
     pub(crate) fn get_distance(&self, index: usize) -> i32 {
@@ -336,114 +333,6 @@ impl Display for Ranges {
             first = false;
         }
         Ok(())
-    }
-}
-
-pub enum RangeDetectionResult {
-    NoRange,
-    Complete(Ranges, i32),
-    NextRange(i32),
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct RangeDetection {
-    key: String,
-    saved_range: i32,
-    min_range: i32,
-    max_range: i32,
-    ranges: Ranges,
-    ranges_to_try: Ranges,
-    index_to_try: usize,
-}
-
-impl RangeDetection {
-    pub fn new(key: String, min_range: i32, max_range: i32, metric: bool, nautical: bool) -> Self {
-        let mut ranges_to_try = Vec::new();
-        if metric {
-            ranges_to_try.extend(
-                ALL_POSSIBLE_METRIC_RANGES
-                    .all
-                    .iter()
-                    .filter(|r| r.distance >= min_range && r.distance <= max_range),
-            );
-        }
-        if nautical {
-            ranges_to_try.extend(
-                ALL_POSSIBLE_NAUTICAL_RANGES
-                    .all
-                    .iter()
-                    .filter(|r| r.distance >= min_range && r.distance <= max_range),
-            );
-        }
-
-        log::info!("{key}: Trying all ranges between {min_range} and {max_range}");
-        log::debug!("{key}: Ranges to try: {ranges_to_try:?}");
-        RangeDetection {
-            key,
-            saved_range: 0,
-            min_range,
-            max_range,
-            ranges: Ranges::empty(),
-            ranges_to_try: Ranges::new(ranges_to_try),
-            index_to_try: 0,
-        }
-    }
-
-    ///
-    /// Try the next range in the list of ranges to try.
-    /// Returns false if there are no more ranges to try,
-    ///
-    fn advance_to_next_index(&mut self) -> Option<&Range> {
-        while self.index_to_try < self.ranges_to_try.all.len() {
-            let range = &self.ranges_to_try.all[self.index_to_try];
-            log::debug!(
-                "{}: advance_to_next_index i={} of {}",
-                self.key,
-                self.index_to_try,
-                self.ranges_to_try.all.len(),
-            );
-            self.index_to_try += 1;
-            if range.is_marked() {
-                // This range has already been tried, skip it
-                log::debug!("{}: Skipping already tried range {}", self.key, range);
-                continue;
-            }
-            log::debug!(
-                "{}: advance_to_next_index found range {} m",
-                self.key,
-                range.distance()
-            );
-            return Some(range);
-        }
-        None
-    }
-
-    pub fn found_range(&mut self, range: i32) -> RangeDetectionResult {
-        if range < self.min_range || range > self.max_range {
-            RangeDetectionResult::NoRange
-        } else {
-            if self.saved_range == 0 {
-                self.saved_range = range;
-            }
-            let range = Range::initial(range);
-
-            log::trace!("{}: reported range {} m", self.key, range);
-            if self.ranges.push(range) {
-                log::info!("{}: Found range {}", self.key, range);
-            }
-            // Remove the range from the list of ranges to try
-            self.ranges_to_try.mark(&range);
-
-            log::trace!("{}: ranges to try: {}", self.key, self.ranges_to_try);
-
-            if let Some(range) = self.advance_to_next_index() {
-                return RangeDetectionResult::NextRange(range.distance());
-            } else {
-                self.ranges = Ranges::new(self.ranges.all.clone()); // Sort by distance
-                log::info!("{}: Found supported ranges {}", self.key, self.ranges);
-                return RangeDetectionResult::Complete(self.ranges.clone(), self.saved_range);
-            }
-        }
     }
 }
 

@@ -121,7 +121,7 @@ pub fn update_when_model_known(
         controls.set_user_name(user_name);
     }
 
-    if model == Model::HALO {
+    if model.is_halo() {
         controls.add(new_list(ControlId::Mode, HaloMode::VARIANTS));
         controls.add(new_list(
             ControlId::AccentLight,
@@ -163,7 +163,7 @@ pub fn update_when_model_known(
 
     controls.add(new_list(
         ControlId::ScanSpeed,
-        if model == Model::HALO {
+        if model.is_halo() {
             &["Normal", "Medium", "Medium Plus", "Fast"]
         } else {
             &["Normal", "Medium", "Medium-High"]
@@ -171,7 +171,7 @@ pub fn update_when_model_known(
     ));
     controls.add(new_list(
         ControlId::TargetExpansion,
-        if model == Model::HALO {
+        if model.is_halo() {
             &["Off", "Low", "Medium", "High"]
         } else {
             &["Off", "On"]
@@ -179,19 +179,19 @@ pub fn update_when_model_known(
     ));
     controls.add(new_list(
         ControlId::NoiseRejection,
-        if model == Model::HALO {
+        if model.is_halo() {
             &["Off", "Low", "Medium", "High"]
         } else {
             &["Off", "Low", "High"]
         },
     ));
-    if model == Model::HALO || model == Model::Gen4 {
+    if model.is_halo() || model == Model::Gen4 {
         controls.add(new_list(
             ControlId::TargetSeparation,
             &["Off", "Low", "Medium", "High"],
         ));
     }
-    if model == Model::HALO {
+    if model.is_halo() {
         controls.add(new_list(
             ControlId::Doppler,
             &["Off", "Normal", "Approaching"],
@@ -207,7 +207,7 @@ pub fn update_when_model_known(
 
     controls.add(new_list(
         ControlId::NoiseRejection,
-        if model == Model::HALO {
+        if model.is_halo() {
             &["Off", "Low", "Medium", "High"]
         } else {
             &["Off", "Low", "High"]
@@ -215,4 +215,21 @@ pub fn update_when_model_known(
     ));
 
     log::debug!("update_when_model_known: {:?}", controls);
+}
+
+/// Refine controls based on 0xC409 TLV capabilities. Called after
+/// `update_when_model_known` for HALO models when the capability
+/// advertisement arrives from the radar.
+pub fn update_from_capabilities(
+    controls: &mut SharedControls,
+    caps: &super::capabilities::NavicoCapabilities,
+) {
+    controls.set_valid_values_bitmask(&ControlId::ScanSpeed, caps.scan_speed_mask);
+    controls.set_valid_values_bitmask(&ControlId::TargetExpansion, caps.target_boost_mask);
+    controls.set_valid_values_bitmask(&ControlId::NoiseRejection, caps.noise_reject_mask);
+    controls.set_valid_values_bitmask(&ControlId::TargetSeparation, caps.beam_sharpening_mask);
+    controls.set_valid_values_bitmask(&ControlId::InterferenceRejection, caps.interference_reject_mask);
+    controls.set_valid_values_bitmask(&ControlId::LocalInterferenceRejection, caps.local_interference_mask);
+
+    log::debug!("update_from_capabilities: refined controls from TLV");
 }

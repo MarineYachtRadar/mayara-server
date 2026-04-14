@@ -2,7 +2,6 @@ use anyhow::{Error, bail};
 use bincode::deserialize;
 use num_traits::FromPrimitive;
 use serde::Deserialize;
-use serde_json::{Number, Value};
 use std::cmp::min;
 use std::io;
 use std::mem::transmute;
@@ -12,29 +11,28 @@ use tokio::time::{Instant, sleep, sleep_until};
 use tokio_graceful_shutdown::SubsystemHandle;
 
 use super::Model;
+use super::capabilities::NavicoCapabilities;
 use super::command::Command;
 use super::protocol::{
     STATE_CONFIG, STATE_FEATURES, STATE_INSTALLATION, STATE_MODE, STATE_PROPERTIES, STATE_SETUP,
-    VALID_SPOKE_STATUSES,
+    STATE_SETUP_EXTENDED, VALID_SPOKE_STATUSES,
 };
 use super::{
-    DYNAMIC_ALLOWED_CONTROLS, SPOKES_PER_FRAME, SPOKES_RAW, SPOKE_DATA_LENGTH, SPOKE_PIXEL_LEN,
+    DYNAMIC_ALLOWED_CONTROLS, SPOKE_DATA_LENGTH, SPOKE_PIXEL_LEN, SPOKES_PER_FRAME, SPOKES_RAW,
 };
 
 use crate::Cli;
-use crate::brand::CommandSender;
 use crate::brand::navico::info::{HaloHeadingPacket, HaloNavigationPacket, Information};
 use crate::brand::navico::{HALO_HEADING_INFO_ADDRESS, HaloMode};
 use crate::network;
-use crate::replay::RadarSocket;
-use crate::radar::range::{RangeDetection, RangeDetectionResult};
-use crate::radar::settings::{ControlId, ControlValue};
+use crate::radar::settings::ControlId;
 use crate::radar::spoke::GenericSpoke;
 use crate::radar::target::MS_TO_KN;
 use crate::radar::{
     BYTE_LOOKUP_LENGTH, CommonRadar, DopplerMode, Legend, Power, RadarError, RadarInfo,
     SharedRadars, SpokeBearing,
 };
+use crate::replay::RadarSocket;
 use crate::util::PrintableSpoke;
 use crate::util::{c_string, c_wide_string};
 
@@ -129,9 +127,8 @@ const LOOKUP_DOPPLER_LENGTH: usize = (LookupDoppler::HighApproaching as usize) +
 
 type PixelToBlobType = [[u8; BYTE_LOOKUP_LENGTH]; LOOKUP_DOPPLER_LENGTH];
 
-fn pixel_to_blob(legend: &Legend) -> [[u8; BYTE_LOOKUP_LENGTH]; LOOKUP_DOPPLER_LENGTH] {
-    let mut lookup: [[u8; BYTE_LOOKUP_LENGTH]; LOOKUP_DOPPLER_LENGTH] =
-        [[0; BYTE_LOOKUP_LENGTH]; LOOKUP_DOPPLER_LENGTH];
+fn pixel_to_blob(legend: &Legend) -> PixelToBlobType {
+    let mut lookup: PixelToBlobType = [[0; BYTE_LOOKUP_LENGTH]; LOOKUP_DOPPLER_LENGTH];
     // Cannot use for() in const expr, so use while instead
     let mut j: usize = 0;
     while j < BYTE_LOOKUP_LENGTH {
@@ -173,18 +170,22 @@ fn pixel_to_blob(legend: &Legend) -> [[u8; BYTE_LOOKUP_LENGTH]; LOOKUP_DOPPLER_L
 
 pub struct NavicoReportReceiver {
     common: CommonRadar,
-    transmit_after_range_detection: bool,
     report_buf: Vec<u8>,
     report_socket: Option<RadarSocket>,
     info_buf: Vec<u8>,
     info_socket: Option<RadarSocket>,
     model: Model,
+    capabilities: Option<NavicoCapabilities>,
+    /// True when we've seen 0xC403 with a HALO model byte but haven't
+    /// received 0xC409 yet. Controls/ranges are deferred until capabilities arrive.
+    awaiting_capabilities: bool,
     command_sender: Option<Command>,
     info_sender: Option<Information>,
-    range_timeout: Instant,
     info_send_timeout: Instant,
     report_request_timeout: Instant,
     reported_unknown: [bool; 256],
+    reported_setup_ext_oversize: bool,
+    has_use_mode_from_ext: bool,
 
     // For data (spokes)
     data_buf: Vec<u8>,
@@ -206,15 +207,10 @@ const INFO_BY_OTHERS_TIMEOUT: Duration = Duration::from_secs(10);
 // navigation and speed at 250 ms.
 const INFO_BY_US_INTERVAL: Duration = Duration::from_millis(100);
 
-// When we are detecting ranges, we wait for 2 seconds before we send the next range
-const RANGE_DETECTION_INTERVAL: Duration = Duration::from_secs(2);
-
-// Used when we don't want to wait for something, we use now plus this
-const FAR_FUTURE: Duration = Duration::from_secs(86400 * 365 * 30);
-
 #[derive(Debug)]
 #[repr(packed)]
 struct StateMode {
+    // 0xC401
     _sub_opcode: u8,
     _category: u8,
     status: u8,
@@ -235,6 +231,7 @@ impl StateMode {
 #[derive(Debug)]
 #[repr(packed)]
 struct StateSetup {
+    // 0xC402
     _sub_opcode: u8,
     _category: u8,
     range: [u8; 4],             // 2..6 = range
@@ -270,19 +267,31 @@ impl StateSetup {
 
 #[derive(Debug)]
 #[repr(packed)]
-struct StateConfig {
-    _sub_opcode: u8,
-    _category: u8,
-    model: u8,      // So far: 01 = 4G and new 3G, 08 = 3G, 0E and 0F = BR24, 00 = HALO
-    _u00: [u8; 31], // Lots of unknown
-    hours: [u8; 4], // Hours of operation
-    _u01: [u8; 20], // Lots of unknown
-    firmware_date: [u8; 32], // Wide chars, assumed UTF16
-    firmware_time: [u8; 32], // Wide chars, assumed UTF16
-    _u02: [u8; 7],
+struct StateProperties {
+    // 0xC403 — fixed 129 bytes
+    _sub_opcode: u8,                 //   0  0x03
+    _category: u8,                   //   1  0xC4
+    _u00: [u8; 12],                  //   2..14
+    feature_flags: u8,               //  14  bit0=FeaturesReport, bit1=IsDownMast
+    _u01: u8,                        //  15
+    sw_build: [u8; 2],               //  16..18  u16 LE (SW version 3rd field)
+    _u02: [u8; 12],                  //  18..30
+    scanner_type: [u8; 4],           //  30..34  eScannerType (u32 LE, 0..23)
+    transmit_time: [u8; 4],          //  34..38  u32 LE (operating hours)
+    warmup_time: [u8; 4],            //  38..42  u32 LE
+    max_range: [u8; 4],              //  42..46  u32 LE (max range in decimeters)
+    _u03: [u8; 4],                   //  46..50
+    sw_version_major: [u8; 4],       //  50..54  u32 LE
+    sw_version_minor: [u8; 4],       //  54..58  u32 LE
+    build_date: [u8; 32],            //  58..90  UTF-16LE, 16 chars
+    build_time: [u8; 32],            //  90..122 UTF-16LE, 16 chars
+    radar_protocol_version: [u8; 4], // 122..126 u32 LE
+    scanner_detail_supported: u8,    // 126
+    _u04: u8,                        // 127
+    _flag: u8,                       // 128 (zeroed when scanner_type ≤ 9)
 }
 
-impl StateConfig {
+impl StateProperties {
     fn transmute(bytes: &[u8]) -> Result<Self, anyhow::Error> {
         // This is safe as the struct's bits are always all valid representations,
         // or we convert them using a fail safe function
@@ -293,28 +302,27 @@ impl StateConfig {
     }
 }
 
-// StateFeatures uses fixed offsets for BR24/4G/HALO radars observed in captures.
-// Note: SRX firmware (2023+) uses tPackedDataParser TLV encoding for this opcode,
-// with feature IDs: 2=UseModes, 3=InterferenceReject, 4=NoiseReject, 5=TargetBoost,
-// 6=STCCurve, 7=BeamSharpening, 8=FastScan, 9=SidelobeGainRange,
-// 10=SupportedAntennas, 11=InstrumentedRange, 12=LocalInterferenceReject.
-// The TLV format uses 3-byte headers (type, unknown, length) per block.
-// All captures to date use the fixed 66-byte format below.
 #[derive(Debug)]
 #[repr(packed)]
-struct StateFeatures {
+struct StateConfig {
+    // 0xC404
     _sub_opcode: u8,
     _category: u8,
-    _u00: [u8; 4],              // 2..6
-    bearing_alignment: [u8; 2], // 6..8
-    _u01: [u8; 2],              // 8..10
-    antenna_height: [u8; 4],    // 10..14 = Antenna height in mm (i32 LE)
-    _u02: [u8; 5],              // 14..19
-    accent_light: u8,           // 19 = Accent light
-    _u03: [u8; 46],             // 20..66
+    _u00: [u8; 4],                       // 2..6
+    bearing_alignment: [u8; 2],          // 6..8
+    _u01: [u8; 2],                       // 8..10
+    antenna_height: [u8; 4],             // 10..14 = Antenna height in mm (i32 LE)
+    _u02: [u8; 5],                       // 14..19
+    accent_light: u8,                    // 19 = Accent light
+    antenna_forward: [u8; 2],            // 20..22 = Antenna forward offset in mm (i16 LE)
+    _u03a: u8,                           // 22
+    antenna_starboard: [u8; 2],          // 23..25 = Antenna starboard offset in mm (i16 LE)
+    _u03b: [u8; 9],                      // 25..34
+    blanking: [SectorBlankingReport; 4], // 34..54
+    _u04: [u8; 12],                      // 54..66
 }
 
-impl StateFeatures {
+impl StateConfig {
     fn transmute(bytes: &[u8]) -> Result<Self, anyhow::Error> {
         // This is safe as the struct's bits are always all valid representations,
         // or we convert them using a fail safe function
@@ -333,136 +341,43 @@ struct SectorBlankingReport {
     end_angle: [u8; 2],
 }
 
-#[derive(Debug)]
-#[repr(packed)]
-struct StateProperties68 {
-    _sub_opcode: u8,
-    _category: u8,
-    _u00: [u8; 4],                       // 2..6
-    name: [u8; 6],                       // 6..12
-    _u01: [u8; 10],                      // 12..22
-    antenna_forward: [u8; 4],            // 22..26 ahead offset in mm (i32 LE)
-    antenna_starboard: [u8; 4],          // 26..30 starboard offset in mm (i32 LE)
-    _u02: [u8; 6],                       // 30..36
-    blanking: [SectorBlankingReport; 4], // 36..56
-    _u03: [u8; 12],                      // 56..68
+// 0xC406 StateInstallation is TLV-encoded (not fixed-layout).
+// After the 2-byte opcode prefix, each entry has a 4-byte header:
+//   u16 tag (LE), u16 length (LE), then `length` bytes of data.
+mod installation_tag {
+    pub const NAME: u16 = 0x0000;
+    pub const ANTENNA_GEOMETRY: u16 = 0x0001;
+    pub const SECTOR_BLANKING: u16 = 0x0003;
+    pub const CABLE_CALIBRATION: u16 = 0x0004;
 }
 
-impl StateProperties68 {
-    fn transmute(bytes: &[u8]) -> Result<Self, anyhow::Error> {
-        // This is safe as the struct's bits are always all valid representations,
-        // or we convert them using a fail safe function
-        Ok(unsafe {
-            let report: [u8; 68] = bytes.try_into()?; // Hardwired length on purpose to verify length
-            transmute(report)
-        })
-    }
-}
-#[derive(Debug)]
-#[repr(packed)]
-struct StateProperties74 {
-    _sub_opcode: u8,
-    _category: u8,
-    _u00: [u8; 4],                       // 2..6
-    name: [u8; 6],                       // 6..12
-    _u01: [u8; 10],                      // 12..22
-    antenna_forward: [u8; 4],            // 22..26 ahead offset in mm (i32 LE)
-    antenna_starboard: [u8; 4],          // 26..30 starboard offset in mm (i32 LE)
-    _u02: [u8; 12],                      // 30..42
-    blanking: [SectorBlankingReport; 4], // 42..62
-    _u03: [u8; 12],                      // 62..74
-}
-
-impl StateProperties74 {
-    fn transmute(bytes: &[u8]) -> Result<Self, anyhow::Error> {
-        // This is safe as the struct's bits are always all valid representations,
-        // or we convert them using a fail safe function
-        Ok(unsafe {
-            let report: [u8; 74] = bytes.try_into()?;
-            transmute(report)
-        })
-    }
-}
-
-#[derive(Debug, Copy, Clone)]
-#[repr(packed)]
-struct StateInstallation {
-    _sub_opcode: u8,            // 0  0x08
-    _category: u8,              // 1  0xC4
-    sea_state: u8,              // 2
-    interference_rejection: u8, // 3
-    scan_speed: u8,             // 4
-    sls_auto: u8,               // 5 installation: sidelobe suppression auto
-    _field6: u8,                // 6
-    _field7: u8,                // 7
-    _field8: u8,                // 8
-    side_lobe_suppression: u8,  // 9 installation: sidelobe suppression
-    _field10: u16,              // 10-11
-    noise_rejection: u8,        // 12    noise rejection
-    target_sep: u8,             // 13
-    sea_clutter: u8,            // 14 sea clutter on Halo
-    auto_sea_clutter: i8,       // 15 auto sea clutter on Halo
-    _field13: u8,               // 16
-    _field14: u8,               // 17
-}
-
-#[derive(Debug)]
-#[repr(packed)]
-struct StateInstallation21 {
-    _base: StateInstallation,
-    doppler_state: u8,
-    doppler_speed: [u8; 2], // doppler speed threshold in values 0..1594 (in cm/s).
-}
-
-#[derive(Debug)]
-#[repr(packed)]
-struct StateInstallation32 {
-    _base: StateInstallation,
-    doppler_state: u8,
-    doppler_speed: [u8; 2], // doppler speed threshold in values 0..1594 (in cm/s).
-    w: u8,
-    x: [u8; 10],
-}
-
-impl StateInstallation {
-    fn transmute(bytes: &[u8]) -> Result<Self, anyhow::Error> {
-        // This is safe as the struct's bits are always all valid representations,
-        // or we convert them using a fail safe function
-        Ok(unsafe {
-            let report: [u8; 18] = bytes.try_into()?; // Hardwired length on purpose to verify length
-            transmute(report)
-        })
-    }
-}
-
-impl StateInstallation21 {
-    fn transmute(bytes: &[u8]) -> Result<Self, anyhow::Error> {
-        // This is safe as the struct's bits are always all valid representations,
-        // or we convert them using a fail safe function
-        Ok(unsafe {
-            let report: [u8; 21] = bytes.try_into()?; // Hardwired length on purpose to verify length
-            transmute(report)
-        })
-    }
-}
-
-impl StateInstallation32 {
-    fn transmute(bytes: &[u8]) -> Result<Self, anyhow::Error> {
-        // This is safe as the struct's bits are always all valid representations,
-        // or we convert them using a fail safe function
-        Ok(unsafe {
-            let report: [u8; 32] = bytes.try_into()?; // Hardwired length on purpose to verify length
-            transmute(report)
-        })
-    }
-}
+// 0xC408 StateSetupExtended — variable length, parsed sequentially like the
+// SRX firmware's tDataParser. Offsets after the 2-byte opcode header:
+//
+//   0..16  (16 bytes) control block:
+//          [0] stc_curve  [1] local_interference  [2] scan_speed
+//          [3] sls_auto   [4..6] unknown          [7] sidelobe_value
+//          [8..9] unknown (u16)  [10] noise_reject [11] target_sep
+//          [12] sea_clutter  [13] auto_sea_clutter  [14] anti_clutter_mode
+//          [15] unknown
+//   16..19 (3 bytes) doppler: state(u8) + speed(u16 LE)
+//   19     (1 byte)  unknown
+//   20..22 (2 bytes) tUseMode: mode(u8) + variant(u8)
+const SETUP_EXT_HEADER: usize = 2;
+const SETUP_EXT_CONTROLS: usize = 16;
+const SETUP_EXT_DOPPLER: usize = 3;
+const SETUP_EXT_UNKNOWN: usize = 1;
+const SETUP_EXT_USE_MODE: usize = 2;
+const SETUP_EXT_MIN_LEN: usize = SETUP_EXT_HEADER + SETUP_EXT_CONTROLS;
+const SETUP_EXT_MAX_KNOWN: usize =
+    SETUP_EXT_MIN_LEN + SETUP_EXT_DOPPLER + SETUP_EXT_UNKNOWN + SETUP_EXT_USE_MODE; // 24
+const SETUP_EXT_MAX_SEEN: usize = 32; // Observed in the field, log a warning if we see more than this
 
 impl NavicoReportReceiver {
     pub fn new(
         args: &Cli,
         info: RadarInfo, // Quick access to our own RadarInfo
         radars: SharedRadars,
-        model: Model,
     ) -> NavicoReportReceiver {
         let key = info.key();
 
@@ -475,7 +390,7 @@ impl NavicoReportReceiver {
         // If we are in replay mode, we don't need a command sender, as we will not send any commands
         let command_sender = if !replay {
             log::debug!("{}: Starting command sender", key);
-            Some(Command::new(args.fake_errors, info.clone(), model.clone()))
+            Some(Command::new(args.fake_errors, info.clone()))
         } else {
             log::debug!("{}: No command sender, replay mode", key);
             None
@@ -506,18 +421,20 @@ impl NavicoReportReceiver {
         let now = Instant::now();
         NavicoReportReceiver {
             common,
-            transmit_after_range_detection: false,
             report_buf: Vec::with_capacity(1000),
             report_socket: None,
             info_buf: Vec::with_capacity(::core::mem::size_of::<HaloHeadingPacket>()),
             info_socket: None,
-            model,
+            model: Model::Unknown,
+            capabilities: None,
+            awaiting_capabilities: false,
             command_sender,
             info_sender,
-            range_timeout: now + FAR_FUTURE,
             info_send_timeout: now,
             report_request_timeout: now,
             reported_unknown: [false; 256],
+            reported_setup_ext_oversize: false,
+            has_use_mode_from_ext: false,
             data_buf: Vec::with_capacity(size_of::<RadarFramePkt>()),
             data_socket: None,
             doppler: DopplerMode::None,
@@ -541,8 +458,11 @@ impl NavicoReportReceiver {
     }
 
     fn start_report_socket(&mut self) -> io::Result<()> {
-        match network::create_udp_listen(&self.common.info.report_addr, &self.common.info.nic_addr, network::SocketType::Multicast)
-        {
+        match network::create_udp_listen(
+            &self.common.info.report_addr,
+            &self.common.info.nic_addr,
+            network::SocketType::Multicast,
+        ) {
             Ok(socket) => {
                 self.report_socket = Some(socket);
                 log::debug!(
@@ -570,7 +490,11 @@ impl NavicoReportReceiver {
         if self.info_socket.is_some() {
             return Ok(()); // Already started
         }
-        match network::create_udp_listen(&HALO_HEADING_INFO_ADDRESS, &self.common.info.nic_addr, network::SocketType::Multicast) {
+        match network::create_udp_listen(
+            &HALO_HEADING_INFO_ADDRESS,
+            &self.common.info.nic_addr,
+            network::SocketType::Multicast,
+        ) {
             Ok(socket) => {
                 self.info_socket = Some(socket);
                 log::debug!(
@@ -637,10 +561,7 @@ impl NavicoReportReceiver {
             }
             self.start_data_socket()?;
 
-            let timeout = min(
-                min(self.report_request_timeout, self.range_timeout),
-                self.info_send_timeout,
-            );
+            let timeout = min(self.report_request_timeout, self.info_send_timeout);
 
             tokio::select! {
                 _ = subsys.on_shutdown_requested() => {
@@ -650,9 +571,6 @@ impl NavicoReportReceiver {
 
                 _ = sleep_until(timeout) => {
                     let now = Instant::now();
-                    if self.range_timeout <= now {
-                        self.process_range(0).await?;
-                    }
                     if self.report_request_timeout <= now {
                         self.send_report_requests().await?;
                     }
@@ -749,7 +667,7 @@ impl NavicoReportReceiver {
             if let Some((range, angle, heading)) = self.validate_header(header_slice, scanline) {
                 log::trace!("range {} angle {} heading {:?}", range, angle, heading);
                 log::trace!(
-                    "Received {:04} spoke {}",
+                    "Received  {:04} spoke {}",
                     scanline,
                     PrintableSpoke::new(spoke_slice)
                 );
@@ -790,6 +708,20 @@ impl NavicoReportReceiver {
         generic_spoke
     }
 
+    /// Set the HALO operating mode and update dynamic control permissions.
+    /// Non-custom modes lock certain controls to read-only.
+    fn set_halo_mode(&mut self, mode: i32) {
+        if let Some(hm) = HaloMode::from_i32(mode) {
+            self.common.set_value(&ControlId::Mode, mode as f64);
+            let allowed = hm == HaloMode::Custom;
+            for ct in &DYNAMIC_ALLOWED_CONTROLS {
+                self.common.info.controls.set_allowed(ct, allowed);
+            }
+        } else {
+            log::error!("{}: Unsupported HALO mode {}", self.common.key, mode);
+        }
+    }
+
     async fn send_report_requests(&mut self) -> Result<(), RadarError> {
         if let Some(command_sender) = &mut self.command_sender {
             command_sender.send_report_requests().await?;
@@ -803,90 +735,6 @@ impl NavicoReportReceiver {
             info_sender.send_info_packets().await?;
         }
         self.info_send_timeout += INFO_BY_US_INTERVAL;
-        Ok(())
-    }
-
-    // If range detection is in progress, go to the next range
-    async fn process_range(&mut self, range: i32) -> Result<(), RadarError> {
-        let range = range / 10;
-
-        if self.common.info.ranges.is_empty()
-            && self.common.info.range_detection.is_none()
-            && !self.common.replay
-        {
-            if let Some(status) = self.common.info.controls.get_status() {
-                if status == Power::Transmit {
-                    log::warn!(
-                        "{}: No ranges available, but radar is transmitting, standby during range detection",
-                        self.common.key
-                    );
-                    self.send_status(Power::Standby).await?;
-                    self.transmit_after_range_detection = true;
-                }
-            } else {
-                log::warn!(
-                    "{}: No ranges available and no radar status found, cannot start range detection",
-                    self.common.key
-                );
-                return Ok(());
-            }
-            if let Some(control) = self.common.info.controls.get(&ControlId::Range) {
-                self.common.info.range_detection = Some(RangeDetection::new(
-                    self.common.key.clone(),
-                    50,
-                    control.item().max_value.unwrap() as i32,
-                    true,
-                    true,
-                ));
-            }
-        }
-
-        if let Some(range_detection) = &mut self.common.info.range_detection {
-            match range_detection.found_range(range) {
-                RangeDetectionResult::NoRange => {
-                    return Ok(());
-                }
-                RangeDetectionResult::Complete(ranges, saved_range) => {
-                    self.common.set_ranges(ranges);
-                    self.range_timeout = Instant::now() + FAR_FUTURE;
-
-                    self.send_range(saved_range).await?;
-                    if self.transmit_after_range_detection {
-                        self.transmit_after_range_detection = false;
-                        self.send_status(Power::Transmit).await?;
-                    }
-                }
-                RangeDetectionResult::NextRange(r) => {
-                    self.range_timeout = Instant::now() + RANGE_DETECTION_INTERVAL;
-
-                    self.send_range(r).await?;
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn send_status(&mut self, status: Power) -> Result<(), RadarError> {
-        let status = status as i128;
-        let status = Number::from_i128(status).unwrap();
-        let cv = ControlValue::new(ControlId::Power, Value::Number(status));
-        self.command_sender
-            .as_mut()
-            .unwrap() // Safe, as we only create a range detection when replay is false
-            .set_control(&cv, &self.common.info.controls)
-            .await?;
-        Ok(())
-    }
-
-    async fn send_range(&mut self, range: i32) -> Result<(), RadarError> {
-        let value = Number::from_i128(range as i128).unwrap();
-        let cv: ControlValue = ControlValue::new(ControlId::Range, Value::Number(value));
-        self.command_sender
-            .as_mut()
-            .unwrap() // Safe, as we only create a range detection when replay is false
-            .set_control(&cv, &self.common.info.controls)
-            .await?;
         Ok(())
     }
 
@@ -954,36 +802,34 @@ impl NavicoReportReceiver {
             return Ok(());
         }
         let sub_opcode = data[0];
+        let ready = self.model != Model::Unknown && !self.awaiting_capabilities;
+
         match sub_opcode {
-            STATE_MODE => {
-                return self.process_state_mode().await;
-            }
-            STATE_SETUP => {
-                if self.model != Model::Unknown {
-                    return self.process_state_setup().await;
-                }
-            }
-            STATE_CONFIG => {
-                return self.process_state_config().await;
+            // These two identify the model and set ranges — always process
+            STATE_PROPERTIES => {
+                return self.process_state_properties().await;
             }
             STATE_FEATURES => {
                 return self.process_state_features().await;
             }
-            STATE_PROPERTIES => {
-                if self.model != Model::Unknown {
-                    if data.len() == 68 {
-                        return self.process_state_properties_68().await;
-                    }
-                    return self.process_state_properties_74().await;
-                }
+            // Everything else is gated on model and controls being fully set up
+            STATE_MODE if ready => {
+                return self.process_state_mode().await;
             }
-            STATE_INSTALLATION => {
-                if self.model != Model::Unknown {
-                    return self.process_state_installation().await;
-                }
+            STATE_SETUP if ready => {
+                return self.process_state_setup().await;
+            }
+            STATE_CONFIG if ready => {
+                return self.process_state_config().await;
+            }
+            STATE_INSTALLATION if ready => {
+                return self.process_state_installation().await;
+            }
+            STATE_SETUP_EXTENDED if ready => {
+                return self.process_state_setup_extended().await;
             }
             _ => {
-                if !self.reported_unknown[sub_opcode as usize] {
+                if ready && !self.reported_unknown[sub_opcode as usize] {
                     self.reported_unknown[sub_opcode as usize] = true;
                     log::trace!(
                         "Unknown state sub_opcode 0x{:02X} len {} data {:02X?} dropped",
@@ -1037,23 +883,15 @@ impl NavicoReportReceiver {
         let target_boost = report.target_boost as i32;
 
         self.common.set_value(&ControlId::Range, range as f64);
-        if self.model == Model::HALO {
-            if let Some(halo_mode) = HaloMode::from_i32(mode) {
-                self.common.set_value(&ControlId::Mode, mode as f64);
-                let allowed = halo_mode == HaloMode::Custom;
-                let controls = &self.common.info.controls;
-                for ct in &DYNAMIC_ALLOWED_CONTROLS {
-                    controls.set_allowed(ct, allowed);
-                }
-            } else {
-                log::error!("{}: Unsupported HALO mode {}", self.common.key, mode);
-            }
-
-            // todo!() if mode !=
+        if self.model.is_halo() && !self.has_use_mode_from_ext {
+            // 0xC402 only carries the mode byte without variant, so it can't
+            // distinguish Bird from Bird+. Once 0xC408 provides the full
+            // tUseMode (with variant), we skip mode updates from 0xC402.
+            self.set_halo_mode(mode);
         }
         self.common
             .set_value_auto(&ControlId::Gain, gain as f64, gain_auto);
-        if self.model != Model::HALO {
+        if !self.model.is_halo() {
             self.common
                 .set_value_auto(&ControlId::Sea, sea as f64, sea_auto);
         } else {
@@ -1073,67 +911,150 @@ impl NavicoReportReceiver {
         self.common
             .set_value(&ControlId::TargetBoost, target_boost as f64);
 
-        self.process_range(range).await?;
-
         Ok(())
     }
 
-    async fn process_state_config(&mut self) -> Result<(), Error> {
-        let report = StateConfig::transmute(&self.report_buf)?;
+    async fn process_state_properties(&mut self) -> Result<(), Error> {
+        let report = StateProperties::transmute(&self.report_buf)?;
 
         log::trace!("{}: report {:?}", self.common.key, report);
 
-        let model_raw = report.model;
-        let hours = i32::from_le_bytes(report.hours);
-        let firmware_date = c_wide_string(&report.firmware_date);
-        let firmware_time = c_wide_string(&report.firmware_time);
-        let model = Model::from(model_raw);
-        match model {
-            Model::Unknown => {
-                if !self.reported_unknown[model_raw as usize] {
-                    self.reported_unknown[model_raw as usize] = true;
-                    log::error!(
-                        "{}: Unknown radar model 0x{:02x}",
-                        self.common.key,
-                        model_raw
-                    );
-                }
-            }
-            Model::HaloOrG4 => {
-                // We need to look at the length of report 8, and its content
-                // to distinguish HALO from 4G.
-                if self.model == Model::Unknown {
-                    self.model = Model::HaloOrG4;
-                }
-            }
-            _ => {
-                if self.model != model {
-                    log::debug!("{}: Radar is model {}", self.common.key, model);
-                    let info2 = self.common.info.clone();
-                    self.model = model;
-                    super::settings::update_when_model_known(
-                        &mut self.common.info.controls,
-                        model,
-                        &info2,
-                    );
-                    self.common.info.set_doppler(model == Model::HALO);
+        let scanner_type = u32::from_le_bytes(report.scanner_type);
+        let transmit_time = u32::from_le_bytes(report.transmit_time);
+        let warmup_time = u32::from_le_bytes(report.warmup_time);
+        let max_range_dm = u32::from_le_bytes(report.max_range);
+        let sw_major = u32::from_le_bytes(report.sw_version_major);
+        let sw_minor = u32::from_le_bytes(report.sw_version_minor);
+        let sw_build = u16::from_le_bytes(report.sw_build);
+        let build_date = c_wide_string(&report.build_date);
+        let build_time = c_wide_string(&report.build_time);
+        let protocol_version = u32::from_le_bytes(report.radar_protocol_version);
+        let scanner_detail_supported = report.scanner_detail_supported;
+        let model = Model::from_scanner_type(scanner_type);
 
-                    self.common.update();
+        if model == Model::Unknown {
+            if !self.reported_unknown[scanner_type as usize & 0xFF] {
+                self.reported_unknown[scanner_type as usize & 0xFF] = true;
+                log::error!(
+                    "{}: Unknown scanner type {} in 0xC403",
+                    self.common.key,
+                    scanner_type
+                );
+            }
+        } else if self.model != model {
+            let max_range_m = max_range_dm / 10;
+            log::info!(
+                "{}: Radar is model {} (scanner type {}, firmware {}.{}.{} {} {}, \
+                 protocol v{}, max range {}m, transmit {}h, warmup {}s, features 0x{:02x}, details supported {})",
+                self.common.key,
+                model,
+                scanner_type,
+                sw_major,
+                sw_minor,
+                sw_build,
+                build_date,
+                build_time,
+                protocol_version,
+                max_range_m,
+                transmit_time,
+                warmup_time,
+                report.feature_flags,
+                scanner_detail_supported,
+            );
+            self.model = model;
+            if let Some(cs) = &mut self.command_sender {
+                cs.set_model(model);
+            }
+
+            if model.is_halo() {
+                if let Some(caps) = &self.capabilities {
+                    // 0xC409 arrived before 0xC403; consume cached capabilities now
+                    let caps = caps.clone();
+                    self.finalize_halo(&caps);
+                } else {
+                    // HALO: defer control and range setup until 0xC409 capabilities arrive
+                    self.awaiting_capabilities = true;
                 }
+            } else {
+                // Non-HALO (BR24/3G/4G): finalize controls and ranges immediately
+                let info2 = self.common.info.clone();
+                super::settings::update_when_model_known(
+                    &mut self.common.info.controls,
+                    model,
+                    &info2,
+                );
+                let ranges = crate::radar::range::Ranges::from_range(50, max_range_m as i32);
+                self.common.set_ranges(ranges);
+                self.common.update();
             }
         }
 
-        let firmware = format!("{} {}", firmware_date, firmware_time);
+        let firmware = format!(
+            "{}.{}.{} {} {}",
+            sw_major, sw_minor, sw_build, build_date, build_time
+        );
         self.common
-            .set_value(&ControlId::TransmitTime, hours as f64);
+            .set_value(&ControlId::TransmitTime, transmit_time as f64);
         self.common
             .set_string(&ControlId::FirmwareVersion, firmware);
+        log::trace!(
+            "{}: warmup={}s protocol=v{}",
+            self.common.key,
+            warmup_time,
+            protocol_version,
+        );
 
         Ok(())
     }
 
     async fn process_state_features(&mut self) -> Result<(), Error> {
-        let report = StateFeatures::transmute(&self.report_buf)?;
+        let data = &self.report_buf;
+        if data.len() < 4 {
+            return Ok(());
+        }
+
+        // Skip the 2-byte opcode header (0xC409)
+        let caps = NavicoCapabilities::parse(&data[2..]);
+
+        // If we were waiting for capabilities before finalizing HALO controls, do it now
+        if self.awaiting_capabilities {
+            self.finalize_halo(&caps);
+        }
+
+        self.capabilities = Some(caps);
+        Ok(())
+    }
+
+    /// Finalize HALO controls and ranges from 0xC409 capabilities.
+    /// Called either when 0xC409 arrives after 0xC403, or when 0xC403
+    /// arrives and cached capabilities are already available.
+    fn finalize_halo(&mut self, caps: &NavicoCapabilities) {
+        self.awaiting_capabilities = false;
+
+        let model = self.model;
+        log::info!(
+            "{}: Capabilities received for {} (doppler={})",
+            self.common.key,
+            model,
+            caps.has_doppler(),
+        );
+
+        let info2 = self.common.info.clone();
+        super::settings::update_when_model_known(&mut self.common.info.controls, model, &info2);
+        self.common.info.set_doppler(caps.has_doppler());
+        self.pixel_to_blob = pixel_to_blob(&self.common.info.get_legend());
+        super::settings::update_from_capabilities(&mut self.common.info.controls, caps);
+
+        if caps.instrumented_range_max_dm > 0 {
+            let ranges =
+                crate::radar::range::Ranges::from_range(caps.range_min_m(), caps.range_max_m());
+            self.common.set_ranges(ranges);
+        }
+        self.common.update();
+    }
+
+    async fn process_state_config(&mut self) -> Result<(), Error> {
+        let report = StateConfig::transmute(&self.report_buf)?;
 
         log::trace!("{}: report {:?}", self.common.key, report);
 
@@ -1145,35 +1066,22 @@ impl NavicoReportReceiver {
             &ControlId::AntennaHeight,
             i32::from_le_bytes(report.antenna_height) as f64,
         );
-        if self.model == Model::HALO {
+        if self.model.is_halo() {
             self.common
                 .set_value(&ControlId::AccentLight, report.accent_light as f64);
         }
 
-        Ok(())
-    }
-
-    ///
-    /// Blanking (No Transmit) report as seen on HALO 2006
-    ///
-    async fn process_state_properties_68(&mut self) -> Result<(), Error> {
-        let report = StateProperties68::transmute(&self.report_buf)?;
-
-        log::debug!("{}: report {:?}", self.common.key, report);
-
-        let name = c_string(&report.name);
-        self.common
-            .set_string(&ControlId::ModelName, name.unwrap_or("").to_string());
-
+        // Antenna offsets (i16 LE, mm)
         self.common.set_value(
             &ControlId::AntennaForward,
-            i32::from_le_bytes(report.antenna_forward) as f64,
+            i16::from_le_bytes(report.antenna_forward) as f64,
         );
         self.common.set_value(
             &ControlId::AntennaStarboard,
-            i32::from_le_bytes(report.antenna_starboard) as f64,
+            i16::from_le_bytes(report.antenna_starboard) as f64,
         );
 
+        // Sector blanking: 4× {u8 enabled, i16 start, i16 end} at offset 34
         for (i, sector) in super::BLANKING_SECTORS {
             let blanking = &report.blanking[i];
             let start_angle = i16::from_le_bytes(blanking.start_angle);
@@ -1190,119 +1098,135 @@ impl NavicoReportReceiver {
         Ok(())
     }
 
-    ///
-    /// Blanking (No Transmit) report as seen on HALO 24 (Firmware 2023)
-    ///
-    async fn process_state_properties_74(&mut self) -> Result<(), Error> {
-        let report = StateProperties74::transmute(&self.report_buf)?;
-
-        log::debug!("{}: report {:?}", self.common.key, report);
-
-        let name = c_string(&report.name);
-        // self.common.set_string(&ControlId::ModelName, name.unwrap_or("").to_string());
-        log::debug!(
-            "Radar name '{}' model '{}'",
-            name.unwrap_or("null"),
-            self.model
-        );
-
-        self.common.set_value(
-            &ControlId::AntennaForward,
-            i32::from_le_bytes(report.antenna_forward) as f64,
-        );
-        self.common.set_value(
-            &ControlId::AntennaStarboard,
-            i32::from_le_bytes(report.antenna_starboard) as f64,
-        );
-
-        for (i, sector) in super::BLANKING_SECTORS {
-            let blanking = &report.blanking[i];
-            let start_angle = i16::from_le_bytes(blanking.start_angle);
-            let end_angle = i16::from_le_bytes(blanking.end_angle);
-            let enabled = Some(blanking.enabled > 0);
-            log::debug!(
-                "no_transmit_sector_{}: {}-{} en={:?}",
-                i,
-                start_angle,
-                end_angle,
-                enabled
-            );
-            self.common.info.controls.set_sector(
-                &sector,
-                start_angle as f64,
-                end_angle as f64,
-                enabled,
-            )?;
-        }
-
-        Ok(())
-    }
-
+    /// 0xC406 StateInstallation — TLV-encoded.
+    /// Tags: 0=name, 1=antenna geometry, 3=sector blanking, 4=cable cal, 6=HS craft.
+    /// Antenna offsets and sector blanking are also delivered via 0xC404 StateConfig,
+    /// so we only parse the name and cable calibration here.
     async fn process_state_installation(&mut self) -> Result<(), Error> {
         let data = &self.report_buf;
+        if data.len() < 4 {
+            return Ok(());
+        }
 
-        if data.len() != size_of::<StateInstallation>()
-            && data.len() != size_of::<StateInstallation21>()
-            && data.len() != size_of::<StateInstallation21>() + 1
-            && data.len() != size_of::<StateInstallation32>()
-        {
+        // Skip 2-byte opcode prefix, then walk TLV entries
+        let mut offset = 2usize;
+        while offset + 4 <= data.len() {
+            let tag = u16::from_le_bytes(data[offset..offset + 2].try_into().unwrap());
+            let len = u16::from_le_bytes(data[offset + 2..offset + 4].try_into().unwrap()) as usize;
+            offset += 4;
+
+            if offset + len > data.len() {
+                log::warn!(
+                    "{}: 0xC406 TLV tag {} truncated at offset {}",
+                    self.common.key,
+                    tag,
+                    offset
+                );
+                break;
+            }
+
+            let payload = &data[offset..offset + len];
+            offset += len;
+
+            match tag {
+                installation_tag::NAME => {
+                    if let Some(name) = c_string(payload) {
+                        if !name.is_empty() {
+                            let _ = self
+                                .common
+                                .info
+                                .controls
+                                .set_string(&ControlId::UserName, name.to_string());
+                        }
+                    }
+                }
+                installation_tag::ANTENNA_GEOMETRY if payload.len() >= 14 => {
+                    // Offsets within tag data: 6-7 = forward, 10-11 = starboard (i16 LE, mm)
+                    let forward = i16::from_le_bytes(payload[6..8].try_into().unwrap());
+                    let starboard = i16::from_le_bytes(payload[10..12].try_into().unwrap());
+                    self.common
+                        .set_value(&ControlId::AntennaForward, forward as f64);
+                    self.common
+                        .set_value(&ControlId::AntennaStarboard, starboard as f64);
+                }
+                installation_tag::SECTOR_BLANKING if !payload.is_empty() => {
+                    let count = payload[0] as usize;
+                    let mut pos = 1;
+                    for (i, sector) in super::BLANKING_SECTORS {
+                        if i >= count || pos + 5 > payload.len() {
+                            break;
+                        }
+                        let enabled = Some(payload[pos] > 0);
+                        let start =
+                            i16::from_le_bytes(payload[pos + 1..pos + 3].try_into().unwrap());
+                        let end = i16::from_le_bytes(payload[pos + 3..pos + 5].try_into().unwrap());
+                        let _ = self.common.info.controls.set_sector(
+                            &sector,
+                            start as f64,
+                            end as f64,
+                            enabled,
+                        );
+                        pos += 5;
+                    }
+                }
+                installation_tag::CABLE_CALIBRATION if payload.len() >= 12 => {
+                    let cable_length = i32::from_le_bytes(payload[4..8].try_into().unwrap());
+                    log::trace!("{}: cable length {} mm", self.common.key, cable_length);
+                }
+                _ => {
+                    log::trace!(
+                        "{}: 0xC406 unknown tag {} len {}",
+                        self.common.key,
+                        tag,
+                        len
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn process_state_setup_extended(&mut self) -> Result<(), Error> {
+        let data = &self.report_buf;
+        let len = data.len();
+
+        if len < SETUP_EXT_MIN_LEN {
             bail!(
-                "{}: StateInstallation (0xC408) invalid length {}",
+                "{}: StateSetupExtended (0xC408) too short: {} bytes",
                 self.common.key,
-                data.len()
+                len
+            );
+        }
+        if len > SETUP_EXT_MAX_SEEN && !self.reported_setup_ext_oversize {
+            self.reported_setup_ext_oversize = true;
+            log::warn!(
+                "{}: StateSetupExtended (0xC408) {} bytes, expected at most {}",
+                self.common.key,
+                len,
+                SETUP_EXT_MAX_SEEN
             );
         }
 
-        let model = if data.len() >= size_of::<StateInstallation21>() {
-            Model::HALO
-        } else if self.model == Model::HaloOrG4 {
-            Model::Gen4
-        } else {
-            self.model
-        };
+        // Parse the 16-byte control block at offset 2
+        let ctl = &data[SETUP_EXT_HEADER..];
+        let sea_state = ctl[0];
+        let local_interference_rejection = ctl[1];
+        let scan_speed = ctl[2];
+        let sls_auto = ctl[3];
+        let sidelobe_suppression = ctl[7];
+        let noise_rejection = ctl[10];
+        let target_sep = ctl[11];
+        let sea_clutter = ctl[12];
+        let auto_sea_clutter = ctl[13] as i8;
 
-        if self.model != model {
-            log::debug!("{}: Radar is model {}", self.common.key, model);
-            let info2 = self.common.info.clone();
-            self.model = model;
-            super::settings::update_when_model_known(&mut self.common.info.controls, model, &info2);
-            self.common.info.set_doppler(model == Model::HALO);
+        // Doppler block (3 bytes) at offset 18
+        if len >= SETUP_EXT_MIN_LEN + SETUP_EXT_DOPPLER {
+            let dop = &data[SETUP_EXT_MIN_LEN..];
+            let doppler_state = dop[0];
+            let doppler_speed = u16::from_le_bytes([dop[1], dop[2]]);
 
-            self.common.update();
-        }
-
-        let report = StateInstallation::transmute(&data[0..size_of::<StateInstallation>()])?;
-
-        log::trace!("{}: report {:?}", self.common.key, report);
-
-        let sea_state = report.sea_state as i32;
-        let local_interference_rejection = report.interference_rejection as i32;
-        let scan_speed = report.scan_speed as i32;
-        let sidelobe_suppression_auto = report.sls_auto;
-        let sidelobe_suppression = report.side_lobe_suppression as i32;
-        let noise_reduction = report.noise_rejection as i32;
-        let target_sep = report.target_sep as i32;
-        let sea_clutter = report.sea_clutter as i32;
-        let auto_sea_clutter = report.auto_sea_clutter;
-
-        // There are reports of size 21, but also 22. HALO new firmware sends 22. The last byte content is unknown.
-        if data.len() >= size_of::<StateInstallation32>() {
-            let report = StateInstallation32::transmute(&data[0..size_of::<StateInstallation32>()])?;
-
-            log::debug!("{}: report {:?}", self.common.key, report);
-
-            let doppler_speed = u16::from_le_bytes(report.doppler_speed);
-            let doppler_state = report.doppler_state;
-
-            let doppler_mode: Result<DopplerMode, _> = doppler_state.try_into();
-            match doppler_mode {
-                Err(_) => {
-                    bail!(
-                        "{}: Unknown doppler state {}",
-                        self.common.key,
-                        report.doppler_state
-                    );
-                }
+            match doppler_state.try_into() {
                 Ok(doppler_mode) => {
                     log::debug!(
                         "{}: doppler mode={} speed={}",
@@ -1312,43 +1236,12 @@ impl NavicoReportReceiver {
                     );
                     self.doppler = doppler_mode;
                 }
-            }
-            self.common
-                .set_value(&ControlId::Doppler, doppler_state as f64);
-            self.common
-                .set_value(&ControlId::DopplerSpeedThreshold, doppler_speed as f64);
-
-            log::debug!(
-                "{}: report w={} x={:?}",
-                self.common.key,
-                report.w,
-                report.x,
-            );
-        } else if data.len() >= size_of::<StateInstallation21>() {
-            let report = StateInstallation21::transmute(&data[0..size_of::<StateInstallation21>()])?;
-
-            log::trace!("{}: report {:?}", self.common.key, report);
-
-            let doppler_speed = u16::from_le_bytes(report.doppler_speed);
-            let doppler_state = report.doppler_state;
-
-            let doppler_mode: Result<DopplerMode, _> = doppler_state.try_into();
-            match doppler_mode {
                 Err(_) => {
                     bail!(
                         "{}: Unknown doppler state {}",
                         self.common.key,
-                        report.doppler_state
+                        doppler_state
                     );
-                }
-                Ok(doppler_mode) => {
-                    log::debug!(
-                        "{}: doppler mode={} speed={}",
-                        self.common.key,
-                        doppler_mode,
-                        doppler_speed
-                    );
-                    self.doppler = doppler_mode;
                 }
             }
             self.common
@@ -1357,7 +1250,24 @@ impl NavicoReportReceiver {
                 .set_value(&ControlId::DopplerSpeedThreshold, doppler_speed as f64);
         }
 
-        if self.model == Model::HALO {
+        // tUseMode (2 bytes) at offset 22, after 1 unknown byte.
+        // Bird Plus = bird mode (5) with variant 1; mapped to HaloMode::BirdPlus (6).
+        if len >= SETUP_EXT_MAX_KNOWN && self.model.is_halo() {
+            let um = &data[SETUP_EXT_MAX_KNOWN - SETUP_EXT_USE_MODE..];
+            let mode = um[0];
+            let variant = um[1];
+
+            self.has_use_mode_from_ext = true;
+            // Bird Plus = bird mode (5) with variant 1
+            let halo_mode = if mode == HaloMode::Bird as u8 && variant == 1 {
+                HaloMode::BirdPlus as i32
+            } else {
+                mode as i32
+            };
+            self.set_halo_mode(halo_mode);
+        }
+
+        if self.model.is_halo() {
             self.common
                 .set_value(&ControlId::SeaState, sea_state as f64);
             self.common.set_value_with_many_auto(
@@ -1375,20 +1285,13 @@ impl NavicoReportReceiver {
         self.common.set_value_auto(
             &ControlId::SideLobeSuppression,
             sidelobe_suppression as f64,
-            sidelobe_suppression_auto,
+            sls_auto,
         );
         self.common
-            .set_value(&ControlId::NoiseRejection, noise_reduction as f64);
-        if self.model == Model::HALO || self.model == Model::Gen4 {
+            .set_value(&ControlId::NoiseRejection, noise_rejection as f64);
+        if self.model.is_halo() || self.model == Model::Gen4 {
             self.common
                 .set_value(&ControlId::TargetSeparation, target_sep as f64);
-        } else if target_sep > 0 {
-            log::trace!(
-                "{}: Target separation value {} not supported on model {}",
-                self.common.key,
-                target_sep,
-                self.model
-            );
         }
 
         Ok(())
@@ -1434,7 +1337,10 @@ impl NavicoReportReceiver {
             return None;
         }
         if !VALID_SPOKE_STATUSES.contains(&header.status) {
-            log::warn!("Spoke with unknown or invalid status (0x{:x}) ignored", header.status);
+            log::warn!(
+                "Spoke with unknown or invalid status (0x{:x}) ignored",
+                header.status
+            );
             return None;
         }
 
@@ -1466,7 +1372,10 @@ impl NavicoReportReceiver {
             return None;
         }
         if !VALID_SPOKE_STATUSES.contains(&header.status) {
-            log::warn!("Spoke with unknown or invalid status (0x{:x}) ignored", header.status);
+            log::warn!(
+                "Spoke with unknown or invalid status (0x{:x}) ignored",
+                header.status
+            );
             return None;
         }
 

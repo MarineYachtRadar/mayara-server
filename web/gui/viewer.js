@@ -37,10 +37,10 @@ import { PPI } from "./ppi.js";
 var webSocket;
 var headingSocket;
 var RadarMessage;
-var ppi;  // The PPI display instance
-var renderer;  // The backend renderer (WebGPU or WebGL)
+var ppi; // The PPI display instance
+var renderer; // The backend renderer (WebGPU or WebGL)
 var capabilities;
-var renderMethod = "webgpu";  // "webgpu" or "webgl"
+var renderMethod = "webgpu"; // "webgpu" or "webgl"
 
 // Heading mode: "headingUp" or "northUp"
 var headingMode = "headingUp";
@@ -101,7 +101,7 @@ window.onload = async function () {
   ppi = new PPI(
     renderer,
     document.getElementById("myr_canvas_overlay"),
-    document.getElementById("myr_canvas_background")
+    document.getElementById("myr_canvas_background"),
   );
 
   // Wait for renderer initialization AND protobuf loading before proceeding
@@ -114,9 +114,13 @@ window.onload = async function () {
 
   // Register acquire target mode callback
   registerAcquireTargetModeCallback((enabled) => {
-    console.log(`Viewer: acquire target mode callback called with enabled=${enabled}`);
+    console.log(
+      `Viewer: acquire target mode callback called with enabled=${enabled}`,
+    );
     ppi.setAcquireTargetMode(enabled, async (bearing, distance) => {
-      console.log(`Viewer: Acquiring target at bearing ${bearing.toFixed(1)}°, distance ${distance.toFixed(0)}m`);
+      console.log(
+        `Viewer: Acquiring target at bearing ${bearing.toFixed(1)}°, distance ${distance.toFixed(0)}m`,
+      );
       const result = await acquireTargetAtPosition(bearing, distance);
       if (result) {
         console.log(`Target ${result.targetId} acquired successfully`);
@@ -160,10 +164,10 @@ window.onload = async function () {
   };
 
   // Keyboard shortcuts for display zoom
-  document.addEventListener('keydown', (event) => {
-    if (event.key === 'i' || event.key === 'I') {
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "i" || event.key === "I") {
       ppi.zoomIn();
-    } else if (event.key === 'o' || event.key === 'O') {
+    } else if (event.key === "o" || event.key === "O") {
       ppi.zoomOut();
     }
   });
@@ -204,8 +208,14 @@ function subscribeToHeading() {
             for (const value of update.values) {
               if (value.path === "navigation.headingTrue") {
                 trueHeading = value.value; // Already in radians
-                if (lastLoggedHeading === null || Math.abs(trueHeading - lastLoggedHeading) > 5 * Math.PI / 180) {
-                  console.log(`Heading: ${(trueHeading * 180 / Math.PI).toFixed(1)}\u00B0`);
+                if (
+                  lastLoggedHeading === null ||
+                  Math.abs(trueHeading - lastLoggedHeading) >
+                    (5 * Math.PI) / 180
+                ) {
+                  console.log(
+                    `Heading: ${((trueHeading * 180) / Math.PI).toFixed(1)}\u00B0`,
+                  );
                   lastLoggedHeading = trueHeading;
                 }
                 onHeadingReceived();
@@ -280,7 +290,7 @@ function formatDMS(deg, isLat) {
   const minFloat = (abs - d) * 60;
   const m = Math.floor(minFloat);
   const s = ((minFloat - m) * 60).toFixed(1);
-  const dir = isLat ? (deg >= 0 ? "N" : "S") : (deg >= 0 ? "E" : "W");
+  const dir = isLat ? (deg >= 0 ? "N" : "S") : deg >= 0 ? "E" : "W";
   return `${d}°${m.toString().padStart(2, "0")}'${s.padStart(4, "0")}" ${dir}`;
 }
 
@@ -289,23 +299,27 @@ function formatDDM(deg, isLat) {
   const abs = Math.abs(deg);
   const d = Math.floor(abs);
   const minFloat = (abs - d) * 60;
-  const dir = isLat ? (deg >= 0 ? "N" : "S") : (deg >= 0 ? "E" : "W");
+  const dir = isLat ? (deg >= 0 ? "N" : "S") : deg >= 0 ? "E" : "W";
   return `${d}°${minFloat.toFixed(3)}' ${dir}`;
 }
 
 // Format degrees to decimal degrees (DD)
 function formatDD(deg, isLat) {
-  const dir = isLat ? (deg >= 0 ? "N" : "S") : (deg >= 0 ? "E" : "W");
+  const dir = isLat ? (deg >= 0 ? "N" : "S") : deg >= 0 ? "E" : "W";
   return `${Math.abs(deg).toFixed(5)}° ${dir}`;
 }
 
 // Format coordinate based on current format setting
 function formatCoord(deg, isLat) {
   switch (coordFormat) {
-    case 0: return formatDMS(deg, isLat);
-    case 1: return formatDDM(deg, isLat);
-    case 2: return formatDD(deg, isLat);
-    default: return formatDMS(deg, isLat);
+    case 0:
+      return formatDMS(deg, isLat);
+    case 1:
+      return formatDDM(deg, isLat);
+    case 2:
+      return formatDD(deg, isLat);
+    default:
+      return formatDMS(deg, isLat);
   }
 }
 
@@ -468,7 +482,7 @@ function updatePowerLozenge(powerState, userName) {
       "myr_power_transmit",
       "myr_power_standby",
       "myr_power_off",
-      "myr_power_disconnected"
+      "myr_power_disconnected",
     );
     if (powerState === "transmit") {
       lozenge.classList.add("myr_power_transmit");
@@ -767,7 +781,7 @@ function radarLoaded(r) {
         ", reason=" +
         e.reason +
         ", wasClean=" +
-        e.wasClean
+        e.wasClean,
     );
     restart(r.id);
   };
@@ -804,11 +818,17 @@ function radarLoaded(r) {
         ppi.render();
         // Update position box with radar position from last spoke
         // Heading is derived from spoke.bearing - spoke.angle (in spokes units)
-        if (lastSpoke && lastSpoke.lat !== undefined && lastSpoke.lon !== undefined) {
+        if (
+          lastSpoke &&
+          lastSpoke.lat !== undefined &&
+          lastSpoke.lon !== undefined
+        ) {
           let heading = null;
           if (lastSpoke.bearing !== undefined) {
             // Convert from spokes to degrees: (bearing - angle) * 360 / spokesPerRevolution
-            heading = (lastSpoke.bearing - lastSpoke.angle) * 360 / spokesPerRevolution;
+            heading =
+              ((lastSpoke.bearing - lastSpoke.angle) * 360) /
+              spokesPerRevolution;
             // Normalize to 0-360
             if (heading < 0) heading += 360;
             if (heading >= 360) heading -= 360;
@@ -1000,9 +1020,7 @@ function setZoneEditMode(controlId, editing, onDragEnd = null) {
 
   if (zoneIndex === null) return;
 
-  const wrappedCallback = onDragEnd
-    ? (index, zone) => onDragEnd(zone)
-    : null;
+  const wrappedCallback = onDragEnd ? (index, zone) => onDragEnd(zone) : null;
 
   ppi.setEditingZone(zoneIndex, wrappedCallback);
 }
@@ -1044,9 +1062,7 @@ function setZoneCreateMode(controlId, creating, onCreated = null) {
 
   if (zoneIndex === null) return;
 
-  const wrappedCallback = onCreated
-    ? (index, zone) => onCreated(zone)
-    : null;
+  const wrappedCallback = onCreated ? (index, zone) => onCreated(zone) : null;
 
   ppi.setCreatingZone(zoneIndex, wrappedCallback, zoneType);
 }
@@ -1100,9 +1116,7 @@ function setRectCreateMode(controlId, creating, onCreated = null) {
 
   if (rectIndex === null) return;
 
-  const wrappedCallback = onCreated
-    ? (index, rect) => onCreated(rect)
-    : null;
+  const wrappedCallback = onCreated ? (index, rect) => onCreated(rect) : null;
 
   ppi.setCreatingRect(rectIndex, wrappedCallback);
 }

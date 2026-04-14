@@ -57,8 +57,7 @@ pub const PIXEL_VALUES: u8 = 252;
 // Network — ports and addresses
 // =============================================================================
 
-/// Base port for all Furuno NavNet services (configurable in firmware, but
-/// always 10000 in shipping products).
+/// Base port for all Furuno NavNet services.
 pub const BASE_PORT: u16 = 10000;
 
 /// UDP beacon discovery port (`BASE_PORT + 10`).
@@ -441,7 +440,6 @@ pub enum CommandId {
 
     /// `0xB8` — IMO/Tile echo format switch (NXT only).
     /// `$SB8,1` = request Tile format, `$SB8,0` = request IMO format.
-    /// From firmware `rmMakeComImoEchoSwitch` at libNAVNETDLL.so.
     ImoEchoSwitch = 0xB8,
 
     /// `0xD2` — STC range.
