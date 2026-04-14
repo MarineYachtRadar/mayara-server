@@ -235,16 +235,15 @@ pub fn create_udp_listen(
 
     let socket: socket2::Socket = new_socket()?;
 
+    // Multicast is detectable from the address. Broadcast is not, because
+    // `Ipv4Addr::is_broadcast` only matches 255.255.255.255, while many
+    // radars (e.g. Furuno) use subnet-directed broadcasts like
+    // 172.31.255.255 that look like unicast to the stdlib. Trust the
+    // caller-supplied SocketType for broadcast vs unicast.
     debug_assert!(
         matches!(socket_type, SocketType::Any)
             || matches!(socket_type, SocketType::Multicast) == addr.ip().is_multicast(),
         "SocketType::Multicast mismatch for address {}",
-        addr,
-    );
-    debug_assert!(
-        matches!(socket_type, SocketType::Any | SocketType::Multicast)
-            || matches!(socket_type, SocketType::Broadcast) == addr.ip().is_broadcast(),
-        "SocketType::Broadcast mismatch for address {}",
         addr,
     );
 
