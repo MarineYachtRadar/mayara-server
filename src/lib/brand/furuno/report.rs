@@ -77,8 +77,8 @@ pub struct FurunoReportReceiver {
     guard_zone_alarm: [bool; 2],
     alarm_active: bool,
     /// Precomputed raw-byte → palette-index lookup table. Built when the model
-    /// and legend are known. DRS4W/DRS use a sqrt curve to spread the
-    /// bottom-heavy echo distribution; other models use a linear mapping.
+    /// and legend are known. DRS4W/DRS use an 18th-root gamma curve to spread
+    /// the bottom-heavy echo distribution; other models use a linear mapping.
     echo_lut: [u8; 256],
 }
 

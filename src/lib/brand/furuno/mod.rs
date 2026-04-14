@@ -121,9 +121,9 @@ impl FurunoLocator {
 
             info.start_forwarding_radar_messages_to_stdout(&subsys);
 
-            if self.args.is_replay() {
-                // Detect model from the original beacon model string, not from
-                // controls which persistence may have overwritten.
+            // In replay mode, detect model from the original beacon string
+            // (not from controls which persistence may have overwritten).
+            let replay_model = if self.args.is_replay() {
                 let model = RadarModel::from_model_name(beacon_model);
                 log::info!(
                     "{}: Radar model {} detected for replay mode (from beacon {:?})",
@@ -135,7 +135,10 @@ impl FurunoLocator {
                     settings::update_when_model_known(&mut info, model, REPLAY_FIRMWARE_VERSION);
                     radars.update(&mut info);
                 }
-            }
+                Some(model)
+            } else {
+                None
+            };
 
             // Register and configure Range B if this is a dual-range model
             let mut info_b = info_b.and_then(|ib| radars.add(ib));
@@ -143,8 +146,7 @@ impl FurunoLocator {
                 ib.send_command_addr.set_port(port);
                 ib.report_addr.set_port(port);
                 ib.start_forwarding_radar_messages_to_stdout(&subsys);
-                if self.args.is_replay() {
-                    let model = RadarModel::from_model_name(beacon_model);
+                if let Some(model) = replay_model {
                     if model != RadarModel::Unknown {
                         settings::update_when_model_known(ib, model, REPLAY_FIRMWARE_VERSION);
                         radars.update(ib);
