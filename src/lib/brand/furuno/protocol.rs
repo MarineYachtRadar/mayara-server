@@ -284,6 +284,12 @@ impl RadarModel {
         }
     }
 
+    /// Whether this is a low-power radar (DRS4W 2.2 kW, DRS) that needs
+    /// an aggressive gamma curve for the echo palette mapping.
+    pub(crate) fn is_low_power(&self) -> bool {
+        matches!(self, RadarModel::DRS4W | RadarModel::DRS)
+    }
+
     /// Whether this model belongs to the DRS-NXT family and supports the
     /// Tile echo format via `ImoEchoSwitch`.
     pub(crate) fn is_nxt(&self) -> bool {

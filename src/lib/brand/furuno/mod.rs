@@ -146,11 +146,9 @@ impl FurunoLocator {
                 ib.send_command_addr.set_port(port);
                 ib.report_addr.set_port(port);
                 ib.start_forwarding_radar_messages_to_stdout(&subsys);
-                if let Some(model) = replay_model {
-                    if model != RadarModel::Unknown {
-                        settings::update_when_model_known(ib, model, REPLAY_FIRMWARE_VERSION);
-                        radars.update(ib);
-                    }
+                if let Some(model) = replay_model.filter(|m| *m != RadarModel::Unknown) {
+                    settings::update_when_model_known(ib, model, REPLAY_FIRMWARE_VERSION);
+                    radars.update(ib);
                 }
             }
 

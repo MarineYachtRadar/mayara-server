@@ -98,7 +98,7 @@ impl FurunoReportReceiver {
             .as_deref()
             .map(RadarModel::from_model_name)
             .unwrap_or(RadarModel::Unknown);
-        let low_power = matches!(model, RadarModel::DRS4W | RadarModel::DRS);
+        let low_power = model.is_low_power();
         let echo_lut = Self::build_echo_lut(info.pixel_colors(), low_power);
 
         let control_update_rx = info.control_update_subscribe();
@@ -929,7 +929,7 @@ impl FurunoReportReceiver {
                 version
             );
             self.model = model;
-            let low_power = matches!(model, RadarModel::DRS4W | RadarModel::DRS);
+            let low_power = model.is_low_power();
             self.echo_lut = Self::build_echo_lut(
                 self.common.info.pixel_colors(),
                 low_power,
