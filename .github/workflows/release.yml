@@ -45,6 +45,43 @@ jobs:
         name: mayara-server-${{ matrix.target }}
         path: mayara-server-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
 
+  build-macos:
+    name: Build macOS Universal
+    runs-on: macos-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v6
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+    - uses: swatinem/rust-cache@v2
+
+    - name: Build ARM64
+      run: cargo build --release --target aarch64-apple-darwin
+
+    - name: Build x86_64
+      run: cargo build --release --target x86_64-apple-darwin
+
+    - name: Create universal binary
+      run: |
+        lipo -create \
+          target/aarch64-apple-darwin/release/mayara-server \
+          target/x86_64-apple-darwin/release/mayara-server \
+          -output mayara-server
+        file mayara-server
+
+    - name: Package
+      run: tar -czvf mayara-server-${{ github.ref_name }}-universal-apple-darwin.tar.gz mayara-server
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v7
+      with:
+        name: mayara-server-macos
+        path: mayara-server-${{ github.ref_name }}-universal-apple-darwin.tar.gz
+
   build-windows:
     name: Build Windows
     runs-on: windows-latest
@@ -68,7 +105,7 @@ jobs:
 
   release:
     name: Create Release
-    needs: [build-linux, build-windows]
+    needs: [build-linux, build-macos, build-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -117,6 +154,7 @@ jobs:
         files: |
           artifacts/mayara-server-x86_64-unknown-linux-musl/*.tar.gz
           artifacts/mayara-server-aarch64-unknown-linux-musl/*.tar.gz
+          artifacts/mayara-server-macos/*.tar.gz
           artifacts/mayara-server-windows/*.zip
 
     - name: Commit changelog
