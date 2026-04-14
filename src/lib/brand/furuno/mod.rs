@@ -131,8 +131,10 @@ impl FurunoLocator {
                     model,
                     beacon_model,
                 );
-                settings::update_when_model_known(&mut info, model, REPLAY_FIRMWARE_VERSION);
-                radars.update(&mut info);
+                if model != RadarModel::Unknown {
+                    settings::update_when_model_known(&mut info, model, REPLAY_FIRMWARE_VERSION);
+                    radars.update(&mut info);
+                }
             }
 
             // Register and configure Range B if this is a dual-range model
@@ -143,8 +145,10 @@ impl FurunoLocator {
                 ib.start_forwarding_radar_messages_to_stdout(&subsys);
                 if self.args.is_replay() {
                     let model = RadarModel::from_model_name(beacon_model);
-                    settings::update_when_model_known(ib, model, REPLAY_FIRMWARE_VERSION);
-                    radars.update(ib);
+                    if model != RadarModel::Unknown {
+                        settings::update_when_model_known(ib, model, REPLAY_FIRMWARE_VERSION);
+                        radars.update(ib);
+                    }
                 }
             }
 
