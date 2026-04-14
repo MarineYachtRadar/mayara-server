@@ -1258,6 +1258,9 @@ async fn ws_signalk_delta(
                             send_message(socket, sk_delta).await?;
                         }
                     },
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        log::warn!("Control channel lagged by {n} messages, resuming");
+                    }
                     Err(e) => {
                         log::error!("Error on Control channel: {e}");
                         break Ok(());

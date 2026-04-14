@@ -215,10 +215,9 @@ impl TrackerManager {
         // Get tracker and process
         let tracker = self.get_or_create_tracker(&msg.radar_key, ctx.spokes_per_revolution);
 
-        // Check for revolution boundary
-        tracker.check_revolution(ctx.angle, ctx.time);
+        // Check for revolution boundary — batch-broadcast all targets once per revolution
+        let revolution_completed = tracker.check_revolution(ctx.angle, ctx.time);
 
-        // Process the candidate and broadcast if needed
         let result = tracker.process_candidate(candidate);
 
         log::debug!(
@@ -230,29 +229,23 @@ impl TrackerManager {
             msg.blob.size_meters,
             result
         );
-        // Broadcast target updates to GUI.
-        // Suppress until the target has been seen 3 times to avoid cluttering the display
-        // with blobs that will be deduplicated or discarded after the first few rotations.
-        match result {
-            ProcessResult::Updated(target_id)
-            | ProcessResult::Promoted(target_id)
-            | ProcessResult::NewAcquiring(target_id) => {
-                if let Some(target) = tracker.get_target(target_id) {
-                    if target.update_count >= 4 {
-                        let target_api = active_target_to_api(target, radar_position.as_ref());
 
-                        let mut delta = SignalKDelta::new();
-                        delta.add_target_update(&msg.radar_key, target_id, Some(target_api));
-
-                        if let Err(e) = self.sk_client_tx.send(delta) {
-                            log::trace!("Failed to broadcast target update: {}", e);
-                        }
-                    }
+        // Only broadcast immediately when a target is first promoted to tracking.
+        // All other updates are batched and sent once per revolution to avoid flooding.
+        if let ProcessResult::Promoted(target_id) = result {
+            if let Some(target) = tracker.get_target(target_id) {
+                let target_api = active_target_to_api(target, radar_position.as_ref());
+                let mut delta = SignalKDelta::new();
+                delta.add_target_update(&msg.radar_key, target_id, Some(target_api));
+                if let Err(e) = self.sk_client_tx.send(delta) {
+                    log::trace!("Failed to broadcast promoted target: {}", e);
                 }
             }
-            ProcessResult::Ignored => {
-                // No broadcast needed - candidate didn't match and wasn't in guard zone
-            }
+        }
+
+        // On revolution boundary, send a single batched delta with all tracking targets
+        if revolution_completed {
+            self.broadcast_all_targets(&msg.radar_key, radar_position.as_ref());
         }
     }
 
@@ -506,6 +499,50 @@ impl TrackerManager {
 
         for (target_id, radar_key) in deletions {
             self.broadcast_deletion(target_id, &radar_key);
+        }
+    }
+
+    /// Broadcast all tracking targets in a single batched delta (once per revolution)
+    fn broadcast_all_targets(&self, radar_key: &str, radar_position: Option<&GeoPosition>) {
+        let targets: Vec<(u64, ArpaTargetApi)> = if self.merge_mode {
+            self.shared_tracker
+                .as_ref()
+                .map(|t| {
+                    t.get_active_targets()
+                        .filter(|t| t.update_count >= 4)
+                        .map(|t| (t.id, active_target_to_api(t, radar_position)))
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            self.per_radar_trackers
+                .get(radar_key)
+                .map(|t| {
+                    t.get_active_targets()
+                        .filter(|t| t.update_count >= 4)
+                        .map(|t| (t.id, active_target_to_api(t, radar_position)))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+
+        if targets.is_empty() {
+            return;
+        }
+
+        log::debug!(
+            "Broadcasting {} targets for radar {radar_key} to {} receivers",
+            targets.len(),
+            self.sk_client_tx.receiver_count()
+        );
+
+        let mut delta = SignalKDelta::new();
+        for (id, api) in targets {
+            delta.add_target_update(radar_key, id, Some(api));
+        }
+
+        if let Err(e) = self.sk_client_tx.send(delta) {
+            log::trace!("Failed to broadcast batched target update: {}", e);
         }
     }
 

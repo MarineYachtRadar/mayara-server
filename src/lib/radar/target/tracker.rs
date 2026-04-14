@@ -368,13 +368,17 @@ impl TargetTracker {
         id
     }
 
-    /// Check for revolution boundary and perform cleanup
-    pub fn check_revolution(&mut self, angle: u16, time: u64) {
+    /// Check for revolution boundary and perform cleanup.
+    /// Returns `true` if a revolution just completed.
+    pub fn check_revolution(&mut self, angle: u16, time: u64) -> bool {
         // Detect revolution boundary (angle wraps from high to low)
-        if angle < self.last_angle && (self.last_angle - angle) > (self.spokes_per_revolution / 2) {
+        let is_boundary = angle < self.last_angle
+            && (self.last_angle - angle) > (self.spokes_per_revolution / 2);
+        if is_boundary {
             self.on_revolution_complete(time);
         }
         self.last_angle = angle;
+        is_boundary
     }
 
     /// Handle revolution complete event

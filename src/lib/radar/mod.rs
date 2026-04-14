@@ -563,6 +563,13 @@ impl Display for RadarInfo {
     }
 }
 
+/// Capacity of the Signal K client broadcast channel. Sized to absorb a
+/// full revolution's worth of target updates plus control value changes
+/// without dropping messages, even when multiple WebSocket clients are
+/// connected. A single lag event is now recoverable (see v2 stream
+/// handler), but larger headroom reduces the chance of visible gaps.
+const SK_CLIENT_CHANNEL_CAPACITY: usize = 128;
+
 #[derive(Clone)]
 pub struct SharedRadars {
     radars: Arc<RwLock<Radars>>,
@@ -570,7 +577,7 @@ pub struct SharedRadars {
 
 impl SharedRadars {
     pub fn new() -> Self {
-        let (sk_client_tx, _) = tokio::sync::broadcast::channel(32);
+        let (sk_client_tx, _) = tokio::sync::broadcast::channel(SK_CLIENT_CHANNEL_CAPACITY);
 
         SharedRadars {
             radars: Arc::new(RwLock::new(Radars {
