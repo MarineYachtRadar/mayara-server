@@ -17,6 +17,8 @@ mod protocol;
 mod report;
 mod settings;
 
+const REPLAY_FIRMWARE_VERSION: &str = "00.00";
+
 use protocol::{
     ANNOUNCE_MAYARA_PACKET, BASE_PORT, BEACON_ADDRESS, BEACON_REPORT_HEADER,
     BEACON_REPORT_LENGTH_MIN, DATA_PORT, FurunoRadarModelReport, FurunoRadarReport,
@@ -129,7 +131,7 @@ impl FurunoLocator {
                     model,
                     beacon_model,
                 );
-                settings::update_when_model_known(&mut info, model, "00.00");
+                settings::update_when_model_known(&mut info, model, REPLAY_FIRMWARE_VERSION);
                 radars.update(&mut info);
             }
 
@@ -141,7 +143,7 @@ impl FurunoLocator {
                 ib.start_forwarding_radar_messages_to_stdout(&subsys);
                 if self.args.is_replay() {
                     let model = RadarModel::from_model_name(beacon_model);
-                    settings::update_when_model_known(ib, model, "00.00");
+                    settings::update_when_model_known(ib, model, REPLAY_FIRMWARE_VERSION);
                     radars.update(ib);
                 }
             }
