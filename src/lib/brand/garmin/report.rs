@@ -1529,6 +1529,7 @@ mod tests {
             history_start: 0,
             doppler_approaching: None,
             doppler_receding: None,
+            doppler_rain: None,
             strong_return: 0,
             medium_return: 0,
             low_return: 0,

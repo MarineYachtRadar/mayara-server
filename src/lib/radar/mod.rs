@@ -124,6 +124,7 @@ enum PixelType {
     Normal,
     DopplerApproaching,
     DopplerReceding,
+    DopplerRain,
     History,
 }
 
@@ -221,6 +222,10 @@ pub struct Legend {
     pub doppler_approaching: Option<(u8, u8)>,
     /// Doppler receding pixel range: `(first_index, count)`.
     pub doppler_receding: Option<(u8, u8)>,
+    /// Doppler rain pixel range: `(first_index, count)`.
+    /// Only populated for radars that classify rain on the wire (Furuno NXT
+    /// Target Analyzer). `None` for all other radars.
+    pub doppler_rain: Option<(u8, u8)>,
     pub history_start: u8,
     pub low_return: u8,
     pub medium_return: u8,
@@ -308,6 +313,7 @@ pub struct RadarInfo {
     pub ranges: Ranges,                  // Ranges for this radar, empty in beginning
     pub doppler: bool,      // Does it support Doppler?
     doppler_levels: u8,     // Intensity sub-levels per direction (0, 1, or 4)
+    has_rain_class: bool,   // Radar classifies rain on the wire (Furuno NXT)
     pub dual_range: bool,                               // Is it dual range capable?
     pub sparse_spokes: bool, // Does it produce fewer spokes than spokes_per_revolution?
     pub stationary: bool,    // Is radar stationary (shore-based)?
@@ -349,7 +355,8 @@ impl RadarInfo {
             )
         };
         let doppler_levels = if doppler { 1 } else { 0 };
-        let legend = default_legend(&targets, doppler_levels, pixel_values);
+        let has_rain_class = false;
+        let legend = default_legend(&targets, doppler_levels, has_rain_class, pixel_values);
 
         let mut key = brand.to_prefix().to_string();
         if let Some(serial_no) = serial_no {
@@ -386,6 +393,7 @@ impl RadarInfo {
             controls,
             doppler,
             doppler_levels,
+            has_rain_class,
             dual_range: false,
             sparse_spokes,
             stationary: args.stationary,
@@ -428,8 +436,12 @@ impl RadarInfo {
         if doppler != self.doppler {
             self.doppler = doppler;
             self.doppler_levels = if doppler { 1 } else { 0 };
-            self.legend =
-                default_legend(&self.targets, self.doppler_levels, self.pixel_values);
+            self.legend = default_legend(
+                &self.targets,
+                self.doppler_levels,
+                self.has_rain_class,
+                self.pixel_values,
+            );
             log::debug!("Doppler changed to {}", doppler);
         }
     }
@@ -439,8 +451,12 @@ impl RadarInfo {
     pub fn set_doppler_levels(&mut self, levels: u8) {
         self.doppler = levels > 0;
         self.doppler_levels = levels;
-        self.legend =
-            default_legend(&self.targets, self.doppler_levels, self.pixel_values);
+        self.legend = default_legend(
+            &self.targets,
+            self.doppler_levels,
+            self.has_rain_class,
+            self.pixel_values,
+        );
         log::debug!(
             "Doppler levels changed to {} (doppler={})",
             levels,
@@ -448,10 +464,30 @@ impl RadarInfo {
         );
     }
 
+    /// Enable the rain Doppler class on this radar. Used by Furuno NXT where
+    /// the wire format encodes a third Doppler band (rain) in addition to
+    /// stationary and approaching.
+    pub(crate) fn set_has_rain_class(&mut self, has_rain_class: bool) {
+        if has_rain_class != self.has_rain_class {
+            self.has_rain_class = has_rain_class;
+            self.legend = default_legend(
+                &self.targets,
+                self.doppler_levels,
+                self.has_rain_class,
+                self.pixel_values,
+            );
+            log::debug!("Rain class changed to {}", has_rain_class);
+        }
+    }
+
     pub fn set_pixel_values(&mut self, pixel_values: u8) {
         if pixel_values != self.pixel_values {
-            self.legend =
-                default_legend(&self.targets, self.doppler_levels, pixel_values);
+            self.legend = default_legend(
+                &self.targets,
+                self.doppler_levels,
+                self.has_rain_class,
+                pixel_values,
+            );
             log::debug!("Pixel_values changed to {}", pixel_values);
         }
         self.pixel_values = pixel_values;
@@ -872,20 +908,31 @@ const OPAQUE: u8 = 255;
 /// - `0` — no Doppler (HD, plain xHD)
 /// - `1` — single flat Doppler color per direction (Navico HALO)
 /// - `4` — 4-level brightness gradient per direction (Garmin Fantom)
-fn default_legend(targets: &TargetMode, doppler_levels: u8, pixel_values: u8) -> Legend {
+fn default_legend(
+    targets: &TargetMode,
+    doppler_levels: u8,
+    has_rain_class: bool,
+    pixel_values: u8,
+) -> Legend {
     let mut legend = Legend {
         pixels: Vec::new(),
         pixel_colors: 0,
         history_start: 0,
         doppler_approaching: None,
         doppler_receding: None,
+        doppler_rain: None,
         strong_return: 0,
         medium_return: 0,
         low_return: 0,
         static_background: None,
     };
 
-    let doppler_total = doppler_levels * 2; // approaching + receding
+    let rain_levels: u8 = if has_rain_class && doppler_levels > 0 {
+        doppler_levels
+    } else {
+        0
+    };
+    let doppler_total = doppler_levels * 2 + rain_levels;
 
     // Calculate extra colors needed for special purposes
     let arpa_extra_colors: u8 = if *targets == TargetMode::Arpa {
@@ -1002,6 +1049,27 @@ fn default_legend(targets: &TargetMode, doppler_levels: u8, pixel_values: u8) ->
             });
         }
         legend.doppler_receding = Some((receding_start, doppler_levels));
+
+        if rain_levels > 0 {
+            let rain_start = legend.pixels.len() as u8;
+            for i in 0..rain_levels {
+                let brightness = if rain_levels == 1 {
+                    255
+                } else {
+                    64 + (i as u16 * 191 / (rain_levels as u16 - 1)) as u8
+                };
+                legend.pixels.push(Lookup {
+                    r#type: PixelType::DopplerRain,
+                    color: Color {
+                        r: 0,
+                        g: 0,
+                        b: brightness,
+                        a: OPAQUE,
+                    }, // Blue at varying brightness
+                });
+            }
+            legend.doppler_rain = Some((rain_start, rain_levels));
+        }
     }
 
     if *targets != TargetMode::None {
@@ -1038,7 +1106,7 @@ mod tests {
     #[test]
     fn legend() {
         let targets = crate::TargetMode::Arpa;
-        let legend = default_legend(&targets, 1, 16);
+        let legend = default_legend(&targets, 1, false, 16);
         let json = serde_json::to_string_pretty(&legend).unwrap();
         println!("{}", json);
     }
