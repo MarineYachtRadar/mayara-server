@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add end-user guide, brand setup pages, and restructure documentation (#113) ([PR #113](https://github.com/MarineYachtRadar/mayara-server/pull/113))
 - reduce pub visibility to pub(crate) and fix warnings (#123) ([PR #123](https://github.com/MarineYachtRadar/mayara-server/pull/123))
 - rename PixelToBlob to WireToLegend (#125) ([PR #125](https://github.com/MarineYachtRadar/mayara-server/pull/125))
+- **furuno:** clarify DRS4W network setup and model identification (#129) ([PR #129](https://github.com/MarineYachtRadar/mayara-server/pull/129))
 
 ### Fixed
 
