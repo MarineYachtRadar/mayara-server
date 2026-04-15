@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **furuno:** handle 0xAF as ARPA alarm, not heartbeat (#101) ([PR #101](https://github.com/MarineYachtRadar/mayara-server/pull/101))
 - **furuno:** sqrt echo curve for DRS4W low-power radars (#111) ([PR #111](https://github.com/MarineYachtRadar/mayara-server/pull/111))
 - **network:** remove overly strict broadcast address assertion (#118) ([PR #118](https://github.com/MarineYachtRadar/mayara-server/pull/118))
+- **arpa:** stop flooding broadcast channel with per-blob target updates (#120) ([PR #120](https://github.com/MarineYachtRadar/mayara-server/pull/120))
 
 ## [3.4.2] - 2026-04-10
 
