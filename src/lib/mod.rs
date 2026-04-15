@@ -395,6 +395,33 @@ pub async fn start_session(
     // Initialize navigation broadcast sender so navdata can push updates to GUI clients
     navdata::init_nav_broadcast(radars.get_sk_client_tx());
 
+    // Seed navigation data from --static-position (for shore-based installations
+    // without a connected Signal K/NMEA navigation source). Mirrors the emulator
+    // pattern: set atomics once, then periodically re-broadcast so late-joining
+    // GUI clients receive the current heading/position.
+    if let Some(static_pos) = args.get_static_position() {
+        navdata::set_position(Some(static_pos.lat), Some(static_pos.lon));
+        navdata::set_heading_true(Some(static_pos.heading.to_radians()), "static");
+        navdata::set_sog(Some(0.0));
+        navdata::set_cog(Some(static_pos.heading.to_radians()));
+
+        subsystem.start(SubsystemBuilder::new(
+            "Static Navigation",
+            |subsys| async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+                loop {
+                    tokio::select! { biased;
+                        _ = subsys.on_shutdown_requested() => break,
+                        _ = interval.tick() => {
+                            navdata::broadcast_heading("static");
+                        }
+                    }
+                }
+                Ok::<(), miette::Report>(())
+            },
+        ));
+    }
+
     // Initialize AIS vessel store if pass_ais is enabled
     if args.pass_ais {
         navdata::init_ais_store(radars.get_sk_client_tx());
