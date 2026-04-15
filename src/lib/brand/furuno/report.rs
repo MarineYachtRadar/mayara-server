@@ -86,10 +86,12 @@ pub(crate) struct FurunoReportReceiver {
     prev_angle: [u16; 2],
     guard_zone_alarm: [bool; 2],
     alarm_active: bool,
-    /// Precomputed raw-byte → palette-index lookup table. Built when the model
-    /// and legend are known. DRS4W/DRS use an 18th-root gamma curve to spread
-    /// the bottom-heavy echo distribution; other models use a linear mapping.
-    wire_to_legend: [u8; 256],
+    /// Precomputed raw-byte → legend-index lookup tables, one per range
+    /// (index 0 = Range A, 1 = Range B). Range A and B can have independent
+    /// Target Analyzer state in dual-range mode, so each needs its own LUT.
+    /// DRS4W/DRS use an 18th-root gamma curve to spread the bottom-heavy
+    /// echo distribution; other models use a linear mapping.
+    wire_to_legend: [[u8; 256]; 2],
 }
 
 impl FurunoReportReceiver {
@@ -109,8 +111,9 @@ impl FurunoReportReceiver {
             .map(RadarModel::from_model_name)
             .unwrap_or(RadarModel::Unknown);
         let low_power = model.is_low_power();
-        let wire_to_legend =
+        let initial_lut =
             Self::wire_to_legend(&info.get_legend(), DopplerWireMode::Off, low_power);
+        let wire_to_legend = [initial_lut, initial_lut];
 
         let control_update_rx = info.control_update_subscribe();
         let blob_tx = radars.get_blob_tx();
@@ -417,10 +420,11 @@ impl FurunoReportReceiver {
                 // $N69,{status},{drid},{wman},{w_send},{w_stop},0
                 numbers.get(1).copied().unwrap_or(0.0)
             }
-            CommandId::Gain | CommandId::Range | CommandId::Tune => {
+            CommandId::Gain | CommandId::Range | CommandId::Tune | CommandId::TargetAnalyzer => {
                 // $N63,{auto},{val},{drid},{auto_val},0
                 // $N62,{wire_idx},{unit},{drid}
                 // $N75,{auto},{value},{drid}
+                // $NEF,{enabled},{mode},{screen}
                 numbers.get(2).copied().unwrap_or(0.0)
             }
             CommandId::Sea | CommandId::Rain => {
@@ -779,19 +783,33 @@ impl FurunoReportReceiver {
                     2.0 // Rain
                 };
 
-                let old_mode = self.doppler_wire_mode();
-                self.common.set_value(&ControlId::Doppler, value);
-                let new_mode = self.doppler_wire_mode();
+                let drid = self.extract_drid(&command_id, &numbers);
+                let range_idx = if drid == 1 && self.common_b.is_some() {
+                    1
+                } else {
+                    0
+                };
+                let old_mode = self.doppler_wire_mode_for(range_idx);
+                self.common_for_range(drid)
+                    .set_value(&ControlId::Doppler, value);
+                let new_mode = self.doppler_wire_mode_for(range_idx);
                 if old_mode != new_mode {
                     let low_power = self.model.is_low_power();
-                    self.wire_to_legend = Self::wire_to_legend(
-                        &self.common.info.get_legend(),
-                        new_mode,
-                        low_power,
-                    );
+                    let legend = if range_idx == 1 {
+                        self.common_b.as_ref().unwrap().info.get_legend()
+                    } else {
+                        self.common.info.get_legend()
+                    };
+                    self.wire_to_legend[range_idx] =
+                        Self::wire_to_legend(&legend, new_mode, low_power);
+                    let key = if range_idx == 1 {
+                        &self.common_b.as_ref().unwrap().key
+                    } else {
+                        &self.common.key
+                    };
                     log::debug!(
                         "{}: Doppler wire mode changed to {:?}",
-                        self.common.key,
+                        key,
                         new_mode
                     );
                 }
@@ -956,11 +974,18 @@ impl FurunoReportReceiver {
             );
             self.model = model;
             let low_power = model.is_low_power();
-            self.wire_to_legend = Self::wire_to_legend(
+            self.wire_to_legend[0] = Self::wire_to_legend(
                 &self.common.info.get_legend(),
-                self.doppler_wire_mode(),
+                self.doppler_wire_mode_for(0),
                 low_power,
             );
+            if let Some(ref cb) = self.common_b {
+                self.wire_to_legend[1] = Self::wire_to_legend(
+                    &cb.info.get_legend(),
+                    self.doppler_wire_mode_for(1),
+                    low_power,
+                );
+            }
             if low_power {
                 log::info!("{}: using gamma echo curve for low-power radar", self.common.key);
             }
@@ -1181,7 +1206,7 @@ impl FurunoReportReceiver {
                 SPOKE_LEN,
             );
 
-            let wire_to_legend = &self.wire_to_legend;
+            let wire_to_legend = &self.wire_to_legend[range_idx];
             if is_range_b {
                 Self::add_spoke_to_common(
                     self.common_b.as_mut().unwrap(),
@@ -1324,7 +1349,7 @@ impl FurunoReportReceiver {
                 scale: TILE_SCALE,
             };
 
-            let wire_to_legend = &self.wire_to_legend;
+            let wire_to_legend = &self.wire_to_legend[range_idx];
             if is_range_b {
                 Self::add_spoke_to_common(
                     self.common_b.as_mut().unwrap(),
@@ -1596,11 +1621,16 @@ impl FurunoReportReceiver {
         lut
     }
 
-    /// Derive the wire-decoding mode from the current Doppler control value.
-    /// `0` (Off) → `Off`; any non-zero value (Target, Rain) → `On`.
-    fn doppler_wire_mode(&self) -> DopplerWireMode {
-        let v = self
-            .common
+    /// Derive the wire-decoding mode from the current Doppler control value
+    /// for the given range (0 = A, 1 = B). `0` (Off) → `Off`; any non-zero
+    /// value (Target, Rain) → `On`.
+    fn doppler_wire_mode_for(&self, range_idx: usize) -> DopplerWireMode {
+        let common = if range_idx == 1 {
+            self.common_b.as_ref().unwrap_or(&self.common)
+        } else {
+            &self.common
+        };
+        let v = common
             .info
             .controls
             .get(&ControlId::Doppler)
@@ -1826,9 +1856,9 @@ mod tests {
             pixels: Vec::new(),
             pixel_colors: 120,
             history_start: 0,
-            doppler_approaching: Some((121, 1)),
-            doppler_receding: Some((122, 1)),
-            doppler_rain: Some((123, 1)),
+            doppler_approaching: Some((120, 1)),
+            doppler_receding: Some((121, 1)),
+            doppler_rain: Some((122, 1)),
             strong_return: 0,
             medium_return: 0,
             low_return: 0,
