@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **furuno:** add FAR radar setup guide (#85) ([PR #85](https://github.com/MarineYachtRadar/mayara-server/pull/85))
 - **contributing:** add workflow guide, CodeRabbit config, scoped changelog (#95) ([PR #95](https://github.com/MarineYachtRadar/mayara-server/pull/95))
 - add end-user guide, brand setup pages, and restructure documentation (#113) ([PR #113](https://github.com/MarineYachtRadar/mayara-server/pull/113))
+- reduce pub visibility to pub(crate) and fix warnings (#123) ([PR #123](https://github.com/MarineYachtRadar/mayara-server/pull/123))
 
 ### Fixed
 
