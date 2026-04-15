@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use std::mem::size_of;
 
-use crate::brand::raymarine::report::pixel_to_blob;
+use crate::brand::raymarine::report::wire_to_legend;
 use crate::brand::raymarine::{RaymarineModel, hd_to_pixel_values, settings};
 use crate::radar::Power;
 use crate::radar::range::{Range, Ranges};
@@ -623,7 +623,7 @@ pub(super) fn process_info_report(receiver: &mut RaymarineReportReceiver, data: 
         .set_pixel_values(hd_to_pixel_values(model.hd));
 
     receiver.common.info.set_doppler(model.doppler);
-    receiver.pixel_to_blob = pixel_to_blob(&receiver.common.info.get_legend());
+    receiver.wire_to_legend = wire_to_legend(&receiver.common.info.get_legend());
     receiver.common.update();
     receiver.model = Some(model);
     receiver.state = ReceiverState::InfoRequestReceived;

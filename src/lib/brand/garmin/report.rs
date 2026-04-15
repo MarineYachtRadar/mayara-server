@@ -20,11 +20,11 @@ use crate::radar::{
 };
 use crate::util::c_string;
 
-/// Lookup table for converting raw pixel values to blob values
-/// For xHD, we divide by 2 to make room for legend values (like Raymarine)
-type PixelToBlobType = [u8; BYTE_LOOKUP_LENGTH];
+/// Lookup table for converting raw wire pixel values to legend indices.
+/// For xHD, values are halved to make room for special legend entries.
+type WireToLegendTable = [u8; BYTE_LOOKUP_LENGTH];
 
-fn pixel_to_blob(legend: &Legend, is_xhd: bool, doppler: bool) -> PixelToBlobType {
+fn wire_to_legend(legend: &Legend, is_xhd: bool, doppler: bool) -> WireToLegendTable {
     let mut lookup = [0u8; BYTE_LOOKUP_LENGTH];
 
     if is_xhd {
@@ -88,7 +88,7 @@ struct RangeState {
     doppler: DopplerMode,
     gain_level: u32,
     gain_auto: bool,
-    pixel_to_blob: PixelToBlobType,
+    wire_to_legend: WireToLegendTable,
 }
 
 pub(crate) struct GarminReportReceiver {
@@ -151,7 +151,7 @@ impl NoTxZone {
 }
 
 impl GarminReportReceiver {
-    pub fn new(args: &Cli, info: RadarInfo, radars: SharedRadars) -> GarminReportReceiver {
+    pub(crate) fn new(args: &Cli, info: RadarInfo, radars: SharedRadars) -> GarminReportReceiver {
         let key = info.key();
 
         let replay = args.is_replay();
@@ -173,8 +173,8 @@ impl GarminReportReceiver {
         let control_update_rx = info.control_update_subscribe();
         let blob_tx = radars.get_blob_tx();
 
-        let pixel_to_blob =
-            pixel_to_blob(&info.get_legend(), radar_type == GarminRadarType::XHD, false);
+        let wire_to_legend =
+            wire_to_legend(&info.get_legend(), radar_type == GarminRadarType::XHD, false);
 
         let common = CommonRadar::new(
             args,
@@ -205,7 +205,7 @@ impl GarminReportReceiver {
                 doppler: DopplerMode::None,
                 gain_level: 0,
                 gain_auto: false,
-                pixel_to_blob,
+                wire_to_legend,
             },
             range_b: None,
             capabilities,
@@ -218,13 +218,13 @@ impl GarminReportReceiver {
 
     /// Attach a Range B receiver for dual-range mode. Called by the
     /// locator after constructing the second RadarInfo.
-    pub fn set_range_b(&mut self, args: &Cli, info: RadarInfo, radars: SharedRadars) {
+    pub(crate) fn set_range_b(&mut self, args: &Cli, info: RadarInfo, radars: SharedRadars) {
         let key = info.key();
         let replay = args.is_replay();
         let control_update_rx = info.control_update_subscribe();
         let blob_tx = radars.get_blob_tx();
-        let pixel_to_blob =
-            pixel_to_blob(&info.get_legend(), self.radar_type == GarminRadarType::XHD, false);
+        let wire_to_legend =
+            wire_to_legend(&info.get_legend(), self.radar_type == GarminRadarType::XHD, false);
         let command_sender_b = Some(Command::new_range_b(self.radar_type, info.send_command_addr));
 
         self.common_b = Some(CommonRadar::new(
@@ -242,7 +242,7 @@ impl GarminReportReceiver {
             doppler: DopplerMode::None,
             gain_level: 0,
             gain_auto: false,
-            pixel_to_blob,
+            wire_to_legend,
         });
     }
 
@@ -688,7 +688,7 @@ impl GarminReportReceiver {
             let packed_data = &spoke_data[start..end];
 
             // Unpack 1-bit samples to 8-bit
-            let samples = unpack_hd_spoke(packed_data, &self.range_a.pixel_to_blob);
+            let samples = unpack_hd_spoke(packed_data, &self.range_a.wire_to_legend);
 
             self.common
                 .add_spoke(range_meters, spoke_angle, None, samples);
@@ -759,10 +759,10 @@ impl GarminReportReceiver {
 
         common.new_spoke_message();
 
-        // 8-bit samples, apply pixel_to_blob transformation
+        // 8-bit samples, map wire values to legend indices
         let samples: GenericSpoke = spoke_data
             .iter()
-            .map(|&v| rs.pixel_to_blob[v as usize])
+            .map(|&v| rs.wire_to_legend[v as usize])
             .collect();
 
         common.add_spoke(range_meters, spoke_angle, None, samples);
@@ -1368,9 +1368,9 @@ impl GarminReportReceiver {
 
         if mode != self.range_a.doppler {
             self.range_a.doppler = mode;
-            // Rebuild the pixel_to_blob table so spoke data in the 0xF0–0xFF
-            // range is directed to the right legend entries.
-            self.range_a.pixel_to_blob = pixel_to_blob(
+            // Rebuild the lookup table so spoke data in the 0xF0–0xFF
+            // doppler range maps to the correct legend entries.
+            self.range_a.wire_to_legend = wire_to_legend(
                 &self.common.info.get_legend(),
                 self.radar_type == GarminRadarType::XHD,
                 mode != DopplerMode::None,
@@ -1498,12 +1498,12 @@ async fn conditional_recv(
 }
 
 /// Unpack HD 1-bit packed spoke data to 8-bit values
-fn unpack_hd_spoke(packed: &[u8], pixel_to_blob: &PixelToBlobType) -> GenericSpoke {
+fn unpack_hd_spoke(packed: &[u8], wire_to_legend: &WireToLegendTable) -> GenericSpoke {
     let mut samples = Vec::with_capacity(packed.len() * 8);
     for byte in packed {
         for bit in 0..8 {
             let value = if (byte >> bit) & 1 == 1 { 255u8 } else { 0u8 };
-            samples.push(pixel_to_blob[value as usize]);
+            samples.push(wire_to_legend[value as usize]);
         }
     }
     samples
@@ -1513,7 +1513,7 @@ fn unpack_hd_spoke(packed: &[u8], pixel_to_blob: &PixelToBlobType) -> GenericSpo
 mod tests {
     use super::*;
 
-    fn identity_lookup() -> PixelToBlobType {
+    fn identity_lookup() -> WireToLegendTable {
         let mut lookup = [0u8; BYTE_LOOKUP_LENGTH];
         for j in 0..BYTE_LOOKUP_LENGTH {
             lookup[j] = j as u8;
@@ -1521,9 +1521,7 @@ mod tests {
         lookup
     }
 
-    /// Build a minimal `Legend` for tests. `pixel_to_blob` ignores the
-    /// legend's contents and only branches on the `is_xhd` flag, so
-    /// every field can be left empty.
+    /// Build a minimal `Legend` for tests.
     fn empty_legend() -> Legend {
         Legend {
             pixels: Vec::new(),
@@ -1557,8 +1555,8 @@ mod tests {
     }
 
     #[test]
-    fn pixel_to_blob_xhd_halves_intensity() {
-        let lookup = pixel_to_blob(&empty_legend(), true, false);
+    fn wire_to_legend_xhd_halves_intensity() {
+        let lookup = wire_to_legend(&empty_legend(), true, false);
         assert_eq!(lookup[0], 0);
         assert_eq!(lookup[2], 1);
         assert_eq!(lookup[200], 100);
@@ -1567,8 +1565,8 @@ mod tests {
     }
 
     #[test]
-    fn pixel_to_blob_hd_passes_through() {
-        let lookup = pixel_to_blob(&empty_legend(), false, false);
+    fn wire_to_legend_hd_passes_through() {
+        let lookup = wire_to_legend(&empty_legend(), false, false);
         assert_eq!(lookup[0], 0);
         assert_eq!(lookup[1], 1);
         assert_eq!(lookup[128], 128);
@@ -1576,13 +1574,13 @@ mod tests {
     }
 
     #[test]
-    fn pixel_to_blob_xhd_doppler_maps_bands() {
+    fn wire_to_legend_xhd_doppler_maps_bands() {
         // Build a minimal legend with 4 Doppler entries per direction.
         // The approaching band starts at index 120, receding at 124.
         let mut legend = empty_legend();
         legend.doppler_approaching = Some((120, 4));
         legend.doppler_receding = Some((124, 4));
-        let lookup = pixel_to_blob(&legend, true, true);
+        let lookup = wire_to_legend(&legend, true, true);
 
         // Normal intensity: 0x00–0xEF halved.
         assert_eq!(lookup[0x00], 0, "zero stays zero");

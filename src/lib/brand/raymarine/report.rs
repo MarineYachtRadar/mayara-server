@@ -30,9 +30,9 @@ enum LookupDoppler {
 }
 const LOOKUP_DOPPLER_LENGTH: usize = (LookupDoppler::Doppler as usize) + 1;
 
-type PixelToBlobType = [[u8; BYTE_LOOKUP_LENGTH]; LOOKUP_DOPPLER_LENGTH];
+type WireToLegendTable = [[u8; BYTE_LOOKUP_LENGTH]; LOOKUP_DOPPLER_LENGTH];
 
-pub(super) fn pixel_to_blob(legend: &Legend) -> PixelToBlobType {
+pub(super) fn wire_to_legend(legend: &Legend) -> WireToLegendTable {
     let mut lookup: [[u8; BYTE_LOOKUP_LENGTH]; LOOKUP_DOPPLER_LENGTH] =
         [[0; BYTE_LOOKUP_LENGTH]; LOOKUP_DOPPLER_LENGTH];
 
@@ -58,7 +58,7 @@ pub(super) fn pixel_to_blob(legend: &Legend) -> PixelToBlobType {
             };
         }
     }
-    log::debug!("Created pixel_to_blob from legend {:?}", legend);
+    log::debug!("Created wire_to_legend from legend {:?}", legend);
     lookup
 }
 
@@ -83,17 +83,17 @@ impl FeatureFlags {
     fn has_flag(&self, mask: u32) -> bool {
         (self.raw & mask) != 0
     }
-    pub fn is_quantum(&self) -> bool { self.has_flag(super::protocol::FEATURE_QUANTUM) }
-    pub fn is_cyclone(&self) -> bool { self.has_flag(super::protocol::FEATURE_CYCLONE) }
-    pub fn has_doppler(&self) -> bool { self.has_flag(super::protocol::FEATURE_DOPPLER) }
-    pub fn has_doppler_auto_acquire(&self) -> bool { self.has_flag(super::protocol::FEATURE_DOPPLER_AUTO_ACQUIRE) }
-    pub fn has_doppler_bird_mode(&self) -> bool { self.has_flag(super::protocol::FEATURE_DOPPLER_BIRD_MODE) }
-    pub fn has_bird_mode(&self) -> bool { self.has_flag(super::protocol::FEATURE_BIRD_MODE) }
-    pub fn has_auto_rain(&self) -> bool { self.has_flag(super::protocol::FEATURE_AUTO_RAIN) }
-    pub fn has_marpa(&self) -> bool { self.has_flag(super::protocol::FEATURE_MARPA) }
-    pub fn has_dual_range_marpa(&self) -> bool { self.has_flag(super::protocol::FEATURE_DUAL_RANGE_MARPA) }
-    pub fn is_analogue(&self) -> bool { self.has_flag(super::protocol::FEATURE_ANALOGUE) }
-    pub fn is_digital(&self) -> bool { self.has_flag(super::protocol::FEATURE_DIGITAL) }
+    pub(crate) fn is_quantum(&self) -> bool { self.has_flag(super::protocol::FEATURE_QUANTUM) }
+    pub(crate) fn is_cyclone(&self) -> bool { self.has_flag(super::protocol::FEATURE_CYCLONE) }
+    pub(crate) fn has_doppler(&self) -> bool { self.has_flag(super::protocol::FEATURE_DOPPLER) }
+    pub(crate) fn has_doppler_auto_acquire(&self) -> bool { self.has_flag(super::protocol::FEATURE_DOPPLER_AUTO_ACQUIRE) }
+    pub(crate) fn has_doppler_bird_mode(&self) -> bool { self.has_flag(super::protocol::FEATURE_DOPPLER_BIRD_MODE) }
+    pub(crate) fn has_bird_mode(&self) -> bool { self.has_flag(super::protocol::FEATURE_BIRD_MODE) }
+    pub(crate) fn has_auto_rain(&self) -> bool { self.has_flag(super::protocol::FEATURE_AUTO_RAIN) }
+    pub(crate) fn has_marpa(&self) -> bool { self.has_flag(super::protocol::FEATURE_MARPA) }
+    pub(crate) fn has_dual_range_marpa(&self) -> bool { self.has_flag(super::protocol::FEATURE_DUAL_RANGE_MARPA) }
+    pub(crate) fn is_analogue(&self) -> bool { self.has_flag(super::protocol::FEATURE_ANALOGUE) }
+    pub(crate) fn is_digital(&self) -> bool { self.has_flag(super::protocol::FEATURE_DIGITAL) }
 }
 
 pub(crate) struct RaymarineReportReceiver {
@@ -110,11 +110,11 @@ pub(crate) struct RaymarineReportReceiver {
 
     // For data (spokes)
     range_meters: u32,
-    pixel_to_blob: PixelToBlobType,
+    wire_to_legend: WireToLegendTable,
 }
 
 impl RaymarineReportReceiver {
-    pub fn new(
+    pub(crate) fn new(
         args: &Cli,
         info: RadarInfo, // Quick access to our own RadarInfo
         radars: SharedRadars,
@@ -132,7 +132,7 @@ impl RaymarineReportReceiver {
         let control_update_rx = info.control_update_subscribe();
         let blob_tx = radars.get_blob_tx();
 
-        let pixel_to_blob = pixel_to_blob(&info.get_legend());
+        let wire_to_legend = wire_to_legend(&info.get_legend());
 
         let common = CommonRadar::new(
             args,
@@ -157,7 +157,7 @@ impl RaymarineReportReceiver {
             features: FeatureFlags::default(),
             features_seen: false,
             range_meters: 0,
-            pixel_to_blob,
+            wire_to_legend,
         }
     }
 
@@ -368,7 +368,7 @@ impl RaymarineReportReceiver {
             // reports, overriding the hardcoded model table.
             if features.has_doppler() != self.common.info.doppler {
                 self.common.info.set_doppler(features.has_doppler());
-                self.pixel_to_blob = pixel_to_blob(&self.common.info.get_legend());
+                self.wire_to_legend = wire_to_legend(&self.common.info.get_legend());
                 log::info!(
                     "{}: Doppler capability updated to {}",
                     self.common.key,

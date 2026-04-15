@@ -125,10 +125,10 @@ enum LookupDoppler {
 }
 const LOOKUP_DOPPLER_LENGTH: usize = (LookupDoppler::HighApproaching as usize) + 1;
 
-type PixelToBlobType = [[u8; BYTE_LOOKUP_LENGTH]; LOOKUP_DOPPLER_LENGTH];
+type WireToLegendTable = [[u8; BYTE_LOOKUP_LENGTH]; LOOKUP_DOPPLER_LENGTH];
 
-fn pixel_to_blob(legend: &Legend) -> PixelToBlobType {
-    let mut lookup: PixelToBlobType = [[0; BYTE_LOOKUP_LENGTH]; LOOKUP_DOPPLER_LENGTH];
+fn wire_to_legend(legend: &Legend) -> WireToLegendTable {
+    let mut lookup: WireToLegendTable = [[0; BYTE_LOOKUP_LENGTH]; LOOKUP_DOPPLER_LENGTH];
     // Cannot use for() in const expr, so use while instead
     let mut j: usize = 0;
     while j < BYTE_LOOKUP_LENGTH {
@@ -168,7 +168,7 @@ fn pixel_to_blob(legend: &Legend) -> PixelToBlobType {
     lookup
 }
 
-pub struct NavicoReportReceiver {
+pub(crate) struct NavicoReportReceiver {
     common: CommonRadar,
     report_buf: Vec<u8>,
     report_socket: Option<RadarSocket>,
@@ -191,7 +191,7 @@ pub struct NavicoReportReceiver {
     data_buf: Vec<u8>,
     data_socket: Option<RadarSocket>,
     doppler: DopplerMode,
-    pixel_to_blob: PixelToBlobType,
+    wire_to_legend: WireToLegendTable,
 }
 
 // Every 5 seconds we ask the radar for reports, so we can update our controls
@@ -345,10 +345,10 @@ struct SectorBlankingReport {
 // After the 2-byte opcode prefix, each entry has a 4-byte header:
 //   u16 tag (LE), u16 length (LE), then `length` bytes of data.
 mod installation_tag {
-    pub const NAME: u16 = 0x0000;
-    pub const ANTENNA_GEOMETRY: u16 = 0x0001;
-    pub const SECTOR_BLANKING: u16 = 0x0003;
-    pub const CABLE_CALIBRATION: u16 = 0x0004;
+    pub(crate) const NAME: u16 = 0x0000;
+    pub(crate) const ANTENNA_GEOMETRY: u16 = 0x0001;
+    pub(crate) const SECTOR_BLANKING: u16 = 0x0003;
+    pub(crate) const CABLE_CALIBRATION: u16 = 0x0004;
 }
 
 // 0xC408 StateSetupExtended — variable length, parsed sequentially like the
@@ -374,7 +374,7 @@ const SETUP_EXT_MAX_KNOWN: usize =
 const SETUP_EXT_MAX_SEEN: usize = 32; // Observed in the field, log a warning if we see more than this
 
 impl NavicoReportReceiver {
-    pub fn new(
+    pub(crate) fn new(
         args: &Cli,
         info: RadarInfo, // Quick access to our own RadarInfo
         radars: SharedRadars,
@@ -406,7 +406,7 @@ impl NavicoReportReceiver {
         let control_update_rx = info.control_update_subscribe();
         let blob_tx = radars.get_blob_tx();
 
-        let pixel_to_blob = pixel_to_blob(&info.get_legend());
+        let wire_to_legend = wire_to_legend(&info.get_legend());
 
         let common = CommonRadar::new(
             &args,
@@ -438,7 +438,7 @@ impl NavicoReportReceiver {
             data_buf: Vec::with_capacity(size_of::<RadarFramePkt>()),
             data_socket: None,
             doppler: DopplerMode::None,
-            pixel_to_blob,
+            wire_to_legend,
         }
     }
 
@@ -684,7 +684,7 @@ impl NavicoReportReceiver {
     }
 
     fn process_spoke(&self, spoke: &[u8]) -> GenericSpoke {
-        let pixel_to_blob = &self.pixel_to_blob;
+        let wire_to_legend = &self.wire_to_legend;
 
         // Convert the spoke data to bytes
         let mut generic_spoke: Vec<u8> = Vec::with_capacity(SPOKE_PIXEL_LEN);
@@ -701,8 +701,8 @@ impl NavicoReportReceiver {
 
         for pixel in spoke {
             let pixel = *pixel as usize;
-            generic_spoke.push(pixel_to_blob[low_nibble_index][pixel]);
-            generic_spoke.push(pixel_to_blob[high_nibble_index][pixel]);
+            generic_spoke.push(wire_to_legend[low_nibble_index][pixel]);
+            generic_spoke.push(wire_to_legend[high_nibble_index][pixel]);
         }
 
         generic_spoke
@@ -1042,7 +1042,7 @@ impl NavicoReportReceiver {
         let info2 = self.common.info.clone();
         super::settings::update_when_model_known(&mut self.common.info.controls, model, &info2);
         self.common.info.set_doppler(caps.has_doppler());
-        self.pixel_to_blob = pixel_to_blob(&self.common.info.get_legend());
+        self.wire_to_legend = wire_to_legend(&self.common.info.get_legend());
         super::settings::update_from_capabilities(&mut self.common.info.controls, caps);
 
         if caps.instrumented_range_max_dm > 0 {

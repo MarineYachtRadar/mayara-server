@@ -3,7 +3,7 @@ use serde::Deserialize;
 use std::mem::size_of;
 
 use crate::brand::raymarine::command::Command;
-use crate::brand::raymarine::report::{LookupDoppler, PixelToBlobType, pixel_to_blob};
+use crate::brand::raymarine::report::{LookupDoppler, WireToLegendTable, wire_to_legend};
 use crate::brand::raymarine::{RaymarineModel, hd_to_pixel_values, settings};
 use crate::radar::range::{Range, Ranges};
 use crate::radar::settings::ControlId;
@@ -88,7 +88,7 @@ pub(crate) fn process_frame(receiver: &mut RaymarineReportReceiver, data: &[u8])
             returns_per_line as usize,
             spoke,
             LookupDoppler::Doppler as usize,
-            &receiver.pixel_to_blob,
+            &receiver.wire_to_legend,
         ),
     );
 
@@ -99,19 +99,19 @@ fn process_spoke(
     returns_per_line: usize,
     spoke: &[u8],
     doppler: usize,
-    pixel_to_blob: &PixelToBlobType,
+    wire_to_legend: &WireToLegendTable,
 ) -> GenericSpoke {
     let mut unpacked_data: Vec<u8> = Vec::with_capacity(1024);
     let mut src_offset: usize = 0;
     while src_offset < spoke.len() {
         if spoke[src_offset] != 0x5c {
             let pixel = spoke[src_offset] as usize;
-            unpacked_data.push(pixel_to_blob[doppler][pixel]);
+            unpacked_data.push(wire_to_legend[doppler][pixel]);
             src_offset = src_offset + 1;
         } else {
             let count = spoke[src_offset + 1] as usize; // number to be filled
             let pixel = spoke[src_offset + 2] as usize; // data to be filled
-            let value = pixel_to_blob[doppler][pixel];
+            let value = wire_to_legend[doppler][pixel];
             for _ in 0..count {
                 unpacked_data.push(value);
             }
@@ -344,7 +344,7 @@ pub(super) fn process_info_report(receiver: &mut RaymarineReportReceiver, data: 
                 .info
                 .set_pixel_values(hd_to_pixel_values(model.hd));
             receiver.common.info.set_doppler(model.doppler);
-            receiver.pixel_to_blob = pixel_to_blob(&receiver.common.info.get_legend());
+            receiver.wire_to_legend = wire_to_legend(&receiver.common.info.get_legend());
             receiver.common.update();
 
             // If we are in replay mode, we don't need a command sender, as we will not send any commands
@@ -395,5 +395,4 @@ pub(super) fn process_doppler_report(receiver: &mut RaymarineReportReceiver, dat
     receiver
         .common
         .set_value(&ControlId::Doppler, doppler as f64);
-    receiver.common.info.set_doppler(doppler > 0);
 }
