@@ -32,6 +32,10 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const PACKAGE: &str = env!("CARGO_PKG_NAME");
 pub const SIGNALK_RADAR_API_VERSION: &str = env!("SIGNALK_RADAR_API_VERSION");
 
+/// How often the static-position task re-broadcasts the current heading
+/// so late-joining GUI clients can receive it.
+const STATIC_NAV_REBROADCAST_INTERVAL_SECS: u64 = 2;
+
 #[derive(clap::ValueEnum, Clone, Default, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum TargetMode {
@@ -400,26 +404,45 @@ pub async fn start_session(
     // pattern: set atomics once, then periodically re-broadcast so late-joining
     // GUI clients receive the current heading/position.
     if let Some(static_pos) = args.get_static_position() {
-        navdata::set_position(Some(static_pos.lat), Some(static_pos.lon));
-        navdata::set_heading_true(Some(static_pos.heading.to_radians()), "static");
-        navdata::set_sog(Some(0.0));
-        navdata::set_cog(Some(static_pos.heading.to_radians()));
+        if static_pos.lat.is_finite()
+            && static_pos.lon.is_finite()
+            && static_pos.heading.is_finite()
+            && (-90.0..=90.0).contains(&static_pos.lat)
+            && (-180.0..=180.0).contains(&static_pos.lon)
+        {
+            let heading_rad = static_pos.heading.to_radians();
+            navdata::set_position(Some(static_pos.lat), Some(static_pos.lon));
+            navdata::set_heading_true(Some(heading_rad), "static");
+            navdata::set_sog(Some(0.0));
+            navdata::set_cog(Some(heading_rad));
 
-        subsystem.start(SubsystemBuilder::new(
-            "Static Navigation",
-            |subsys| async move {
-                let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
-                loop {
-                    tokio::select! { biased;
-                        _ = subsys.on_shutdown_requested() => break,
-                        _ = interval.tick() => {
-                            navdata::broadcast_heading("static");
+            subsystem.start(SubsystemBuilder::new(
+                "Static Navigation",
+                |subsys| async move {
+                    let mut interval = tokio::time::interval(std::time::Duration::from_secs(
+                        STATIC_NAV_REBROADCAST_INTERVAL_SECS,
+                    ));
+                    loop {
+                        tokio::select! { biased;
+                            _ = subsys.on_shutdown_requested() => break,
+                            _ = interval.tick() => {
+                                navdata::broadcast_heading("static");
+                            }
                         }
                     }
-                }
-                Ok::<(), miette::Report>(())
-            },
-        ));
+                    Ok::<(), miette::Report>(())
+                },
+            ));
+        } else {
+            log::warn!(
+                "--static-position ignored: values out of range \
+                 (lat={}, lon={}, heading={}). \
+                 Expected lat ∈ [-90,90], lon ∈ [-180,180], finite heading.",
+                static_pos.lat,
+                static_pos.lon,
+                static_pos.heading
+            );
+        }
     }
 
     // Initialize AIS vessel store if pass_ais is enabled
