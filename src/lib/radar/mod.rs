@@ -572,10 +572,6 @@ impl RadarInfo {
     pub fn get_legend(&self) -> Legend {
         self.legend.clone()
     }
-
-    pub(crate) fn pixel_colors(&self) -> u8 {
-        self.legend.pixel_colors
-    }
 }
 
 impl Display for RadarInfo {
