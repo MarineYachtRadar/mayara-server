@@ -37,7 +37,7 @@ pub(crate) struct LocatorAddress {
 // unsafe impl Send for LocatorAddress {}
 
 impl LocatorAddress {
-    pub fn new(
+    pub(crate) fn new(
         id: LocatorId,
         address: &SocketAddr,
         brand: Brand,
@@ -79,7 +79,7 @@ pub(crate) struct Locator {
 }
 
 impl Locator {
-    pub fn new(args: Cli, radars: SharedRadars) -> Self {
+    pub(crate) fn new(args: Cli, radars: SharedRadars) -> Self {
         Locator { radars, args }
     }
 

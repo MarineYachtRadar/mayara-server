@@ -28,7 +28,7 @@ use crate::{
 /// range, doppler) are registered — antenna-level controls (bearing
 /// alignment, scan speed, interference rejection, no-TX zones, sentry,
 /// target expansion, telemetry) are omitted because they live on Range A.
-pub fn new(
+pub(crate) fn new(
     radar_id: String,
     sk_client_tx: tokio::sync::broadcast::Sender<SignalKDelta>,
     args: &Cli,

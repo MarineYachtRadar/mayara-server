@@ -54,7 +54,7 @@ struct FurunoSpokeMetadata {
     scale: u32,
 }
 
-pub struct FurunoReportReceiver {
+pub(crate) struct FurunoReportReceiver {
     common: CommonRadar,
     /// Second CommonRadar for Range B in dual range mode.
     common_b: Option<CommonRadar>,
@@ -83,7 +83,7 @@ pub struct FurunoReportReceiver {
 }
 
 impl FurunoReportReceiver {
-    pub fn new(args: &Cli, radars: SharedRadars, info: RadarInfo) -> FurunoReportReceiver {
+    pub(crate) fn new(args: &Cli, radars: SharedRadars, info: RadarInfo) -> FurunoReportReceiver {
         let key = info.key();
         let command_sender = if args.is_replay() {
             None
@@ -134,7 +134,7 @@ impl FurunoReportReceiver {
     }
 
     /// Set the Range B RadarInfo for dual range mode.
-    pub fn set_range_b(&mut self, args: &Cli, radars: &SharedRadars, info_b: RadarInfo) {
+    pub(crate) fn set_range_b(&mut self, args: &Cli, radars: &SharedRadars, info_b: RadarInfo) {
         let key_b = info_b.key();
         let control_update_rx_b = info_b.control_update_subscribe();
         let blob_tx_b = radars.get_blob_tx();

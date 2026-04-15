@@ -34,7 +34,7 @@ use std::time::Duration;
 // =============================================================================
 
 /// Total number of spokes per revolution (13-bit angle, 0–8191).
-pub const SPOKES: usize = 8192;
+pub(crate) const SPOKES: usize = 8192;
 
 /// Maximum spoke length in pixels delivered to the GUI.
 ///
@@ -42,7 +42,7 @@ pub const SPOKES: usize = 8192;
 /// reports 884). Shorter native spokes are stretched to this size by
 /// `stretch_spoke` so the inner/outer scale stays consistent. 1024 is a
 /// round upper bound that accommodates all known Furuno models.
-pub const SPOKE_LEN: usize = 1024;
+pub(crate) const SPOKE_LEN: usize = 1024;
 
 /// Number of echo intensity levels in the palette.
 ///
@@ -51,33 +51,33 @@ pub const SPOKE_LEN: usize = 1024;
 /// to the palette — no shift, no gain. The `default_legend()` function may
 /// cap the effective palette size if reserved slots (ARPA, Doppler, history)
 /// would push the total beyond 255.
-pub const PIXEL_VALUES: u8 = 252;
+pub(crate) const PIXEL_VALUES: u8 = 252;
 
 // =============================================================================
 // Network — ports and addresses
 // =============================================================================
 
 /// Base port for all Furuno NavNet services.
-pub const BASE_PORT: u16 = 10000;
+pub(crate) const BASE_PORT: u16 = 10000;
 
 /// UDP beacon discovery port (`BASE_PORT + 10`).
-pub const BEACON_PORT: u16 = BASE_PORT + 10;
+pub(crate) const BEACON_PORT: u16 = BASE_PORT + 10;
 
 /// UDP spoke echo data port (`BASE_PORT + 24`).
-pub const DATA_PORT: u16 = BASE_PORT + 24;
+pub(crate) const DATA_PORT: u16 = BASE_PORT + 24;
 
 /// Broadcast address for beacon discovery.
-pub const BEACON_ADDRESS: SocketAddr = SocketAddr::new(
+pub(crate) const BEACON_ADDRESS: SocketAddr = SocketAddr::new(
     IpAddr::V4(Ipv4Addr::new(172, 31, 255, 255)),
     BEACON_PORT,
 );
 
 /// Broadcast address for spoke echo data (used by DRS4W WiFi radar).
-pub const DATA_BROADCAST_ADDRESS: SocketAddrV4 =
+pub(crate) const DATA_BROADCAST_ADDRESS: SocketAddrV4 =
     SocketAddrV4::new(Ipv4Addr::new(172, 31, 255, 255), DATA_PORT);
 
 /// Multicast address for spoke echo data (used by wired DRS/NXT/FAR models).
-pub const SPOKE_DATA_MULTICAST_ADDRESS: SocketAddrV4 =
+pub(crate) const SPOKE_DATA_MULTICAST_ADDRESS: SocketAddrV4 =
     SocketAddrV4::new(Ipv4Addr::new(239, 255, 0, 2), DATA_PORT);
 
 // =============================================================================
@@ -86,46 +86,46 @@ pub const SPOKE_DATA_MULTICAST_ADDRESS: SocketAddrV4 =
 
 /// 32-byte packet announcing this software to the radar.
 /// Contains embedded ASCII `"MAYARA"` at bytes 16–21.
-pub const ANNOUNCE_MAYARA_PACKET: [u8; 32] = [
+pub(crate) const ANNOUNCE_MAYARA_PACKET: [u8; 32] = [
     0x1, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, 0x0, 0x18, 0x1, 0x0, 0x0, 0x0, b'M', b'A',
     b'Y', b'A', b'R', b'A', 0x0, 0x0, 0x1, 0x1, 0x0, 0x2, 0x0, 0x1, 0x0, 0x12,
 ];
 
 /// 16-byte beacon request packet. Byte 8 = `0x01` (beacon request type).
-pub const REQUEST_BEACON_PACKET: [u8; 16] = [
+pub(crate) const REQUEST_BEACON_PACKET: [u8; 16] = [
     0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x01, 0x01, 0x00, 0x08, 0x01, 0x00, 0x00,
     0x00,
 ];
 
 /// 16-byte model request packet. Byte 8 = `0x14` (model request type).
-pub const REQUEST_MODEL_PACKET: [u8; 16] = [
+pub(crate) const REQUEST_MODEL_PACKET: [u8; 16] = [
     0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x14, 0x01, 0x00, 0x08, 0x01, 0x00, 0x00,
     0x00,
 ];
 
 /// Expected header bytes in the 32-byte beacon report (bytes 0–10).
-pub const BEACON_REPORT_HEADER: [u8; 11] =
+pub(crate) const BEACON_REPORT_HEADER: [u8; 11] =
     [0x1, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, 0x0];
 
 /// Minimum beacon report size (= `size_of::<FurunoRadarReport>()`).
-pub const BEACON_REPORT_LENGTH_MIN: usize = std::mem::size_of::<FurunoRadarReport>();
+pub(crate) const BEACON_REPORT_LENGTH_MIN: usize = std::mem::size_of::<FurunoRadarReport>();
 
 /// Fixed length of the 170-byte model report.
-pub const MODEL_REPORT_LENGTH: usize = 170;
+pub(crate) const MODEL_REPORT_LENGTH: usize = 170;
 
 // =============================================================================
 // Login protocol
 // =============================================================================
 
 /// TCP connect / read / write timeout for the COPYRIGHT login handshake.
-pub const LOGIN_TIMEOUT: Duration = Duration::from_millis(500);
+pub(crate) const LOGIN_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// 56-byte login message sent via TCP to port 10010.
 ///
 /// From `fnet.dll` function `login_via_copyright`. Byte 9 selects the service
 /// (1 = Radar). The embedded ASCII payload starting at byte 12 reads:
 /// `"COPYRIGHT (C) 2001 FURUNO ELECTRIC CO.,LTD. "`.
-pub const LOGIN_MESSAGE: [u8; 56] = [
+pub(crate) const LOGIN_MESSAGE: [u8; 56] = [
     //                                              v- byte 9: service ID (1=Radar)
     0x8, 0x1, 0x0, 0x38, 0x1, 0x0, 0x0, 0x0, 0x0, 0x1, 0x0, 0x0, 0x43, 0x4f, 0x50, 0x59, 0x52,
     0x49, 0x47, 0x48, 0x54, 0x20, 0x28, 0x43, 0x29, 0x20, 0x32, 0x30, 0x30, 0x31, 0x20, 0x46,
@@ -135,7 +135,7 @@ pub const LOGIN_MESSAGE: [u8; 56] = [
 
 /// Expected 8-byte reply header from the radar after sending [`LOGIN_MESSAGE`].
 /// The 4 bytes following this header contain the big-endian port offset.
-pub const LOGIN_EXPECTED_HEADER: [u8; 8] = [0x9, 0x1, 0x0, 0xc, 0x1, 0x0, 0x0, 0x0];
+pub(crate) const LOGIN_EXPECTED_HEADER: [u8; 8] = [0x9, 0x1, 0x0, 0xc, 0x1, 0x0, 0x0, 0x0];
 
 // =============================================================================
 // Wire-format report structures
@@ -156,7 +156,7 @@ pub const LOGIN_EXPECTED_HEADER: [u8; 8] = [0x9, 0x1, 0x0, 0xc, 0x1, 0x0, 0x0, 0
 /// 32-byte beacon report — radar serial/name identification.
 #[derive(Deserialize, Debug, Copy, Clone)]
 #[repr(packed)]
-pub struct FurunoRadarReport {
+pub(crate) struct FurunoRadarReport {
     pub _header: [u8; 11],
     pub length: u8,
     pub _filler2: [u8; 4],
@@ -166,7 +166,7 @@ pub struct FurunoRadarReport {
 /// 170-byte model report — radar model name, firmware versions, serial number.
 #[derive(Deserialize, Debug, Copy, Clone)]
 #[repr(packed)]
-pub struct FurunoRadarModelReport {
+pub(crate) struct FurunoRadarModelReport {
     pub _filler1: [u8; 24],
     pub model: [u8; 32],
     pub _firmware_versions: [u8; 32],
@@ -181,7 +181,7 @@ pub struct FurunoRadarModelReport {
 
 /// All known Furuno radar models.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum RadarModel {
+pub(crate) enum RadarModel {
     Unknown,
     FAR21x7,
     DRS,
@@ -226,7 +226,7 @@ impl RadarModel {
     /// [`RadarModel`]. Returns [`RadarModel::Unknown`] for unrecognized codes.
     ///
     /// Source: `Fec.Wrapper.SensorProperty.GetRadarSensorType` (TimeZero).
-    pub fn from_part_number(part: &str) -> RadarModel {
+    pub(crate) fn from_part_number(part: &str) -> RadarModel {
         match part {
             "0359235" => RadarModel::DRS,
             "0359255" => RadarModel::FAR14x7,
@@ -307,7 +307,7 @@ impl RadarModel {
 // =============================================================================
 
 /// ASCII mode character prefixing every NavNet command.
-pub enum CommandMode {
+pub(crate) enum CommandMode {
     /// `'S'` — Set (write a control value).
     Set,
     /// `'R'` — Request (read a control value).
@@ -323,7 +323,7 @@ pub enum CommandMode {
 }
 
 impl CommandMode {
-    pub fn to_char(&self) -> char {
+    pub(crate) fn to_char(&self) -> char {
         match self {
             CommandMode::Set => 'S',
             CommandMode::Request => 'R',
@@ -355,7 +355,7 @@ impl From<u8> for CommandMode {
 
 /// Two-digit hex opcode following the mode character in `$<mode><hex>,...`.
 #[derive(Primitive, PartialEq, Eq, Debug, Clone)]
-pub enum CommandId {
+pub(crate) enum CommandId {
     /// `0x60` — Connection control.
     Connect = 0x60,
     /// `0x61` — Display mode.
@@ -479,10 +479,10 @@ pub enum CommandId {
 // =============================================================================
 
 /// Wire unit value for nautical miles.
-pub const WIRE_UNIT_NM: i32 = 0;
+pub(crate) const WIRE_UNIT_NM: i32 = 0;
 
 /// Wire unit value for kilometres.
-pub const WIRE_UNIT_KM: i32 = 1;
+pub(crate) const WIRE_UNIT_KM: i32 = 1;
 // Wire unit 2 = SM (statute miles), 3 = Kyd (kilo-yards) — not yet implemented
 
 /// Wire index → meters mapping (NM mode, wire unit 0).
@@ -490,7 +490,7 @@ pub const WIRE_UNIT_KM: i32 = 1;
 /// Wire indices are **non-sequential**. The radar uses specific slot numbers
 /// that do not correspond to a sorted range order. Verified via Wireshark
 /// captures from TimeZero ↔ DRS4D-NXT.
-pub const WIRE_INDEX_TABLE: [(i32, i32); 22] = [
+pub(crate) const WIRE_INDEX_TABLE: [(i32, i32); 22] = [
     (21, 116),    // 1/16 nm = 116m - wire index 21!
     (0, 231),     // 1/8 nm = 231m
     (1, 463),     // 1/4 nm = 463m
@@ -517,7 +517,7 @@ pub const WIRE_INDEX_TABLE: [(i32, i32); 22] = [
 
 /// Wire index → meters mapping (km mode, wire unit 1).
 /// Wire index 21 (0.0625 km) is **not** available in km mode.
-pub const WIRE_INDEX_TABLE_KM: [(i32, i32); 21] = [
+pub(crate) const WIRE_INDEX_TABLE_KM: [(i32, i32); 21] = [
     (0, 125),     // 0.125 km
     (1, 250),     // 0.25 km
     (2, 500),     // 0.5 km
@@ -542,17 +542,17 @@ pub const WIRE_INDEX_TABLE_KM: [(i32, i32); 21] = [
 ];
 
 /// Convert meters to the nearest wire index (NM table).
-pub fn meters_to_wire_index(meters: i32) -> i32 {
+pub(crate) fn meters_to_wire_index(meters: i32) -> i32 {
     lookup_wire_index(&WIRE_INDEX_TABLE, meters)
 }
 
 /// Convert meters to the nearest wire index (km table).
-pub fn meters_to_wire_index_km(meters: i32) -> i32 {
+pub(crate) fn meters_to_wire_index_km(meters: i32) -> i32 {
     lookup_wire_index(&WIRE_INDEX_TABLE_KM, meters)
 }
 
 /// Convert meters to the nearest wire index for the given wire unit.
-pub fn meters_to_wire_index_for_unit(meters: i32, wire_unit: i32) -> i32 {
+pub(crate) fn meters_to_wire_index_for_unit(meters: i32, wire_unit: i32) -> i32 {
     match wire_unit {
         WIRE_UNIT_KM => meters_to_wire_index_km(meters),
         _ => meters_to_wire_index(meters),
@@ -568,7 +568,7 @@ fn lookup_wire_index(table: &[(i32, i32)], meters: i32) -> i32 {
 }
 
 /// Convert a wire index to meters (NM table).
-pub fn wire_index_to_meters(wire_index: i32) -> Option<i32> {
+pub(crate) fn wire_index_to_meters(wire_index: i32) -> Option<i32> {
     WIRE_INDEX_TABLE
         .iter()
         .find(|(idx, _)| *idx == wire_index)
@@ -576,7 +576,7 @@ pub fn wire_index_to_meters(wire_index: i32) -> Option<i32> {
 }
 
 /// Convert a wire index to meters (km table).
-pub fn wire_index_to_meters_km(wire_index: i32) -> Option<i32> {
+pub(crate) fn wire_index_to_meters_km(wire_index: i32) -> Option<i32> {
     WIRE_INDEX_TABLE_KM
         .iter()
         .find(|(idx, _)| *idx == wire_index)
@@ -584,7 +584,7 @@ pub fn wire_index_to_meters_km(wire_index: i32) -> Option<i32> {
 }
 
 /// Convert a wire index to meters for the given wire unit.
-pub fn wire_index_to_meters_for_unit(wire_index: i32, wire_unit: i32) -> Option<i32> {
+pub(crate) fn wire_index_to_meters_for_unit(wire_index: i32, wire_unit: i32) -> Option<i32> {
     match wire_unit {
         WIRE_UNIT_KM => wire_index_to_meters_km(wire_index),
         _ => wire_index_to_meters(wire_index),
@@ -593,7 +593,7 @@ pub fn wire_index_to_meters_for_unit(wire_index: i32, wire_unit: i32) -> Option<
 
 /// Determine the wire unit for a range value in meters.
 /// Metric distances (km-based) use wire unit 1, nautical use wire unit 0.
-pub fn wire_unit_for_meters(meters: i32) -> i32 {
+pub(crate) fn wire_unit_for_meters(meters: i32) -> i32 {
     if WIRE_INDEX_TABLE_KM.iter().any(|(_, m)| *m == meters) {
         if crate::radar::range::Range::is_metric_distance(meters) {
             return WIRE_UNIT_KM;
@@ -623,73 +623,73 @@ pub fn wire_unit_for_meters(meters: i32) -> i32 {
 //          bits 4-5: echo_type; bit 6: dual_range_id; bit 7: unknown
 
 /// Byte 0 of every IMO echo frame must be this value.
-pub const FRAME_MAGIC: u8 = 0x02;
+pub(crate) const FRAME_MAGIC: u8 = 0x02;
 
 /// Byte 9 bit 0: high bit of `spoke_data_len`.
-pub const FRAME_SPOKE_DATA_LEN_HIGH_BIT: u8 = 0x01;
+pub(crate) const FRAME_SPOKE_DATA_LEN_HIGH_BIT: u8 = 0x01;
 
 /// Byte 11 bits 0–2: high bits of `sweep_len` (sample_count).
-pub const FRAME_SWEEP_LEN_HIGH_MASK: u8 = 0x07;
+pub(crate) const FRAME_SWEEP_LEN_HIGH_MASK: u8 = 0x07;
 
 /// Byte 11 bits 3–4: encoding mode (0–3).
-pub const FRAME_ENCODING_MASK: u8 = 0x18;
+pub(crate) const FRAME_ENCODING_MASK: u8 = 0x18;
 
 /// Right-shift for encoding mode extraction from byte 11.
-pub const FRAME_ENCODING_SHIFT: u8 = 3;
+pub(crate) const FRAME_ENCODING_SHIFT: u8 = 3;
 
 /// Byte 11 bit 5: heading data present in per-spoke sub-header.
-pub const FRAME_HEADING_VALID_BIT: u8 = 0x20;
+pub(crate) const FRAME_HEADING_VALID_BIT: u8 = 0x20;
 
 /// Byte 12 bits 0–5: range wire index.
-pub const FRAME_WIRE_INDEX_MASK: u8 = 0x3F;
+pub(crate) const FRAME_WIRE_INDEX_MASK: u8 = 0x3F;
 
 /// Byte 15 bits 0–2: high bits of `scale`.
-pub const FRAME_SCALE_HIGH_MASK: u8 = 0x07;
+pub(crate) const FRAME_SCALE_HIGH_MASK: u8 = 0x07;
 
 /// Byte 15 bit 6: dual range identifier (0 = Range A, 1 = Range B).
-pub const FRAME_DUAL_RANGE_BIT: u8 = 0x40;
+pub(crate) const FRAME_DUAL_RANGE_BIT: u8 = 0x40;
 
 /// Per-spoke sub-header: bits 0–4 of angle/heading byte 1 or 3.
-pub const SPOKE_ANGLE_HIGH_MASK: u8 = 0x1F;
+pub(crate) const SPOKE_ANGLE_HIGH_MASK: u8 = 0x1F;
 
 // =============================================================================
 // Spoke encoding constants
 // =============================================================================
 
 /// Encoding modes 1/2: a zero repeat count means 128.
-pub const ENCODING_1_REPEAT_DEFAULT: usize = 0x80;
+pub(crate) const ENCODING_1_REPEAT_DEFAULT: usize = 0x80;
 
 /// Encoding mode 3: a zero repeat count means 64.
-pub const ENCODING_3_REPEAT_DEFAULT: usize = 0x40;
+pub(crate) const ENCODING_3_REPEAT_DEFAULT: usize = 0x40;
 
 /// Bitmask for rounding consumed bytes up to 4-byte alignment:
 /// `used = (used + 3) & SPOKE_ALIGNMENT_MASK`.
-pub const SPOKE_ALIGNMENT_MASK: usize = !3;
+pub(crate) const SPOKE_ALIGNMENT_MASK: usize = !3;
 
 /// Minimum palette index for non-zero echo values. Skips the dimmest
 /// indices so weak returns are visually distinct from transparent black.
-pub const ECHO_FLOOR: u16 = 10;
+pub(crate) const ECHO_FLOOR: u16 = 10;
 
 // =============================================================================
 // Tile echo format (NXT only)
 // =============================================================================
 
 /// Bits 29-31 of the first header word must equal this value for a Tile frame.
-pub const TILE_MAGIC: u32 = 2;
+pub(crate) const TILE_MAGIC: u32 = 2;
 
 /// Tile echo format uses a hardcoded scale of 496 at all ranges.
 /// From `DecodeTileEchoFormat` in libNAVNETDLL.so (Ghidra decompilation).
-pub const TILE_SCALE: u32 = 496;
+pub(crate) const TILE_SCALE: u32 = 496;
 
 /// Tile RLE: a zero repeat count (low 7 bits) means 128 repeats.
-pub const TILE_REPEAT_DEFAULT: usize = 128;
+pub(crate) const TILE_REPEAT_DEFAULT: usize = 128;
 
 // =============================================================================
 // Guard zone constants
 // =============================================================================
 
 /// Guard mode value: zone disabled.
-pub const GUARD_MODE_OFF: i32 = 0;
+pub(crate) const GUARD_MODE_OFF: i32 = 0;
 
 /// Guard mode value: fan (sector) zone.
-pub const GUARD_MODE_FAN: i32 = 1;
+pub(crate) const GUARD_MODE_FAN: i32 = 1;

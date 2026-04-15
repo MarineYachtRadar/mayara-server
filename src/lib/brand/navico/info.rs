@@ -41,7 +41,7 @@ pub(crate) struct HaloHeadingPacket {
 }
 
 impl HaloHeadingPacket {
-    pub fn transmute(bytes: &[u8]) -> Result<Self, anyhow::Error> {
+    pub(crate) fn transmute(bytes: &[u8]) -> Result<Self, anyhow::Error> {
         Ok(unsafe {
             let report: [u8; 72] = bytes.try_into()?;
             transmute(report)
@@ -70,7 +70,7 @@ pub(crate) struct HaloNavigationPacket {
 }
 
 impl HaloNavigationPacket {
-    pub fn transmute(bytes: &[u8]) -> Result<Self, anyhow::Error> {
+    pub(crate) fn transmute(bytes: &[u8]) -> Result<Self, anyhow::Error> {
         Ok(unsafe {
             let report: [u8; 72] = bytes.try_into()?;
             transmute(report)
@@ -125,7 +125,7 @@ fn any_as_u8_slice<T: Sized>(p: &T) -> &[u8] {
 }
 
 impl Information {
-    pub fn new(key: String, info: &RadarInfo) -> Self {
+    pub(crate) fn new(key: String, info: &RadarInfo) -> Self {
         Information {
             key,
             nic_addr: info.nic_addr.clone(),

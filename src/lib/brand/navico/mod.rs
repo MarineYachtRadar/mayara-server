@@ -32,7 +32,7 @@ pub(super) use protocol::{
 
 #[derive(Copy, Clone, PartialEq, Debug)]
 #[repr(u32)]
-pub enum Model {
+pub(crate) enum Model {
     Unknown = 9,
     BR24 = 10,       // Broadband Radar 24 (FMCW dome)
     Gen3 = 12,       // Broadband 3G (FMCW dome)
@@ -72,7 +72,7 @@ impl fmt::Display for Model {
 impl Model {
     /// Parse from a persisted model name string.
     #[allow(dead_code)]
-    pub fn new(s: &str) -> Self {
+    pub(crate) fn new(s: &str) -> Self {
         match s {
             "BR24" => Model::BR24,
             "3G" => Model::Gen3,
@@ -91,7 +91,7 @@ impl Model {
     }
 
     /// Map from the eScannerType u32 in the 0xC403 StateProperties packet.
-    pub fn from_scanner_type(scanner_type: u32) -> Self {
+    pub(crate) fn from_scanner_type(scanner_type: u32) -> Self {
         match scanner_type {
             10 => Model::BR24,
             12 => Model::Gen3,
@@ -110,7 +110,7 @@ impl Model {
     }
 
     /// Returns true for all HALO variants (dome and open array).
-    pub fn is_halo(&self) -> bool {
+    pub(crate) fn is_halo(&self) -> bool {
         let v = *self as u32;
         v >= 14 && v <= 23
     }

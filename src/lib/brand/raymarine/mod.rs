@@ -183,7 +183,7 @@ struct RaymarineBeacon56 {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
-pub enum BaseModel {
+pub(crate) enum BaseModel {
     RD,
     Quantum,
 }

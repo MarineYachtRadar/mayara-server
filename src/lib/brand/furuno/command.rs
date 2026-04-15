@@ -27,7 +27,7 @@ pub(crate) struct Command {
 }
 
 impl Command {
-    pub fn new(info: &RadarInfo, has_dual_range: bool) -> Self {
+    pub(crate) fn new(info: &RadarInfo, has_dual_range: bool) -> Self {
         Command {
             key: info.key(),
             write: None,
@@ -38,11 +38,11 @@ impl Command {
         }
     }
 
-    pub fn set_writer(&mut self, write: WriteHalf<TcpStream>) {
+    pub(crate) fn set_writer(&mut self, write: WriteHalf<TcpStream>) {
         self.write = Some(write);
     }
 
-    pub fn set_ranges(&mut self, ranges: Ranges) {
+    pub(crate) fn set_ranges(&mut self, ranges: Ranges) {
         self.ranges = ranges;
     }
 

@@ -46,7 +46,7 @@ const MIN_CDM_BODY_LEN: usize = 12;
 
 /// Decoded fields from a `0x038e` CDM heartbeat.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CdmHeartbeat {
+pub(crate) struct CdmHeartbeat {
     /// `version_marker` byte. Should always be `2` for V2 heartbeats.
     pub version: u8,
     /// 16-bit product identifier. Maps to a model via [`product_name`].
@@ -61,7 +61,7 @@ pub struct CdmHeartbeat {
 /// Parse the body of a `0x038e` heartbeat. `payload` must be the slice
 /// **after** the 8-byte GMN header. Returns `None` if the body is too
 /// short or has the wrong version marker.
-pub fn parse(payload: &[u8]) -> Option<CdmHeartbeat> {
+pub(crate) fn parse(payload: &[u8]) -> Option<CdmHeartbeat> {
     if payload.len() < MIN_CDM_BODY_LEN {
         return None;
     }
@@ -90,16 +90,16 @@ pub fn parse(payload: &[u8]) -> Option<CdmHeartbeat> {
 const MIN_PRODUCT_DATA_LEN: usize = 0x42;
 
 /// `0x0392` — CDM product data response.
-pub const MSG_CDM_PRODUCT_DATA: u32 = 0x0392;
+pub(crate) const MSG_CDM_PRODUCT_DATA: u32 = 0x0392;
 
 /// `0x0391` — CDM product data request. Sent as a GMN packet to the
 /// radar's IP on port 50050 to solicit a `0x0392` response containing
 /// the factory model name and user-customizable alias.
-pub const MSG_CDM_PRODUCT_DATA_REQUEST: u32 = 0x0391;
+pub(crate) const MSG_CDM_PRODUCT_DATA_REQUEST: u32 = 0x0391;
 
 /// Decoded fields from a `0x0392` product data response.
 #[derive(Debug, Clone)]
-pub struct CdmProductData {
+pub(crate) struct CdmProductData {
     /// Factory model name (e.g. "GMR Fantom 24"), up to 30 chars.
     pub device_name: String,
     /// User-customizable alias (e.g. "Bow Radar"), up to 31 chars.
@@ -108,7 +108,7 @@ pub struct CdmProductData {
 
 /// Parse the body of a `0x0392` product data response. `payload` is the
 /// slice after the 8-byte GMN header.
-pub fn parse_product_data(payload: &[u8]) -> Option<CdmProductData> {
+pub(crate) fn parse_product_data(payload: &[u8]) -> Option<CdmProductData> {
     if payload.len() < MIN_PRODUCT_DATA_LEN {
         return None;
     }
@@ -122,7 +122,7 @@ pub fn parse_product_data(payload: &[u8]) -> Option<CdmProductData> {
 
 /// Build a minimal `0x0391` request packet (just the 8-byte GMN header,
 /// no payload). The radar responds with a `0x0392` on the same port.
-pub fn build_product_data_request() -> [u8; 8] {
+pub(crate) fn build_product_data_request() -> [u8; 8] {
     let mut buf = [0u8; 8];
     buf[0..4].copy_from_slice(&MSG_CDM_PRODUCT_DATA_REQUEST.to_le_bytes());
     // payload_len = 0
@@ -132,14 +132,14 @@ pub fn build_product_data_request() -> [u8; 8] {
 /// `0x0393` — Set device alias. The MFD sends this to rename a device
 /// on the Garmin Marine Network. Payload: 30-byte alias string, NUL-padded.
 /// Sent to the device's IP on the CDM control port (50051).
-pub const MSG_CDM_SET_ALIAS: u32 = 0x0393;
+pub(crate) const MSG_CDM_SET_ALIAS: u32 = 0x0393;
 
 /// CDM control port used for alias-set and other CDM write operations.
-pub const CDM_CONTROL_PORT: u16 = 50051;
+pub(crate) const CDM_CONTROL_PORT: u16 = 50051;
 
 /// Build a `0x0393` set-alias packet. `alias` is truncated to 30 bytes
 /// and NUL-padded.
-pub fn build_set_alias(alias: &str) -> Vec<u8> {
+pub(crate) fn build_set_alias(alias: &str) -> Vec<u8> {
     let alias_bytes = alias.as_bytes();
     let copy_len = alias_bytes.len().min(30);
     let payload_len: u32 = 32; // 30 chars + 2 padding/null bytes
@@ -155,7 +155,7 @@ pub fn build_set_alias(alias: &str) -> Vec<u8> {
 /// Sourced from `research/garmin/radar-detection.md`. Returns `None`
 /// for unknown IDs (the caller should
 /// fall back to a generic "Garmin xHD" / "Garmin HD" label).
-pub fn product_name(product_id: u16) -> Option<&'static str> {
+pub(crate) fn product_name(product_id: u16) -> Option<&'static str> {
     Some(match product_id {
         0x010f => "GMR 18",
         0x0195 => "GMR 24 HD",

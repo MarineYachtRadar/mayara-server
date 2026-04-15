@@ -6,12 +6,12 @@ use crate::radar::{RadarError, RadarInfo};
 
 /// Command sender for the emulator radar.
 /// Since this is a simulated radar, most commands are just logged.
-pub struct Command {
+pub(crate) struct Command {
     key: String,
 }
 
 impl Command {
-    pub fn new(info: RadarInfo) -> Self {
+    pub(crate) fn new(info: RadarInfo) -> Self {
         Command { key: info.key() }
     }
 }

@@ -12,7 +12,7 @@ use crate::{
 
 use super::protocol::RadarModel;
 
-pub fn new(
+pub(crate) fn new(
     radar_id: String,
     sk_client_tx: tokio::sync::broadcast::Sender<SignalKDelta>,
     args: &Cli,
@@ -216,7 +216,7 @@ fn capabilities(model: &RadarModel) -> Capabilities {
     }
 }
 
-pub fn update_when_model_known(info: &mut RadarInfo, model: RadarModel, version: &str) {
+pub(crate) fn update_when_model_known(info: &mut RadarInfo, model: RadarModel, version: &str) {
     let model_name = model.to_string();
     log::debug!("update_when_model_known: {}", model_name);
     info.controls.set_model_name(model_name.to_string());

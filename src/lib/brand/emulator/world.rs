@@ -36,11 +36,11 @@ const KNOTS_TO_MS: f64 = 1852.0 / 3600.0; // 1 knot = 1852m/h = 0.5144 m/s
 const DEG_TO_RAD: f64 = PI / 180.0;
 
 /// Radius of the half-circle turn when reversing course (meters)
-pub const TURN_RADIUS: f64 = 100.0;
+pub(crate) const TURN_RADIUS: f64 = 100.0;
 
 /// Progress state for a half-circle turn maneuver
 #[derive(Clone, Debug)]
-pub struct TurnProgress {
+pub(crate) struct TurnProgress {
     /// Center of the turning circle
     pub center: GeoPosition,
     /// Turn radius in meters
@@ -57,7 +57,7 @@ pub struct TurnProgress {
 
 /// A moving target (boat)
 #[derive(Clone, Debug)]
-pub struct Target {
+pub(crate) struct Target {
     /// Current position
     pub position: GeoPosition,
     /// Heading in degrees (0 = North, 90 = East)
@@ -115,7 +115,7 @@ impl Target {
     }
 
     /// Start a port (counterclockwise) half-circle turn
-    pub fn start_port_turn(&mut self, radius: f64) {
+    pub(crate) fn start_port_turn(&mut self, radius: f64) {
         let heading_rad = self.heading * DEG_TO_RAD;
         // Port (left) direction is heading - π/2
         let center_bearing = heading_rad - PI / 2.0;
@@ -136,7 +136,7 @@ impl Target {
 
 /// A static buoy (small radar target)
 #[derive(Clone, Debug)]
-pub struct Buoy {
+pub(crate) struct Buoy {
     /// Position of the buoy
     pub position: GeoPosition,
     /// Radar return radius in meters (typically small, ~5m)
@@ -151,7 +151,7 @@ impl Buoy {
 
 /// A target moving in a circle
 #[derive(Clone, Debug)]
-pub struct CirclingTarget {
+pub(crate) struct CirclingTarget {
     /// Center of the circular path
     pub center: GeoPosition,
     /// Radius of the circular path in meters
@@ -218,7 +218,7 @@ impl CirclingTarget {
 
 /// Land area (stationary oblong)
 #[derive(Clone, Debug)]
-pub struct LandArea {
+pub(crate) struct LandArea {
     /// Center position
     pub center: GeoPosition,
     /// Half-width (perpendicular to orientation)
@@ -258,7 +258,7 @@ impl LandArea {
 }
 
 /// Cached local coordinates for efficient per-spoke lookups
-pub struct LocalCache {
+pub(crate) struct LocalCache {
     /// Land center in local coords
     land_center: (f64, f64),
     /// Target positions in local coords
@@ -274,7 +274,7 @@ pub struct LocalCache {
 }
 
 /// The simulated world
-pub struct EmulatorWorld {
+pub(crate) struct EmulatorWorld {
     /// Land area (fixed position)
     pub land: LandArea,
     /// Moving targets (east-moving boats)
@@ -292,7 +292,7 @@ pub struct EmulatorWorld {
 }
 
 impl EmulatorWorld {
-    pub fn new(initial_boat_pos: GeoPosition) -> Self {
+    pub(crate) fn new(initial_boat_pos: GeoPosition) -> Self {
         // Create land area 700m south, directly south of initial position
         let south_bearing = 180.0 * DEG_TO_RAD;
         let west_bearing = 270.0 * DEG_TO_RAD;
@@ -393,7 +393,7 @@ impl EmulatorWorld {
     }
 
     /// Update all moving objects based on elapsed time
-    pub fn update(&mut self, elapsed_secs: f64) {
+    pub(crate) fn update(&mut self, elapsed_secs: f64) {
         for target in &mut self.targets {
             target.update(elapsed_secs);
         }
@@ -409,7 +409,7 @@ impl EmulatorWorld {
     }
 
     /// Initiate port (counterclockwise) half-circle turns for all linear targets
-    pub fn reverse_all_targets(&mut self, radius: f64) {
+    pub(crate) fn reverse_all_targets(&mut self, radius: f64) {
         for target in &mut self.targets {
             target.start_port_turn(radius);
         }
@@ -423,7 +423,7 @@ impl EmulatorWorld {
     }
 
     /// Count how many targets are within the given range of the boat
-    pub fn count_visible_targets(&self, boat_pos: &GeoPosition, max_range: f64) -> usize {
+    pub(crate) fn count_visible_targets(&self, boat_pos: &GeoPosition, max_range: f64) -> usize {
         let max_range_sq = max_range * max_range;
         let meters_per_degree_lat: f64 = 111_320.0;
         let lat_rad = boat_pos.lat().to_radians();
@@ -459,7 +459,7 @@ impl EmulatorWorld {
 
     /// Update the local coordinate cache for the current boat position
     /// Call once per spoke batch before generating spokes
-    pub fn update_cache(&mut self, boat_pos: &GeoPosition) {
+    pub(crate) fn update_cache(&mut self, boat_pos: &GeoPosition) {
         const METERS_PER_DEGREE_LAT: f64 = 111_320.0;
 
         let lat_rad = boat_pos.lat().to_radians();
@@ -504,7 +504,7 @@ impl EmulatorWorld {
     /// sin_b, cos_b are precomputed sin/cos of bearing
     /// Returns 0-15 intensity value (0 = no return, 15 = strongest)
     #[inline]
-    pub fn get_intensity_fast(&self, sin_b: f64, cos_b: f64, distance: f64) -> u8 {
+    pub(crate) fn get_intensity_fast(&self, sin_b: f64, cos_b: f64, distance: f64) -> u8 {
         let cache = match &self.cache {
             Some(c) => c,
             None => return 0,
@@ -585,7 +585,7 @@ impl EmulatorWorld {
 
     /// Get the radar return intensity at a given position (legacy method)
     #[allow(dead_code)]
-    pub fn get_intensity(&self, _boat_pos: &GeoPosition, bearing_rad: f64, distance: f64) -> u8 {
+    pub(crate) fn get_intensity(&self, _boat_pos: &GeoPosition, bearing_rad: f64, distance: f64) -> u8 {
         self.get_intensity_fast(bearing_rad.sin(), bearing_rad.cos(), distance)
     }
 }

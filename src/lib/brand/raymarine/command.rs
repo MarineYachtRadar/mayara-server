@@ -11,7 +11,7 @@ use crate::radar::{RadarError, RadarInfo};
 mod quantum;
 mod rd;
 
-pub struct Command {
+pub(crate) struct Command {
     key: String,
     info: RadarInfo,
     model: BaseModel,
@@ -19,7 +19,7 @@ pub struct Command {
 }
 
 impl Command {
-    pub fn new(info: RadarInfo, model: BaseModel) -> Self {
+    pub(crate) fn new(info: RadarInfo, model: BaseModel) -> Self {
         Command {
             key: info.key(),
             info,
@@ -28,7 +28,7 @@ impl Command {
         }
     }
 
-    pub fn set_ranges(&mut self, ranges: Ranges) {
+    pub(crate) fn set_ranges(&mut self, ranges: Ranges) {
         self.info.ranges = ranges;
     }
 

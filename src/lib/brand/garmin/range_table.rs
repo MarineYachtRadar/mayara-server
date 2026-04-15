@@ -43,7 +43,7 @@ const RANGES_OFFSET: usize = 8;
 /// has been stripped. Returns the list of supported ranges in meters,
 /// or `None` if the body is malformed (truncated, count too large, or
 /// the declared length doesn't match the data we got).
-pub fn parse(payload: &[u8]) -> Option<Ranges> {
+pub(crate) fn parse(payload: &[u8]) -> Option<Ranges> {
     if payload.len() < RANGES_OFFSET {
         return None;
     }

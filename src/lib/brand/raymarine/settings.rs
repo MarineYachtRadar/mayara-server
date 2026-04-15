@@ -14,7 +14,7 @@ use crate::{
 
 use super::BaseModel;
 
-pub fn new(
+pub(crate) fn new(
     radar_id: String,
     sk_client_tx: tokio::sync::broadcast::Sender<SignalKDelta>,
     args: &Cli,
@@ -110,7 +110,7 @@ pub fn new(
     SharedControls::new(radar_id, sk_client_tx, args, controls)
 }
 
-pub fn update_when_model_known(
+pub(crate) fn update_when_model_known(
     controls: &mut SharedControls,
     model: &RaymarineModel,
     radar_info: &RadarInfo,

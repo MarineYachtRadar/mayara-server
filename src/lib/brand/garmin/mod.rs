@@ -54,7 +54,7 @@ const GARMIN_HD_RANGES_NAUTICAL: &[i32] = &[
 /// Supported Garmin radar types
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(dead_code)]
-pub enum GarminRadarType {
+pub(crate) enum GarminRadarType {
     /// Original HD radar: 720 spokes, 1-bit samples
     HD,
     /// xHD radar: 1440 spokes, 8-bit samples
@@ -82,7 +82,7 @@ impl Display for GarminRadarType {
 
 impl GarminRadarType {
     /// Returns the number of spokes per revolution for this radar type
-    pub fn spokes_per_revolution(&self) -> usize {
+    pub(crate) fn spokes_per_revolution(&self) -> usize {
         match self {
             GarminRadarType::HD => HD_SPOKES_PER_REVOLUTION,
             // Unsupported types default to enhanced protocol specs
@@ -91,7 +91,7 @@ impl GarminRadarType {
     }
 
     /// Returns the maximum spoke length for this radar type
-    pub fn max_spoke_len(&self) -> usize {
+    pub(crate) fn max_spoke_len(&self) -> usize {
         match self {
             GarminRadarType::HD => HD_MAX_SPOKE_LEN,
             _ => MAX_SPOKE_LEN,
@@ -99,7 +99,7 @@ impl GarminRadarType {
     }
 
     /// Returns the number of pixel values for this radar type
-    pub fn pixel_values(&self) -> u8 {
+    pub(crate) fn pixel_values(&self) -> u8 {
         match self {
             GarminRadarType::HD => HD_PIXEL_VALUES,
             _ => PIXEL_VALUES,
@@ -107,7 +107,7 @@ impl GarminRadarType {
     }
 
     /// Returns true if this radar type is currently supported
-    pub fn is_supported(&self) -> bool {
+    pub(crate) fn is_supported(&self) -> bool {
         matches!(self, GarminRadarType::HD | GarminRadarType::XHD)
     }
 }

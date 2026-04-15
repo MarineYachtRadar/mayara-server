@@ -14,7 +14,7 @@ use crate::{
     stream::SignalKDelta,
 };
 
-pub fn new(
+pub(crate) fn new(
     radar_id: String,
     sk_client_tx: tokio::sync::broadcast::Sender<SignalKDelta>,
     args: &Cli,
@@ -87,7 +87,7 @@ pub fn new(
     SharedControls::new(radar_id, sk_client_tx, args, controls)
 }
 
-pub fn update_when_model_known(
+pub(crate) fn update_when_model_known(
     controls: &mut SharedControls,
     model: Model,
     radar_info: &RadarInfo,
@@ -220,7 +220,7 @@ pub fn update_when_model_known(
 /// Refine controls based on 0xC409 TLV capabilities. Called after
 /// `update_when_model_known` for HALO models when the capability
 /// advertisement arrives from the radar.
-pub fn update_from_capabilities(
+pub(crate) fn update_from_capabilities(
     controls: &mut SharedControls,
     caps: &super::capabilities::NavicoCapabilities,
 ) {

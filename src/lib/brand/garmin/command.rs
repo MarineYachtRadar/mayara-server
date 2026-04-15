@@ -13,7 +13,7 @@ use crate::radar::{DopplerMode, Power, RadarError};
 /// Garmin command sender. In dual-range mode each range gets its own
 /// `Command` instance — Range B's instance has `range_b = true` and
 /// sends Range B opcodes instead of Range A ones.
-pub struct Command {
+pub(crate) struct Command {
     radar_type: GarminRadarType,
     send_addr: SocketAddrV4,
     socket: Option<UdpSocket>,
@@ -21,7 +21,7 @@ pub struct Command {
 }
 
 impl Command {
-    pub fn new(radar_type: GarminRadarType, send_addr: SocketAddrV4) -> Self {
+    pub(crate) fn new(radar_type: GarminRadarType, send_addr: SocketAddrV4) -> Self {
         Command {
             radar_type,
             send_addr,
@@ -30,7 +30,7 @@ impl Command {
         }
     }
 
-    pub fn new_range_b(radar_type: GarminRadarType, send_addr: SocketAddrV4) -> Self {
+    pub(crate) fn new_range_b(radar_type: GarminRadarType, send_addr: SocketAddrV4) -> Self {
         Command {
             radar_type,
             send_addr,

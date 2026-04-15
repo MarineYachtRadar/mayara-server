@@ -25,7 +25,7 @@ pub fn set_replay(replay: bool) {
 // This is like a SocketAddrV4 but with known layout
 #[derive(Deserialize, Copy, Clone)]
 #[repr(C)]
-pub struct NetworkSocketAddrV4 {
+pub(crate) struct NetworkSocketAddrV4 {
     addr: [u8; 4],
     port: [u8; 2],
 }
@@ -61,7 +61,7 @@ impl fmt::Debug for NetworkSocketAddrV4 {
 
 #[derive(Deserialize, Copy, Clone)]
 #[repr(C)]
-pub struct LittleEndianSocketAddrV4 {
+pub(crate) struct LittleEndianSocketAddrV4 {
     addr: [u8; 4],
     port: [u8; 2],
 }
@@ -96,7 +96,7 @@ impl fmt::Debug for LittleEndianSocketAddrV4 {
 }
 
 // this will be common for all our sockets
-pub fn new_socket() -> io::Result<socket2::Socket> {
+pub(crate) fn new_socket() -> io::Result<socket2::Socket> {
     let socket = socket2::Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
 
     // we're going to use read timeouts so that we don't hang waiting for packets
@@ -209,11 +209,12 @@ fn bind_to_broadcast(
 }
 
 /// Socket type for `create_udp_listen`.
-pub enum SocketType {
+pub(crate) enum SocketType {
     /// Auto-detect from address: multicast if the IP is in a multicast
     /// range, broadcast if in a broadcast range, unicast otherwise.
     Any,
     /// Unicast/plain: bind to INADDR_ANY on the given port.
+    #[allow(dead_code)]
     Unicast,
     /// Broadcast: set SO_BROADCAST and bind to the broadcast address.
     Broadcast,
@@ -224,7 +225,7 @@ pub enum SocketType {
 /// Create a `RadarSocket` for a listen address. If pcap replay is
 /// active, returns a replay-backed socket. Otherwise creates a real
 /// UDP socket bound according to `socket_type`.
-pub fn create_udp_listen(
+pub(crate) fn create_udp_listen(
     addr: &SocketAddrV4,
     nic_addr: &Ipv4Addr,
     socket_type: SocketType,
@@ -267,7 +268,7 @@ pub fn create_udp_listen(
     Ok(crate::replay::RadarSocket::Udp(socket))
 }
 
-pub fn create_multicast_send(addr: &SocketAddrV4, nic_addr: &Ipv4Addr) -> io::Result<UdpSocket> {
+pub(crate) fn create_multicast_send(addr: &SocketAddrV4, nic_addr: &Ipv4Addr) -> io::Result<UdpSocket> {
     let socket: socket2::Socket = new_socket()?;
 
     let socketaddr = SocketAddr::new(IpAddr::V4(*addr.ip()), addr.port());
@@ -279,7 +280,7 @@ pub fn create_multicast_send(addr: &SocketAddrV4, nic_addr: &Ipv4Addr) -> io::Re
     Ok(socket)
 }
 
-pub fn match_ipv4(addr: &Ipv4Addr, bcast: &Ipv4Addr, netmask: &Ipv4Addr) -> bool {
+pub(crate) fn match_ipv4(addr: &Ipv4Addr, bcast: &Ipv4Addr, netmask: &Ipv4Addr) -> bool {
     let r = addr & netmask;
     let b = bcast & netmask;
     r == b

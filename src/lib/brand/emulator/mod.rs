@@ -66,7 +66,7 @@ pub(super) fn new(_args: &Cli, _addresses: &mut Vec<LocatorAddress>) {
 }
 
 /// Create the emulator radar directly (called from locator when --emulator is set)
-pub fn create_emulator_radar(args: &Cli, radars: &SharedRadars, subsys: &SubsystemHandle) {
+pub(crate) fn create_emulator_radar(args: &Cli, radars: &SharedRadars, subsys: &SubsystemHandle) {
     log::info!("create_emulator_radar called");
 
     // Check if we already have an emulator radar

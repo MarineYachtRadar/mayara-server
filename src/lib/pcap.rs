@@ -12,7 +12,7 @@ use std::time::Duration;
 
 /// A single UDP packet extracted from a pcap file.
 #[derive(Debug, Clone)]
-pub struct PcapPacket {
+pub(crate) struct PcapPacket {
     /// Time offset from the first packet in the capture.
     pub timestamp: Duration,
     /// Source IP and port.
@@ -43,7 +43,7 @@ const ETHERTYPE_IPV4: u16 = 0x0800;
 const IP_PROTO_UDP: u8 = 17;
 
 /// Parse a pcap file (or gzipped pcap) and return all UDP packets.
-pub fn parse_file(path: &Path) -> io::Result<Vec<PcapPacket>> {
+pub(crate) fn parse_file(path: &Path) -> io::Result<Vec<PcapPacket>> {
     let data = if path.extension().map_or(false, |e| e == "gz") {
         let file = fs::File::open(path)?;
         let mut decoder = flate2::read::GzDecoder::new(file);
@@ -57,7 +57,7 @@ pub fn parse_file(path: &Path) -> io::Result<Vec<PcapPacket>> {
 }
 
 /// Parse pcap data from a byte slice.
-pub fn parse_bytes(data: &[u8]) -> io::Result<Vec<PcapPacket>> {
+pub(crate) fn parse_bytes(data: &[u8]) -> io::Result<Vec<PcapPacket>> {
     if data.len() < 24 {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "pcap too short"));
     }
@@ -181,7 +181,8 @@ fn parse_udp_packet(data: &[u8], timestamp: Duration) -> Option<PcapPacket> {
 
 /// Write packets back to a pcap file. Creates a valid pcap with
 /// Ethernet + IPv4 + UDP headers wrapping each payload.
-pub fn write_file(path: &Path, packets: &[PcapPacket]) -> io::Result<()> {
+#[cfg(test)]
+pub(crate) fn write_file(path: &Path, packets: &[PcapPacket]) -> io::Result<()> {
     let mut data = Vec::new();
 
     // Global header (24 bytes): magic, version 2.4, timezone 0, sigfigs 0, snaplen 65535, linktype 1 (Ethernet)

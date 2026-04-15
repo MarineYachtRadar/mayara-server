@@ -24,6 +24,7 @@ Do not add error handling, fallbacks, or validation for scenarios that cannot ha
 - Handle errors explicitly at system boundaries
 - No magic numbers; use named constants
 - Documentation describes current state, not development history - avoid changelog-style language that will become stale
+- Prefer minimal visibility: use `pub(crate)` or private over `pub` unless the item is part of the public API
 
 ### Type Safety
 

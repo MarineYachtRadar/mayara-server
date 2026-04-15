@@ -22,7 +22,7 @@ const SPOKES_PER_BATCH: usize = 32; // Like Navico
 const KNOTS_TO_MS: f64 = 1852.0 / 3600.0;
 const DEG_TO_RAD: f64 = PI / 180.0;
 
-pub struct EmulatorReportReceiver {
+pub(crate) struct EmulatorReportReceiver {
     common: CommonRadar,
     command_sender: Option<Command>,
 
@@ -45,7 +45,7 @@ pub struct EmulatorReportReceiver {
 }
 
 impl EmulatorReportReceiver {
-    pub fn new(args: &Cli, info: RadarInfo, radars: SharedRadars) -> Self {
+    pub(crate) fn new(args: &Cli, info: RadarInfo, radars: SharedRadars) -> Self {
         let key = info.key();
 
         log::debug!("{}: Creating EmulatorReportReceiver", key);

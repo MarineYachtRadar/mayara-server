@@ -18,7 +18,7 @@ use super::protocol::{
     INSTALL_TAG_ANTENNA_OFFSET, REQUEST_STATE_BATCH, REQUEST_STATE_PROPERTIES,
 };
 
-pub struct Command {
+pub(crate) struct Command {
     key: String,
     info: RadarInfo,
     model: Model,
@@ -27,7 +27,7 @@ pub struct Command {
 }
 
 impl Command {
-    pub fn new(fake_errors: bool, info: RadarInfo) -> Self {
+    pub(crate) fn new(fake_errors: bool, info: RadarInfo) -> Self {
         Command {
             key: info.key(),
             info,
@@ -37,7 +37,7 @@ impl Command {
         }
     }
 
-    pub fn set_model(&mut self, model: Model) {
+    pub(crate) fn set_model(&mut self, model: Model) {
         self.model = model;
     }
 

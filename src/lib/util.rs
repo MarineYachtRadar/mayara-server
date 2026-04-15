@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-pub fn c_string(bytes: &[u8]) -> Option<&str> {
+pub(crate) fn c_string(bytes: &[u8]) -> Option<&str> {
     let bytes_without_null = match bytes.iter().position(|&b| b == 0) {
         Some(ix) => &bytes[..ix],
         None => bytes,
@@ -10,7 +10,7 @@ pub fn c_string(bytes: &[u8]) -> Option<&str> {
 
     std::str::from_utf8(bytes_without_null).ok()
 }
-pub fn c_wide_string(bytes: &[u8]) -> String {
+pub(crate) fn c_wide_string(bytes: &[u8]) -> String {
     let mut res = String::new();
 
     let mut i = bytes.iter();
@@ -26,10 +26,10 @@ pub fn c_wide_string(bytes: &[u8]) -> String {
     res
 }
 
-pub struct PrintableSlice<'a>(&'a [u8]);
+pub(crate) struct PrintableSlice<'a>(&'a [u8]);
 
 impl<'a> PrintableSlice<'a> {
-    pub fn new<T>(data: &'a T) -> PrintableSlice<'a>
+    pub(crate) fn new<T>(data: &'a T) -> PrintableSlice<'a>
     where
         T: ?Sized + AsRef<[u8]> + 'a,
     {
@@ -56,10 +56,10 @@ impl fmt::Display for PrintableSlice<'_> {
     }
 }
 
-pub struct PrintableSpoke<'a>(&'a [u8]);
+pub(crate) struct PrintableSpoke<'a>(&'a [u8]);
 
 impl<'a> PrintableSpoke<'a> {
-    pub fn new<T>(data: &'a T) -> PrintableSpoke<'a>
+    pub(crate) fn new<T>(data: &'a T) -> PrintableSpoke<'a>
     where
         T: ?Sized + AsRef<[u8]> + 'a,
     {

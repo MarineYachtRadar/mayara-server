@@ -15,7 +15,7 @@ use super::protocol::tlv;
 
 /// Capabilities parsed from the 0xC409 TLV data block.
 #[derive(Debug, Clone)]
-pub struct NavicoCapabilities {
+pub(crate) struct NavicoCapabilities {
     /// Bitmask of supported operating modes (from TLV type 2).
     pub supported_modes_mask: u32,
     /// Bitmask of supported interference rejection levels (TLV type 3).
@@ -44,7 +44,7 @@ pub struct NavicoCapabilities {
 
 impl NavicoCapabilities {
     /// Parse a 0xC409 StateDataBlock payload (after the 2-byte opcode header).
-    pub fn parse(data: &[u8]) -> Self {
+    pub(crate) fn parse(data: &[u8]) -> Self {
         let mut caps = NavicoCapabilities {
             supported_modes_mask: 0,
             interference_reject_mask: 0,
@@ -168,23 +168,23 @@ impl NavicoCapabilities {
     }
 
     /// Whether Doppler mode is supported.
-    pub fn has_doppler(&self) -> bool {
+    pub(crate) fn has_doppler(&self) -> bool {
         self.supported_modes_mask & tlv::MODE_DOPPLER != 0
     }
 
     /// Whether bird mode is supported.
     #[allow(dead_code)]
-    pub fn has_bird_mode(&self) -> bool {
+    pub(crate) fn has_bird_mode(&self) -> bool {
         self.supported_modes_mask & tlv::MODE_BIRD != 0
     }
 
     /// Instrumented range minimum in meters.
-    pub fn range_min_m(&self) -> i32 {
+    pub(crate) fn range_min_m(&self) -> i32 {
         (self.instrumented_range_min_dm / 10) as i32
     }
 
     /// Instrumented range maximum in meters.
-    pub fn range_max_m(&self) -> i32 {
+    pub(crate) fn range_max_m(&self) -> i32 {
         (self.instrumented_range_max_dm / 10) as i32
     }
 }

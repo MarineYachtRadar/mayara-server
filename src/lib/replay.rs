@@ -28,7 +28,7 @@ use crate::pcap::{self, PcapPacket};
 /// A socket that can receive UDP packets from either a real network
 /// socket or from the pcap replay dispatcher. Receivers use this
 /// instead of `tokio::net::UdpSocket` directly.
-pub enum RadarSocket {
+pub(crate) enum RadarSocket {
     /// Real network UDP socket.
     Udp(UdpSocket),
     /// Pcap replay channel.
@@ -51,14 +51,14 @@ impl RadarSocket {
 
 /// A packet received from replay, including the original source address.
 #[derive(Debug, Clone)]
-pub struct ReplayPacket {
+pub(crate) struct ReplayPacket {
     pub data: Vec<u8>,
     pub from: SocketAddrV4,
 }
 
 /// A replay receiver that can be used in place of a UDP socket.
 /// Wraps an mpsc receiver of `ReplayPacket`.
-pub struct ReplayReceiver {
+pub(crate) struct ReplayReceiver {
     rx: mpsc::Receiver<ReplayPacket>,
 }
 
@@ -117,7 +117,7 @@ pub fn init(path: &Path) -> io::Result<()> {
 }
 
 /// Returns true if pcap replay is active.
-pub fn is_active() -> bool {
+pub(crate) fn is_active() -> bool {
     REPLAY.get().is_some()
 }
 
@@ -126,7 +126,7 @@ pub fn is_active() -> bool {
 ///
 /// The returned `ReplayReceiver` has the same `recv_buf_from` API as
 /// `UdpSocket`, so receivers can use it with minimal code changes.
-pub fn create_listen(addr: &SocketAddrV4) -> Option<ReplayReceiver> {
+pub(crate) fn create_listen(addr: &SocketAddrV4) -> Option<ReplayReceiver> {
     let state = REPLAY.get()?;
 
     let (tx, rx) = mpsc::channel(512);

@@ -13,7 +13,7 @@ use crate::radar::RadarInfo;
 use crate::radar::range::Ranges;
 use crate::radar::settings::ControlId;
 
-pub fn get_project_dirs() -> ProjectDirs {
+pub(crate) fn get_project_dirs() -> ProjectDirs {
     directories::ProjectDirs::from("net", "verruijt", "mayara")
         .expect("Cannot find project directories")
 }
@@ -49,7 +49,7 @@ pub struct ExclusionRect {
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
-pub struct Radar {
+pub(crate) struct Radar {
     pub id: usize,
     pub user_name: String,
     #[serde(default)]
@@ -95,7 +95,7 @@ pub struct Radar {
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
-pub struct Config {
+pub(crate) struct Config {
     pub radars: HashMap<String, Radar>,
 }
 
@@ -107,7 +107,7 @@ pub(crate) struct Persistence {
 }
 
 impl Persistence {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         if crate::replay::is_active() {
             debug!("persistence disabled in pcap replay mode");
             return Persistence {
@@ -216,7 +216,7 @@ impl Persistence {
         };
     }
 
-    pub fn store(&mut self, radar_info: &RadarInfo) {
+    pub(crate) fn store(&mut self, radar_info: &RadarInfo) {
         if self.path.as_os_str().is_empty() {
             return; // Pcap replay mode — no persistence
         }
@@ -358,7 +358,7 @@ impl Persistence {
         }
     }
 
-    pub fn update_info_from_persistence(&self, info: &mut RadarInfo) {
+    pub(crate) fn update_info_from_persistence(&self, info: &mut RadarInfo) {
         if let Some(p) = self.config.radars.get(&info.key()) {
             if p.model_name.is_some() {
                 info.controls

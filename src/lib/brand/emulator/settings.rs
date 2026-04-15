@@ -8,7 +8,7 @@ use crate::radar::settings::{
 use crate::radar::units::Units;
 use crate::stream::SignalKDelta;
 
-pub fn new(
+pub(crate) fn new(
     radar_id: String,
     sk_client_tx: tokio::sync::broadcast::Sender<SignalKDelta>,
     args: &Cli,
