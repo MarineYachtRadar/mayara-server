@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **replay:** pcap replay infrastructure for all radar brands (#99) ([PR #99](https://github.com/MarineYachtRadar/mayara-server/pull/99))
 - **furuno:** 252-level palette, Tile echo decoder, and EchoFormat control (#108) ([PR #108](https://github.com/MarineYachtRadar/mayara-server/pull/108))
 - **navico:** scanner type identification, capability bitmasks, and deferred radar visibility (#116) ([PR #116](https://github.com/MarineYachtRadar/mayara-server/pull/116))
+- **navdata:** seed --static-position for real radars (#119) ([PR #119](https://github.com/MarineYachtRadar/mayara-server/pull/119))
 
 ### Changed
 
