@@ -31,6 +31,16 @@ use crate::radar::settings::ControlId;
 use crate::radar::{Power, RadarError, RadarInfo};
 use crate::util::PrintableSpoke;
 
+/// Furuno wire-format decoding mode. When Target Analyzer is active on NXT
+/// radars, each echo byte encodes `[dopplerClass:2 | intensity:4 | 00:2]`
+/// rather than a plain intensity in 0..PIXEL_VALUES. The report receiver
+/// rebuilds the `wire_to_legend` table when this mode changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DopplerWireMode {
+    Off,
+    On,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum ReceiveAddressType {
     Both,
@@ -79,7 +89,7 @@ pub(crate) struct FurunoReportReceiver {
     /// Precomputed raw-byte → palette-index lookup table. Built when the model
     /// and legend are known. DRS4W/DRS use an 18th-root gamma curve to spread
     /// the bottom-heavy echo distribution; other models use a linear mapping.
-    echo_lut: [u8; 256],
+    wire_to_legend: [u8; 256],
 }
 
 impl FurunoReportReceiver {
@@ -99,7 +109,8 @@ impl FurunoReportReceiver {
             .map(RadarModel::from_model_name)
             .unwrap_or(RadarModel::Unknown);
         let low_power = model.is_low_power();
-        let echo_lut = Self::build_echo_lut(info.pixel_colors(), low_power);
+        let wire_to_legend =
+            Self::wire_to_legend(&info.get_legend(), DopplerWireMode::Off, low_power);
 
         let control_update_rx = info.control_update_subscribe();
         let blob_tx = radars.get_blob_tx();
@@ -129,7 +140,7 @@ impl FurunoReportReceiver {
             prev_angle: [0, 0],
             guard_zone_alarm: [false, false],
             alarm_active: false,
-            echo_lut,
+            wire_to_legend,
         }
     }
 
@@ -930,8 +941,9 @@ impl FurunoReportReceiver {
             );
             self.model = model;
             let low_power = model.is_low_power();
-            self.echo_lut = Self::build_echo_lut(
-                self.common.info.pixel_colors(),
+            self.wire_to_legend = Self::wire_to_legend(
+                &self.common.info.get_legend(),
+                self.doppler_wire_mode(),
                 low_power,
             );
             if low_power {
@@ -1154,7 +1166,7 @@ impl FurunoReportReceiver {
                 SPOKE_LEN,
             );
 
-            let echo_lut = &self.echo_lut;
+            let wire_to_legend = &self.wire_to_legend;
             if is_range_b {
                 Self::add_spoke_to_common(
                     self.common_b.as_mut().unwrap(),
@@ -1162,7 +1174,7 @@ impl FurunoReportReceiver {
                     angle,
                     heading,
                     &send_spoke,
-                    echo_lut,
+                    wire_to_legend,
                 );
             } else {
                 Self::add_spoke_to_common(
@@ -1171,7 +1183,7 @@ impl FurunoReportReceiver {
                     angle,
                     heading,
                     &send_spoke,
-                    echo_lut,
+                    wire_to_legend,
                 );
             }
 
@@ -1297,7 +1309,7 @@ impl FurunoReportReceiver {
                 scale: TILE_SCALE,
             };
 
-            let echo_lut = &self.echo_lut;
+            let wire_to_legend = &self.wire_to_legend;
             if is_range_b {
                 Self::add_spoke_to_common(
                     self.common_b.as_mut().unwrap(),
@@ -1305,7 +1317,7 @@ impl FurunoReportReceiver {
                     angle,
                     heading,
                     &send_spoke,
-                    echo_lut,
+                    wire_to_legend,
                 );
             } else {
                 Self::add_spoke_to_common(
@@ -1314,7 +1326,7 @@ impl FurunoReportReceiver {
                     angle,
                     heading,
                     &send_spoke,
-                    echo_lut,
+                    wire_to_legend,
                 );
             }
 
@@ -1477,14 +1489,23 @@ impl FurunoReportReceiver {
         out
     }
 
-    /// Build the raw-byte → palette-index lookup table.
+    /// Build the raw-byte → legend-index lookup table.
     ///
     /// Low-power radars (DRS4W, DRS) have a bottom-heavy echo distribution
     /// where 95% of returns are below raw value 64. An 18th-root (gamma 0.056)
     /// curve aggressively compresses the range so that even weak returns
     /// reach red, matching the Furuno iOS app's vivid visual output.
     /// Full-power models (NXT, FAR) use a linear mapping.
-    fn build_echo_lut(pixel_colors: u8, low_power: bool) -> [u8; 256] {
+    ///
+    /// When `doppler_mode` is `On`, the Target Analyzer wire format is
+    /// decoded — this is populated in a later commit. For now both modes
+    /// produce the same intensity mapping.
+    fn wire_to_legend(
+        legend: &crate::radar::Legend,
+        _doppler_mode: DopplerWireMode,
+        low_power: bool,
+    ) -> [u8; 256] {
+        let pixel_colors = legend.pixel_colors;
         let pixel_max = pixel_colors.saturating_sub(1) as u16;
         let usable = pixel_max.saturating_sub(ECHO_FLOOR);
         let mut lut = [0u8; 256];
@@ -1500,13 +1521,30 @@ impl FurunoReportReceiver {
         lut
     }
 
+    /// Derive the wire-decoding mode from the current Doppler control value.
+    /// `0` (Off) → `Off`; any non-zero value (Target, Rain) → `On`.
+    fn doppler_wire_mode(&self) -> DopplerWireMode {
+        let v = self
+            .common
+            .info
+            .controls
+            .get(&ControlId::Doppler)
+            .and_then(|c| c.value)
+            .unwrap_or(0.0);
+        if v == 0.0 {
+            DopplerWireMode::Off
+        } else {
+            DopplerWireMode::On
+        }
+    }
+
     fn add_spoke_to_common(
         common: &mut CommonRadar,
         metadata: &FurunoSpokeMetadata,
         angle: SpokeBearing,
         heading: SpokeBearing,
         sweep: &[u8],
-        echo_lut: &[u8; 256],
+        wire_to_legend: &[u8; 256],
     ) {
         if common.replay {
             let _ = common
@@ -1530,7 +1568,7 @@ impl FurunoReportReceiver {
         let mut data = vec![0; sweep.len()];
 
         for (i, b) in sweep.iter().enumerate() {
-            data[i] = echo_lut[*b as usize];
+            data[i] = wire_to_legend[*b as usize];
         }
 
         log::trace!(
