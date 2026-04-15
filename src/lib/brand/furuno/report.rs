@@ -1922,6 +1922,33 @@ mod tests {
     }
 
     #[test]
+    fn wire_to_legend_on_uses_16_level_gradient_per_band() {
+        // Legend with 16 sub-levels per Doppler band, mirroring what
+        // set_doppler_levels(16) + set_has_rain_class(true) produces.
+        let legend = Legend {
+            pixels: Vec::new(),
+            pixel_colors: 120,
+            history_start: 0,
+            doppler_approaching: Some((120, 16)),
+            doppler_receding: Some((136, 16)),
+            doppler_rain: Some((152, 16)),
+            strong_return: 0,
+            medium_return: 0,
+            low_return: 0,
+            static_background: None,
+        };
+        let lut =
+            FurunoReportReceiver::wire_to_legend(&legend, DopplerWireMode::On, false);
+        // Each step of 4 in the raw byte moves one slot in the legend.
+        assert_eq!(lut[0x80], 120, "approaching lowest intensity");
+        assert_eq!(lut[0x84], 121);
+        assert_eq!(lut[0xBC], 135, "approaching highest intensity");
+        assert_eq!(lut[0x00], 0, "raw byte 0 is transparent");
+        assert_eq!(lut[0x04], 153, "rain second-lowest intensity");
+        assert_eq!(lut[0x3C], 167, "rain highest intensity");
+    }
+
+    #[test]
     fn wire_to_legend_on_without_rain_slot_falls_back_to_intensity() {
         let mut legend = nxt_ta_legend();
         legend.doppler_rain = None;

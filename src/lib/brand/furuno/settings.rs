@@ -366,6 +366,10 @@ pub(crate) fn update_when_model_known(info: &mut RadarInfo, model: RadarModel, v
         // NXT radars encode rain as a distinct class on the wire when
         // Target Analyzer is active. Reserve a legend slot for it.
         info.set_has_rain_class(true);
+        // Each Doppler band carries a 4-bit intensity on the wire (16 levels).
+        // Reserve 16 legend slots per direction so the UI can render an
+        // intensity gradient instead of a single flat color.
+        info.set_doppler_levels(16);
     }
     if cap.watchman {
         info.controls
