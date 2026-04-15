@@ -363,6 +363,9 @@ pub(crate) fn update_when_model_known(info: &mut RadarInfo, model: RadarModel, v
         };
         info.controls
             .add(new_list(ControlId::Doppler, doppler_options));
+        // NXT radars encode rain as a distinct class on the wire when
+        // Target Analyzer is active. Reserve a legend slot for it.
+        info.set_has_rain_class(true);
     }
     if cap.watchman {
         info.controls
