@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **furuno:** 252-level palette, Tile echo decoder, and EchoFormat control (#108) ([PR #108](https://github.com/MarineYachtRadar/mayara-server/pull/108))
 - **navico:** scanner type identification, capability bitmasks, and deferred radar visibility (#116) ([PR #116](https://github.com/MarineYachtRadar/mayara-server/pull/116))
 - **navdata:** seed --static-position for real radars (#119) ([PR #119](https://github.com/MarineYachtRadar/mayara-server/pull/119))
+- **furuno:** wire 3-band Target Analyzer Doppler format into wire_to_legend (#131) ([PR #131](https://github.com/MarineYachtRadar/mayara-server/pull/131))
 
 ### Changed
 
