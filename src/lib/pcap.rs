@@ -42,7 +42,11 @@ const ETHERTYPE_IPV4: u16 = 0x0800;
 /// UDP IP protocol number.
 const IP_PROTO_UDP: u8 = 17;
 
-/// Parse a pcap file (or gzipped pcap) and return all UDP packets.
+/// Parse a pcap or NND file (optionally gzipped) and return all UDP packets.
+///
+/// Auto-detects the file format: NND files start with `Time:`, pcap files
+/// start with a 4-byte magic number. Both `.gz` and uncompressed files are
+/// supported.
 pub(crate) fn parse_file(path: &Path) -> io::Result<Vec<PcapPacket>> {
     let data = if path.extension().map_or(false, |e| e == "gz") {
         let file = fs::File::open(path)?;
@@ -53,6 +57,11 @@ pub(crate) fn parse_file(path: &Path) -> io::Result<Vec<PcapPacket>> {
     } else {
         fs::read(path)?
     };
+
+    if crate::nnd::is_nnd(&data) {
+        return crate::nnd::parse_bytes(&data);
+    }
+
     parse_bytes(&data)
 }
 

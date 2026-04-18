@@ -1156,6 +1156,7 @@ impl FurunoReportReceiver {
             sweep = &sweep[4..];
 
             let range_idx = if is_range_b { 1 } else { 0 };
+
             let (mut generic_spoke, used) = match metadata.encoding {
                 0 => Self::decode_sweep_encoding_0(sweep),
                 1 => Self::decode_sweep_encoding_1(sweep, sweep_len),

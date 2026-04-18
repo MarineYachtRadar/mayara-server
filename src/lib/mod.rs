@@ -19,6 +19,7 @@ pub mod brand;
 pub mod config;
 pub mod locator;
 pub mod navdata;
+pub mod nnd;
 pub mod pcap;
 pub mod replay;
 pub mod network;

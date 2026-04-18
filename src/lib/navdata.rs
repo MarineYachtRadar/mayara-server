@@ -23,7 +23,9 @@ use tokio_graceful_shutdown::SubsystemHandle;
 use crate::{
     Cli,
     ais::AisVesselStore,
+    nnd::NMEA_REPLAY_ADDRESS,
     radar::{GeoPosition, RadarError},
+    replay,
     stream::SignalKDelta,
 };
 
@@ -297,6 +299,44 @@ impl NavigationData {
         subsys: SubsystemHandle,
         rx_ip_change: Receiver<()>,
     ) -> Result<(), Error> {
+        // In NND replay mode, consume NMEA sentences from the replay channel
+        // instead of connecting to a live TCP/UDP source.
+        if replay::is_active() {
+            if let Some(mut rx) = replay::create_listen(&NMEA_REPLAY_ADDRESS) {
+                // Ensure we have an NMEA parser even if --nmea0183 wasn't passed
+                if self.nmea_parser.is_none() {
+                    self.nmea_parser = Some(NmeaParser::new());
+                }
+                log::info!("NavData: listening for NMEA replay packets");
+                let mut buf = Vec::with_capacity(1024);
+                loop {
+                    tokio::select! { biased;
+                        _ = subsys.on_shutdown_requested() => {
+                            return Ok(());
+                        },
+                        result = rx.recv_buf_from(&mut buf) => {
+                            match result {
+                                Ok((len, _from)) => {
+                                    if let Ok(text) = std::str::from_utf8(&buf[..len]) {
+                                        for line in text.lines() {
+                                            let trimmed = line.trim();
+                                            if trimmed.starts_with('$') || trimmed.starts_with('!') {
+                                                if let Err(e) = self.parse_nmea0183(trimmed) {
+                                                    log::warn!("NMEA replay: {}", e);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    buf.clear();
+                                }
+                                Err(_) => return Ok(()),
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         log::debug!("{} run_loop (re)start", self.what);
         let mut rx_ip_change = rx_ip_change;
         let navigation_address = self.args.navigation_address.clone();
