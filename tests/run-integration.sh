@@ -42,6 +42,6 @@ echo "Server ready (pid ${SERVER_PID}), running tests..."
 # Run all tests including integration tests
 MAYARA_TEST_URL="${BASE_URL}" \
 MAYARA_TEST_WS_URL="ws://localhost:${PORT}" \
-cargo test -- --include-ignored
+cargo test --features pcap-replay -- --include-ignored
 
 echo "All tests passed."
