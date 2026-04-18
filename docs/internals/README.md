@@ -16,7 +16,7 @@ Mayara is structured in three layers:
 │    Controls · Ranges · Spokes · Target Tracking   │
 ├──────────────────────────────────────────────────┤
 │              Brand Implementations                │
-│     Navico · Furuno · Garmin · Raymarine          │
+│  Navico · Furuno · Garmin · Koden · Raymarine     │
 │     Locator · Report Parser · Command Sender      │
 └──────────────────────────────────────────────────┘
          │                            │
