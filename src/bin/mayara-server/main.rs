@@ -3,7 +3,9 @@ extern crate tokio;
 use clap::Parser;
 use env_logger::Env;
 use log::{info, warn};
-use miette::{IntoDiagnostic, Result};
+#[cfg(feature = "pcap-replay")]
+use miette::IntoDiagnostic;
+use miette::Result;
 use std::time::Duration;
 use tokio_graceful_shutdown::{SubsystemBuilder, Toplevel};
 use web::Web;
@@ -11,7 +13,9 @@ use web::Web;
 mod web;
 
 use mayara;
-use mayara::{Cli, network, replay};
+use mayara::{Cli, network};
+#[cfg(feature = "pcap-replay")]
+use mayara::replay;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -33,6 +37,7 @@ async fn main() -> Result<()> {
 
     network::set_replay(args.is_replay());
 
+    #[cfg(feature = "pcap-replay")]
     if let Some(pcap_path) = args.pcap_file() {
         replay::init(std::path::Path::new(pcap_path)).into_diagnostic()?;
     }

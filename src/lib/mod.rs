@@ -19,7 +19,9 @@ pub mod brand;
 pub mod config;
 pub mod locator;
 pub mod navdata;
-pub mod nnd;
+#[cfg(feature = "pcap-replay")]
+pub(crate) mod nnd;
+#[cfg(feature = "pcap-replay")]
 pub mod pcap;
 pub mod replay;
 pub mod network;
@@ -94,11 +96,13 @@ pub struct Cli {
     #[arg(short, long, default_value_t = false)]
     pub replay: bool,
 
-    /// Replay a pcap file through the full radar pipeline
+    /// Replay a pcap/nnd file through the full radar pipeline
+    #[cfg(feature = "pcap-replay")]
     #[arg(long, value_name = "FILE")]
     pub pcap: Option<String>,
 
     /// Repeat pcap replay in a loop (only with --pcap)
+    #[cfg(feature = "pcap-replay")]
     #[arg(long, default_value_t = false, requires = "pcap")]
     pub repeat: bool,
 
@@ -155,10 +159,15 @@ pub struct StaticPosition {
 impl Cli {
     /// Returns true if any replay mode is active (pcap or legacy).
     pub fn is_replay(&self) -> bool {
-        self.replay || self.pcap.is_some()
+        #[cfg(feature = "pcap-replay")]
+        if self.pcap.is_some() {
+            return true;
+        }
+        self.replay
     }
 
     /// Returns the pcap file path if `--pcap <file>` was specified.
+    #[cfg(feature = "pcap-replay")]
     pub fn pcap_file(&self) -> Option<&str> {
         self.pcap.as_deref()
     }
@@ -511,6 +520,7 @@ pub async fn start_session(
     }));
 
     // Start pcap replay dispatcher after the locator (which registers listeners)
+    #[cfg(feature = "pcap-replay")]
     if replay::is_active() {
         let repeat = args.repeat;
         subsystem.start(SubsystemBuilder::new("PcapReplay", move |subsys| async move {

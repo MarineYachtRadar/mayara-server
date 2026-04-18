@@ -12,6 +12,7 @@
 
 use std::io;
 use std::net::{Ipv4Addr, SocketAddrV4};
+use std::path::Path;
 use std::time::Duration;
 
 use crate::pcap::PcapPacket;
@@ -55,9 +56,11 @@ pub(crate) fn is_nnd(data: &[u8]) -> bool {
 /// NND demo recordings don't contain beacon/discovery packets (the radar
 /// was already discovered before the recording started). We synthesize
 /// minimal beacon and model report packets at timestamp 0 so the Furuno
-/// locator can detect the radar.
-pub(crate) fn parse_bytes(data: &[u8]) -> io::Result<Vec<PcapPacket>> {
-    let mut packets = synthesize_beacon_packets();
+/// locator can detect the radar. The model string is extracted from the
+/// filename (e.g., "DRS25A-NXT" from "Seattle_TZT3_DRS25A-NXT_...nnd.gz").
+pub(crate) fn parse_bytes(data: &[u8], path: &Path) -> io::Result<Vec<PcapPacket>> {
+    let model = model_from_filename(path);
+    let mut packets = synthesize_beacon_packets(&model);
     let mut pos = 0;
     let mut current_ts = Duration::ZERO;
 
@@ -261,12 +264,35 @@ fn is_beacon_report(payload: &[u8]) -> bool {
         && payload[16] == b'R'
 }
 
+/// Extract a Furuno model string from the NND filename.
+///
+/// Looks for substrings starting with "DRS" or "FAR" (the prefixes the
+/// Furuno locator requires). Hyphens are stripped since the locator
+/// matches e.g. "DRS25ANXT" not "DRS25A-NXT". Falls back to "DRS4DNXT"
+/// if no model is found.
+fn model_from_filename(path: &Path) -> String {
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        // Strip .nnd from .nnd.gz (file_stem gives "foo.nnd")
+        .map(|s| s.strip_suffix(".nnd").unwrap_or(s))
+        .unwrap_or("");
+
+    for part in stem.split('_') {
+        let upper = part.to_ascii_uppercase();
+        if upper.starts_with("DRS") || upper.starts_with("FAR") {
+            return upper.replace('-', "");
+        }
+    }
+    "DRS4DNXT".to_string()
+}
+
 /// Synthesize beacon and model report packets for radar discovery.
 ///
 /// NND demo files lack beacon packets. We craft a 32-byte beacon report
-/// and a 170-byte model report with "DRS25ANXT" so the Furuno locator
-/// recognizes the radar and creates a RadarInfo.
-fn synthesize_beacon_packets() -> Vec<PcapPacket> {
+/// and a 170-byte model report so the Furuno locator recognizes the radar
+/// and creates a RadarInfo.
+fn synthesize_beacon_packets(model: &str) -> Vec<PcapPacket> {
     // 32-byte beacon report: header[0..11] + length[11] + pad[12..16] + name[16..24]
     let mut beacon = [0u8; 32];
     beacon[..BEACON_REPORT_HEADER.len()].copy_from_slice(&BEACON_REPORT_HEADER);
@@ -278,7 +304,9 @@ fn synthesize_beacon_packets() -> Vec<PcapPacket> {
     let mut model_report = [0u8; 170];
     model_report[..BEACON_REPORT_HEADER.len()].copy_from_slice(&BEACON_REPORT_HEADER);
     model_report[11] = 162; // length = 170 - 8
-    model_report[24..33].copy_from_slice(b"DRS25ANXT"); // model string
+    let model_bytes = model.as_bytes();
+    let copy_len = model_bytes.len().min(32); // model field is 32 bytes
+    model_report[24..24 + copy_len].copy_from_slice(&model_bytes[..copy_len]);
 
     vec![
         PcapPacket {
@@ -367,5 +395,22 @@ mod tests {
         let mut payload = vec![0u8; 8]; // 8-byte header
         payload.extend_from_slice(b"$ARPA,0,0,0032,0000,0032,\x00\x12\x04");
         assert!(classify_payload(&payload, Duration::ZERO).is_none());
+    }
+
+    #[test]
+    fn model_from_nnd_filename() {
+        assert_eq!(
+            model_from_filename(Path::new("Seattle_TZT3_DRS25A-NXT_TargetAnalyzer_ON.nnd.gz")),
+            "DRS25ANXT"
+        );
+        assert_eq!(
+            model_from_filename(Path::new("capture_FAR-2127_test.nnd")),
+            "FAR2127"
+        );
+        // Fallback when no model found
+        assert_eq!(
+            model_from_filename(Path::new("unknown_recording.nnd.gz")),
+            "DRS4DNXT"
+        );
     }
 }

@@ -12,17 +12,23 @@
 //!   pcap timestamps (for `--replay <file>` interactive use)
 //! - **Instant**: all packets are sent as fast as possible (for tests)
 
+#[cfg(feature = "pcap-replay")]
 use std::collections::HashMap;
 use tokio::net::UdpSocket;
 use std::io;
 use std::net::{SocketAddr, SocketAddrV4};
+#[cfg(feature = "pcap-replay")]
 use std::path::Path;
+#[cfg(feature = "pcap-replay")]
 use std::sync::{Arc, Mutex, OnceLock};
+#[cfg(feature = "pcap-replay")]
 use std::time::Duration;
 
 use tokio::sync::mpsc;
+#[cfg(feature = "pcap-replay")]
 use tokio::time::sleep;
 
+#[cfg(feature = "pcap-replay")]
 use crate::pcap::{self, PcapPacket};
 
 /// A socket that can receive UDP packets from either a real network
@@ -80,24 +86,28 @@ impl ReplayReceiver {
     }
 }
 
-/// Global replay state. Set once at startup when `--replay <file>` is used.
+// --- pcap-replay feature: global state and init/run ---
+
+#[cfg(feature = "pcap-replay")]
 static REPLAY: OnceLock<Arc<ReplayState>> = OnceLock::new();
 
-/// When true, replay uses instant timing regardless of the `realistic_timing` parameter.
+#[cfg(feature = "pcap-replay")]
 static INSTANT_TIMING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Force instant timing for replay. Call before `run()` in tests.
+#[cfg(feature = "pcap-replay")]
 pub fn set_instant_timing() {
     INSTANT_TIMING.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
+#[cfg(feature = "pcap-replay")]
 struct ReplayState {
     packets: Vec<PcapPacket>,
-    /// Map from original destination address to channel senders.
     channels: Mutex<HashMap<SocketAddrV4, Vec<mpsc::Sender<ReplayPacket>>>>,
 }
 
-/// Initialize the replay system with a pcap file. Called once at startup.
+/// Initialize the replay system with a pcap/nnd file. Called once at startup.
+#[cfg(feature = "pcap-replay")]
 pub fn init(path: &Path) -> io::Result<()> {
     let packets = pcap::parse_file(path)?;
     log::info!(
@@ -118,30 +128,37 @@ pub fn init(path: &Path) -> io::Result<()> {
 
 /// Returns true if pcap replay is active.
 pub(crate) fn is_active() -> bool {
-    REPLAY.get().is_some()
+    #[cfg(feature = "pcap-replay")]
+    { REPLAY.get().is_some() }
+    #[cfg(not(feature = "pcap-replay"))]
+    { false }
 }
 
 /// Create a replay receiver for the given multicast/listen address.
 /// Returns `None` if replay is not active.
-///
-/// The returned `ReplayReceiver` has the same `recv_buf_from` API as
-/// `UdpSocket`, so receivers can use it with minimal code changes.
 pub(crate) fn create_listen(addr: &SocketAddrV4) -> Option<ReplayReceiver> {
-    let state = REPLAY.get()?;
-
-    let (tx, rx) = mpsc::channel(512);
-    state
-        .channels
-        .lock()
-        .unwrap()
-        .entry(*addr)
-        .or_default()
-        .push(tx);
-
-    log::debug!("Replay: registered listener for {}", addr);
-    Some(ReplayReceiver { rx })
+    #[cfg(feature = "pcap-replay")]
+    {
+        let state = REPLAY.get()?;
+        let (tx, rx) = mpsc::channel(512);
+        state
+            .channels
+            .lock()
+            .unwrap()
+            .entry(*addr)
+            .or_default()
+            .push(tx);
+        log::debug!("Replay: registered listener for {}", addr);
+        Some(ReplayReceiver { rx })
+    }
+    #[cfg(not(feature = "pcap-replay"))]
+    {
+        let _ = addr;
+        None
+    }
 }
 
+#[cfg(feature = "pcap-replay")]
 /// Start the replay dispatcher. Call this after all sockets/listeners
 /// have been registered.
 ///

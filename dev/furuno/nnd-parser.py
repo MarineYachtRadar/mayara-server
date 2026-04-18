@@ -57,7 +57,8 @@ def decode_mode1(src, n):
     last = 0
     s = 0
     while len(dst) < n and s < len(src):
-        b = src[s]; s += 1
+        b = src[s]
+        s += 1
         if (b & 1) == 0:
             last = b & 0xFE
             dst.append(last)
@@ -77,7 +78,8 @@ def decode_mode2(src, prev, n):
     s = 0
     p = 0
     while len(dst) < n and s < len(src):
-        b = src[s]; s += 1
+        b = src[s]
+        s += 1
         if (b & 1) == 1:
             run = b >> 1
             if run == 0:
@@ -100,7 +102,8 @@ def decode_mode3(src, prev, n):
     s = 0
     p = 0
     while len(dst) < n and s < len(src):
-        b = src[s]; s += 1
+        b = src[s]
+        s += 1
         marker = b & 3
         if marker == 0:
             last = b & 0xFC
@@ -331,8 +334,10 @@ def parse_nnd(data):
             payload_len = stated_len - header_len + 2
             payload_start = pos + header_len
             payload_end = payload_start + payload_len
-            if payload_end <= len(data) and payload_len >= 0:
-                yield (current_ts, port, data[payload_start:payload_end])
+            if payload_len < 0 or payload_end <= pos or payload_end > len(data):
+                pos += header_len  # skip past the header, don't go backwards
+                continue
+            yield (current_ts, port, data[payload_start:payload_end])
             pos = payload_end
             continue
 

@@ -59,7 +59,7 @@ pub(crate) fn parse_file(path: &Path) -> io::Result<Vec<PcapPacket>> {
     };
 
     if crate::nnd::is_nnd(&data) {
-        return crate::nnd::parse_bytes(&data);
+        return crate::nnd::parse_bytes(&data, path);
     }
 
     parse_bytes(&data)

@@ -23,9 +23,7 @@ use tokio_graceful_shutdown::SubsystemHandle;
 use crate::{
     Cli,
     ais::AisVesselStore,
-    nnd::NMEA_REPLAY_ADDRESS,
     radar::{GeoPosition, RadarError},
-    replay,
     stream::SignalKDelta,
 };
 
@@ -301,8 +299,9 @@ impl NavigationData {
     ) -> Result<(), Error> {
         // In NND replay mode, consume NMEA sentences from the replay channel
         // instead of connecting to a live TCP/UDP source.
-        if replay::is_active() {
-            if let Some(mut rx) = replay::create_listen(&NMEA_REPLAY_ADDRESS) {
+        #[cfg(feature = "pcap-replay")]
+        if crate::replay::is_active() {
+            if let Some(mut rx) = crate::replay::create_listen(&crate::nnd::NMEA_REPLAY_ADDRESS) {
                 // Ensure we have an NMEA parser even if --nmea0183 wasn't passed
                 if self.nmea_parser.is_none() {
                     self.nmea_parser = Some(NmeaParser::new());
