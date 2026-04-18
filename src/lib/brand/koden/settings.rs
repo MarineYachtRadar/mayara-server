@@ -43,7 +43,7 @@ pub(crate) fn new(
 
     new_numeric(ControlId::DisplayTiming, 0., 124.).build(&mut controls);
 
-    new_sector(ControlId::NoTransmitSector1, -180., 180.)
+    new_sector(ControlId::NoTransmitSector1, -PI, PI)
         .wire_scale_factor(KODEN_ANGLE_SCALE * 180. / PI, true)
         .wire_offset(-1.)
         .build(&mut controls);
