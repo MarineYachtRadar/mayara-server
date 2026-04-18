@@ -7,12 +7,15 @@ use crate::brand::CommandSender;
 use crate::radar::settings::{ControlId, ControlValue, SharedControls};
 use crate::radar::{Power, RadarError, RadarInfo};
 
+/// Scale a percentage (0–100) to a wire byte (0–255) with rounding.
+fn pct_to_u8(pct: f64) -> u8 {
+    (pct.clamp(0.0, 100.0) * 255.0 / 100.0).round() as u8
+}
+
 pub(crate) struct Command {
     key: String,
     socket: Option<UdpSocket>,
-    radar_addr: SocketAddrV4,
     controls: SharedControls,
-    broadcast: bool,
 }
 
 impl Command {
@@ -20,9 +23,7 @@ impl Command {
         Command {
             key: info.key(),
             socket: None,
-            radar_addr: info.addr,
             controls: info.controls.clone(),
-            broadcast: true, // Default to broadcast mode
         }
     }
 
@@ -30,15 +31,11 @@ impl Command {
         self.socket = Some(socket);
     }
 
-    /// Send a raw byte slice to the radar.
+    /// Send a raw byte slice to the radar via broadcast.
     async fn send_raw(&self, data: &[u8]) -> Result<(), RadarError> {
         match &self.socket {
             Some(s) => {
-                let dest = if self.broadcast {
-                    SocketAddrV4::new(std::net::Ipv4Addr::BROADCAST, RADAR_PORT)
-                } else {
-                    self.radar_addr
-                };
+                let dest = SocketAddrV4::new(std::net::Ipv4Addr::BROADCAST, RADAR_PORT);
                 s.send_to(data, dest).await.map_err(RadarError::Io)?;
                 Ok(())
             }
@@ -59,7 +56,6 @@ impl Command {
     }
 
     /// Send a 5-byte SetWord command: `& cmd hi lo \r`
-    #[allow(dead_code)]
     async fn set_word(&self, cmd: u8, value: u16) -> Result<(), RadarError> {
         let packet = [
             CONTROL_PREFIX,
@@ -127,18 +123,14 @@ impl CommandSender for Command {
                     self.set_byte(CMD_AUTO_GAIN_MODE, WIRE_TRUE).await
                 } else {
                     self.set_byte(CMD_AUTO_GAIN_MODE, WIRE_FALSE).await?;
-                    // Scale 0–100 to 0–255
-                    let wire_val = (value_f64 * 2.55) as u8;
-                    self.set_byte(CMD_GAIN, wire_val).await
+                    self.set_byte(CMD_GAIN, pct_to_u8(value_f64)).await
                 }
             }
             ControlId::Sea => {
-                let wire_val = (value_f64 * 2.55) as u8;
-                self.set_byte(CMD_STC, wire_val).await
+                self.set_byte(CMD_STC, pct_to_u8(value_f64)).await
             }
             ControlId::Rain => {
-                let wire_val = (value_f64 * 2.55) as u8;
-                self.set_byte(CMD_FTC, wire_val).await
+                self.set_byte(CMD_FTC, pct_to_u8(value_f64)).await
             }
             ControlId::SeaState => {
                 // 0=Manual, 1=Auto, 2=Harbor

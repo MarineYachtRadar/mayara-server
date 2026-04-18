@@ -483,8 +483,11 @@ impl KodenReportReceiver {
 
         // Get heading from navdata if available
         let heading: Option<u16> = {
-            let h = crate::navdata::get_heading_true();
-            h.map(|h| (h * SPOKES as f64 / std::f64::consts::TAU) as u16)
+            crate::navdata::get_heading_true().map(|h| {
+                let normalized = h.rem_euclid(std::f64::consts::TAU);
+                ((normalized * SPOKES as f64 / std::f64::consts::TAU).floor() as u16)
+                    .min(SPOKES as u16 - 1)
+            })
         };
 
         // Process each spoke in this frame
@@ -508,7 +511,7 @@ impl KodenReportReceiver {
             let spoke_data = &data[spoke_offset..spoke_end];
 
             let mut scaled = Vec::with_capacity(spoke_byte_len);
-            for (i, pixel) in spoke_data.iter().enumerate() {
+            for pixel in spoke_data.iter() {
                 // Scale raw 0-255 to 0-PIXEL_VALUES
                 scaled.push((*pixel as u16 * PIXEL_VALUES as u16 / 255) as u8);
             }
