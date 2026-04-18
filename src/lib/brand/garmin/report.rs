@@ -12,12 +12,13 @@ use super::protocol::*;
 use super::range_table;
 use crate::Cli;
 use crate::network;
-use crate::replay::RadarSocket;
 use crate::radar::settings::ControlId;
 use crate::radar::spoke::GenericSpoke;
 use crate::radar::{
-    BYTE_LOOKUP_LENGTH, CommonRadar, DopplerMode, Legend, Power, RadarError, RadarInfo, SharedRadars,
+    BYTE_LOOKUP_LENGTH, CommonRadar, DopplerMode, Legend, Power, RadarError, RadarInfo,
+    SharedRadars,
 };
+use crate::replay::RadarSocket;
 use crate::util::c_string;
 
 /// Lookup table for converting raw wire pixel values to legend indices.
@@ -33,12 +34,8 @@ fn wire_to_legend(legend: &Legend, is_xhd: bool, doppler: bool) -> WireToLegendT
             //   0x00–0xEF (0–239)   → normal intensity, halved to 0–119
             //   0xF0–0xF7 (240–247) → approaching, 4 legend indices
             //   0xF8–0xFF (248–255) → receding, 4 legend indices
-            let (appr_start, appr_count) = legend
-                .doppler_approaching
-                .unwrap_or((0, 0));
-            let (recv_start, recv_count) = legend
-                .doppler_receding
-                .unwrap_or((0, 0));
+            let (appr_start, appr_count) = legend.doppler_approaching.unwrap_or((0, 0));
+            let (recv_start, recv_count) = legend.doppler_receding.unwrap_or((0, 0));
             for j in 0..BYTE_LOOKUP_LENGTH {
                 let jb = j as u8;
                 lookup[j] = if jb >= DOPPLER_RECEDING_START {
@@ -173,8 +170,11 @@ impl GarminReportReceiver {
         let control_update_rx = info.control_update_subscribe();
         let blob_tx = radars.get_blob_tx();
 
-        let wire_to_legend =
-            wire_to_legend(&info.get_legend(), radar_type == GarminRadarType::XHD, false);
+        let wire_to_legend = wire_to_legend(
+            &info.get_legend(),
+            radar_type == GarminRadarType::XHD,
+            false,
+        );
 
         let common = CommonRadar::new(
             args,
@@ -223,9 +223,15 @@ impl GarminReportReceiver {
         let replay = args.is_replay();
         let control_update_rx = info.control_update_subscribe();
         let blob_tx = radars.get_blob_tx();
-        let wire_to_legend =
-            wire_to_legend(&info.get_legend(), self.radar_type == GarminRadarType::XHD, false);
-        let command_sender_b = Some(Command::new_range_b(self.radar_type, info.send_command_addr));
+        let wire_to_legend = wire_to_legend(
+            &info.get_legend(),
+            self.radar_type == GarminRadarType::XHD,
+            false,
+        );
+        let command_sender_b = Some(Command::new_range_b(
+            self.radar_type,
+            info.send_command_addr,
+        ));
 
         self.common_b = Some(CommonRadar::new(
             args,
@@ -248,8 +254,11 @@ impl GarminReportReceiver {
 
     async fn start_sockets(&mut self) -> io::Result<()> {
         // Report socket (239.254.2.0:50100)
-        match network::create_udp_listen(&self.common.info.report_addr, &self.common.info.nic_addr, network::SocketType::Multicast)
-        {
+        match network::create_udp_listen(
+            &self.common.info.report_addr,
+            &self.common.info.nic_addr,
+            network::SocketType::Multicast,
+        ) {
             Ok(socket) => {
                 self.report_socket = Some(socket);
                 log::debug!(
@@ -434,9 +443,7 @@ impl GarminReportReceiver {
             // both report the radar's transmit state. Treat them
             // identically — the radar broadcasts both, and the MFD
             // pulls the same handler off either ID.
-            MSG_TRANSMIT_MODE | MSG_TRANSMIT_MODE_CURRENT => {
-                self.process_transmit_state(data)?
-            }
+            MSG_TRANSMIT_MODE | MSG_TRANSMIT_MODE_CURRENT => self.process_transmit_state(data)?,
             MSG_DITHER_MODE => self.process_dither_mode(data)?,
             MSG_RANGE_MODE => self.process_range_mode(data)?,
             MSG_RANGE_A => self.process_range(data)?,
@@ -512,14 +519,16 @@ impl GarminReportReceiver {
                 let v = self.extract_xhd_value(data)?;
                 log::debug!("{}: transmit channel mode: {}", self.common.key, v);
                 // 0=manual, 1=auto
-                self.common
-                    .set_value_auto(&ControlId::TransmitChannel, 0.0, if v == 1 { 1 } else { 0 });
+                self.common.set_value_auto(
+                    &ControlId::TransmitChannel,
+                    0.0,
+                    if v == 1 { 1 } else { 0 },
+                );
             }
             MSG_TRANSMIT_CHANNEL_SELECT => {
                 let v = self.extract_xhd_value(data)?;
                 log::debug!("{}: transmit channel select: {}", self.common.key, v);
-                self.common
-                    .set_value(&ControlId::TransmitChannel, v as f64);
+                self.common.set_value(&ControlId::TransmitChannel, v as f64);
             }
             MSG_TRANSMIT_CHANNEL_MAX => {
                 let v = self.extract_xhd_value(data)?;
@@ -529,8 +538,7 @@ impl GarminReportReceiver {
             MSG_RANGE_A_PULSE_EXPANSION => {
                 let v = self.extract_xhd_value(data)?;
                 log::debug!("{}: pulse expansion A: {}", self.common.key, v);
-                self.common
-                    .set_value(&ControlId::TargetExpansion, v as f64);
+                self.common.set_value(&ControlId::TargetExpansion, v as f64);
             }
             MSG_RANGE_B_PULSE_EXPANSION => {
                 self.with_range_b(data, |common, _rs, d| {
@@ -544,8 +552,7 @@ impl GarminReportReceiver {
             MSG_RANGE_A_TARGET_SIZE => {
                 let v = self.extract_xhd_value(data)?;
                 log::debug!("{}: target size A: {}", self.common.key, v);
-                self.common
-                    .set_value(&ControlId::TargetBoost, v as f64);
+                self.common.set_value(&ControlId::TargetBoost, v as f64);
             }
             MSG_RANGE_B_TARGET_SIZE => {
                 self.with_range_b(data, |common, _rs, d| {
@@ -559,8 +566,7 @@ impl GarminReportReceiver {
             MSG_RANGE_A_SCAN_AVERAGE_MODE => {
                 let v = self.extract_xhd_value(data)?;
                 log::debug!("{}: scan average mode A: {}", self.common.key, v);
-                self.common
-                    .set_value(&ControlId::ScanAverageMode, v as f64);
+                self.common.set_value(&ControlId::ScanAverageMode, v as f64);
             }
             MSG_RANGE_B_SCAN_AVERAGE_MODE => {
                 self.with_range_b(data, |common, _rs, d| {
@@ -622,9 +628,7 @@ impl GarminReportReceiver {
         };
 
         if range_indicator == 1 {
-            if let (Some(common_b), Some(rs)) =
-                (&mut self.common_b, &mut self.range_b)
-            {
+            if let (Some(common_b), Some(rs)) = (&mut self.common_b, &mut self.range_b) {
                 Self::process_spoke_for(common_b, rs, data)?;
             }
         } else {
@@ -814,9 +818,11 @@ impl GarminReportReceiver {
         self.common
             .set_value(&ControlId::Power, power as i32 as f64);
 
-        if warmup > 0 {
-            self.common.set_value(&ControlId::WarmupTime, warmup as f64);
-        }
+        self.common.set_value_enabled(
+            &ControlId::WarmupTime,
+            warmup as f64,
+            warmup.min(u8::MAX as u16) as u8,
+        );
 
         self.common.set_value_auto(
             &ControlId::Gain,
@@ -903,11 +909,7 @@ impl GarminReportReceiver {
     fn process_bearing_alignment(&mut self, data: &[u8]) -> Result<(), Error> {
         let value = self.extract_xhd_value(data)? as i32;
         let degrees = value / DEGREE_SCALE;
-        log::debug!(
-            "{}: bearing alignment: {} deg",
-            self.common.key,
-            degrees
-        );
+        log::debug!("{}: bearing alignment: {} deg", self.common.key, degrees);
         self.common
             .set_value(&ControlId::BearingAlignment, degrees as f64);
         Ok(())
@@ -969,9 +971,7 @@ impl GarminReportReceiver {
     where
         F: FnOnce(&mut CommonRadar, &mut RangeState, &[u8]) -> Result<(), Error>,
     {
-        if let (Some(common_b), Some(rs)) =
-            (&mut self.common_b, &mut self.range_b)
-        {
+        if let (Some(common_b), Some(rs)) = (&mut self.common_b, &mut self.range_b) {
             f(common_b, rs, data)
         } else {
             Ok(()) // Silently ignore if no Range B attached
@@ -1171,8 +1171,7 @@ impl GarminReportReceiver {
             start,
             end
         );
-        self.common
-            .set_sector(&control, start, end, Some(enabled));
+        self.common.set_sector(&control, start, end, Some(enabled));
     }
 
     fn process_timed_idle_mode(&mut self, data: &[u8]) -> Result<(), Error> {
@@ -1220,10 +1219,11 @@ impl GarminReportReceiver {
         let value = self.extract_xhd_value(data)?;
         let seconds = value / 1000;
         log::debug!("{}: state change in {} s", self.common.key, seconds);
-        if seconds > 0 {
-            self.common
-                .set_value(&ControlId::WarmupTime, seconds as f64);
-        }
+        self.common.set_value_enabled(
+            &ControlId::WarmupTime,
+            seconds as f64,
+            seconds.min(u8::MAX as u32) as u8,
+        );
         Ok(())
     }
 
@@ -1320,11 +1320,7 @@ impl GarminReportReceiver {
 
     fn process_system_temperature(&mut self, data: &[u8]) -> Result<(), Error> {
         let value = self.extract_xhd_value(data)?;
-        log::debug!(
-            "{}: system temperature raw: {}",
-            self.common.key,
-            value
-        );
+        log::debug!("{}: system temperature raw: {}", self.common.key, value);
         self.common
             .set_value(&ControlId::DeviceTemperature, value as f64);
         Ok(())

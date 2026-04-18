@@ -89,6 +89,11 @@ pub(crate) fn new(
     // --- Antenna-level / shared controls (Range A only) ---
 
     if !is_range_b {
+        new_numeric(ControlId::WarmupTime, 0., 255.)
+            .has_enabled()
+            .read_only(true)
+            .build(&mut controls);
+
         if capabilities.has(super::capabilities::cap::FRONT_OF_BOAT) {
             new_numeric(ControlId::BearingAlignment, -PI, PI)
                 .wire_scale_factor(180. / PI, false)
