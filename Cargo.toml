@@ -20,10 +20,11 @@ path = "src/lib/mod.rs"
 navico = []
 furuno = []
 garmin = []
+koden = []
 raymarine = []
 emulator = []
 # default = ["navico", "furuno", "raymarine"]
-default = ["navico", "furuno", "garmin", "raymarine", "emulator"]
+default = ["navico", "furuno", "garmin", "koden", "raymarine", "emulator"]
 
 [dependencies]
 ctor = "0.1"

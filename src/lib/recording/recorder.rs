@@ -309,6 +309,7 @@ pub fn brand_to_id(brand: Brand) -> u32 {
         Brand::Raymarine => 4,
         Brand::Emulator => 5,
         Brand::Playback => 6,
+        Brand::Koden => 7,
     }
 }
 
@@ -320,6 +321,7 @@ pub fn id_to_brand(id: u32) -> Option<Brand> {
         4 => Some(Brand::Raymarine),
         5 => Some(Brand::Emulator),
         6 => Some(Brand::Playback),
+        7 => Some(Brand::Koden),
         _ => None,
     }
 }

@@ -182,6 +182,7 @@ impl Cli {
 pub enum Brand {
     Furuno,
     Garmin,
+    Koden,
     Navico,
     Raymarine,
     Emulator,
@@ -193,6 +194,7 @@ impl Brand {
         match self {
             Self::Furuno => "fur",
             Self::Garmin => "gar",
+            Self::Koden => "kod",
             Self::Navico => "nav",
             Self::Raymarine => "ray",
             Self::Emulator => "emu",
@@ -206,6 +208,7 @@ impl Into<Brand> for &str {
         match self.to_ascii_lowercase().as_str() {
             "furuno" => Brand::Furuno,
             "garmin" => Brand::Garmin,
+            "koden" => Brand::Koden,
             "navico" => Brand::Navico,
             "raymarine" => Brand::Raymarine,
             "emulator" => Brand::Emulator,
@@ -223,6 +226,7 @@ impl Serialize for Brand {
         match self {
             Self::Furuno => serializer.serialize_str("Furuno"),
             Self::Garmin => serializer.serialize_str("Garmin"),
+            Self::Koden => serializer.serialize_str("Koden"),
             Self::Navico => serializer.serialize_str("Navico"),
             Self::Raymarine => serializer.serialize_str("Raymarine"),
             Self::Emulator => serializer.serialize_str("Emulator"),
@@ -236,6 +240,7 @@ impl std::fmt::Display for Brand {
         match self {
             Self::Furuno => write!(f, "Furuno"),
             Self::Garmin => write!(f, "Garmin"),
+            Self::Koden => write!(f, "Koden"),
             Self::Navico => write!(f, "Navico"),
             Self::Raymarine => write!(f, "Raymarine"),
             Self::Emulator => write!(f, "Emulator"),

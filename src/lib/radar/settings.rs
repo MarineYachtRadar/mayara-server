@@ -125,8 +125,7 @@ pub enum ControlId {
     ScanSpeed,
     SideLobeSuppression,
     Tune,
-    // TuneCoarse,
-    // TuneFine,
+    TuneFine,
     // ColorGain,
     // DisplayTiming,
     Ftc,
@@ -272,6 +271,7 @@ impl ControlId {
             | ControlId::ScanSpeed
             | ControlId::SideLobeSuppression
             | ControlId::Tune
+            | ControlId::TuneFine
             | ControlId::Ftc
             | ControlId::MainBangSuppression
             | ControlId::SeaClutterCurve
@@ -341,6 +341,7 @@ impl ControlId {
             ControlId::ScanSpeed => "Desired rotation speed of the radar antenna",
             ControlId::SideLobeSuppression => "Level of side lobe suppression",
             ControlId::Tune => "Method to finely tune the radar receiver",
+            ControlId::TuneFine => "Fine adjustment of the radar receiver tuning",
             ControlId::Ftc => "FTC",
             ControlId::RangeUnits => "Which unit system to use for range values",
             ControlId::MainBangSuppression => "Main bang suppression",
@@ -458,7 +459,7 @@ impl ControlId {
             // ControlId::TimedRun => "Timed run",
             ControlId::TrailsMotion => "Target trails motion",
             ControlId::Tune => "Tune",
-            // ControlId::TuneFine => "Fine tune",
+            ControlId::TuneFine => "Fine tune",
             ControlId::Spokes => "Spokes",
             ControlId::SpokeLength => "Spoke length",
             ControlId::SpokeProcessing => "Spoke Processing",
@@ -527,6 +528,7 @@ impl ControlId {
             ControlId::ScanSpeed => ControlDestination::Command,
             ControlId::SideLobeSuppression => ControlDestination::Command,
             ControlId::Tune => ControlDestination::Command,
+            ControlId::TuneFine => ControlDestination::Command,
             ControlId::Ftc => ControlDestination::Command,
             ControlId::MainBangSuppression => ControlDestination::Command,
             ControlId::SeaClutterCurve => ControlDestination::Command,

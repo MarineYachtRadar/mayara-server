@@ -12,6 +12,8 @@ pub(crate) mod emulator;
 pub(crate) mod furuno;
 #[cfg(feature = "garmin")]
 pub(crate) mod garmin;
+#[cfg(feature = "koden")]
+pub(crate) mod koden;
 #[cfg(feature = "navico")]
 pub(crate) mod navico;
 #[cfg(feature = "raymarine")]
@@ -29,6 +31,7 @@ pub(crate) enum LocatorId {
     Furuno,
     Garmin,
     GarminCdm,
+    Koden,
     Raymarine,
 }
 
@@ -64,6 +67,11 @@ pub(crate) fn create_brand_listeners(
     if args.brand.unwrap_or(Brand::Garmin) == Brand::Garmin {
         garmin::new(args, listen_addresses);
         brands.insert(Brand::Garmin);
+    }
+    #[cfg(feature = "koden")]
+    if args.brand.unwrap_or(Brand::Koden) == Brand::Koden {
+        koden::new(args, listen_addresses);
+        brands.insert(Brand::Koden);
     }
 }
 
