@@ -512,8 +512,8 @@ impl KodenReportReceiver {
 
             let mut scaled = Vec::with_capacity(spoke_byte_len);
             for pixel in spoke_data.iter() {
-                // Scale raw 0-255 to 0-PIXEL_VALUES
-                scaled.push((*pixel as u16 * PIXEL_VALUES as u16 / 255) as u8);
+                // Scale raw 0-255 to 0-127, make room for history colors
+                scaled.push(*pixel >> 1);
             }
 
             self.common.add_spoke(range_meters, angle, heading, scaled);
