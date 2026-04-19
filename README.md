@@ -22,15 +22,13 @@ Fully supported and tested with real hardware:
 
 - [**Navico**](docs/navico-setup.md) — BR24, 3G, 4G, HALO 20, HALO 20+, HALO 24, HALO 2000–6000
 - [**Raymarine**](docs/raymarine-setup.md) — Quantum, RD series
-- [**Furuno**](docs/furuno-setup.md) — DRS-NXT series (DRS4D-NXT, DRS6A-NXT, DRS12A-NXT, DRS25A-NXT) including dual range
-- [**Furuno**](docs/furuno-setup.md) — DRS4W WiFi ("1st Watch")
-- [**Furuno**](docs/furuno-setup.md) — FAR-2xx7 series
+- [**Furuno**](docs/furuno-setup.md) — DRS-NXT series (DRS4D-NXT, DRS6A-NXT, DRS12A-NXT, DRS25A-NXT) including dual range, DRS4W WiFi ("1st Watch"), FAR-2xx7 series
 
 Implemented but awaiting real-hardware validation:
 
 - [**Garmin**](docs/garmin-setup.md) — HD, xHD, xHD2, xHD3, Fantom, Fantom Pro (all models including dual range and MotionScope/Doppler)
 - [**Furuno**](docs/furuno-setup.md) — DRS, DRS4DL, DRS6A X-Class, FAR-15x3, FAR-3000
-- [**Koden**](docs/koden-setup.md) — MDS-1R/8R, MDS-5R, MDS-9R, MDS-10R, MDS-50R, MDS-51R, MDS-52R, MDS-61R, MDS-62R, MDS-63R (RADARpc series)
+- [**Koden**](docs/koden-setup.md) — MDS-xxR control boxes with any antenna unit (RADARpc series)
 - [**Raymarine**](docs/raymarine-setup.md) — HD, Magnum, Cyclone
 
 If your radar is not on the fully supported list, contact us to help with testing!
