@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **navdata:** seed --static-position for real radars (#119) ([PR #119](https://github.com/MarineYachtRadar/mayara-server/pull/119))
 - **furuno:** wire 3-band Target Analyzer Doppler format into wire_to_legend (#131) ([PR #131](https://github.com/MarineYachtRadar/mayara-server/pull/131))
 - **furuno:** add NND file replay support (#133) ([PR #133](https://github.com/MarineYachtRadar/mayara-server/pull/133))
+- **koden:** add Koden RADARpc radar support (#134) ([PR #134](https://github.com/MarineYachtRadar/mayara-server/pull/134))
 
 ### Changed
 
