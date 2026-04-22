@@ -3461,13 +3461,10 @@ impl Serialize for ControlId {
             }
             ApiVersion::V1 => {
                 // numeric discriminant rendered as string
-                // stack-only formatting
-
-                let mut buf = itoa::Buffer::new();
-                let s = buf.format(*self as u8);
+                let s = (*self as u8).to_string();
 
                 log::debug!("Serializing V1 ControlId {:?} as number {}", self, s);
-                serializer.serialize_str(s)
+                serializer.serialize_str(&s)
             }
         }
     }
