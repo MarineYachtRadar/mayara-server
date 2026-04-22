@@ -1,4 +1,3 @@
-use std::net::SocketAddrV4;
 use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::time::{Instant, sleep_until};
@@ -17,7 +16,6 @@ use crate::util::PrintableSlice;
 pub(crate) struct KodenReportReceiver {
     common: CommonRadar,
     command_sender: Option<Command>,
-    radar_addr: SocketAddrV4,
 }
 
 impl KodenReportReceiver {
@@ -29,7 +27,6 @@ impl KodenReportReceiver {
             Some(Command::new(&info))
         };
 
-        let radar_addr = info.addr;
         let control_update_rx = info.control_update_subscribe();
         let blob_tx = radars.get_blob_tx();
 
@@ -46,7 +43,6 @@ impl KodenReportReceiver {
         KodenReportReceiver {
             common,
             command_sender,
-            radar_addr,
         }
     }
 

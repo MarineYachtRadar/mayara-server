@@ -15,7 +15,6 @@ fn pct_to_u8(pct: f64) -> u8 {
 pub(crate) struct Command {
     key: String,
     socket: Option<UdpSocket>,
-    controls: SharedControls,
 }
 
 impl Command {
@@ -23,7 +22,6 @@ impl Command {
         Command {
             key: info.key(),
             socket: None,
-            controls: info.controls.clone(),
         }
     }
 
