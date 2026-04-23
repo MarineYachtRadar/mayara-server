@@ -200,6 +200,13 @@ struct GuardZoneInternal {
     end_pixel: usize,
 }
 
+// Guard zones allow negative head-relative angles, so conversion to the
+// circular spoke domain must wrap around 0 instead of collapsing negatives.
+fn radians_to_spoke(angle_radians: f64, spokes_per_revolution: u16) -> u16 {
+    let spoke = ((angle_radians / TAU) * spokes_per_revolution as f64) as i32;
+    spoke.rem_euclid(spokes_per_revolution as i32) as u16
+}
+
 /// Blob detector that processes spokes and identifies targets
 pub struct BlobDetector {
     spokes_per_revolution: u16,
@@ -283,14 +290,12 @@ impl BlobDetector {
                     continue;
                 }
 
-                // Convert angles from radians to spokes
-                // Guard zones are head-relative (0 = forward)
-                let start_spoke = ((zone.start_angle / TAU)
-                    * self.spokes_per_revolution as f64) as u16
-                    % self.spokes_per_revolution;
-                let end_spoke = ((zone.end_angle / TAU) * self.spokes_per_revolution as f64)
-                    as u16
-                    % self.spokes_per_revolution;
+                // Guard zones are head-relative (0 = forward) and can cross
+                // 0 with a negative start angle.
+                let start_spoke =
+                    radians_to_spoke(zone.start_angle, self.spokes_per_revolution);
+                let end_spoke =
+                    radians_to_spoke(zone.end_angle, self.spokes_per_revolution);
 
                 // Convert distances from meters to pixels
                 let start_pixel = (zone.start_distance / meters_per_pixel) as usize;
@@ -597,6 +602,8 @@ impl BlobDetector {
 
 #[cfg(test)]
 mod tests {
+    use std::f64::consts::PI;
+
     use super::*;
 
     fn blob_from_spokes(spokes: &[u16]) -> BlobInProgress {
@@ -714,5 +721,42 @@ mod tests {
         // 0 forward to 8191, which is 8190 empty slots). Center =
         // (8191 + 1) % 8192 = 0.
         assert_eq!(arc.center, 0);
+    }
+
+    #[test]
+    fn guard_zone_negative_angles_wrap_correctly() {
+        // A sector like -55 deg .. 38 deg must wrap across spoke 0.
+        let mut detector = BlobDetector::new(2048, 10, None);
+
+        // The actual range/pixel values only need to be non-zero so the guard
+        // zone cache can be rebuilt.
+        detector.current_range = 1000;
+        detector.current_spoke_len = 1000;
+        detector.set_guard_zone_1(Some(GuardZone {
+            start_angle: -55.0 * PI / 180.0,
+            end_angle: 38.0 * PI / 180.0,
+            start_distance: 0.0,
+            end_distance: 1000.0,
+            enabled: true,
+        }));
+
+        assert_eq!(detector.guard_zones.len(), 1);
+
+        let zone = &detector.guard_zones[0];
+
+        // The start must land near the end of the revolution, proving we
+        // wrapped the negative angle instead of collapsing it to 0.
+        assert!(zone.start_spoke > zone.end_spoke);
+        assert!(zone.start_spoke > 1700);
+        assert!(zone.end_spoke < 300);
+
+        // A spoke in the negative-angle part of the sector must be detected.
+        assert_eq!(detector.check_guard_zones(1800, 500), vec![1]);
+
+        // A spoke in the positive-angle part must also be detected.
+        assert_eq!(detector.check_guard_zones(150, 500), vec![1]);
+
+        // A spoke well outside the configured sector must not match.
+        assert!(detector.check_guard_zones(900, 500).is_empty());
     }
 }
