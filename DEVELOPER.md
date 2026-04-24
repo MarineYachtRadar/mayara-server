@@ -5,14 +5,14 @@ Mayara is designed to be used as a building block: run it alongside your own sof
 ## Architecture
 
 ```
-┌────────────┐    HTTP / WS     ┌──────────────┐     Ethernet      ┌─────────────┐
+┌────────────┐    HTTP / WS    ┌───────────────┐     Ethernet     ┌─────────────┐
 │ Your app   │ ◄─────────────► │ mayara-server │ ◄──────────────► │    Radar    │
-│ (any lang) │   Signal K API   │              │   proprietary     │  (Navico,   │
-└────────────┘                   │   REST API   │   protocols       │  Furuno, …) │
-                                 │   WebSocket  │                   └─────────────┘
-                                 │   Built-in   │
-                                 │   GUI        │
-                                 └──────────────┘
+│ (any lang) │   Signal K API  │               │   proprietary    │  (Navico,   │
+└────────────┘                 │   REST API    │    protocols     │  Furuno, …) │
+                               │   WebSocket   │                  └─────────────┘
+                               │   Built-in    │
+                               │   GUI         │
+                               └───────────────┘
 ```
 
 Mayara translates each brand's wire protocol into a uniform [Signal K Radar API](https://github.com/SignalK/signalk-server/blob/master/docs/develop/rest-api/radar_api.md). Your client code works the same regardless of which radar is connected. Multiple clients can connect simultaneously — PPI displays, chart overlays, or autonomous navigation systems.
@@ -21,15 +21,15 @@ Mayara translates each brand's wire protocol into a uniform [Signal K Radar API]
 
 All endpoints are under `/signalk/v2/api/vessels/self/radars`.
 
-| What | How |
-|------|-----|
-| List radars | `GET /radars` |
-| Radar capabilities | `GET /radars/{id}/capabilities` |
-| Read/write controls | `GET/PUT /radars/{id}/controls/{cid}` |
-| Acquire/delete targets | `POST/DELETE /radars/{id}/targets` |
-| Spoke data stream | `ws://.../radars/{id}/spokes` (binary protobuf) |
-| Control & target updates | `ws://.../signalk/v1/stream` (JSON delta) |
-| OpenAPI spec | `GET /radars/resources/openapi.json` |
+| What                     | How                                             |
+| ------------------------ | ----------------------------------------------- |
+| List radars              | `GET /radars`                                   |
+| Radar capabilities       | `GET /radars/{id}/capabilities`                 |
+| Read/write controls      | `GET/PUT /radars/{id}/controls/{cid}`           |
+| Acquire/delete targets   | `POST/DELETE /radars/{id}/targets`              |
+| Spoke data stream        | `ws://.../radars/{id}/spokes` (binary protobuf) |
+| Control & target updates | `ws://.../signalk/v1/stream` (JSON delta)       |
+| OpenAPI spec             | `GET /radars/resources/openapi.json`            |
 
 See [docs/api/](docs/api/README.md) for the full API reference.
 

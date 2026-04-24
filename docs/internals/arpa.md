@@ -4,14 +4,14 @@ The tracking system is a full ARPA (Automatic Radar Plotting Aid) implementation
 
 ## Key Files
 
-| File | Purpose |
-|------|---------|
-| `tracker.rs` | Core state machine, candidate matching, lifecycle |
-| `blob.rs` | Blob detection from radar pixels, guard zone checks |
-| `kalman.rs` | 4-state Extended Kalman Filter (lat, lon, vlat, vlon in meters) |
-| `motion.rs` | IMM combining 3 Kalman filters (CV, CA, CT) |
-| `manager.rs` | Multi-radar management, MARPA requests, Signal K broadcasting |
-| `cpa.rs` | CPA/TCPA collision avoidance calculations |
+| File         | Purpose                                                         |
+| ------------ | --------------------------------------------------------------- |
+| `tracker.rs` | Core state machine, candidate matching, lifecycle               |
+| `blob.rs`    | Blob detection from radar pixels, guard zone checks             |
+| `kalman.rs`  | 4-state Extended Kalman Filter (lat, lon, vlat, vlon in meters) |
+| `motion.rs`  | IMM combining 3 Kalman filters (CV, CA, CT)                     |
+| `manager.rs` | Multi-radar management, MARPA requests, Signal K broadcasting   |
+| `cpa.rs`     | CPA/TCPA collision avoidance calculations                       |
 
 ## Pipeline
 

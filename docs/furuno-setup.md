@@ -30,7 +30,7 @@ The radar broadcasts discovery beacons and Mayara detects the model automaticall
 Mayara identifies DRS models from the 7-digit part code in the `$N96` Modules response:
 
 | Part Code | Model       |
-|-----------|-------------|
+| --------- | ----------- |
 | 0359235   | DRS         |
 | 0359338   | DRS4DL      |
 | 0359367   | DRS4DL      |
@@ -57,7 +57,7 @@ To change the IMO mode on the FAR-2xx7:
 Mayara identifies FAR models from the 7-digit part code in the `$N96` Modules response:
 
 | Part Code | Model    |
-|-----------|----------|
+| --------- | -------- |
 | 0359397   | FAR-14x6 |
 | 0359255   | FAR-14x7 |
 | 0359321   | FAR-14x7 |

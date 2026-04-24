@@ -7,18 +7,18 @@ This directory documents the internal architecture and design of mayara-server. 
 Mayara is structured in three layers:
 
 ```
-┌──────────────────────────────────────────────────┐
+┌───────────────────────────────────────────────────┐
 │                  Web Server (Axum)                │
 │         REST API · WebSocket · Embedded GUI       │
-├──────────────────────────────────────────────────┤
+├───────────────────────────────────────────────────┤
 │               Radar Abstraction Layer             │
 │    RadarInfo · CommonRadar · SharedRadars         │
 │    Controls · Ranges · Spokes · Target Tracking   │
-├──────────────────────────────────────────────────┤
+├───────────────────────────────────────────────────┤
 │              Brand Implementations                │
 │  Navico · Furuno · Garmin · Koden · Raymarine     │
 │     Locator · Report Parser · Command Sender      │
-└──────────────────────────────────────────────────┘
+└───────────────────────────────────────────────────┘
          │                            │
     Ethernet (UDP)              Navigation Data
     multicast/broadcast         Signal K / NMEA
@@ -32,7 +32,7 @@ Brand implementations handle the proprietary wire protocols. The radar abstracti
 src/
   bin/mayara-server/
     main.rs              Entry point
-    web.rs               Axum HTTP/WebSocket server
+    web/mod.rs            Axum HTTP/WebSocket server
     web/signalk/v2.rs    Signal K REST + WebSocket endpoints
     web/recordings.rs    Recording management endpoints
 
@@ -104,13 +104,7 @@ Each brand also implements a **report receiver** that runs as an async task, rec
 
 ### Adding a new brand
 
-1. Create `src/lib/brand/<name>/` with `mod.rs`, `protocol.rs`, `report.rs`, `command.rs`, `settings.rs`
-2. Implement `RadarLocator` for beacon parsing
-3. Implement `CommandSender` for control translation
-4. Implement a report receiver task that calls `CommonRadar::add_spoke()` for each spoke
-5. Register controls in a `settings::new()` function
-6. Add the brand to the `Brand` enum and `create_brand_listeners()`
-7. Add a feature flag in `Cargo.toml`
+See [Adding a New Radar Brand](new_radar_brand.md) for the full step-by-step guide, including module structure, trait implementations, fixture generation, and replay testing.
 
 ## Spoke Data Flow
 
@@ -174,4 +168,5 @@ Integration tests in `tests/replay_*.rs` replay brand-specific pcap fixtures and
 
 ## Further Reading
 
+- [Adding a New Radar Brand](new_radar_brand.md) — full guide with checklist
 - [ARPA Target Tracking](arpa.md) — IMM filtering and blob detection
