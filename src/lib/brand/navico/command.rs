@@ -87,7 +87,7 @@ impl Command {
         } else if r < 0.0 {
             r = 0.0;
         }
-        r as u8
+        r.round() as u8
     }
 
     fn mod_deci_degrees(a: i32) -> i32 {

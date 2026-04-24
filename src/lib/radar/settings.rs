@@ -2908,8 +2908,8 @@ impl Control {
                 auto_value = auto_value.map(|value| (value * 10.) as i32 as f64 / 10.);
             }
             1.0 => {
-                value = value as i32 as f64;
-                auto_value = auto_value.map(|value| value as i32 as f64);
+                value = value.round() as i32 as f64;
+                auto_value = auto_value.map(|value| value.round() as i32 as f64);
             }
             _ => {
                 value = (value / step).round() * step;
