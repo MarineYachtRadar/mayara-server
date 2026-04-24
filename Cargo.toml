@@ -79,18 +79,18 @@ time = { version = "0.3.47", features = ["formatting"] }
 tokio = { version = "1", features = ["full"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "logging", "tls12"] }
 tokio-graceful-shutdown = "0.15.4"
-# tokio-tungstenite = "0.26.2"
-tokio-tungstenite = { git = "https://github.com/keesverruijt/tokio-tungstenite", features = [ "deflate" ] }
 tokio-util = "0.7.18"
 tower = "0.5.3"
 tower-http = { version = "0.6", features = ["trace"] }
-tungstenite = { git = "https://github.com/keesverruijt/tungstenite-rs.git", branch = "permessage-deflate", features = [ "deflate" ] }
 utoipa = { version = "5", features = ["macros", "axum_extras", "chrono", "time", "url", "repr" ] }
 serde_string_enum = "0.2.1"
 unicase = "2.9.0"
 wildmatch = "2.6.1"
 utoipa-swagger-ui = { version = "9.0.2", features = ["url", "axum"] }
-# tungstenite = { path = "../tungstenite-rs", features = [ "handshake", "deflate" ] }
+tokio-tungstenite = { version = "0.26.2", features = [ "handshake", "deflate", "rustls-tls-native-roots" ] }
+
+[patch.crates-io]
+tokio-tungstenite = { git = "https://github.com/keesverruijt/tokio-tungstenite", tag = "v0.26.2-signalapp-v0.27.0"}
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.9.4"

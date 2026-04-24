@@ -3,12 +3,11 @@ set -euo pipefail
 
 PORT="${MAYARA_TEST_PORT:-6502}"
 BASE_URL="http://localhost:${PORT}"
-SERVER="./target/release/mayara-server"
+SERVER="./target/debug/mayara-server"
 LOG_FILE=$(mktemp)
 
-# Build release binary
-echo "Building release binary..."
-cargo build --release --quiet
+echo "Building debug binary..."
+cargo build --quiet
 
 # Start emulator server, capture log to extract PID
 echo "Starting emulator on port ${PORT}..."

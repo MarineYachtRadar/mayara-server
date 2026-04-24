@@ -1,5 +1,6 @@
-#![allow(dead_code, unused_variables)]
-
+//
+// Small modification to support per-message compression, which is not supported by tungstenite-rs out of the box.
+//
 //! Handle WebSocket connections.
 //!
 //! # Example
@@ -94,18 +95,17 @@
 
 use self::rejection::*;
 use axum::extract::FromRequestParts;
-use axum::http::{
-    Method, StatusCode, Version,
-    header::{self, HeaderMap, HeaderName, HeaderValue},
-    request::Parts,
-};
 use axum::{Error, body::Bytes, response::Response};
 use axum_core::body::Body;
 use futures_util::{
     sink::{Sink, SinkExt},
-    stream::{Stream, StreamExt},
+    stream::{FusedStream, Stream, StreamExt},
 };
-use headers::HeaderMapExt;
+use http::{
+    Method, StatusCode, Version,
+    header::{self, HeaderMap, HeaderName, HeaderValue},
+    request::Parts,
+};
 use hyper_util::rt::TokioIo;
 use sha1::{Digest, Sha1};
 use std::{
@@ -118,13 +118,22 @@ use tokio_tungstenite::{
     WebSocketStream,
     tungstenite::{
         self as ts,
+        extensions::ExtensionsConfig,
         protocol::{self, WebSocketConfig},
     },
 };
-use tungstenite::extensions::DeflateConfig;
-use tungstenite::handshake::headers::SecWebsocketExtensions;
 
+/// Extractor for establishing WebSocket connections.
+///
+/// For HTTP/1.1 requests, this extractor requires the request method to be `GET`;
+/// in later versions, `CONNECT` is used instead.
+/// To support both, it should be used with [`any`](crate::routing::any).
+///
+/// See the [module docs](self) for an example.
+///
+/// [`MethodFilter`]: crate::routing::MethodFilter
 #[cfg_attr(docsrs, doc(cfg(feature = "ws")))]
+#[must_use]
 pub struct WebSocketUpgrade<F = DefaultOnFailedUpgrade> {
     config: WebSocketConfig,
     /// The chosen protocol sent in the `Sec-WebSocket-Protocol` header of the response.
@@ -134,7 +143,10 @@ pub struct WebSocketUpgrade<F = DefaultOnFailedUpgrade> {
     on_upgrade: hyper::upgrade::OnUpgrade,
     on_failed_upgrade: F,
     sec_websocket_protocol: Option<HeaderValue>,
-    sec_websocket_extensions: Option<SecWebsocketExtensions>,
+    /// Whether the client offered permessage-deflate in `Sec-WebSocket-Extensions`.
+    client_offers_deflate: bool,
+    /// Whether permessage-deflate was enabled via the builder.
+    permessage_deflate: bool,
 }
 
 impl<F> std::fmt::Debug for WebSocketUpgrade<F> {
@@ -203,13 +215,17 @@ impl<F> WebSocketUpgrade<F> {
         self
     }
 
-    /// Enable compression
-    pub fn accept_compression(mut self, enable: bool) -> Self {
-        self.config.compression = if enable {
-            Some(DeflateConfig::default())
-        } else {
-            None
-        };
+    /// Enable per-message deflate compression with default settings.
+    ///
+    /// Only takes effect if the client offered `permessage-deflate` in its
+    /// `Sec-WebSocket-Extensions` request header.
+    pub fn permessage_deflate(mut self) -> Self {
+        if self.client_offers_deflate {
+            let mut extensions = ExtensionsConfig::default();
+            extensions.permessage_deflate = Some(Default::default());
+            self.config.extensions = extensions;
+            self.permessage_deflate = true;
+        }
         self
     }
 
@@ -272,6 +288,15 @@ impl<F> WebSocketUpgrade<F> {
         self
     }
 
+    /// Return the selected WebSocket subprotocol, if one has been chosen.
+    ///
+    /// If [`protocols()`][Self::protocols] has been called and a matching
+    /// protocol has been selected, the return value will be `Some` containing
+    /// said protocol. Otherwise, it will be `None`.
+    pub fn selected_protocol(&self) -> Option<&HeaderValue> {
+        self.protocol.as_ref()
+    }
+
     /// Provide a callback to call if upgrading the connection fails.
     ///
     /// The connection upgrade is performed in a background task. If that fails this callback
@@ -307,7 +332,8 @@ impl<F> WebSocketUpgrade<F> {
             on_upgrade: self.on_upgrade,
             on_failed_upgrade: callback,
             sec_websocket_protocol: self.sec_websocket_protocol,
-            sec_websocket_extensions: self.sec_websocket_extensions,
+            client_offers_deflate: self.client_offers_deflate,
+            permessage_deflate: self.permessage_deflate,
         }
     }
 
@@ -321,19 +347,12 @@ impl<F> WebSocketUpgrade<F> {
         F: OnFailedUpgrade,
     {
         let on_upgrade = self.on_upgrade;
-        let config: WebSocketConfig = self.config;
+        let config = self.config;
         let on_failed_upgrade = self.on_failed_upgrade;
 
         let protocol = self.protocol.clone();
-        let (sec_websocket_extensions, extensions) =
-            if let Some(ext) = self.sec_websocket_extensions {
-                config.accept_offers(&ext).unzip()
-            } else {
-                (None, None)
-            };
 
         tokio::spawn(async move {
-            log::debug!("on_upgrade on new tokio thread: config={:?}", config);
             let upgraded = match on_upgrade.await {
                 Ok(upgraded) => upgraded,
                 Err(err) => {
@@ -343,13 +362,9 @@ impl<F> WebSocketUpgrade<F> {
             };
             let upgraded = TokioIo::new(upgraded);
 
-            let socket = WebSocketStream::from_raw_socket_with_extensions(
-                upgraded,
-                protocol::Role::Server,
-                Some(config),
-                extensions,
-            )
-            .await;
+            let socket =
+                WebSocketStream::from_raw_socket(upgraded, protocol::Role::Server, Some(config))
+                    .await;
             let socket = WebSocket {
                 inner: socket,
                 protocol,
@@ -387,11 +402,14 @@ impl<F> WebSocketUpgrade<F> {
                 .headers_mut()
                 .insert(header::SEC_WEBSOCKET_PROTOCOL, protocol);
         }
-        if let Some(ext) = sec_websocket_extensions {
-            response
-                .headers_mut()
-                .insert(header::SEC_WEBSOCKET_EXTENSIONS, ext.to_value());
+
+        if self.permessage_deflate {
+            response.headers_mut().insert(
+                header::SEC_WEBSOCKET_EXTENSIONS,
+                HeaderValue::from_static("permessage-deflate"),
+            );
         }
+
         response
     }
 }
@@ -457,6 +475,8 @@ where
                 return Err(MethodNotConnect.into());
             }
 
+            // if this feature flag is disabled, we won’t be receiving an HTTP/2 request to begin
+            // with.
             if parts
                 .extensions
                 .get::<hyper::ext::Protocol>()
@@ -478,7 +498,13 @@ where
             .ok_or(ConnectionNotUpgradable)?;
 
         let sec_websocket_protocol = parts.headers.get(header::SEC_WEBSOCKET_PROTOCOL).cloned();
-        let sec_websocket_extensions = parts.headers.typed_get::<SecWebsocketExtensions>();
+
+        let client_offers_deflate = parts
+            .headers
+            .get(header::SEC_WEBSOCKET_EXTENSIONS)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.contains("permessage-deflate"));
+
         let config: WebSocketConfig = Default::default();
 
         Ok(Self {
@@ -487,8 +513,9 @@ where
             sec_websocket_key,
             on_upgrade,
             sec_websocket_protocol,
-            sec_websocket_extensions,
             on_failed_upgrade: DefaultOnFailedUpgrade,
+            client_offers_deflate,
+            permessage_deflate: false,
         })
     }
 }
@@ -546,6 +573,13 @@ impl WebSocket {
     }
 }
 
+impl FusedStream for WebSocket {
+    /// Returns true if the websocket has been terminated.
+    fn is_terminated(&self) -> bool {
+        self.inner.is_terminated()
+    }
+}
+
 impl Stream for WebSocket {
     type Item = Result<Message, Error>;
 
@@ -595,6 +629,7 @@ pub struct Utf8Bytes(ts::Utf8Bytes);
 impl Utf8Bytes {
     /// Creates from a static str.
     #[inline]
+    #[must_use]
     pub const fn from_static(str: &'static str) -> Self {
         Self(ts::Utf8Bytes::from_static(str))
     }
@@ -1064,3 +1099,4 @@ pub mod close_code {
     /// action.
     pub const AGAIN: u16 = 1013;
 }
+

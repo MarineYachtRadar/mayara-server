@@ -12,7 +12,13 @@ use serde_json::{Value, json};
 use std::env;
 use std::time::Duration;
 use tokio::time::timeout;
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
+use tokio_tungstenite::{
+    connect_async, connect_async_with_config,
+    tungstenite::{
+        extensions::ExtensionsConfig,
+        protocol::{Message, WebSocketConfig},
+    },
+};
 
 fn ws_url() -> String {
     env::var("MAYARA_TEST_WS_URL").unwrap_or_else(|_| "ws://localhost:6502".to_string())
@@ -314,4 +320,70 @@ async fn test_signalk_delta_format() {
             }
         }
     }
+}
+
+// ============================================================================
+// WebSocket compression (permessage-deflate)
+// ============================================================================
+
+#[tokio::test]
+#[ignore = "requires running server"]
+async fn test_websocket_deflate_negotiation() {
+    let url = format!("{}/signalk/v1/stream?subscribe=none", ws_url());
+
+    let mut config = WebSocketConfig::default();
+    let mut extensions = ExtensionsConfig::default();
+    extensions.permessage_deflate = Some(Default::default());
+    config.extensions = extensions;
+
+    let (ws, response) =
+        connect_async_with_config(url, Some(config), false)
+            .await
+            .expect("Failed to connect with deflate");
+
+    // Server should echo back the extension in the response
+    let ext_header = response
+        .headers()
+        .get("sec-websocket-extensions")
+        .expect("Response missing Sec-WebSocket-Extensions header");
+    assert!(
+        ext_header
+            .to_str()
+            .unwrap()
+            .contains("permessage-deflate"),
+        "Server should negotiate permessage-deflate, got: {:?}",
+        ext_header
+    );
+
+    // Verify the connection is functional: send a subscribe and read a response
+    let (mut write, mut read) = ws.split();
+    let msg = json!({"subscribe": [{"path": "radars.*.controls.*", "policy": "instant"}]});
+    write.send(text_msg(&msg)).await.expect("Failed to send");
+
+    let result = timeout(Duration::from_secs(5), read.next()).await;
+    assert!(result.is_ok(), "Should receive data over compressed connection");
+    if let Ok(Some(Ok(Message::Text(text)))) = result {
+        let json: Value = serde_json::from_str(&text).expect("Should be valid JSON");
+        assert!(
+            json.get("updates").is_some() || json.get("name").is_some(),
+            "Should receive valid message over compressed connection"
+        );
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires running server"]
+async fn test_websocket_without_deflate() {
+    let url = format!("{}/signalk/v1/stream?subscribe=none", ws_url());
+
+    // Connect without requesting compression
+    let (_, response) = connect_async(&url)
+        .await
+        .expect("Failed to connect");
+
+    // Server should NOT include the extension header
+    assert!(
+        response.headers().get("sec-websocket-extensions").is_none(),
+        "Server should not negotiate deflate when client doesn't offer it"
+    );
 }

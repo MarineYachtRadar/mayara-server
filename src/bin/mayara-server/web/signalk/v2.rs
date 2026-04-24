@@ -1138,14 +1138,12 @@ async fn control_stream_handler(
         }
     };
 
-    let ws = ws.accept_compression(true);
-
     let radars = state.radars.clone();
     let shutdown_tx = state.shutdown_tx.clone();
 
     // finalize the upgrade process by returning upgrade callback.
     // we can customize the callback by sending additional info such as address.
-    ws.on_upgrade(move |socket| {
+    ws.permessage_deflate().on_upgrade(move |socket| {
         ws_signalk_delta_shim(socket, subscribe, send_cached_values, radars, shutdown_tx)
     })
 }

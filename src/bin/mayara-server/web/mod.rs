@@ -27,13 +27,17 @@ use tokio_rustls::{TlsAcceptor, server::TlsStream};
 use tower_http::trace::TraceLayer;
 use utoipa::ToSchema;
 
-mod axum_fix;
+#[allow(dead_code)]
+mod axum_extract_ws; // Our own WebSocketUpgrade that supports compression and other features we need
+use axum_extract_ws::Message;
+use axum_extract_ws::WebSocket;
+use axum_extract_ws::WebSocketUpgrade;
+
 mod recordings;
 mod signalk;
 
 pub use signalk::v2::generate_openapi_json;
 
-use axum_fix::{Message, WebSocket, WebSocketUpgrade};
 use mayara::{
     Cli, InterfaceApi, PACKAGE, VERSION,
     radar::{RadarError, SharedRadars},
@@ -145,15 +149,13 @@ impl Web {
         socket.set_only_v6(false).map_err(WebError::Io)?;
         socket.set_reuse_address(true).map_err(WebError::Io)?;
         socket.set_nonblocking(true).map_err(WebError::Io)?;
-        socket
-            .bind(&addr.into())
-            .map_err(|e| {
-                if e.kind() == io::ErrorKind::AddrInUse {
-                    WebError::PortInUse(port)
-                } else {
-                    WebError::Io(e)
-                }
-            })?;
+        socket.bind(&addr.into()).map_err(|e| {
+            if e.kind() == io::ErrorKind::AddrInUse {
+                WebError::PortInUse(port)
+            } else {
+                WebError::Io(e)
+            }
+        })?;
         socket.listen(1024).map_err(WebError::Io)?;
         let listener = TcpListener::from_std(socket.into()).map_err(WebError::Io)?;
 
@@ -338,15 +340,14 @@ async fn spokes_handler(
 ) -> Response {
     debug!("stream request for {}", params.id);
 
-    let ws = ws.accept_compression(true);
-
     match state.radars.get_by_key(&params.id) {
         Some(radar) => {
             let shutdown_rx = state.shutdown_tx.subscribe();
             let radar_message_rx = radar.message_tx.subscribe();
             // finalize the upgrade process by returning upgrade callback.
             // we can customize the callback by sending additional info such as address.
-            ws.on_upgrade(move |socket| spokes_stream(socket, radar_message_rx, shutdown_rx))
+            ws.permessage_deflate()
+                .on_upgrade(move |socket| spokes_stream(socket, radar_message_rx, shutdown_rx))
         }
         None => RadarError::NoSuchRadar(params.id).into_response(),
     }
