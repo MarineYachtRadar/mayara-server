@@ -45,6 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **garmin:** add warmup time control and fix formatting (#135) ([PR #135](https://github.com/MarineYachtRadar/mayara-server/pull/135))
 - **koden:** remove unused fields to silence dead_code warnings (#142) ([PR #142](https://github.com/MarineYachtRadar/mayara-server/pull/142))
 - **target:** wrap negative guard-zone angles (#144) ([PR #144](https://github.com/MarineYachtRadar/mayara-server/pull/144))
+- **controls:** round instead of truncate in value conversions (#151) ([PR #151](https://github.com/MarineYachtRadar/mayara-server/pull/151))
 
 ## [3.4.2] - 2026-04-10
 
