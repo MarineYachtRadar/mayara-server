@@ -16,7 +16,7 @@
 #   make demo     - Rebuild the docker demo image
 #   make clean    - Clean build artifacts
 
-.PHONY: all release debug dev docs run run-dev clean test docker demo changelog
+.PHONY: all release debug dev docs run run-dev clean test fixtures docker demo changelog
 
 # Default: build release with embedded docs
 all: release
@@ -83,6 +83,22 @@ run: release
 run-dev: dev
 	@echo "Starting dev server..."
 	./target/debug/mayara-server
+
+# Pcap fixture files used by replay integration tests
+FIXTURES = \
+	testdata/pcap/furuno-drs4dnxt.pcap.gz \
+	testdata/pcap/garmin-xhd.pcap.gz \
+	testdata/pcap/navico-4g.pcap.gz \
+	testdata/pcap/navico-br24.pcap.gz \
+	testdata/pcap/navico-halo20plus.pcap.gz \
+	testdata/pcap/navico-halo24.pcap.gz \
+	testdata/pcap/navico-halo3006.pcap.gz \
+	testdata/pcap/raymarine-quantum.pcap.gz
+
+# (Re)generate pcap fixtures from radar-recordings repo
+fixtures: $(FIXTURES)
+$(FIXTURES) &:
+	cargo run --features pcap-replay --example generate-fixtures
 
 # Run unit tests and integration tests (starts emulator, runs tests, stops server)
 test:
