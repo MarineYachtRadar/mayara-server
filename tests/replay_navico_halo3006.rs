@@ -1,9 +1,9 @@
-//! Integration test: replay Navico BR24 pcap fixture.
+//! Integration test: replay Navico HALO3006 pcap fixture.
 //!
 //! Verifies that replaying the fixture through the full pipeline
 //! detects the radar with the correct brand, model, and capabilities.
 
-use mayara::{replay, Cli};
+use mayara::{Cli, replay};
 use std::path::Path;
 use std::time::Duration;
 use tokio_graceful_shutdown::{SubsystemBuilder, Toplevel};
@@ -37,11 +37,11 @@ fn test_args() -> Cli {
 }
 
 #[tokio::test]
-async fn replay_navico_br24() {
+async fn replay_navico_halo3006() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("testdata")
         .join("pcap")
-        .join("navico-br24.pcap.gz");
+        .join("navico-halo3006.pcap.gz");
     if !fixture.exists() {
         panic!(
             "Fixture not found: {}. Run: cargo run --features pcap-replay --example generate-fixtures",
@@ -49,7 +49,6 @@ async fn replay_navico_br24() {
         );
     }
 
-    let _ = env_logger::builder().is_test(true).try_init();
     replay::init(&fixture).expect("init replay");
     replay::set_instant_timing();
     let args = test_args();
@@ -69,8 +68,8 @@ async fn replay_navico_br24() {
                     if info.controls.model_name().is_some() && !info.ranges.all.is_empty() {
                         assert!(key.starts_with("nav"), "expected Navico key, got: {}", key);
                         assert_eq!(info.brand, mayara::Brand::Navico);
-                        assert_eq!(info.controls.model_name().unwrap(), "BR24");
-                        assert!(!info.doppler, "BR24 should not support Doppler");
+                        assert_eq!(info.controls.model_name().unwrap(), "HALO3000");
+                        assert!(info.doppler, "HALO3000 should support Doppler");
                         assert_eq!(info.spokes_per_revolution, 2048);
                         break;
                     }

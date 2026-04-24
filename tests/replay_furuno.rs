@@ -1,9 +1,9 @@
 //! Integration test: replay Furuno DRS4D-NXT pcap fixture.
 //!
 //! Verifies that replaying the fixture through the full pipeline
-//! detects the radar with the correct brand.
+//! detects the radar with the correct brand, model, and capabilities.
 
-use mayara::{replay, Cli};
+use mayara::{Cli, replay};
 use std::path::Path;
 use std::time::Duration;
 use tokio_graceful_shutdown::{SubsystemBuilder, Toplevel};
@@ -44,7 +44,7 @@ async fn replay_furuno_drs4dnxt() {
         .join("furuno-drs4dnxt.pcap.gz");
     if !fixture.exists() {
         panic!(
-            "Fixture not found: {}. Run: cargo test --lib generate_fixtures -- --ignored",
+            "Fixture not found: {}. Run: cargo run --features pcap-replay --example generate-fixtures",
             fixture.display()
         );
     }
@@ -62,14 +62,17 @@ async fn replay_furuno_drs4dnxt() {
                 let keys = radars.get_keys();
                 if !keys.is_empty() {
                     let key = &keys[0];
-                    assert!(
-                        key.starts_with("fur"),
-                        "expected Furuno key, got: {}",
-                        key
-                    );
                     let info = radars.get_by_key(key).expect("radar info");
-                    assert_eq!(info.brand, mayara::Brand::Furuno);
-                    break;
+
+                    // Wait until the model has been identified
+                    if info.controls.model_name().is_some() && !info.ranges.all.is_empty() {
+                        assert!(key.starts_with("fur"), "expected Furuno key, got: {}", key);
+                        assert_eq!(info.brand, mayara::Brand::Furuno);
+                        assert_eq!(info.controls.model_name().unwrap(), "DRS4DNXT");
+                        assert!(info.doppler, "DRS4D-NXT should support Doppler");
+                        assert_eq!(info.spokes_per_revolution, 8192);
+                        break;
+                    }
                 }
                 if tokio::time::Instant::now() > deadline {
                     panic!("Timeout: no radar detected within 5 seconds");
