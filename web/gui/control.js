@@ -338,14 +338,16 @@ const ButtonValue = (id, name) =>
   );
 
 const AutoButton = (id) =>
-  button(
-    {
-      type: "button",
+  label(
+    { class: "myr_auto_switch" },
+    input({
+      type: "checkbox",
       class: "myr_auto_toggle",
       id: control_prefix + id + auto_postfix,
-      onclick: (e) => do_toggle_auto(e.target),
-    },
-    "Auto"
+      onchange: (e) => do_toggle_auto(e.target),
+    }),
+    span({ class: "myr_auto_slider" }),
+    " Auto"
   );
 
 const EnabledButton = (id) =>
@@ -1431,11 +1433,11 @@ function setControlValue(cv) {
         updateTickMarks(i);
       }
 
-      // Handle auto toggle button
+      // Handle auto toggle switch
       if (control.hasAuto && "auto" in cv) {
-        let autoBtn = i.parentNode.querySelector(".myr_auto_toggle");
-        if (autoBtn) {
-          autoBtn.classList.toggle("myr_auto_active", cv.auto);
+        let autoCheckbox = i.parentNode.querySelector(".myr_auto_toggle");
+        if (autoCheckbox) {
+          autoCheckbox.checked = cv.auto;
         }
         let display = cv.auto && !control.hasAutoAdjustable ? "none" : "block";
         if (n) n.style.display = display;
@@ -1524,15 +1526,14 @@ function do_change(v) {
   sendControlToServer(id, message);
 }
 
-function do_toggle_auto(btn) {
-  let id = html_to_server_id(btn.id);
+function do_toggle_auto(checkbox) {
+  let id = html_to_server_id(checkbox.id);
 
   let update = myr_control_values[id] || { id: id };
-  let newAuto = !update.auto;
-  update.auto = newAuto;
+  update.auto = checkbox.checked;
   setControlValue(update);
 
-  sendControlToServer(id, { id: id, auto: newAuto });
+  sendControlToServer(id, { id: id, auto: checkbox.checked });
 }
 
 function do_change_enabled(checkbox) {

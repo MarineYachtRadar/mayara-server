@@ -42,29 +42,66 @@ label.myr_auto_label,input.myr_auto {
   margin-top: 8px;
 }
 
-/* Auto toggle button */
-.myr_auto_toggle {
-  padding: 4px 10px;
+/* Auto toggle switch */
+.myr_auto_switch {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
   font-size: 12px;
   font-weight: bold;
-  border: 2px solid #558;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  background-color: #223;
   color: #88a;
   margin-left: 8px;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
-.myr_auto_toggle:hover {
+.myr_auto_switch .myr_auto_toggle {
+  display: none;
+}
+
+.myr_auto_slider {
+  display: inline-block;
+  width: 32px;
+  height: 18px;
+  background-color: #223;
+  border: 2px solid #558;
+  border-radius: 11px;
+  position: relative;
+  transition: all 0.2s ease;
+  margin-right: 6px;
+  flex-shrink: 0;
+}
+
+.myr_auto_slider::after {
+  content: "";
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  background-color: #88a;
+  border-radius: 50%;
+  top: 3px;
+  left: 2px;
+  transition: all 0.2s ease;
+}
+
+.myr_auto_toggle:checked + .myr_auto_slider {
+  background-color: #4a8;
+  border-color: #4a8;
+}
+
+.myr_auto_toggle:checked + .myr_auto_slider::after {
+  background-color: #fff;
+  left: 16px;
+}
+
+.myr_auto_switch:hover .myr_auto_slider {
   border-color: #77a;
   background-color: #334;
 }
 
-.myr_auto_toggle.myr_auto_active {
-  background-color: #4a8;
-  border-color: #4a8;
-  color: #fff;
+.myr_auto_switch:hover .myr_auto_toggle:checked + .myr_auto_slider {
+  background-color: #3c9;
+  border-color: #3c9;
 }
 
 /* Power buttons container */
