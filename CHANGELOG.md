@@ -42,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **arpa:** stop flooding broadcast channel with per-blob target updates (#120) ([PR #120](https://github.com/MarineYachtRadar/mayara-server/pull/120))
 - **garmin:** add warmup time control and fix formatting (#135) ([PR #135](https://github.com/MarineYachtRadar/mayara-server/pull/135))
 - **koden:** remove unused fields to silence dead_code warnings (#142) ([PR #142](https://github.com/MarineYachtRadar/mayara-server/pull/142))
+- **target:** wrap negative guard-zone angles (#144) ([PR #144](https://github.com/MarineYachtRadar/mayara-server/pull/144))
 
 ## [3.4.2] - 2026-04-10
 
