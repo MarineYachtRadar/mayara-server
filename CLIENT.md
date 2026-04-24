@@ -4,13 +4,19 @@ The `client-examples/` directory contains minimal client implementations that de
 
 ## Python Client
 
-`client-examples/python-client/` — Connects to the first radar's spoke data stream and displays sampled spoke data as ASCII art.
+`client-examples/python-client/` — Two viewers sharing a virtual environment. Requires Python 3; the venv is created automatically on first run.
+
+**Spoke viewer** — Connects to the first radar's spoke data stream and displays sampled spoke data as ASCII art.
 
 ```sh
 ./client-examples/python-client/run.sh [--url http://localhost:6502]
 ```
 
-Creates a virtual environment automatically on first run. Requires Python 3.
+**Target viewer** — Subscribes to ARPA/MARPA targets via the Signal K WebSocket and displays a live-updating table with bearing, distance, course, speed, and CPA/TCPA.
+
+```sh
+./client-examples/python-client/run-target-viewer.sh [--url http://localhost:6502]
+```
 
 ## JavaScript Client
 
@@ -34,7 +40,7 @@ Requires curl and jq.
 
 ## What They Demonstrate
 
-Both clients perform the same steps:
+### Spoke viewers (Python, JavaScript)
 
 1. **Discover radars** via `GET /signalk/v2/api/vessels/self/radars`
 2. **Fetch capabilities** via `GET /signalk/v2/api/vessels/self/radars/{id}/capabilities`
@@ -42,7 +48,14 @@ Both clients perform the same steps:
 4. **Decode protobuf messages** using `RadarMessage.proto` from the source tree
 5. **Sample 32 spokes** across one revolution and display them as ASCII art
 
-Both clients read `src/lib/protos/RadarMessage.proto` directly so the protobuf definition stays in sync with the server.
+Both spoke viewers read `src/lib/protos/RadarMessage.proto` directly so the protobuf definition stays in sync with the server.
+
+### Target viewer (Python)
+
+1. **Discover radars** via `GET /signalk/v2/api/vessels/self/radars`
+2. **Connect to the Signal K WebSocket** at `/signalk/v1/stream?subscribe=none`
+3. **Subscribe to targets** by sending `{"subscribe": [{"path": "radars.*.targets.*", "policy": "instant"}]}`
+4. **Render a live table** of tracked targets (bearing, distance, course, speed, CPA/TCPA)
 
 ## Full GUI
 
