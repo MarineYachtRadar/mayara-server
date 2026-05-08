@@ -50,6 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **gui:** replace Auto button with toggle switch (#154) ([PR #154](https://github.com/MarineYachtRadar/mayara-server/pull/154))
 - **gui:** convert user units to SI in do_change (#158) ([PR #158](https://github.com/MarineYachtRadar/mayara-server/pull/158))
 - **gui:** show feedback when heading missing in acquire mode (#159) ([PR #159](https://github.com/MarineYachtRadar/mayara-server/pull/159))
+- **gui:** apply min/max/step to numeric controls (#157) ([PR #157](https://github.com/MarineYachtRadar/mayara-server/pull/157))
 
 ## [3.4.2] - 2026-04-10
 
