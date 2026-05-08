@@ -92,6 +92,13 @@ pub(crate) struct FurunoReportReceiver {
     /// DRS4W/DRS use an 18th-root gamma curve to spread the bottom-heavy
     /// echo distribution; other models use a linear mapping.
     wire_to_legend: [[u8; 256]; 2],
+    /// Whether the Target Analyzer (Doppler) state for each range has been
+    /// confirmed by either a `$NEF` report from the radar or by learning
+    /// that the model has no TA capability. Until this is true, the LUT
+    /// in `wire_to_legend` may not match the radar's actual wire format,
+    /// so we drop spokes rather than render them with wrong colors.
+    /// Index 0 = Range A, 1 = Range B.
+    target_analyzer_known: [bool; 2],
 }
 
 impl FurunoReportReceiver {
@@ -128,6 +135,12 @@ impl FurunoReportReceiver {
             blob_tx,
         );
 
+        // In replay mode the saved control state already drives the LUT, so
+        // treat TA state as known from the start. In live mode we wait for
+        // either a `$NEF` reply or model identification to confirm whether
+        // the radar has TA at all.
+        let initial_ta_known = args.is_replay();
+
         FurunoReportReceiver {
             common,
             common_b: None,
@@ -144,6 +157,7 @@ impl FurunoReportReceiver {
             guard_zone_alarm: [false, false],
             alarm_active: false,
             wire_to_legend,
+            target_analyzer_known: [initial_ta_known, initial_ta_known],
         }
     }
 
@@ -813,6 +827,21 @@ impl FurunoReportReceiver {
                         new_mode
                     );
                 }
+                // First `$NEF` for this range confirms the TA state, so the
+                // LUT is now trustworthy and spoke emission can resume.
+                if !self.target_analyzer_known[range_idx] {
+                    self.target_analyzer_known[range_idx] = true;
+                    let key = if range_idx == 1 {
+                        &self.common_b.as_ref().unwrap().key
+                    } else {
+                        &self.common.key
+                    };
+                    log::info!(
+                        "{}: Target Analyzer state confirmed (mode {:?}), spoke output enabled",
+                        key,
+                        self.doppler_wire_mode_for(range_idx)
+                    );
+                }
             }
 
             CommandId::Tune => {
@@ -981,6 +1010,16 @@ impl FurunoReportReceiver {
             // map past the ramp end into Doppler / history reservation
             // slots, painting strong stationary echoes blue.
             settings::update_when_model_known(&mut self.common.info, model, version);
+            // Models without a Doppler control will never send `$NEF`, so the
+            // initial TA-Off LUT is correct for them and we can lift the gate.
+            if !self
+                .common
+                .info
+                .controls
+                .contains_key(&ControlId::Doppler)
+            {
+                self.target_analyzer_known[0] = true;
+            }
             self.wire_to_legend[0] = Self::wire_to_legend(
                 &self.common.info.get_legend(),
                 self.doppler_wire_mode_for(0),
@@ -999,6 +1038,9 @@ impl FurunoReportReceiver {
                 let legend_b = {
                     let cb = self.common_b.as_mut().unwrap();
                     settings::update_when_model_known(&mut cb.info, model, version);
+                    if !cb.info.controls.contains_key(&ControlId::Doppler) {
+                        self.target_analyzer_known[1] = true;
+                    }
                     let legend = cb.info.get_legend();
                     cb.update();
                     legend
@@ -1213,25 +1255,32 @@ impl FurunoReportReceiver {
                 SPOKE_LEN,
             );
 
-            let wire_to_legend = &self.wire_to_legend[range_idx];
-            if is_range_b {
-                Self::add_spoke_to_common(
-                    self.common_b.as_mut().unwrap(),
-                    &metadata,
-                    angle,
-                    heading,
-                    &send_spoke,
-                    wire_to_legend,
-                );
-            } else {
-                Self::add_spoke_to_common(
-                    &mut self.common,
-                    &metadata,
-                    angle,
-                    heading,
-                    &send_spoke,
-                    wire_to_legend,
-                );
+            // Defer emission until the radar's Target Analyzer state is
+            // confirmed; otherwise the LUT may misclassify wire bytes and
+            // strong stationary echoes get rendered with Doppler colors.
+            // Delta-decoding state is still updated so the spoke stream
+            // resumes correctly once the gate lifts.
+            if self.target_analyzer_known[range_idx] {
+                let wire_to_legend = &self.wire_to_legend[range_idx];
+                if is_range_b {
+                    Self::add_spoke_to_common(
+                        self.common_b.as_mut().unwrap(),
+                        &metadata,
+                        angle,
+                        heading,
+                        &send_spoke,
+                        wire_to_legend,
+                    );
+                } else {
+                    Self::add_spoke_to_common(
+                        &mut self.common,
+                        &metadata,
+                        angle,
+                        heading,
+                        &send_spoke,
+                        wire_to_legend,
+                    );
+                }
             }
 
             self.prev_angle[range_idx] = angle;
@@ -1356,25 +1405,28 @@ impl FurunoReportReceiver {
                 scale: TILE_SCALE,
             };
 
-            let wire_to_legend = &self.wire_to_legend[range_idx];
-            if is_range_b {
-                Self::add_spoke_to_common(
-                    self.common_b.as_mut().unwrap(),
-                    &metadata,
-                    angle,
-                    heading,
-                    &send_spoke,
-                    wire_to_legend,
-                );
-            } else {
-                Self::add_spoke_to_common(
-                    &mut self.common,
-                    &metadata,
-                    angle,
-                    heading,
-                    &send_spoke,
-                    wire_to_legend,
-                );
+            // See IMO path: gate emission on confirmed TA state.
+            if self.target_analyzer_known[range_idx] {
+                let wire_to_legend = &self.wire_to_legend[range_idx];
+                if is_range_b {
+                    Self::add_spoke_to_common(
+                        self.common_b.as_mut().unwrap(),
+                        &metadata,
+                        angle,
+                        heading,
+                        &send_spoke,
+                        wire_to_legend,
+                    );
+                } else {
+                    Self::add_spoke_to_common(
+                        &mut self.common,
+                        &metadata,
+                        angle,
+                        heading,
+                        &send_spoke,
+                        wire_to_legend,
+                    );
+                }
             }
 
             self.prev_angle[range_idx] = angle;
