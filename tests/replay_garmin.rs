@@ -31,6 +31,7 @@ fn test_args() -> Cli {
         openapi: false,
         transmit: false,
         pass_ais: false,
+        accept_invalid_certs: false,
         emulator: false,
         merge_targets: false,
     }

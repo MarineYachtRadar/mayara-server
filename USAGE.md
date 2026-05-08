@@ -69,15 +69,32 @@ Command Line Options
 
 ### Navigation Data
 
-| Option                            | Description                                      |
-| --------------------------------- | ------------------------------------------------ |
-| `-n, --navigation-address <ADDR>` | Navigation service address for GPS/heading data  |
-|                                   | No value: auto-discover via mDNS                 |
-|                                   | Interface name: search mDNS on that interface    |
-|                                   | `udp:ip:port`: listen for UDP broadcasts         |
-|                                   | `tcp:ip:port`: connect to TCP server             |
-| `--nmea0183`                      | Use NMEA 0183 instead of Signal K for navigation |
-| `--pass-ais`                      | Forward AIS targets from Signal K to GUI clients |
+| Option                            | Description                                                                 |
+| --------------------------------- | --------------------------------------------------------------------------- |
+| `-n, --navigation-address <ADDR>` | Navigation service address for GPS/heading data                             |
+|                                   | No value: auto-discover via mDNS                                            |
+|                                   | Interface name: search mDNS on that interface                               |
+|                                   | `tcp:ip:port`: anonymous Signal K TCP stream                                |
+|                                   | `udp:ip:port`: listen for NMEA 0183 UDP broadcasts                          |
+|                                   | `ws:ip:port`: Signal K WebSocket (via discovery)                            |
+|                                   | `wss:ip:port`: Signal K secure WebSocket (requires `--accept-invalid-certs`)|
+| `--nmea0183`                      | Use NMEA 0183 instead of Signal K for navigation                            |
+| `--pass-ais`                      | Forward AIS targets from Signal K to GUI clients                            |
+| `--accept-invalid-certs`          | Accept self-signed TLS certificates when connecting to Signal K via         |
+|                                   | HTTPS/WSS. Required for boat-LAN setups that use self-signed certs.         |
+
+**Note on authentication:** Authenticated Signal K servers can only be reached
+via `ws:` or `wss:`. The plain `tcp:` transport is anonymous-only. Authentication
+support is tracked as follow-up work.
+
+**Note on TLS SNI:** `wss:ip:port` and mDNS-discovered HTTPS Signal K servers
+use the server's IP address (not hostname) during the TLS handshake. Some
+strict reverse proxies (e.g. nginx with `server_name` enforcement and
+TLS SNI matching) reject handshakes that present an IP as SNI. Boat-LAN
+Signal K deployments typically do not enforce this and the handshake proceeds
+because `--accept-invalid-certs` bypasses hostname verification entirely.
+If you run Mayara against a strict cloud-hosted Signal K instance, configure
+the server to accept IP-based SNI or point Mayara at an on-LAN instance.
 
 ### Stationary Installation
 

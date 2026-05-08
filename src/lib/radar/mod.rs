@@ -84,6 +84,8 @@ pub enum RadarError {
     ParseJson(String),
     #[error("Cannot parse NMEA0183 '{0}'")]
     ParseNmea0183(String),
+    #[error("Signal K error: {0}")]
+    SignalK(String),
     #[error("IP address changed")]
     IPAddressChanged,
     #[error("Cannot login to radar")]

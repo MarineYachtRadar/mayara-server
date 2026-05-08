@@ -1,5 +1,5 @@
 use atomic_float::AtomicF64;
-use futures_util::future::select_ok;
+use futures_util::{SinkExt, StreamExt, future::select_ok};
 use mdns_sd::{Error, IfKind, ServiceDaemon, ServiceEvent};
 use nmea_parser::*;
 use serde_json::Value;
@@ -19,6 +19,7 @@ use tokio::{io::AsyncBufReadExt, net::UdpSocket, time::sleep};
 use tokio::{io::AsyncWriteExt, net::TcpStream};
 use tokio::{io::BufReader, sync::broadcast::Receiver};
 use tokio_graceful_shutdown::SubsystemHandle;
+use tokio_tungstenite::tungstenite::Message;
 
 use crate::{
     Cli,
@@ -73,6 +74,20 @@ fn set_own_ship_context(context: &str) {
         if guard.is_none() {
             log::info!("Own-ship context set to: {}", context);
             *guard = Some(context.to_string());
+        }
+    }
+}
+
+/// Clear the own-ship context. Called on every Signal K reconnection so a
+/// roam to a different server (with a different vessel URN) cannot silently
+/// misroute AIS traffic to the stale context.
+fn reset_own_ship_context() {
+    if let Some(lock) = OWN_SHIP_CONTEXT.get() {
+        if let Ok(mut guard) = lock.write() {
+            if guard.is_some() {
+                log::debug!("Clearing own-ship context on reconnect");
+                *guard = None;
+            }
         }
     }
 }
@@ -208,9 +223,7 @@ pub(crate) fn set_sog(sog: Option<f64>) {
     }
 }
 
-/// The hostname of the devices we are searching for.
-const SIGNAL_K_SERVICE_NAME: &'static str = "_signalk-tcp._tcp.local.";
-const NMEA0183_SERVICE_NAME: &'static str = "_nmea-0183._tcp.local.";
+const NMEA0183_SERVICE_NAME: &str = "_nmea-0183._tcp.local.";
 
 /// Subscription for own-ship navigation data only
 const SUBSCRIBE_SELF: &'static str = "{\"context\":\"vessels.self\",\"subscribe\":[{\"path\":\"navigation.headingTrue\"},{\"path\":\"navigation.position\"},{\"path\":\"navigation.speedOverGround\"},{\"path\":\"navigation.courseOverGroundTrue\"}]}\r\n";
@@ -219,10 +232,33 @@ const SUBSCRIBE_SELF: &'static str = "{\"context\":\"vessels.self\",\"subscribe\
 const SUBSCRIBE_ALL: &'static str =
     "{\"context\":\"vessels.*\",\"subscribe\":[{\"path\":\"*\"}]}\r\n";
 
+/// A Signal K subscription the transport layer should send in response to an
+/// incoming message. Both TCP and WebSocket receive loops share this decision
+/// logic via `NavigationData::signalk_actions_for_line`.
+#[derive(Clone, Copy, Debug)]
+enum SignalKSubscription {
+    /// Initial own-ship subscription; sent once we receive the hello message.
+    OwnShip,
+    /// All-vessels subscription for AIS forwarding; sent once we know the
+    /// own-ship context (when `--pass-ais` is set).
+    AllVessels,
+}
+
+impl SignalKSubscription {
+    fn payload(self) -> &'static str {
+        match self {
+            Self::OwnShip => SUBSCRIBE_SELF,
+            Self::AllVessels => SUBSCRIBE_ALL,
+        }
+    }
+}
+
 enum ConnectionType {
     Mdns,
     Udp(SocketAddr),
     Tcp(SocketAddr),
+    /// WebSocket connection; bool indicates TLS (wss) vs plain (ws)
+    Ws(SocketAddr, bool),
 }
 
 impl ConnectionType {
@@ -237,10 +273,11 @@ impl ConnectionType {
                     return ConnectionType::Mdns;
                 } else if parts.len() == 2 {
                     if let Ok(addr) = parts[1].parse() {
-                        // Dump if illegal address
                         match parts[0].to_ascii_lowercase().as_str() {
                             "udp" => return ConnectionType::Udp(addr),
                             "tcp" => return ConnectionType::Tcp(addr),
+                            "ws" => return ConnectionType::Ws(addr, false),
+                            "wss" => return ConnectionType::Ws(addr, true),
                             _ => {} // fallthrough to panic below
                         }
                     }
@@ -248,22 +285,23 @@ impl ConnectionType {
             }
         }
         panic!(
-            "Interface must be either interface name (no :) or <connection>:<address>:<port> with <connection> one of `udp` or `tcp`."
+            "Interface must be either interface name (no :) or <connection>:<address>:<port> with <connection> one of `udp`, `tcp`, `ws` or `wss`."
         );
     }
 }
 
-#[derive(Debug)]
+use crate::signalk::WsStream;
+
 enum Stream {
     Tcp(TcpStream),
     Udp(UdpSocket),
+    WebSocket(WsStream, String),
 }
 
 pub(crate) struct NavigationData {
     args: Cli,
     nmea0183_mode: bool,
     pass_ais: bool,
-    service_name: &'static str,
     what: &'static str,
     nmea_parser: Option<NmeaParser>,
 }
@@ -277,7 +315,6 @@ impl NavigationData {
                 args,
                 nmea0183_mode: true,
                 pass_ais,
-                service_name: NMEA0183_SERVICE_NAME,
                 what: "NMEA0183",
                 nmea_parser: Some(NmeaParser::new()),
             },
@@ -285,7 +322,6 @@ impl NavigationData {
                 args,
                 nmea0183_mode: false,
                 pass_ais,
-                service_name: SIGNAL_K_SERVICE_NAME,
                 what: "Signal K",
                 nmea_parser: None,
             },
@@ -341,15 +377,22 @@ impl NavigationData {
         let navigation_address = self.args.navigation_address.clone();
 
         loop {
+            // Clear per-session state so a reconnect to a different Signal K
+            // server cannot inherit a stale own-ship URN from the previous one.
+            reset_own_ship_context();
+
             match self
                 .find_service(&subsys, &mut rx_ip_change, &navigation_address)
                 .await
             {
                 Ok(Stream::Tcp(stream)) => {
                     log::info!(
-                        "Listening to {} data from {}",
+                        "Listening to {} data via TCP from {}",
                         self.what,
-                        stream.peer_addr().unwrap()
+                        stream
+                            .peer_addr()
+                            .map(|a| a.to_string())
+                            .unwrap_or_else(|_| "<unknown>".to_string())
                     );
                     match self.receive_loop(stream, &subsys).await {
                         Err(RadarError::Shutdown) => {
@@ -362,7 +405,14 @@ impl NavigationData {
                     }
                 }
                 Ok(Stream::Udp(socket)) => {
-                    log::info!("Listening to {} data via UDP", self.what);
+                    log::info!(
+                        "Listening to {} data via UDP from {}",
+                        self.what,
+                        socket
+                            .local_addr()
+                            .map(|a| a.to_string())
+                            .unwrap_or_else(|_| "<unknown>".to_string())
+                    );
                     match self.receive_udp_loop(socket, &subsys).await {
                         Err(RadarError::Shutdown) => {
                             log::debug!("{} receive_loop shutdown", self.what);
@@ -370,6 +420,22 @@ impl NavigationData {
                         }
                         e => {
                             log::debug!("{} receive_loop restart on result {:?}", self.what, e);
+                        }
+                    }
+                }
+                Ok(Stream::WebSocket(ws, url)) => {
+                    log::info!("Listening to {} data via WebSocket from {}", self.what, url);
+                    match self.receive_ws_loop(ws, &subsys).await {
+                        Err(RadarError::Shutdown) => {
+                            log::debug!("{} receive_ws_loop shutdown", self.what);
+                            return Ok(());
+                        }
+                        e => {
+                            log::debug!(
+                                "{} receive_ws_loop restart on result {:?}",
+                                self.what,
+                                e
+                            );
                         }
                     }
                 }
@@ -400,6 +466,7 @@ impl NavigationData {
             }
             ConnectionType::Tcp(addr) => self.find_tcp_service(subsys, addr).await,
             ConnectionType::Udp(addr) => self.find_udp_service(subsys, addr).await,
+            ConnectionType::Ws(addr, tls) => self.find_signalk_ws_service(subsys, addr, tls).await,
         }
     }
 
@@ -409,8 +476,6 @@ impl NavigationData {
         rx_ip_change: &mut Receiver<()>,
         interface: &Option<String>,
     ) -> Result<Stream, RadarError> {
-        let mut known_addresses: HashSet<SocketAddr> = HashSet::new();
-
         let mdns = ServiceDaemon::new().expect("Failed to create daemon");
 
         if interface.is_some() {
@@ -424,12 +489,43 @@ impl NavigationData {
                 .clone();
             let _ = mdns.enable_interface(IfKind::Name(navigation_address));
         }
-        let tcp_locator = mdns.browse(self.service_name).expect(&format!(
-            "Failed to browse for {} service",
-            self.service_name
-        ));
 
-        log::debug!("SignalK find_service (re)start");
+        if self.nmea0183_mode {
+            return self
+                .find_mdns_nmea0183(&mdns, subsys, rx_ip_change)
+                .await;
+        }
+
+        let r = crate::signalk::find_mdns_service(
+            &mdns,
+            subsys,
+            rx_ip_change,
+            self.args.accept_invalid_certs,
+        )
+        .await
+        .map(signalk_connection_to_stream);
+
+        if let Ok(r3) = mdns.shutdown() {
+            if let Ok(r3) = r3.recv() {
+                log::debug!("mdns_shutdown: {:?}", r3);
+            }
+        }
+        r
+    }
+
+    /// mDNS discovery for NMEA 0183 services (plain TCP)
+    async fn find_mdns_nmea0183(
+        &self,
+        mdns: &ServiceDaemon,
+        subsys: &SubsystemHandle,
+        rx_ip_change: &mut Receiver<()>,
+    ) -> Result<Stream, RadarError> {
+        let mut known_addresses: HashSet<SocketAddr> = HashSet::new();
+        let locator = mdns
+            .browse(NMEA0183_SERVICE_NAME)
+            .expect("Failed to browse for NMEA0183 service");
+
+        log::debug!("NMEA0183 find_mdns_service (re)start");
 
         let r: Result<Stream, RadarError>;
         loop {
@@ -444,14 +540,12 @@ impl NavigationData {
                     r = Err(RadarError::IPAddressChanged);
                     break;
                 },
-                event = tcp_locator.recv_async() => {
+                event = locator.recv_async() => {
                     match event {
                         Ok(ServiceEvent::ServiceResolved(info)) => {
-                            log::debug!("Resolved a new {} service: {}", self.what, info.get_fullname());
-                            let addr = info.get_addresses();
+                            log::debug!("Resolved NMEA0183 service: {}", info.get_fullname());
                             let port = info.get_port();
-
-                            for a in addr {
+                            for a in info.get_addresses() {
                                 known_addresses.insert(SocketAddr::new(a.to_ip_addr(), port));
                             }
                         },
@@ -460,32 +554,23 @@ impl NavigationData {
                         }
                     }
 
-                }
-            }
-
-            let stream = connect_first(known_addresses.clone()).await;
-            match stream {
-                Ok(stream) => {
-                    log::info!(
-                        "Listening to {} data from {}",
-                        self.what,
-                        stream.peer_addr().unwrap()
-                    );
-
-                    r = Ok(Stream::Tcp(stream));
-                    break;
-                }
-                Err(_e) => {} // Just loop
+                    match connect_first(known_addresses.clone()).await {
+                        Ok(stream) => {
+                            r = Ok(Stream::Tcp(stream));
+                            break;
+                        }
+                        Err(_e) => {}
+                    }
+                },
             }
         }
 
-        log::debug!("find_service(...,'{}') = {:?}", self.service_name, r);
         if let Ok(r3) = mdns.shutdown() {
             if let Ok(r3) = r3.recv() {
                 log::debug!("mdns_shutdown: {:?}", r3);
             }
         }
-        return r;
+        r
     }
 
     async fn find_tcp_service(
@@ -505,11 +590,6 @@ impl NavigationData {
                 stream = connect_to_socket(addr) => {
                     match stream {
                         Ok(stream) => {
-                            log::info!(
-                                "Receiving {} data from {}",
-                                self.what,
-                                stream.peer_addr().unwrap()
-                            );
                             return Ok(Stream::Tcp(stream));
                         }
                         Err(e) => {
@@ -539,11 +619,6 @@ impl NavigationData {
                 stream = UdpSocket::bind(addr) => {
                     match stream {
                         Ok(stream) => {
-                            log::info!(
-                                "Receiving {} data from {}",
-                                self.what,
-                                stream.local_addr().unwrap()
-                            );
                             return Ok(Stream::Udp(stream));
                         }
                         Err(e) => {
@@ -556,6 +631,17 @@ impl NavigationData {
         }
     }
 
+    async fn find_signalk_ws_service(
+        &self,
+        subsys: &SubsystemHandle,
+        addr: SocketAddr,
+        use_tls: bool,
+    ) -> Result<Stream, RadarError> {
+        crate::signalk::find_explicit_service(subsys, addr, use_tls, self.args.accept_invalid_certs)
+            .await
+            .map(signalk_connection_to_stream)
+    }
+
     // Loop until we get an error, then just return the error
     // or Ok if we are to shutdown.
     async fn receive_loop(
@@ -566,7 +652,10 @@ impl NavigationData {
         log::info!(
             "{} receive_loop started for {}",
             self.what,
-            stream.peer_addr().unwrap()
+            stream
+                .peer_addr()
+                .map(|a| a.to_string())
+                .unwrap_or_else(|_| "<unknown>".to_string())
         );
         let (read_half, mut write_half) = stream.split();
         let mut lines = BufReader::new(read_half).lines();
@@ -582,35 +671,12 @@ impl NavigationData {
                         Ok(Some(line)) => {
                             log::trace!("{} <- {}", self.what, line);
                             if self.nmea0183_mode {
-                                // We are in NMEA0183 mode, so we need to parse
-                                // the data we get.
-                                match self.parse_nmea0183(&line) {
-                                    Err(e) => { log::warn!("{}", e)}
-                                    Ok(_) => { }
+                                if let Err(e) = self.parse_nmea0183(&line) {
+                                    log::warn!("{}", e);
                                 }
                             } else {
-                                // We are in SignalK mode, so we need to subscribe
-                                // to the data we want.
-                                if line.starts_with("{\"name\":") {
-                                    log::debug!("{} sending subscription", self.what);
-                                    self.send_subscription(&mut write_half).await?;
-                                }
-                                else {
-                                    // Check if we need to send AIS subscription
-                                    // (when pass_ais is enabled and we just learned the own-ship context)
-                                    let had_own_ship = get_own_ship_context().is_some();
-
-                                    match parse_signalk(&line, self.pass_ais) {
-                                        Err(e) => { log::trace!("{} parse error: {}", self.what, e)}
-                                        Ok(_) => { }
-                                    }
-
-                                    // If pass_ais is enabled and we just learned the own-ship context,
-                                    // send the expanded subscription for all vessels
-                                    if self.pass_ais && !had_own_ship && get_own_ship_context().is_some() {
-                                        log::info!("Own-ship context established, expanding subscription to all vessels");
-                                        self.send_ais_subscription(&mut write_half).await?;
-                                    }
+                                for action in self.signalk_actions_for_line(&line) {
+                                    self.send_subscription_tcp(&mut write_half, action).await?;
                                 }
                             }
                         }
@@ -630,35 +696,88 @@ impl NavigationData {
         }
     }
 
-    async fn send_subscription(
-        &self,
-        stream: &mut tokio::net::tcp::WriteHalf<'_>,
-    ) -> Result<(), RadarError> {
-        // Always start with SUBSCRIBE_SELF to get own-ship navigation data
-        // and to learn the own-ship context
-        let bytes: &[u8] = SUBSCRIBE_SELF.as_bytes();
-        log::info!("Sending SignalK subscription: {}", SUBSCRIBE_SELF.trim());
-        let result = stream.write_all(bytes).await.map_err(|e| RadarError::Io(e));
-        match &result {
-            Ok(_) => log::debug!("Subscription sent successfully"),
-            Err(e) => log::warn!("Failed to send subscription: {:?}", e),
+    /// Process an incoming Signal K message and return the subscriptions the
+    /// transport layer should send in response. Shared between the TCP and
+    /// WebSocket receive loops so hello-detection and AIS-expansion logic
+    /// lives in one place. Delta parsing side effects (heading, position,
+    /// AIS updates, own-ship context) happen inside `parse_signalk`.
+    fn signalk_actions_for_line(&self, line: &str) -> Vec<SignalKSubscription> {
+        if line.starts_with("{\"name\":") {
+            log::debug!("{} received hello, will subscribe", self.what);
+            return vec![SignalKSubscription::OwnShip];
         }
-        result
+
+        let had_own_ship = get_own_ship_context().is_some();
+
+        if let Err(e) = parse_signalk(line, self.pass_ais) {
+            log::trace!("{} parse error: {}", self.what, e);
+        }
+
+        if self.pass_ais && !had_own_ship && get_own_ship_context().is_some() {
+            log::info!("Own-ship context established, expanding subscription to all vessels");
+            return vec![SignalKSubscription::AllVessels];
+        }
+
+        Vec::new()
     }
 
-    /// Send the expanded subscription for all vessels (AIS data)
-    async fn send_ais_subscription(
+    async fn send_subscription_tcp(
         &self,
         stream: &mut tokio::net::tcp::WriteHalf<'_>,
+        subscription: SignalKSubscription,
     ) -> Result<(), RadarError> {
-        let bytes: &[u8] = SUBSCRIBE_ALL.as_bytes();
-        log::info!("Sending AIS subscription: {}", SUBSCRIBE_ALL.trim());
-        let result = stream.write_all(bytes).await.map_err(|e| RadarError::Io(e));
-        match &result {
-            Ok(_) => log::debug!("AIS subscription sent successfully"),
-            Err(e) => log::warn!("Failed to send AIS subscription: {:?}", e),
+        let payload = subscription.payload();
+        log::info!("Sending SignalK subscription: {}", payload.trim());
+        stream
+            .write_all(payload.as_bytes())
+            .await
+            .map_err(RadarError::Io)
+    }
+
+    async fn receive_ws_loop(
+        &mut self,
+        ws: WsStream,
+        subsys: &SubsystemHandle,
+    ) -> Result<(), RadarError> {
+        log::info!("{} WebSocket receive_loop started", self.what);
+
+        let (mut write, mut read) = ws.split();
+
+        loop {
+            tokio::select! { biased;
+                _ = subsys.on_shutdown_requested() => {
+                    log::debug!("{} receive_ws_loop shutdown", self.what);
+                    let _ = write.close().await;
+                    return Ok(());
+                },
+                msg = read.next() => {
+                    match msg {
+                        Some(Ok(Message::Text(text))) => {
+                            log::trace!("{} <- {}", self.what, text);
+                            for action in self.signalk_actions_for_line(&text) {
+                                let payload = action.payload().trim();
+                                log::info!("Sending SignalK subscription: {}", payload);
+                                write
+                                    .send(Message::Text(payload.into()))
+                                    .await
+                                    .map_err(|e| RadarError::SignalK(e.to_string()))?;
+                            }
+                        }
+                        Some(Ok(Message::Close(_))) | None => {
+                            log::warn!("{} WebSocket connection closed", self.what);
+                            return Ok(());
+                        }
+                        Some(Ok(_)) => {
+                            // Ignore binary, ping, pong frames
+                        }
+                        Some(Err(e)) => {
+                            log::warn!("{} WebSocket error: {}", self.what, e);
+                            return Err(RadarError::SignalK(e.to_string()));
+                        }
+                    }
+                }
+            }
         }
-        result
     }
 
     // Loop until we get an error, then just return the error
@@ -761,90 +880,87 @@ impl NavigationData {
 
 fn parse_signalk(s: &str, pass_ais: bool) -> Result<(), RadarError> {
     log::trace!("parse_signalk: parsing '{}'", s);
-    match serde_json::from_str::<Value>(s) {
-        Ok(v) => {
-            log::trace!("parse_signalk: parsed JSON successfully");
-            let context = v["context"].as_str();
-            let updates = &v["updates"];
+    let v: Value = serde_json::from_str(s).map_err(|e| {
+        log::warn!("Unable to parse SK message '{}'", s);
+        RadarError::ParseJson(e.to_string())
+    })?;
 
-            // When pass_ais is enabled, handle own-ship detection and AIS forwarding
-            if pass_ais {
-                if let Some(ctx) = context {
-                    let own_ship = get_own_ship_context();
+    let context = v["context"].as_str();
+    let updates = &v["updates"];
 
-                    if own_ship.is_none() {
-                        // First message after subscribing to vessels.self establishes own-ship
-                        // The context will be the actual vessel URN (e.g., vessels.urn:mrn:imo:mmsi:244060807)
-                        set_own_ship_context(ctx);
-                        log::info!("Own-ship context detected: {}", ctx);
-                        // Continue to process this as navigation data
-                    } else if let Some(own_ship_ctx) = own_ship {
-                        // We know which vessel is own-ship, check if this is a different vessel
-                        let is_own_ship = own_ship_ctx == ctx || ctx == "vessels.self";
-                        if !is_own_ship {
-                            // This is an AIS target - update the vessel store
-                            update_ais_vessel(ctx, updates);
-                            return Ok(());
-                        }
-                    }
+    // When pass_ais is enabled, handle own-ship detection and AIS forwarding.
+    if pass_ais {
+        if let Some(ctx) = context {
+            let own_ship = get_own_ship_context();
+
+            if own_ship.is_none() {
+                // First message after subscribing to vessels.self establishes the
+                // own-ship context. Continue processing this message as nav data.
+                set_own_ship_context(ctx);
+                log::info!("Own-ship context detected: {}", ctx);
+            } else if let Some(own_ship_ctx) = own_ship {
+                let is_own_ship = own_ship_ctx == ctx || ctx == "vessels.self";
+                if !is_own_ship {
+                    // This delta is for another vessel; route to AIS store.
+                    update_ais_vessel(ctx, updates);
+                    return Ok(());
                 }
             }
-
-            // Process own-ship navigation data
-            let update = &updates[0];
-            // Extract source from upstream SignalK message
-            // Try $source first (more specific), then source, fall back to "signalk"
-            let source = update["$source"]
-                .as_str()
-                .or_else(|| update["source"]["label"].as_str())
-                .or_else(|| update["source"]["type"].as_str())
-                .unwrap_or("signalk");
-            let values = &update["values"][0];
-            {
-                log::trace!("parse_signalk: values = {:?}", values);
-
-                if let (Some(path), value) = (values["path"].as_str(), &values["value"]) {
-                    log::trace!("parse_signalk: path = '{}', value = {:?}", path, value);
-                    match path {
-                        "navigation.position" => {
-                            log::trace!(
-                                "parse_signalk: position lat={:?} lon={:?}",
-                                value["latitude"].as_f64(),
-                                value["longitude"].as_f64()
-                            );
-                            set_position(value["latitude"].as_f64(), value["longitude"].as_f64());
-                            return Ok(());
-                        }
-                        "navigation.headingTrue" => {
-                            set_heading_true(value.as_f64(), source);
-                            return Ok(());
-                        }
-                        "navigation.speedOverGround" => {
-                            set_sog(value.as_f64());
-                            return Ok(());
-                        }
-                        "navigation.courseOverGroundTrue" => {
-                            set_cog(value.as_f64());
-                            return Ok(());
-                        }
-                        _ => {
-                            return Err(RadarError::ParseJson(format!("Ignored path '{}'", path)));
-                        }
-                    }
-                } else {
-                    log::trace!("parse_signalk: no path or value found in values");
-                }
-            }
-        }
-        Err(e) => {
-            log::warn!("Unable to parse SK message '{}'", s);
-            return Err(RadarError::ParseJson(e.to_string()));
         }
     }
-    return Err(RadarError::ParseJson(format!(
-        "Insufficient fields in '{}'",
-        s
-    )));
+
+    // Process own-ship navigation data. The Signal K delta format allows
+    // multiple updates per message and multiple values per update; process
+    // every one rather than just `updates[0].values[0]`.
+    let Some(updates_array) = updates.as_array() else {
+        return Ok(());
+    };
+
+    for update in updates_array {
+        // Extract source: prefer $source, then source.label, then source.type.
+        let source = update["$source"]
+            .as_str()
+            .or_else(|| update["source"]["label"].as_str())
+            .or_else(|| update["source"]["type"].as_str())
+            .unwrap_or("signalk");
+
+        let Some(values_array) = update["values"].as_array() else {
+            continue;
+        };
+
+        for values_entry in values_array {
+            apply_signalk_value(values_entry, source);
+        }
+    }
+
+    Ok(())
+}
+
+/// Apply a single `{path, value}` entry from a Signal K delta to the local
+/// navigation state.
+fn apply_signalk_value(values_entry: &Value, source: &str) {
+    let Some(path) = values_entry["path"].as_str() else {
+        return;
+    };
+    let value = &values_entry["value"];
+    log::trace!("parse_signalk: path = '{}', value = {:?}", path, value);
+    match path {
+        "navigation.position" => {
+            set_position(value["latitude"].as_f64(), value["longitude"].as_f64());
+        }
+        "navigation.headingTrue" => {
+            set_heading_true(value.as_f64(), source);
+        }
+        "navigation.speedOverGround" => {
+            set_sog(value.as_f64());
+        }
+        "navigation.courseOverGroundTrue" => {
+            set_cog(value.as_f64());
+        }
+        _ => {
+            log::trace!("Ignored path '{}'", path);
+        }
+    }
 }
 
 async fn connect_to_socket(address: SocketAddr) -> Result<TcpStream, RadarError> {
@@ -890,5 +1006,13 @@ where
             log::debug!("All connections failed: {}", e);
             Err(e)
         }
+    }
+}
+
+fn signalk_connection_to_stream(conn: crate::signalk::Connection) -> Stream {
+    use crate::signalk::Connection;
+    match conn {
+        Connection::Tcp(s) => Stream::Tcp(s),
+        Connection::WebSocket(ws, url) => Stream::WebSocket(ws, url),
     }
 }

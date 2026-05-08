@@ -28,6 +28,7 @@ pub mod network;
 pub mod protos;
 pub mod radar;
 pub mod recording;
+pub mod signalk;
 pub mod stream;
 pub mod util;
 
@@ -77,10 +78,19 @@ pub struct Cli {
     #[arg(short, long, default_value_t, value_enum)]
     pub targets: TargetMode,
 
-    /// Set navigation service address, either
-    /// - Nothing: all interfaces will search via MDNS
-    /// - An interface name: only that interface will seach for via MDNS
-    /// - `udp-listen:ipv4-address:port` = listen on (broadcast) address at given port
+    /// Set navigation service address. Accepts either an interface name
+    /// (restricts mDNS to that interface) or `<scheme>:<address>:<port>`.
+    ///
+    /// Schemes:
+    /// - `tcp:` — plain TCP Signal K stream (anonymous only; auth not supported)
+    /// - `udp:` — UDP listener for NMEA 0183 broadcasts
+    /// - `ws:`  — WebSocket via Signal K discovery (anonymous)
+    /// - `wss:` — WebSocket Secure via Signal K discovery; requires
+    ///            `--accept-invalid-certs`
+    ///
+    /// Authenticated Signal K servers can only be reached via `ws:` or `wss:`
+    /// (auth is not yet implemented; tracked as follow-up work). The plain
+    /// `tcp:` transport is strictly for anonymous setups.
     #[arg(short, long)]
     pub navigation_address: Option<String>,
 
@@ -138,6 +148,10 @@ pub struct Cli {
     /// Pass AIS targets from Signal K server to GUI clients
     #[arg(long, default_value_t = false)]
     pub pass_ais: bool,
+
+    /// Accept invalid TLS certificates (e.g. self-signed) when connecting to Signal K
+    #[arg(long, default_value_t = false)]
+    pub accept_invalid_certs: bool,
 
     /// Use emulator radar instead of real radar discovery
     #[arg(long, default_value_t = false)]
