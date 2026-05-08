@@ -31,7 +31,7 @@ export {
 };
 
 import van from "./vendor/van-1.5.2.js";
-import { toUser } from "./units.js";
+import { toSI, toUser } from "./units.js";
 import {
   fetchRadars,
   fetchRadarIds,
@@ -1504,15 +1504,29 @@ function do_change(v) {
     value = Number(value);
   }
 
+  // The wire/server convention is SI; setControlValue converts SI -> user
+  // for display. The input here is in user_units, so convert back to SI
+  // before storing in `update`, otherwise setControlValue would re-apply the
+  // SI -> user conversion (e.g. 30 deg -> 1718 deg).
+  let storeValue = value;
+  if (
+    "user_units" in control &&
+    control.user_units &&
+    control.units &&
+    control.user_units !== control.units
+  ) {
+    [, storeValue] = toSI(control.user_units, value);
+  }
+
   // Check if auto mode is active from current control state
   let auto = update.auto || false;
   update.auto = auto;
   message.auto = auto;
   if (auto && control.hasAutoAdjustable) {
-    update.autoValue = value;
+    update.autoValue = storeValue;
     message.autoValue = value;
   } else {
-    update.value = value;
+    update.value = storeValue;
     message.value = value;
   }
 
