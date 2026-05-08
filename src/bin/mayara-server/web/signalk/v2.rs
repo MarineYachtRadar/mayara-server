@@ -198,6 +198,12 @@ struct RadarApiV3 {
     /// IP address of the radar unit on the network
     #[schema(value_type = String, example = "192.168.1.50")]
     radar_ip_address: Ipv4Addr,
+    /// True if this radar is sourced from a recording playback rather than a
+    /// live network connection. Clients should treat playback radars as
+    /// read-only — the server still accepts control writes via the WebSocket
+    /// path but they have no effect on the recorded data stream.
+    #[schema(example = false)]
+    replay: bool,
 }
 
 #[utoipa::path(
@@ -241,6 +247,7 @@ async fn get_radars(State(state): State<Web>, headers: hyper::header::HeaderMap)
             spoke_data_url: format!("{}://{}{}", ws_scheme, host, spoke_data_uri),
             stream_url: format!("{}://{}{}", ws_scheme, host, CONTROL_URI),
             radar_ip_address: *info.addr.ip(),
+            replay: info.replay(),
         };
 
         api.insert(info.key(), v);

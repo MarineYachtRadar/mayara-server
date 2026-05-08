@@ -418,6 +418,29 @@ impl RadarInfo {
         self.key.to_owned()
     }
 
+    pub fn replay(&self) -> bool {
+        self.replay
+    }
+
+    pub fn targets(&self) -> TargetMode {
+        self.targets.clone()
+    }
+
+    pub fn doppler_levels(&self) -> u8 {
+        self.doppler_levels
+    }
+
+    pub fn has_rain_class(&self) -> bool {
+        self.has_rain_class
+    }
+
+    /// Override the replay flag. Used by the recording player when constructing
+    /// a playback radar so brand-specific receivers know not to attempt live
+    /// network operations.
+    pub fn set_replay(&mut self, replay: bool) {
+        self.replay = replay;
+    }
+
     //
     // Once the ranges are set non-zero the radar is findable by the GUI,
     // this version only to be called by config() that does not have CommonRadar.

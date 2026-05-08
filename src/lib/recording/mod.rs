@@ -28,11 +28,13 @@
 //! ```
 
 pub mod file_format;
+mod identity;
 pub mod manager;
 pub mod player;
 pub mod recorder;
 
 pub use file_format::{MrrFooter, MrrHeader, MrrReader, MrrWriter};
+pub use identity::RecordingIdentity;
 pub use manager::{RecordingInfo, RecordingManager, recordings_dir};
 pub use player::{ActivePlayback, PlaybackSettings, PlaybackState, PlaybackStatus};
 pub use recorder::{ActiveRecording, RecordingState, RecordingStatus};

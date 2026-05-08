@@ -217,7 +217,7 @@ async fn get_recordable_radars(State(state): State<Web>) -> impl IntoResponse {
     let radars = state.radars.get_active();
     let recordable: Vec<RecordableRadar> = radars
         .iter()
-        .filter(|r| r.brand != mayara::Brand::Playback)
+        .filter(|r| !r.replay())
         .map(|r| RecordableRadar {
             id: r.key(),
             name: r.controls.user_name(),
@@ -268,13 +268,20 @@ async fn start_recording_handler(
         }
     };
 
-    let capabilities_json = serde_json::to_vec(&serde_json::json!({
-        "brand": format!("{}", radar.brand),
-        "spokesPerRevolution": radar.spokes_per_revolution,
-        "maxSpokeLen": radar.max_spoke_len,
-        "pixelValues": radar.pixel_values,
-    }))
-    .unwrap_or_default();
+    // Recording a playback radar would copy the recorded stream back into
+    // a new file. Reject it at the API boundary so callers can't bypass
+    // the GUI filter in get_recordable_radars.
+    if radar.replay() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Cannot record a playback radar"})),
+        );
+    }
+
+    // Capture the source radar's full identity so playback can reproduce
+    // the same legend and brand shape rather than rendering against a
+    // generic Brand::Playback default.
+    let capabilities_json = mayara::recording::RecordingIdentity::from_radar_info(&radar).to_json();
 
     let initial_state = build_initial_state(&radar);
 

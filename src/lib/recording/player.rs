@@ -17,6 +17,7 @@ use crate::radar::SharedRadars;
 use crate::radar::settings::{ControlId, SharedControls, new_string};
 
 use super::file_format::MrrReader;
+use super::identity::RecordingIdentity;
 use super::manager::RecordingManager;
 use super::recorder::id_to_brand;
 
@@ -164,25 +165,41 @@ impl ActivePlayback {
     }
 }
 
-/// Create minimal controls for a playback radar (read-only)
+/// Create minimal controls for a playback radar (read-only). UserName and
+/// ModelName are populated from the recorded identity when available so the
+/// GUI's radar list matches what was recorded.
+///
+/// Full control reproduction (Range, Gain, etc.) is intentionally out of
+/// scope: the player would need to dispatch to brand-specific control
+/// initializers and replay control deltas. This function only ensures the
+/// radar shows up with a recognizable name.
 fn playback_controls(
     radar_id: String,
     sk_client_tx: broadcast::Sender<crate::stream::SignalKDelta>,
     args: &Cli,
+    identity: &RecordingIdentity,
 ) -> SharedControls {
     let mut controls = HashMap::new();
 
     new_string(ControlId::UserName).build(&mut controls);
+    let label = identity
+        .user_name
+        .clone()
+        .unwrap_or_else(|| format!("Playback: {}", radar_id));
     controls
         .get_mut(&ControlId::UserName)
         .unwrap()
-        .set_string(format!("Playback: {}", radar_id));
+        .set_string(label);
 
     new_string(ControlId::ModelName).build(&mut controls);
+    let model = identity
+        .model_name
+        .clone()
+        .unwrap_or_else(|| "Recording Playback".to_string());
     controls
         .get_mut(&ControlId::ModelName)
         .unwrap()
-        .set_string("Recording Playback".to_string());
+        .set_string(model);
 
     SharedControls::new(radar_id, sk_client_tx, args, controls)
 }
@@ -211,31 +228,79 @@ pub async fn load_recording(
     let header = mrr_reader.header();
     let footer = mrr_reader.footer();
 
-    let brand = id_to_brand(header.radar_brand).unwrap_or(Brand::Playback);
-    let _ = brand; // Original brand recorded, but we register as Playback
+    // Recover the source radar's identity so the playback radar wears the
+    // original brand, legend shape, and pixel-value layout. If the
+    // capabilities slot is missing or malformed we synthesize a minimal
+    // identity from the file header (still using its `radar_brand` id);
+    // Brand::Playback is only used further down as the fallback when
+    // `id_to_brand(identity.brand_id)` itself fails to resolve.
+    let identity = match RecordingIdentity::from_json(mrr_reader.capabilities()) {
+        Ok(id) => id,
+        Err(e) => {
+            warn!(
+                "Recording {} has unreadable identity ({}); falling back to generic Playback brand",
+                filename, e
+            );
+            // Synthesize a minimal identity from the header so we can still play
+            // the file, even if the legend won't match the source radar.
+            RecordingIdentity {
+                brand_id: header.radar_brand,
+                spokes_per_revolution: header.spokes_per_rev as u16,
+                max_spoke_len: header.max_spoke_len as u16,
+                pixel_values: header.pixel_values as u8,
+                doppler_levels: 0,
+                has_rain_class: false,
+                doppler: false,
+                targets: crate::TargetMode::None,
+                dual_range: false,
+                dual: None,
+                sparse_spokes: false,
+                stationary: false,
+                serial_no: None,
+                user_name: None,
+                model_name: None,
+            }
+        }
+    };
+
+    let brand = id_to_brand(identity.brand_id).unwrap_or(Brand::Playback);
 
     let base_name = filename.trim_end_matches(".mrr");
+    // Tag the serial so the radar key is stable per-file and identifiable as
+    // a playback radar via the `replay` flag (not the brand itself).
     let serial_no = format!("PB-{}", base_name);
     let fake_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0);
 
-    let info = crate::radar::RadarInfo::new(
+    let mut info = crate::radar::RadarInfo::new(
         radars,
         args,
-        Brand::Playback,
+        brand,
         Some(&serial_no),
-        None,
-        header.pixel_values as u8,
-        header.spokes_per_rev as usize,
-        header.max_spoke_len as usize,
+        identity.dual.as_deref(),
+        identity.pixel_values,
+        identity.spokes_per_revolution as usize,
+        identity.max_spoke_len as usize,
         fake_addr,
         Ipv4Addr::LOCALHOST,
         fake_addr,
         fake_addr,
         fake_addr,
-        |id, tx| playback_controls(id, tx, args),
-        false,
-        false,
+        |id, tx| playback_controls(id, tx, args, &identity),
+        identity.doppler,
+        identity.sparse_spokes,
     );
+
+    // Reshape the legend to match the source radar's wire format. Without
+    // these calls the legend would default to the no-Doppler / no-rain-class
+    // shape and incoming spoke indices would land in the wrong palette slots
+    // (see fix(furuno): rebuild wire-to-legend LUT after legend reshape).
+    if identity.doppler_levels > 0 {
+        info.set_doppler_levels(identity.doppler_levels);
+    }
+    if identity.has_rain_class {
+        info.set_has_rain_class(identity.has_rain_class);
+    }
+    info.set_replay(true);
 
     let radar_key = info.key();
 
@@ -254,6 +319,35 @@ pub async fn load_recording(
             crate::radar::Power::Transmit as i32 as f64,
             None,
         );
+
+        // Apply the recorded `SpokeProcessing` value so playback uses the
+        // same processor mode the source radar was set to (e.g. Reduce for
+        // Furuno NXT). Without this the GUI defaults to Auto, which picks
+        // Smooth for high-spoke-count radars and renders sparse-spoke data
+        // as moiré interference.
+        //
+        // Range-check the value at this file → memory boundary: the only
+        // valid modes are 0=Clean, 1=Fill, 2=Reduce, 3=Smooth.
+        match serde_json::from_slice::<serde_json::Value>(mrr_reader.initial_state()) {
+            Ok(state) => {
+                if let Some(val) = state.get("SpokeProcessing").and_then(|v| v.as_i64()) {
+                    if (0..=3).contains(&val) {
+                        info.controls.set_spoke_processing(val as i32);
+                    } else {
+                        warn!(
+                            "Recording {}: ignoring out-of-range SpokeProcessing value {}",
+                            filename, val
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                warn!(
+                    "Recording {}: malformed initial_state JSON ({}); SpokeProcessing not restored",
+                    filename, e
+                );
+            }
+        }
 
         radars.update(&mut info);
 
