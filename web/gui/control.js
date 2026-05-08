@@ -184,30 +184,33 @@ function convertControlToUserUnits(id, control) {
   return cloned;
 }
 
+// Decimal places needed to represent stepValue exactly as a string.
+// Handles "0.25" -> 2 and scientific notation like "1e-7" -> 7.
+function stepPrecision(stepValue) {
+  const s = String(stepValue).toLowerCase();
+  if (s.includes("e-")) return Number(s.split("e-")[1]);
+  const dot = s.indexOf(".");
+  return dot === -1 ? 0 : s.length - dot - 1;
+}
+
 /**
- * Rounds a number to a limited number of decimals, for user pleasure.
+ * Rounds a number to the nearest multiple of stepValue starting from
+ * baseValue (the capability's minValue), and trims trailing float
+ * artifacts (e.g. 0.30000000000000004 -> 0.3) for display.
+ *
+ * Rounding relative to baseValue keeps capability values like
+ * minValue=0.05, step=0.1 from snapping to a different grid (0.05
+ * stays 0.05). Precision comes from the exact step magnitude so
+ * step=0.25 keeps two decimals (1.25 stays 1.25, not 1.3).
  */
-function roundToStep(value, stepValue) {
+function roundToStep(value, stepValue, baseValue = 0) {
   value = Number(value);
   if (!Number.isFinite(value) || !Number.isFinite(stepValue)) return NaN;
+  if (stepValue <= 0) return value;
 
-  if (Math.abs(stepValue - 0.1) < Number.EPSILON) {
-    return Number((value + stepValue / 2).toFixed(1));
-  }
-  if (stepValue < 0.02) {
-    return Number((value + stepValue / 2).toFixed(2));
-  }
-  if (stepValue <= 1) {
-    return Number((value + stepValue / 2).toFixed(1));
-  }
-
-  const scale = 1 / stepValue;
-  const scaledVal = Math.round(value * scale);
-  const scaledStep = Math.round(stepValue * scale);
-  const roundedInt = Math.round(scaledVal / scaledStep) * scaledStep;
-  const rounded = roundedInt / scale;
-
-  return rounded;
+  const base = Number.isFinite(baseValue) ? baseValue : 0;
+  const rounded = Math.round((value - base) / stepValue) * stepValue + base;
+  return Number(rounded.toFixed(stepPrecision(stepValue)));
 }
 
 // V1-style control builders adapted with v3 CSS classes
@@ -226,8 +229,19 @@ const StringValue = (id, name) =>
     button({ type: "button", onclick: (e) => do_button(e) }, "Set")
   );
 
-const NumericValue = (id, name) =>
-  div(
+const NumericValue = (id, name, control = {}) => {
+  const attrs = {
+    type: "number",
+    id: control_prefix + id,
+    onchange: (e) => do_change(e.target),
+    oninput: (e) => do_input(e),
+  };
+  if (Number.isFinite(control.minValue)) attrs.min = control.minValue;
+  if (Number.isFinite(control.maxValue)) attrs.max = control.maxValue;
+  if (Number.isFinite(control.stepValue) && control.stepValue > 0) {
+    attrs.step = control.stepValue;
+  }
+  return div(
     { class: "myr_control myr_number_control" },
     div(
       { class: "myr_control_header" },
@@ -237,13 +251,9 @@ const NumericValue = (id, name) =>
         id: control_prefix + id + "_display",
       })
     ),
-    input({
-      type: "number",
-      id: control_prefix + id,
-      onchange: (e) => do_change(e.target),
-      oninput: (e) => do_input(e),
-    })
+    input(attrs)
   );
+};
 
 const RangeValue = (id, name, min, max, def) =>
   div(
@@ -580,8 +590,9 @@ function updateSectorUI(id, control, cv) {
     let [, startAngle] = toUser(control.units, cv.value);
     let [, endAngle] = toUser(control.units, cv.endValue);
     if (control.stepValue) {
-      startAngle = roundToStep(startAngle ?? 0, control.stepValue);
-      endAngle = roundToStep(endAngle ?? 0, control.stepValue);
+      const base = control.minValue ?? 0;
+      startAngle = roundToStep(startAngle ?? 0, control.stepValue, base);
+      endAngle = roundToStep(endAngle ?? 0, control.stepValue, base);
     }
     angleDisplay.textContent = `${startAngle ?? 0}° - ${endAngle ?? 0}°`;
   }
@@ -910,8 +921,9 @@ function updateZoneUI(id, control, cv) {
     let [, startAngle] = toUser(control.units, cv.value);
     let [, endAngle] = toUser(control.units, cv.endValue);
     if (control.stepValue) {
-      startAngle = roundToStep(startAngle ?? 0, control.stepValue);
-      endAngle = roundToStep(endAngle ?? 0, control.stepValue);
+      const base = control.minValue ?? 0;
+      startAngle = roundToStep(startAngle ?? 0, control.stepValue, base);
+      endAngle = roundToStep(endAngle ?? 0, control.stepValue, base);
     }
     angleDisplay.textContent = `${startAngle ?? 0}° - ${endAngle ?? 0}°`;
   }
@@ -1343,7 +1355,7 @@ function buildSingleControl(k, v) {
     }
     return RangeValue(k, v.name, min, max, 0);
   } else {
-    return NumericValue(k, v.name);
+    return NumericValue(k, v.name, v);
   }
 }
 
@@ -1371,7 +1383,7 @@ function setControlValue(cv) {
     if (control.units && cv.id !== "range") {
       [units, value] = toUser(control.units, value);
       if (control.stepValue) {
-        value = roundToStep(value, control.stepValue);
+        value = roundToStep(value, control.stepValue, control.minValue ?? 0);
       }
       // Floor time values displayed in hours (operating time, transmit time)
       if (units === "h") {
