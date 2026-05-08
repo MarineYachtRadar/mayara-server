@@ -974,31 +974,37 @@ impl FurunoReportReceiver {
             );
             self.model = model;
             let low_power = model.is_low_power();
+            // `update_when_model_known` reshapes the legend for the detected
+            // model — adding rain / Doppler reservation slots on NXT shrinks
+            // the intensity-ramp portion (`pixel_colors`). The LUT must be
+            // built against the post-update legend; otherwise wire bytes
+            // map past the ramp end into Doppler / history reservation
+            // slots, painting strong stationary echoes blue.
+            settings::update_when_model_known(&mut self.common.info, model, version);
             self.wire_to_legend[0] = Self::wire_to_legend(
                 &self.common.info.get_legend(),
                 self.doppler_wire_mode_for(0),
                 low_power,
             );
-            if let Some(ref cb) = self.common_b {
-                self.wire_to_legend[1] = Self::wire_to_legend(
-                    &cb.info.get_legend(),
-                    self.doppler_wire_mode_for(1),
-                    low_power,
-                );
-            }
             if low_power {
                 log::info!("{}: using gamma echo curve for low-power radar", self.common.key);
             }
-            settings::update_when_model_known(&mut self.common.info, model, version);
             if let Some(cs) = &mut self.command_sender {
                 cs.set_ranges(self.common.info.ranges.clone());
             }
             self.common.update();
 
             // Also update Range B if present
-            if let Some(ref mut cb) = self.common_b {
-                settings::update_when_model_known(&mut cb.info, model, version);
-                cb.update();
+            if self.common_b.is_some() {
+                let legend_b = {
+                    let cb = self.common_b.as_mut().unwrap();
+                    settings::update_when_model_known(&mut cb.info, model, version);
+                    let legend = cb.info.get_legend();
+                    cb.update();
+                    legend
+                };
+                let mode_b = self.doppler_wire_mode_for(1);
+                self.wire_to_legend[1] = Self::wire_to_legend(&legend_b, mode_b, low_power);
             }
             return;
         }
