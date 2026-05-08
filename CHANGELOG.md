@@ -52,6 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **gui:** show feedback when heading missing in acquire mode (#159) ([PR #159](https://github.com/MarineYachtRadar/mayara-server/pull/159))
 - **gui:** apply min/max/step to numeric controls (#157) ([PR #157](https://github.com/MarineYachtRadar/mayara-server/pull/157))
 - **furuno:** rebuild wire-to-legend LUT after legend reshape (#165) ([PR #165](https://github.com/MarineYachtRadar/mayara-server/pull/165))
+- **furuno:** defer spoke decode until Target Analyzer state is known (#167) ([PR #167](https://github.com/MarineYachtRadar/mayara-server/pull/167))
 
 ## [3.4.2] - 2026-04-10
 
