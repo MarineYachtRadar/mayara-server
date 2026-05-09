@@ -2,7 +2,7 @@
 //!
 //! Handles listing, metadata extraction, and deletion of recordings.
 
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
 use std::io::BufReader;
@@ -265,6 +265,44 @@ impl RecordingManager {
         Ok(())
     }
 
+    /// Remove any `<name>.upload` temp files left in the base directory.
+    ///
+    /// Uploads stream into `<filename>.upload` and atomically rename to the
+    /// final name on success. A crash or dropped connection leaves the temp
+    /// file behind, and `create_new(true)` then rejects future uploads of the
+    /// same name with 409 Conflict. At startup no upload can be in progress,
+    /// so anything matching `*.upload` is orphaned and safe to delete.
+    pub fn cleanup_orphaned_uploads(&self) {
+        let entries = match fs::read_dir(&self.base_dir) {
+            Ok(e) => e,
+            Err(e) => {
+                error!(
+                    "Failed to scan recordings directory for orphaned uploads: {}",
+                    e
+                );
+                return;
+            }
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            if path.extension().and_then(|e| e.to_str()) != Some("upload") {
+                continue;
+            }
+            match fs::remove_file(&path) {
+                Ok(()) => info!("Removed orphaned upload: {}", path.display()),
+                Err(e) => warn!(
+                    "Failed to remove orphaned upload {}: {}",
+                    path.display(),
+                    e
+                ),
+            }
+        }
+    }
+
     pub fn create_directory(&self, name: &str) -> Result<(), String> {
         if !is_valid_name(name) {
             return Err("Invalid directory name".to_string());
@@ -446,6 +484,32 @@ mod tests {
 
         // Delete directory traversal
         assert!(manager.delete_directory("../escape").is_err());
+    }
+
+    #[test]
+    fn test_cleanup_orphaned_uploads() {
+        let (manager, _temp) = create_test_manager();
+
+        let orphan_a = manager.base_dir.join("a.mrr.upload");
+        let orphan_b = manager.base_dir.join("b.mrr.gz.upload");
+        let recording = manager.base_dir.join("kept.mrr");
+        fs::write(&orphan_a, b"partial").unwrap();
+        fs::write(&orphan_b, b"partial").unwrap();
+        fs::write(&recording, b"data").unwrap();
+
+        // Subdirectories must not be touched even if a stray .upload appears
+        // there; the upload handler only writes to base_dir, but cleanup
+        // shouldn't recurse and accidentally pick up unrelated content.
+        manager.create_directory("sub").unwrap();
+        let nested = manager.base_dir.join("sub").join("c.mrr.upload");
+        fs::write(&nested, b"partial").unwrap();
+
+        manager.cleanup_orphaned_uploads();
+
+        assert!(!orphan_a.exists());
+        assert!(!orphan_b.exists());
+        assert!(recording.exists());
+        assert!(nested.exists());
     }
 
     #[test]
