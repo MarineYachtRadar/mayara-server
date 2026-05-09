@@ -13,6 +13,7 @@ use web::Web;
 mod web;
 
 use mayara;
+use mayara::recording::RecordingManager;
 use mayara::{Cli, network};
 #[cfg(feature = "pcap-replay")]
 use mayara::replay;
@@ -69,6 +70,8 @@ async fn main() -> Result<()> {
                 .unwrap_or(&"MDNS".to_string())
         );
     }
+
+    RecordingManager::new().cleanup_orphaned_uploads();
 
     Toplevel::new(|s| async move {
         let web = Web::new(&s, args).await;
