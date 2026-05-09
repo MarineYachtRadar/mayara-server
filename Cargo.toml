@@ -74,7 +74,7 @@ serde_with = { version = "3.19.0", features = ["macros"] }
 sha1 = "0.11.0"
 socket2 = "0.5.10"
 strum = { version = "0.27.2", features = ["derive"] }
-thiserror = "1.0.69"
+thiserror = "2.0.18"
 time = { version = "0.3.47", features = ["formatting"] }
 tokio = { version = "1", features = ["full"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "logging", "tls12"] }
