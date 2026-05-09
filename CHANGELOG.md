@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **furuno:** add NND file replay support (#133) ([PR #133](https://github.com/MarineYachtRadar/mayara-server/pull/133))
 - **koden:** add Koden RADARpc radar support (#134) ([PR #134](https://github.com/MarineYachtRadar/mayara-server/pull/134))
 - **navdata:** add Signal K discovery protocol and WebSocket transport (#43) ([PR #43](https://github.com/MarineYachtRadar/mayara-server/pull/43))
+- **recording:** faithful playback with source brand identity (#168) ([PR #168](https://github.com/MarineYachtRadar/mayara-server/pull/168))
 
 ### Changed
 
