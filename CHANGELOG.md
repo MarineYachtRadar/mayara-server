@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **furuno:** skip set_value for unsupported controls (#190) ([PR #190](https://github.com/MarineYachtRadar/mayara-server/pull/190))
+- **recordings:** clean up orphaned .upload files at startup (#192) ([PR #192](https://github.com/MarineYachtRadar/mayara-server/pull/192))
 
 ## [3.5.0] - 2026-05-09
 
