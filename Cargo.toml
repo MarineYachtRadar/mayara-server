@@ -94,7 +94,7 @@ tokio-tungstenite = { git = "https://github.com/keesverruijt/tokio-tungstenite",
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.9.4"
-system-configuration = "0.6.1"
+system-configuration = "0.7.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 netlink-sys = { version = "0.8.8", features = ["tokio", "tokio_socket"] }
