@@ -551,8 +551,17 @@ impl FurunoReportReceiver {
                 if numbers.len() >= 5 {
                     let wman = numbers[2] as i32;
                     let w_send = numbers[3];
-                    target.set_value(&ControlId::TimedIdle, wman as f64);
-                    target.set_value(&ControlId::TimedRun, w_send);
+                    // Wire format always includes wman/w_send fields, but
+                    // models without the watchman capability (DRS, DRS4W)
+                    // never registered the controls — skip the set_value to
+                    // avoid spamming "not supported" errors on every Status
+                    // report.
+                    if target.info.controls.contains_key(&ControlId::TimedIdle) {
+                        target.set_value(&ControlId::TimedIdle, wman as f64);
+                    }
+                    if target.info.controls.contains_key(&ControlId::TimedRun) {
+                        target.set_value(&ControlId::TimedRun, w_send);
+                    }
                 }
 
                 // Coupled transmit: on DRS models both ranges share TX state.
@@ -638,18 +647,36 @@ impl FurunoReportReceiver {
                 // Zone 1 is enabled if width is non-zero
                 let s1_enable = s1_width != 0.0;
 
-                self.common.set_sector(
-                    &ControlId::NoTransmitSector1,
-                    s1_start,
-                    s1_end,
-                    Some(s1_enable),
-                );
-                self.common.set_sector(
-                    &ControlId::NoTransmitSector2,
-                    s2_start,
-                    s2_end,
-                    Some(s2_enable),
-                );
+                // Wire format always includes blind-sector fields, but models
+                // without sector_blanking (DRS, DRS4W) never registered the
+                // controls — skip the set_sector to avoid spamming "not
+                // supported" errors on every report.
+                if self
+                    .common
+                    .info
+                    .controls
+                    .contains_key(&ControlId::NoTransmitSector1)
+                {
+                    self.common.set_sector(
+                        &ControlId::NoTransmitSector1,
+                        s1_start,
+                        s1_end,
+                        Some(s1_enable),
+                    );
+                }
+                if self
+                    .common
+                    .info
+                    .controls
+                    .contains_key(&ControlId::NoTransmitSector2)
+                {
+                    self.common.set_sector(
+                        &ControlId::NoTransmitSector2,
+                        s2_start,
+                        s2_end,
+                        Some(s2_enable),
+                    );
+                }
             }
             CommandId::Range => {
                 // Response format: $N62,{wire_idx},{unit},{drid}
