@@ -11,8 +11,14 @@ pub const MRR_MAGIC: [u8; 4] = *b"MRR1";
 /// Magic bytes for MRR file footer
 pub const MRR_FOOTER_MAGIC: [u8; 4] = *b"MRRF";
 
-/// Current format version
-pub const MRR_VERSION: u16 = 1;
+/// Current format version.
+///
+/// Version 2 stores the source radar's full identity (brand, legend-shaping
+/// flags, controls) in the capabilities JSON so playback can reproduce the
+/// exact `RadarInfo` shape live recording had. V1 files are rejected — they
+/// rendered with a generic Brand::Playback legend and never matched the
+/// source radar visually. Re-record old captures.
+pub const MRR_VERSION: u16 = 2;
 
 /// Header size in bytes (fixed)
 pub const HEADER_SIZE: usize = 256;
@@ -104,10 +110,18 @@ impl MrrHeader {
         }
 
         let version = u16::from_le_bytes([buf[4], buf[5]]);
-        if version > MRR_VERSION {
+        if version != MRR_VERSION {
+            let hint = if version < MRR_VERSION {
+                " — re-record from live radar."
+            } else {
+                " — this server is older than the recording; upgrade Mayara."
+            };
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("Unsupported MRR version: {}", version),
+                format!(
+                    "Unsupported MRR version: {} (this build expects {}){}",
+                    version, MRR_VERSION, hint
+                ),
             ));
         }
 
@@ -542,7 +556,7 @@ mod tests {
     #[test]
     fn test_header_roundtrip() {
         let header = MrrHeader {
-            version: 1,
+            version: MRR_VERSION,
             flags: 0,
             radar_brand: 42,
             spokes_per_rev: 2048,
@@ -663,5 +677,18 @@ mod tests {
         let second = reader.read_frame().unwrap().unwrap();
         assert_eq!(second.timestamp_ms, 100);
         assert_eq!(second.data, vec![1u8; 10]);
+    }
+
+    #[test]
+    fn test_rejects_v1_recordings() {
+        let mut buf = vec![0u8; HEADER_SIZE];
+        buf[0..4].copy_from_slice(&MRR_MAGIC);
+        buf[4..6].copy_from_slice(&1u16.to_le_bytes()); // V1
+        let err = MrrHeader::read(&mut Cursor::new(buf)).unwrap_err();
+        assert!(
+            err.to_string().contains("Unsupported MRR version: 1"),
+            "expected v1 rejection, got: {}",
+            err
+        );
     }
 }

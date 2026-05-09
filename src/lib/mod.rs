@@ -5,7 +5,7 @@ use locator::Locator;
 use miette::Result;
 use radar::SharedRadars;
 use radar::target::{BlobMessage, TrackerManager};
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Serialize, Serializer};
 use std::{
     collections::{HashMap, HashSet},
     net::Ipv4Addr,
@@ -40,7 +40,7 @@ pub const SIGNALK_RADAR_API_VERSION: &str = env!("SIGNALK_RADAR_API_VERSION");
 /// so late-joining GUI clients can receive it.
 const STATIC_NAV_REBROADCAST_INTERVAL_SECS: u64 = 2;
 
-#[derive(clap::ValueEnum, Clone, Default, Debug, PartialEq, Serialize)]
+#[derive(clap::ValueEnum, Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum TargetMode {
     #[default]

@@ -1827,13 +1827,15 @@ async function loadRadar(id) {
     }
 
     radarId = id;
-    playbackMode = isPlaybackRadar(id);
-    console.log(
-      `Loading radar: ${radarId}${playbackMode ? " (playback mode)" : ""}`
-    );
 
     const radars = await fetchRadars();
     const radarInfo = radars[radarId];
+    // Server marks playback radars via the `replay` flag. Fall back to the
+    // legacy `playback-` key prefix for older recordings or stale clients.
+    playbackMode = (radarInfo && radarInfo.replay === true) || isPlaybackRadar(id);
+    console.log(
+      `Loading radar: ${radarId}${playbackMode ? " (playback mode)" : ""}`
+    );
 
     myr_capabilities = await fetchCapabilities(radarId);
     console.log("Capabilities:", myr_capabilities);
