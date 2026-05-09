@@ -148,7 +148,7 @@ jobs:
         cat CHANGELOG.manual.md >> CHANGELOG.md
 
     - name: Create Release
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@v3
       with:
         body_path: CHANGES.md
         files: |
