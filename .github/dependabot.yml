@@ -1,0 +1,32 @@
+# Dependabot keeps GitHub Actions and Cargo dependencies current.
+#
+# Patch/minor Cargo bumps are grouped into a single weekly PR to avoid
+# flooding the queue with 60+ separate PRs from individual transitive deps.
+# Major Cargo bumps stay individual because they often need code review.
+# All Actions updates are grouped because they're trivial YAML edits.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      cargo-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    commit-message:
+      prefix: "chore"
+      prefix-development: "chore"
+      include: "scope"
