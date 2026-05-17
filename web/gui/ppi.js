@@ -2,7 +2,9 @@ export { PPI };
 
 import { SpokeProcessorFactory } from "./spoke_processor.js";
 
-// Factor by which we fill the (w,h) canvas with the outer radar range ring
+// Fraction of the shorter canvas axis used as the outer radar range ring radius.
+// The PPI is a circle inscribed in the canvas so the full set range is visible
+// in every direction; the remaining margin leaves room for range labels.
 const RANGE_SCALE = 0.9;
 
 const NAUTICAL_MILE = 1852.0;
@@ -713,7 +715,7 @@ class PPI {
     this.height = h;
     this.center_x = w / 2;
     this.center_y = h / 2;
-    this.beam_length = Math.trunc(Math.max(this.center_x, this.center_y) * RANGE_SCALE * this.displayZoom);
+    this.beam_length = Math.trunc(Math.min(this.center_x, this.center_y) * RANGE_SCALE * this.displayZoom);
 
     // Update heading rotation
     let trueHeadingDeg = this.lastHeading;
