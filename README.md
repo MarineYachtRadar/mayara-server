@@ -27,7 +27,7 @@ Fully supported and tested with real hardware:
 Implemented but awaiting real-hardware validation:
 
 - [**Garmin**](docs/garmin-setup.md) — HD, xHD, xHD2, xHD3, Fantom, Fantom Pro (all models including dual range and MotionScope/Doppler)
-- [**Furuno**](docs/furuno-setup.md) — DRS, DRS4DL, DRS6A X-Class, FAR-15x3, FAR-3000
+- [**Furuno**](docs/furuno-setup.md) — DRS2D, DRS4DL, DRS6A X-Class, FAR-15x3, FAR-3000
 - [**Koden**](docs/koden-setup.md) — MDS-xxR control boxes with any antenna unit (RADARpc series)
 - [**Raymarine**](docs/raymarine-setup.md) — HD, Magnum, Cyclone
 
