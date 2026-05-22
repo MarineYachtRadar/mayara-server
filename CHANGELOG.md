@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **furuno:** correct DRS to DRS2D in supported radars list (#204) ([PR #204](https://github.com/MarineYachtRadar/mayara-server/pull/204))
+
 ### Fixed
 
 - **furuno:** skip set_value for unsupported controls (#190) ([PR #190](https://github.com/MarineYachtRadar/mayara-server/pull/190))
