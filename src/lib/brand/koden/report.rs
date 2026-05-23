@@ -46,7 +46,7 @@ impl KodenReportReceiver {
         }
     }
 
-    pub(crate) async fn run(mut self, subsys: SubsystemHandle) -> Result<(), RadarError> {
+    pub(crate) async fn run(mut self, subsys: &mut SubsystemHandle) -> Result<(), RadarError> {
         loop {
             if let Err(e) = self.data_loop(&subsys).await {
                 log::error!("{}: Data loop error: {}, restarting", self.common.key, e);

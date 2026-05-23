@@ -8,7 +8,7 @@
 use mayara::{Cli, replay};
 use std::path::Path;
 use std::time::Duration;
-use tokio_graceful_shutdown::{SubsystemBuilder, Toplevel};
+use tokio_graceful_shutdown::{SubsystemBuilder, SubsystemHandle, Toplevel};
 
 fn test_args() -> Cli {
     Cli {
@@ -56,10 +56,10 @@ async fn replay_furuno_drs4dnxt() {
     replay::set_instant_timing();
     let args = test_args();
 
-    Toplevel::new(move |s| async move {
+    Toplevel::new(async move |s: &mut SubsystemHandle| {
         let (radars, _) = mayara::start_session(&s, args).await;
 
-        s.start(SubsystemBuilder::new("test", move |subsys| async move {
+        s.start(SubsystemBuilder::new("test", async move |subsys: &mut SubsystemHandle| {
             let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
             loop {
                 let keys = radars.get_keys();

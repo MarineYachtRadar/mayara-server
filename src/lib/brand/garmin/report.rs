@@ -391,7 +391,7 @@ impl GarminReportReceiver {
         }
     }
 
-    pub async fn run(mut self, subsys: SubsystemHandle) -> Result<(), RadarError> {
+    pub async fn run(mut self, subsys: &mut SubsystemHandle) -> Result<(), RadarError> {
         loop {
             if let Err(e) = self.start_sockets().await {
                 log::warn!("{}: Failed to start sockets: {}", self.common.key, e);

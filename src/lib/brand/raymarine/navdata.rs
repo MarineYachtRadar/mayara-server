@@ -41,7 +41,7 @@ fn radians_to_fixed(rad: f64) -> i32 {
 
 /// Run the NavData sender loop. Sends position/heading to the radar
 /// every 100ms for as long as the subsystem is alive.
-pub async fn run(subsys: SubsystemHandle, socket: UdpSocket) -> Result<(), RadarError> {
+pub async fn run(subsys: &mut SubsystemHandle, socket: UdpSocket) -> Result<(), RadarError> {
     let mut deadline = Instant::now() + NAVDATA_INTERVAL;
 
     loop {

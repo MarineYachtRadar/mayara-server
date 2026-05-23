@@ -85,7 +85,7 @@ impl Locator {
 
     pub async fn run(
         self,
-        subsys: SubsystemHandle,
+        subsys: &mut SubsystemHandle,
         tx_ip_change: broadcast::Sender<()>,
         tx_interface_request: broadcast::Sender<Option<mpsc::Sender<InterfaceApi>>>,
     ) -> Result<(), RadarError> {

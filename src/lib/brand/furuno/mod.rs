@@ -157,9 +157,10 @@ impl FurunoLocator {
             if let Some(ib) = info_b {
                 report_receiver.set_range_b(&self.args, radars, ib);
             }
-            subsys.start(SubsystemBuilder::new(report_name, |s| {
-                report_receiver.run(s)
-            }));
+            subsys.start(SubsystemBuilder::new(
+                report_name,
+                async move |s: &mut SubsystemHandle| report_receiver.run(s).await,
+            ));
         }
     }
 

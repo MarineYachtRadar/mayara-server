@@ -564,13 +564,14 @@ impl RadarInfo {
         if self.output {
             let info_clone2 = self.clone();
 
-            subsys.start(SubsystemBuilder::new("stdout", move |s| {
-                info_clone2.forward_output(s)
-            }));
+            subsys.start(SubsystemBuilder::new(
+                "stdout",
+                async move |s: &mut SubsystemHandle| info_clone2.forward_output(s).await,
+            ));
         }
     }
 
-    async fn forward_output(self, subsys: SubsystemHandle) -> Result<(), RadarError> {
+    async fn forward_output(self, subsys: &mut SubsystemHandle) -> Result<(), RadarError> {
         use std::io::Write;
 
         let mut rx = self.message_tx.subscribe();
