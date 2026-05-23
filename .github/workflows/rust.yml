@@ -54,3 +54,19 @@ jobs:
       with:
         name: Mayara Windows x86_64
         path: target/release/mayara-server.exe
+
+  macos:
+    name: Build macOS
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v6
+    - uses: swatinem/rust-cache@v2
+    - name: Run tests
+      run: cargo test --features pcap-replay --release --verbose
+    - name: Build
+      run: cargo build --release
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v7
+      with:
+        name: Mayara macOS
+        path: target/release/mayara-server
