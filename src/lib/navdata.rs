@@ -330,7 +330,7 @@ impl NavigationData {
 
     pub(crate) async fn run(
         &mut self,
-        subsys: SubsystemHandle,
+        subsys: &mut SubsystemHandle,
         rx_ip_change: Receiver<()>,
     ) -> Result<(), Error> {
         // In NND replay mode, consume NMEA sentences from the replay channel

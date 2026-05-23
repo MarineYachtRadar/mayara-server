@@ -137,7 +137,7 @@ impl Web {
         }
     }
 
-    pub async fn run(self, subsys: SubsystemHandle) -> Result<(), WebError> {
+    pub async fn run(self, subsys: &mut SubsystemHandle) -> Result<(), WebError> {
         let port = self.args.port;
         let addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), port);
         let socket = socket2::Socket::new(

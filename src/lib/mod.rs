@@ -413,7 +413,7 @@ pub async fn start_session(
 
         subsystem.start(SubsystemBuilder::new(
             "TrackerManager",
-            |subsys| async move {
+            async move |subsys: &mut SubsystemHandle| {
                 tokio::select! { biased;
                     _ = subsys.on_shutdown_requested() => {
                         log::debug!("TrackerManager shutdown requested");
@@ -447,7 +447,7 @@ pub async fn start_session(
 
             subsystem.start(SubsystemBuilder::new(
                 "Static Navigation",
-                |subsys| async move {
+                async move |subsys: &mut SubsystemHandle| {
                     let mut interval = tokio::time::interval(std::time::Duration::from_secs(
                         STATIC_NAV_REBROADCAST_INTERVAL_SECS,
                     ));
@@ -479,7 +479,7 @@ pub async fn start_session(
         navdata::init_ais_store(radars.get_sk_client_tx());
 
         // Start background task to check for AIS vessel timeouts (every 30 seconds)
-        subsystem.start(SubsystemBuilder::new("AIS Timeout", |subsys| async move {
+        subsystem.start(SubsystemBuilder::new("AIS Timeout", async move |subsys: &mut SubsystemHandle| {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
             loop {
                 tokio::select! { biased;
@@ -504,7 +504,7 @@ pub async fn start_session(
         // This coalesces rapid updates into single broadcasts
         subsystem.start(SubsystemBuilder::new(
             "AIS Broadcast",
-            |subsys| async move {
+            async move |subsys: &mut SubsystemHandle| {
                 let mut interval = tokio::time::interval(std::time::Duration::from_millis(50));
                 loop {
                     tokio::select! { biased;
@@ -530,19 +530,25 @@ pub async fn start_session(
     let mut navdata = navdata::NavigationData::new(args.clone());
 
     let rx_ip_change_clone = tx_ip_change.subscribe();
-    subsystem.start(SubsystemBuilder::new("NavData", |subsys| async move {
-        navdata.run(subsys, rx_ip_change_clone).await
-    }));
+    subsystem.start(SubsystemBuilder::new(
+        "NavData",
+        async move |subsys: &mut SubsystemHandle| {
+            navdata.run(subsys, rx_ip_change_clone).await
+        },
+    ));
     let tx_interface_request_clone = tx_interface_request.clone();
-    subsystem.start(SubsystemBuilder::new("Locator", |subsys| {
-        locator.run(subsys, tx_ip_change, tx_interface_request_clone)
-    }));
+    subsystem.start(SubsystemBuilder::new(
+        "Locator",
+        async move |subsys: &mut SubsystemHandle| {
+            locator.run(subsys, tx_ip_change, tx_interface_request_clone).await
+        },
+    ));
 
     // Start pcap replay dispatcher after the locator (which registers listeners)
     #[cfg(feature = "pcap-replay")]
     if replay::is_active() {
         let repeat = args.repeat;
-        subsystem.start(SubsystemBuilder::new("PcapReplay", move |subsys| async move {
+        subsystem.start(SubsystemBuilder::new("PcapReplay", async move |subsys: &mut SubsystemHandle| {
             tokio::select! { biased;
                 _ = subsys.on_shutdown_requested() => {
                     log::debug!("PcapReplay shutdown requested");

@@ -251,7 +251,7 @@ impl RaymarineReportReceiver {
         Ok(())
     }
 
-    pub async fn run(mut self, subsys: SubsystemHandle) -> Result<(), RadarError> {
+    pub(super) async fn run(mut self, subsys: &mut SubsystemHandle) -> Result<(), RadarError> {
         self.start_report_socket().await?;
         loop {
             if self.report_socket.is_some() {

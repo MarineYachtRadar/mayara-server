@@ -130,9 +130,10 @@ impl KodenLocator {
 
             let report_receiver =
                 report::KodenReportReceiver::new(&self.args, radars.clone(), info);
-            subsys.start(SubsystemBuilder::new(report_name, |s| {
-                report_receiver.run(s)
-            }));
+            subsys.start(SubsystemBuilder::new(
+                report_name,
+                async move |s: &mut SubsystemHandle| report_receiver.run(s).await,
+            ));
         }
     }
 }

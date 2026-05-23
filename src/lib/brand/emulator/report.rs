@@ -82,7 +82,7 @@ impl EmulatorReportReceiver {
         }
     }
 
-    pub async fn run(mut self, subsys: SubsystemHandle) -> Result<(), RadarError> {
+    pub(super) async fn run(mut self, subsys: &mut SubsystemHandle) -> Result<(), RadarError> {
         // Set initial status to Transmit in emulator mode
         self.common
             .set_value(&ControlId::Power, Power::Transmit as i32 as f64);

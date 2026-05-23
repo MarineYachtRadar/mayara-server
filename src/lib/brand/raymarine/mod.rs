@@ -471,22 +471,27 @@ impl RaymarineLocator {
             let send_addr = info.send_command_addr;
             let nic_addr = info.nic_addr;
             let navdata_name = format!("{}-navdata", report_name);
-            subsys.start(SubsystemBuilder::new(navdata_name, move |s| async move {
-                match crate::network::create_multicast_send(&send_addr, &nic_addr) {
+            subsys.start(SubsystemBuilder::new(
+                navdata_name,
+                async move |s: &mut SubsystemHandle| match crate::network::create_multicast_send(
+                    &send_addr,
+                    &nic_addr,
+                ) {
                     Ok(sock) => navdata::run(s, sock).await.map_err(|e| e.into()),
                     Err(e) => {
                         log::warn!("Failed to create NavData socket: {}", e);
                         Ok::<(), anyhow::Error>(())
                     }
-                }
-            }));
+                },
+            ));
 
             let report_receiver =
                 report::RaymarineReportReceiver::new(&self.args, info, radars.clone());
 
-            subsys.start(SubsystemBuilder::new(report_name, |s| {
-                report_receiver.run(s)
-            }));
+            subsys.start(SubsystemBuilder::new(
+                report_name,
+                async move |s: &mut SubsystemHandle| report_receiver.run(s).await,
+            ));
         }
     }
 }

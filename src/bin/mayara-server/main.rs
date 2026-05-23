@@ -7,7 +7,7 @@ use log::{info, warn};
 use miette::IntoDiagnostic;
 use miette::Result;
 use std::time::Duration;
-use tokio_graceful_shutdown::{SubsystemBuilder, Toplevel};
+use tokio_graceful_shutdown::{SubsystemBuilder, SubsystemHandle, Toplevel};
 use web::Web;
 
 mod web;
@@ -73,9 +73,12 @@ async fn main() -> Result<()> {
 
     RecordingManager::new().cleanup_orphaned_uploads();
 
-    Toplevel::new(|s| async move {
-        let web = Web::new(&s, args).await;
-        s.start(SubsystemBuilder::new("Webserver", move |a| web.run(a)));
+    Toplevel::new(async move |s: &mut SubsystemHandle| {
+        let web = Web::new(&*s, args).await;
+        s.start(SubsystemBuilder::new(
+            "Webserver",
+            async move |a: &mut SubsystemHandle| web.run(a).await,
+        ));
     })
     .catch_signals()
     .handle_shutdown_requests(Duration::from_millis(5000))

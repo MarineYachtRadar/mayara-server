@@ -141,8 +141,9 @@ pub(crate) fn create_emulator_radar(args: &Cli, radars: &SharedRadars, subsys: &
         let report_name = info.key() + " reports";
         let report_receiver = report::EmulatorReportReceiver::new(args, info, radars.clone());
 
-        subsys.start(SubsystemBuilder::new(report_name, |s| {
-            report_receiver.run(s)
-        }));
+        subsys.start(SubsystemBuilder::new(
+            report_name,
+            async move |s: &mut SubsystemHandle| report_receiver.run(s).await,
+        ));
     }
 }
