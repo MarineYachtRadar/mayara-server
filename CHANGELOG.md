@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **recordings:** clean up orphaned .upload files at startup (#192) ([PR #192](https://github.com/MarineYachtRadar/mayara-server/pull/192))
 - **gui:** inscribe PPI in canvas so full range is visible (#200) ([PR #200](https://github.com/MarineYachtRadar/mayara-server/pull/200))
 - **furuno:** clamp spoke alignment overshoot on last sweep (#202) ([PR #202](https://github.com/MarineYachtRadar/mayara-server/pull/202))
+- **gui:** keep guard-zone buttons inside the card on narrow panels (#212) ([PR #212](https://github.com/MarineYachtRadar/mayara-server/pull/212))
 
 ## [3.5.0] - 2026-05-09
 
