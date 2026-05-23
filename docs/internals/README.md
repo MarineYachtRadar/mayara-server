@@ -78,7 +78,7 @@ testdata/pcap/           Captured radar traffic for integration tests
 2. Start the `Locator` subsystem — spawns UDP listeners on all NICs for all enabled brands
 3. Start `NavigationData` — connects to Signal K server or NMEA source for heading/GPS
 4. Optionally start PCAP replay dispatcher (if `--pcap <file>` given)
-5. Start AIS vessel tracking — seeds from upstream Signal K REST snapshot, then follows `vessels.*` deltas
+5. Start AIS vessel tracking from upstream navigation data
 6. Start `TargetTracker` subsystem (if `--targets arpa`)
 7. Start the web server — serves REST API, WebSocket streams, and embedded GUI
 

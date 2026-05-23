@@ -62,7 +62,7 @@ pub(crate) enum Connection {
 static UPSTREAM_HTTP_BASE: std::sync::OnceLock<std::sync::RwLock<Option<String>>> =
     std::sync::OnceLock::new();
 
-pub fn get_upstream_http_base() -> Option<String> {
+pub(crate) fn get_upstream_http_base() -> Option<String> {
     UPSTREAM_HTTP_BASE
         .get()
         .and_then(|lock| lock.read().ok())

@@ -82,7 +82,16 @@ fn get_own_ship_context() -> Option<String> {
 fn set_own_ship_context(context: &str) {
     let lock = OWN_SHIP_CONTEXT.get_or_init(|| RwLock::new(None));
     if let Ok(mut guard) = lock.write() {
-        if guard.is_none() {
+        // Set on first sight, OR upgrade from the "vessels.self" placeholder
+        // to a concrete `vessels.urn:...` once one arrives. Without the
+        // upgrade, later own-ship URN deltas would compare false against the
+        // stored "vessels.self" and get misrouted into the AIS store.
+        let should_set = match guard.as_deref() {
+            None => true,
+            Some("vessels.self") if context != "vessels.self" => true,
+            _ => false,
+        };
+        if should_set {
             log::info!("Own-ship context set to: {}", context);
             *guard = Some(context.to_string());
         }
@@ -127,7 +136,7 @@ fn update_ais_vessel(context: &str, updates: &Value) {
 /// a freshly-connected GUI sees the overlay trickle in over minutes.
 /// Best-effort: any failure (no upstream URL, unreachable, malformed JSON)
 /// is logged at debug and ignored; per-vessel WS deltas will fill the gap.
-pub async fn seed_ais_from_upstream(accept_invalid_certs: bool) {
+pub(crate) async fn seed_ais_from_upstream(accept_invalid_certs: bool) {
     let Some(base) = crate::signalk::get_upstream_http_base() else {
         return;
     };
@@ -1029,14 +1038,12 @@ fn parse_signalk(s: &str) -> Result<(), RadarError> {
 
     // Identify own ship and route non-self deltas to the AIS store.
     if let Some(ctx) = context {
-        let own_ship = get_own_ship_context();
+        // Always try to set: first time stores the context, subsequent
+        // concrete URN messages upgrade away from the "vessels.self"
+        // placeholder if that was first.
+        set_own_ship_context(ctx);
 
-        if own_ship.is_none() {
-            // First message after subscribing to vessels.self establishes the
-            // own-ship context. Continue processing this message as nav data.
-            set_own_ship_context(ctx);
-            log::info!("Own-ship context detected: {}", ctx);
-        } else if let Some(own_ship_ctx) = own_ship {
+        if let Some(own_ship_ctx) = get_own_ship_context() {
             let is_own_ship = own_ship_ctx == ctx || ctx == "vessels.self";
             if !is_own_ship {
                 // This delta is for another vessel; route to AIS store.
