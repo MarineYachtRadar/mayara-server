@@ -25,7 +25,9 @@ fn wait_for_ip_addr_change(
     tx_ip_change: Sender<()>,
 ) -> Result<(), RadarError> {
     // Create a dynamic store session
-    let store: SCDynamicStore = SCDynamicStoreBuilder::new("IPChangeMonitor").build();
+    let store: SCDynamicStore = SCDynamicStoreBuilder::new("IPChangeMonitor")
+        .build()
+        .expect("Failed to create SCDynamicStore session for IP change monitor");
 
     // Define the key to monitor for changes (IPv4 addresses)
     let watched_keys = &CFArray::from_CFTypes(&vec![CFString::new("State:/Network/Global/IPv4")]);
@@ -91,11 +93,10 @@ fn wait_for_ip_addr_change(
 pub fn is_wireless_interface(interface_name: &str) -> bool {
     use system_configuration::dynamic_store::*;
 
-    let store = SCDynamicStoreBuilder::new("networkInterfaceInfo").build();
+    let Some(store) = SCDynamicStoreBuilder::new("networkInterfaceInfo").build() else {
+        return false;
+    };
 
     let key = format!("State:/Network/Interface/{}/AirPort", interface_name);
-    if let Some(_) = store.get(key.as_str()) {
-        return true;
-    }
-    false
+    store.get(key.as_str()).is_some()
 }
