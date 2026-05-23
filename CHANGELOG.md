@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **gui:** inscribe PPI in canvas so full range is visible (#200) ([PR #200](https://github.com/MarineYachtRadar/mayara-server/pull/200))
 - **furuno:** clamp spoke alignment overshoot on last sweep (#202) ([PR #202](https://github.com/MarineYachtRadar/mayara-server/pull/202))
 - **gui:** keep guard-zone buttons inside the card on narrow panels (#212) ([PR #212](https://github.com/MarineYachtRadar/mayara-server/pull/212))
+- **deps:** migrate to tokio-graceful-shutdown 0.19 closure API (#215) ([PR #215](https://github.com/MarineYachtRadar/mayara-server/pull/215))
 
 ## [3.5.0] - 2026-05-09
 
