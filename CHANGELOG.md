@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **gui:** keep guard-zone buttons inside the card on narrow panels (#212) ([PR #212](https://github.com/MarineYachtRadar/mayara-server/pull/212))
 - **deps:** migrate to tokio-graceful-shutdown 0.19 closure API (#215) ([PR #215](https://github.com/MarineYachtRadar/mayara-server/pull/215))
 - **deps:** use system-configuration's core-foundation re-export (#218) ([PR #218](https://github.com/MarineYachtRadar/mayara-server/pull/218))
+- **macos:** handle Option return from SCDynamicStoreBuilder::build (#221) ([PR #221](https://github.com/MarineYachtRadar/mayara-server/pull/221))
 
 ## [3.5.0] - 2026-05-09
 
