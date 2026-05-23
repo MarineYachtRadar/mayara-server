@@ -1,3 +1,5 @@
+#![cfg(feature = "pcap-replay")]
+
 //! Integration test: replay Furuno DRS25A-NXT NND demo recording.
 //!
 //! Verifies that replaying a TZtouch3 `.nnd.gz` demo file through the

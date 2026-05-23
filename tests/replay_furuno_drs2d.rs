@@ -1,3 +1,5 @@
+#![cfg(feature = "pcap-replay")]
+
 //! Integration test: replay Furuno DRS2D pcap fixture.
 //!
 //! Regression for the spoke-alignment overshoot panic on the last spoke of a
