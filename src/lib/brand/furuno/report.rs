@@ -350,7 +350,7 @@ impl FurunoReportReceiver {
         }
     }
 
-    pub async fn run(mut self, subsys: &mut SubsystemHandle) -> Result<(), RadarError> {
+    pub(super) async fn run(mut self, subsys: &mut SubsystemHandle) -> Result<(), RadarError> {
         loop {
             // Each time we start the loop, there is no stream
             // and none of the data sockets are open.

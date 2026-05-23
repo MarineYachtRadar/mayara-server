@@ -442,7 +442,7 @@ impl NavicoReportReceiver {
         }
     }
 
-    pub async fn run(mut self, subsys: &mut SubsystemHandle) -> Result<(), RadarError> {
+    pub(super) async fn run(mut self, subsys: &mut SubsystemHandle) -> Result<(), RadarError> {
         self.start_report_socket()?;
         loop {
             match self.socket_loop(&subsys).await {
