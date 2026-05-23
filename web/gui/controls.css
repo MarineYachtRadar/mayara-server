@@ -827,6 +827,7 @@ div.myr_range_buttons {
 
 .myr_zone_buttons {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 12px;
   justify-content: flex-end;
@@ -835,7 +836,9 @@ div.myr_range_buttons {
 .myr_zone_draw_btn,
 .myr_zone_cancel_btn,
 .myr_zone_save_btn {
-  padding: 6px 16px;
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 6px 8px;
   font-size: 12px;
   font-weight: bold;
   border: 2px solid #446;
