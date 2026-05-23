@@ -1,10 +1,10 @@
 use std::ptr;
 
-use core_foundation::runloop::{
-    CFRunLoop, CFRunLoopAddSource, CFRunLoopStop, kCFRunLoopDefaultMode,
-};
 use system_configuration::core_foundation::array::CFArray;
 use system_configuration::core_foundation::base::TCFType;
+use system_configuration::core_foundation::runloop::{
+    CFRunLoop, CFRunLoopAddSource, CFRunLoopRunResult, CFRunLoopStop, kCFRunLoopDefaultMode,
+};
 use system_configuration::core_foundation::string::CFString;
 use system_configuration::dynamic_store::{SCDynamicStore, SCDynamicStoreBuilder};
 use system_configuration::sys::dynamic_store::SCDynamicStoreCreateRunLoopSource;
@@ -61,15 +61,15 @@ fn wait_for_ip_addr_change(
             std::time::Duration::from_secs(2),
             true,
         ) {
-            core_foundation::runloop::CFRunLoopRunResult::Finished => {
+            CFRunLoopRunResult::Finished => {
                 log::trace!("CFRunLoop finished.");
             }
-            core_foundation::runloop::CFRunLoopRunResult::Stopped => {
+            CFRunLoopRunResult::Stopped => {
                 log::trace!("CFRunLoop stopped.");
                 break;
             }
-            core_foundation::runloop::CFRunLoopRunResult::TimedOut => {}
-            core_foundation::runloop::CFRunLoopRunResult::HandledSource => {
+            CFRunLoopRunResult::TimedOut => {}
+            CFRunLoopRunResult::HandledSource => {
                 log::trace!("CFRunLoop handled source.");
                 log::debug!("IP address changed.");
                 let _ = tx_ip_change.send(());
