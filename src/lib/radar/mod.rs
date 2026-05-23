@@ -1611,15 +1611,14 @@ impl CommonRadar {
                 }
             }
 
-            // Extract heading from spoke data and broadcast for GUI
-            if let Some(bearing) = spoke.bearing {
-                let heading_spokes = (bearing as i32 - spoke.angle as i32)
-                    .rem_euclid(self.info.spokes_per_revolution as i32)
-                    as f64;
-                let heading_rad =
-                    heading_spokes / self.info.spokes_per_revolution as f64 * std::f64::consts::TAU;
-                crate::navdata::set_heading_true(Some(heading_rad), &self.key);
-            }
+            // Per-spoke heading from the radar's inline bearing is NOT fed
+            // back to navdata. The radar typically receives its heading
+            // from N2K and re-emits it once per spoke; pushing it into
+            // set_heading_true would race the authoritative compass source
+            // (typically YDEN02 / direct N2K) on `navigation.headingTrue`
+            // and saturate downstream subscribers with kHz-rate updates.
+            // The PPI still uses `spoke.bearing` directly for rotation, so
+            // dropping this feed is invisible to single-radar displays.
 
             // Always broadcast spoke to clients
             let mut spoke = spoke;

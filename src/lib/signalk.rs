@@ -55,6 +55,27 @@ pub(crate) enum Connection {
     WebSocket(WsStream, String),
 }
 
+/// Last-resolved upstream Signal K REST base URL (e.g.
+/// `http://192.168.0.122:4400/signalk/v1/api/`). Captured during discovery
+/// so the AIS snapshot seeder can issue one-shot REST reads without
+/// re-running discovery itself.
+static UPSTREAM_HTTP_BASE: std::sync::OnceLock<std::sync::RwLock<Option<String>>> =
+    std::sync::OnceLock::new();
+
+pub fn get_upstream_http_base() -> Option<String> {
+    UPSTREAM_HTTP_BASE
+        .get()
+        .and_then(|lock| lock.read().ok())
+        .and_then(|guard| guard.clone())
+}
+
+fn set_upstream_http_base(url: &str) {
+    let lock = UPSTREAM_HTTP_BASE.get_or_init(|| std::sync::RwLock::new(None));
+    if let Ok(mut guard) = lock.write() {
+        *guard = Some(url.to_string());
+    }
+}
+
 /// How a resolved mDNS service should be connected to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Transport {
@@ -67,11 +88,15 @@ enum Transport {
 }
 
 #[derive(Debug, PartialEq)]
-struct DiscoveryResult {
-    server_id: String,
-    server_version: String,
-    tcp_url: Option<String>,
-    ws_url: Option<String>,
+pub(crate) struct DiscoveryResult {
+    pub(crate) server_id: String,
+    pub(crate) server_version: String,
+    pub(crate) tcp_url: Option<String>,
+    pub(crate) ws_url: Option<String>,
+    /// REST API base URL (ends with `/`), e.g.
+    /// `http://192.168.0.122:4400/signalk/v1/api/`. Used for one-shot
+    /// snapshot reads such as seeding the AIS store at startup.
+    pub(crate) http_url: Option<String>,
 }
 
 /// Browse mDNS for the three Signal K service types.
@@ -239,6 +264,10 @@ async fn connect_via_discovery(
         discovery.server_id,
         discovery.server_version
     );
+
+    if let Some(http) = discovery.http_url.as_deref() {
+        set_upstream_http_base(http);
+    }
 
     // Prefer WebSocket: it is the only Signal K transport that can carry
     // authentication, so any future auth work will want to land there.
@@ -418,11 +447,17 @@ fn parse_discovery_response(json: &Value) -> Result<DiscoveryResult, RadarError>
         ));
     }
 
+    let http_url = endpoints["signalk-https"]
+        .as_str()
+        .or_else(|| endpoints["signalk-http"].as_str())
+        .map(String::from);
+
     Ok(DiscoveryResult {
         server_id,
         server_version,
         tcp_url: endpoints["signalk-tcp"].as_str().map(String::from),
         ws_url: endpoints["signalk-ws"].as_str().map(String::from),
+        http_url,
     })
 }
 

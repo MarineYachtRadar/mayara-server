@@ -26,8 +26,6 @@ export {
   acquireTargetAtPosition,
   registerAcquireTargetModeCallback,
   getRadarId,
-  subscribeToAis,
-  unsubscribeFromAis,
 };
 
 import van from "./vendor/van-1.5.2.js";
@@ -2120,53 +2118,6 @@ function setAcquireTargetMode(enabled) {
  */
 function registerAcquireTargetModeCallback(callback) {
   acquireTargetModeCallbacks.push(callback);
-}
-
-// ============================================================================
-// AIS Subscription Management
-// ============================================================================
-
-/**
- * Subscribe to AIS vessel updates
- */
-function subscribeToAis() {
-  if (!stateWebSocket || stateWebSocket.readyState !== WebSocket.OPEN) {
-    console.warn("Cannot subscribe to AIS: WebSocket not connected");
-    return;
-  }
-
-  const subscription = {
-    subscribe: [
-      {
-        path: "vessels.*",
-        policy: "instant",
-      },
-    ],
-  };
-
-  console.log("Subscribing to AIS vessels:", subscription);
-  stateWebSocket.send(JSON.stringify(subscription));
-}
-
-/**
- * Unsubscribe from AIS vessel updates
- */
-function unsubscribeFromAis() {
-  if (!stateWebSocket || stateWebSocket.readyState !== WebSocket.OPEN) {
-    console.warn("Cannot unsubscribe from AIS: WebSocket not connected");
-    return;
-  }
-
-  const desubscription = {
-    desubscribe: [
-      {
-        path: "vessels.*",
-      },
-    ],
-  };
-
-  console.log("Desubscribing from AIS vessels:", desubscription);
-  stateWebSocket.send(JSON.stringify(desubscription));
 }
 
 /**

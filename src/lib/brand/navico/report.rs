@@ -1359,7 +1359,10 @@ impl NavicoReportReceiver {
             ((large_range as u32) * (small_range as u32)) / 512
         };
 
-        let heading = extract_heading_value(heading);
+        // Navico encodes heading in SPOKES_RAW (4096) units; halve to bring it
+        // into the SPOKES_PER_REVOLUTION (2048) space `to_protobuf_spoke`
+        // stores. Matches the `angle / 2` normalization above.
+        let heading = extract_heading_value(heading).map(|h| h / 2);
         Some((range, angle, heading))
     }
 

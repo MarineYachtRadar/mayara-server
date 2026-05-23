@@ -87,7 +87,6 @@ pub enum ControlId {
     // Client Only, not here: Orientation,
     // Client Only, not here: Position,
     // Client Only, not here: Symbology,
-    ShowAis,
 
     // Target tracking
     GuardZone1,
@@ -217,8 +216,7 @@ impl ControlId {
             | ControlId::Rain
             | ControlId::Doppler
             | ControlId::DopplerMode => Category::Base,
-            ControlId::ShowAis
-            | ControlId::DopplerAutoTrack
+            ControlId::DopplerAutoTrack
             | ControlId::ArpaDetectMaxSpeed
             | ControlId::ClearTargets
             | ControlId::GuardZone1
@@ -306,7 +304,6 @@ impl ControlId {
                 "Targets coming towards or going away from own ship shown in different colors"
             }
             ControlId::DopplerMode => "For what type of targets Doppler is used",
-            ControlId::ShowAis => "Show AIS vessels on the radar display",
             ControlId::DopplerAutoTrack => {
                 "Convert all Doppler targets to ARPA targets automatically"
             }
@@ -396,7 +393,6 @@ impl ControlId {
             ControlId::AntennaStarboard => "Antenna starboard",
             ControlId::BearingAlignment => "Bearing alignment",
             // ControlId::ColorGain => "Color gain",
-            ControlId::ShowAis => "Show AIS",
             ControlId::ClearTargets => "Clear targets",
             ControlId::ClearTrails => "Clear trails",
             ControlId::ColorGain => "Color gain",
@@ -497,7 +493,6 @@ impl ControlId {
             ControlId::Range => ControlDestination::Command,
             ControlId::Mode => ControlDestination::Command,
             ControlId::Gain => ControlDestination::Command,
-            ControlId::ShowAis => ControlDestination::Internal,
             ControlId::GuardZone1 => ControlDestination::Target,
             ControlId::GuardZone2 => ControlDestination::Target,
             ControlId::ExclusionZone1 => ControlDestination::Target,
@@ -698,13 +693,6 @@ impl Controls {
                 .build(&mut controls);
 
             new_button(ControlId::ClearTargets).build(&mut controls);
-        }
-
-        // Add ShowAis control when pass_ais is enabled
-        if args.pass_ais {
-            new_list(ControlId::ShowAis, &["Off", "On"])
-                .set_value(1.) // Default to "On"
-                .build(&mut controls);
         }
 
         let (all_clients_tx, _) = tokio::sync::broadcast::channel(32);
