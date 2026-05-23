@@ -1,3 +1,5 @@
+#![cfg(feature = "pcap-replay")]
+
 //! Integration test: replay Navico HALO20+ pcap fixture.
 //!
 //! Verifies that replaying the fixture through the full pipeline

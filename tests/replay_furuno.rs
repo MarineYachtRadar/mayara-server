@@ -1,3 +1,5 @@
+#![cfg(feature = "pcap-replay")]
+
 //! Integration test: replay Furuno DRS4D-NXT pcap fixture.
 //!
 //! Verifies that replaying the fixture through the full pipeline
