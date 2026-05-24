@@ -36,6 +36,8 @@ fn test_args() -> Cli {
         openapi: false,
         transmit: false,
         accept_invalid_certs: false,
+        signalk_token: None,
+        signalk_token_file: None,
         emulator: false,
         merge_targets: false,
     }

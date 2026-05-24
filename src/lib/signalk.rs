@@ -76,6 +76,23 @@ fn set_upstream_http_base(url: &str) {
     }
 }
 
+/// Bearer token for authenticating to the upstream Signal K server. Set
+/// once at startup from `Cli::resolved_signalk_token()` and read by the
+/// `ws:`/`wss:`/HTTP-discovery code paths and the AIS REST seeder. Plain
+/// `tcp:`/`udp:` transports ignore it.
+static SIGNALK_TOKEN: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+
+/// Install the upstream Signal K bearer token. Must be called at most once
+/// per process; subsequent calls are silently ignored (the value is
+/// captured in a `OnceLock`).
+pub(crate) fn set_signalk_token(token: Option<String>) {
+    let _ = SIGNALK_TOKEN.set(token);
+}
+
+pub(crate) fn get_signalk_token() -> Option<String> {
+    SIGNALK_TOKEN.get().and_then(|v| v.clone())
+}
+
 /// How a resolved mDNS service should be connected to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Transport {
@@ -330,14 +347,23 @@ async fn discover(
 /// support chunked transfer-encoding (Signal K servers use Content-Length for
 /// the small JSON discovery payload) but returns a clear error if encountered.
 async fn http_get_signalk(addr: SocketAddr, use_tls: bool) -> Result<String, RadarError> {
+    // SAFETY against header injection: `Cli::resolved_signalk_token`
+    // (the only writer of `SIGNALK_TOKEN`) rejects control characters,
+    // so `t` cannot contain `\r`/`\n` and embedding it via `format!` is
+    // safe.
+    let auth_header = match get_signalk_token() {
+        Some(t) => format!("Authorization: Bearer {}\r\n", t),
+        None => String::new(),
+    };
     let request = format!(
         "GET /signalk HTTP/1.1\r\n\
          Host: {}\r\n\
          User-Agent: mayara\r\n\
          Accept: application/json\r\n\
+         {auth_header}\
          Connection: close\r\n\
          \r\n",
-        addr
+        addr,
     );
 
     let tcp = TcpStream::connect(addr).await.map_err(RadarError::Io)?;
@@ -471,6 +497,9 @@ async fn connect_websocket(
 ) -> Result<WsStream, RadarError> {
     let is_wss = url.starts_with("wss://");
 
+    let token = get_signalk_token();
+    let connect_url = append_token_query(url, token.as_deref());
+
     let result = if is_wss {
         if !accept_invalid_certs {
             return Err(RadarError::SignalK(
@@ -478,25 +507,41 @@ async fn connect_websocket(
             ));
         }
         let connector = tokio_tungstenite::Connector::Rustls(insecure_tls_config());
-        tokio_tungstenite::connect_async_tls_with_config(url, None, false, Some(connector)).await
+        tokio_tungstenite::connect_async_tls_with_config(
+            connect_url.as_str(),
+            None,
+            false,
+            Some(connector),
+        )
+        .await
     } else {
-        tokio_tungstenite::connect_async(url).await
+        tokio_tungstenite::connect_async(connect_url.as_str()).await
     };
 
     match result {
         Ok((ws, _)) => {
+            // Log the bare URL — `connect_url` may carry `?token=...`.
             log::info!("Connected to Signal K via {}: {}", if is_wss { "WSS" } else { "WS" }, url);
             Ok(ws)
         }
         Err(e) => {
-            // Surface 401 with a user-friendly hint pointing at future auth work.
+            // 401 on an authenticated transport means token is missing,
+            // expired, or rejected. The connect URL is logged without the
+            // token to avoid leaking it.
             if is_auth_error(&e) {
-                log::info!(
-                    "Signal K server at {} requires authentication (HTTP 401). \
-                     Authentication is not yet implemented; see \
-                     https://github.com/MarineYachtRadar/mayara-server/issues/42",
-                    url
-                );
+                if token.is_some() {
+                    log::warn!(
+                        "Signal K server at {} rejected the supplied token (HTTP 401). \
+                         Verify `--signalk-token`/`--signalk-token-file` is current.",
+                        url
+                    );
+                } else {
+                    log::info!(
+                        "Signal K server at {} requires authentication (HTTP 401). \
+                         Pass `--signalk-token` or `--signalk-token-file`.",
+                        url
+                    );
+                }
             }
             Err(RadarError::SignalK(format!(
                 "{} connect failed: {}",
@@ -505,6 +550,43 @@ async fn connect_websocket(
             )))
         }
     }
+}
+
+/// Append `token=<urlencoded>` to the query string of `url`. Picks `?` vs
+/// `&` based on whether the URL already has non-empty query content (a
+/// bare trailing `?` is treated as empty so we don't produce `?&token=`).
+/// Returns the original URL unchanged when `token` is `None`. Fragments
+/// are preserved (the token slots in before any `#fragment`).
+fn append_token_query(url: &str, token: Option<&str>) -> String {
+    let Some(t) = token else {
+        return url.to_string();
+    };
+    let encoded = url_encode_token(t);
+    let (head, fragment) = match url.find('#') {
+        Some(i) => (&url[..i], &url[i..]),
+        None => (url, ""),
+    };
+    let has_query = head.contains('?') && !head.ends_with('?');
+    let separator = if has_query { '&' } else { '?' };
+    let head = head.strip_suffix('?').unwrap_or(head);
+    format!("{head}{separator}token={encoded}{fragment}")
+}
+
+/// Percent-encode bytes that may appear in a JWT but aren't safe in a URL
+/// query value. JWTs are base64url-encoded so the only character we'd
+/// reasonably see is `=` (padding); a few extra escapes don't hurt and keep
+/// us safe against future token formats. Uses RFC 3986 unreserved + `-._~`.
+fn url_encode_token(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for &b in s.as_bytes() {
+        let safe = b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~');
+        if safe {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{:02X}", b));
+        }
+    }
+    out
 }
 
 fn is_auth_error(e: &tokio_tungstenite::tungstenite::Error) -> bool {
@@ -956,5 +1038,67 @@ mod tests {
         assert_ne!(Transport::Tcp, Transport::HttpDiscovery);
         assert_ne!(Transport::HttpDiscovery, Transport::HttpsDiscovery);
         assert_ne!(Transport::Tcp, Transport::HttpsDiscovery);
+    }
+
+    // -- append_token_query / url_encode_token tests --
+
+    #[test]
+    fn append_token_query_none_leaves_url_unchanged() {
+        let url = "ws://127.0.0.1:3000/signalk/v1/stream";
+        assert_eq!(append_token_query(url, None), url);
+    }
+
+    #[test]
+    fn append_token_query_adds_first_query_param() {
+        let url = "ws://127.0.0.1:3000/signalk/v1/stream";
+        assert_eq!(
+            append_token_query(url, Some("abc.def")),
+            "ws://127.0.0.1:3000/signalk/v1/stream?token=abc.def"
+        );
+    }
+
+    #[test]
+    fn append_token_query_amperands_when_query_present() {
+        let url = "ws://127.0.0.1:3000/signalk/v1/stream?subscribe=none";
+        assert_eq!(
+            append_token_query(url, Some("abc")),
+            "ws://127.0.0.1:3000/signalk/v1/stream?subscribe=none&token=abc"
+        );
+    }
+
+    #[test]
+    fn append_token_query_preserves_fragment() {
+        let url = "ws://h/path#frag";
+        assert_eq!(
+            append_token_query(url, Some("x")),
+            "ws://h/path?token=x#frag"
+        );
+    }
+
+    #[test]
+    fn append_token_query_handles_bare_question_mark() {
+        // Some clients produce URLs ending in `?` when their query
+        // builder emits no params. Treat as empty query.
+        assert_eq!(
+            append_token_query("ws://h/path?", Some("x")),
+            "ws://h/path?token=x"
+        );
+        assert_eq!(
+            append_token_query("ws://h/path?#frag", Some("x")),
+            "ws://h/path?token=x#frag"
+        );
+    }
+
+    #[test]
+    fn url_encode_token_passes_jwt_unreserved_chars() {
+        // JWT bodies are base64url with `-` `_` and dots. All unreserved.
+        let jwt = "eyJhbGciOi.JzdWIiOi.AbCdEf-_~";
+        assert_eq!(url_encode_token(jwt), jwt);
+    }
+
+    #[test]
+    fn url_encode_token_escapes_reserved_chars() {
+        assert_eq!(url_encode_token("a b/c"), "a%20b%2Fc");
+        assert_eq!(url_encode_token("="), "%3D");
     }
 }
