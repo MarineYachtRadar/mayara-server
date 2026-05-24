@@ -213,28 +213,49 @@ impl Cli {
 
     /// Resolve the upstream Signal K bearer token by precedence:
     /// `--signalk-token` > `--signalk-token-file` > env `MAYARA_SIGNALK_TOKEN`
-    /// > none. The file is read once; the trailing newline (if any) is
-    /// trimmed. An empty literal or empty/whitespace-only file resolves to
-    /// `None` so misconfigured deployments don't silently send blank
-    /// tokens.
+    /// > none. The file is read once; outer whitespace is trimmed. An
+    /// empty/whitespace-only value resolves to `None` so misconfigured
+    /// deployments don't silently send blank tokens. Embedded control
+    /// characters (including `\r`/`\n`) cause an `InvalidData` error so a
+    /// token can never inject extra HTTP headers downstream.
     pub fn resolved_signalk_token(&self) -> std::io::Result<Option<String>> {
+        fn sanitize(raw: &str) -> std::io::Result<Option<String>> {
+            let t = raw.trim();
+            if t.is_empty() {
+                return Ok(None);
+            }
+            if t.chars().any(char::is_control) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Signal K token contains control characters",
+                ));
+            }
+            Ok(Some(t.to_string()))
+        }
         if let Some(t) = self.signalk_token.as_deref() {
-            let t = t.trim();
-            return Ok((!t.is_empty()).then(|| t.to_string()));
+            return sanitize(t);
         }
         if let Some(path) = self.signalk_token_file.as_deref() {
             let raw = std::fs::read_to_string(path)?;
-            let t = raw.trim();
-            return Ok((!t.is_empty()).then(|| t.to_string()));
+            return sanitize(&raw);
         }
         match std::env::var("MAYARA_SIGNALK_TOKEN") {
-            Ok(t) => {
-                let t = t.trim();
-                Ok((!t.is_empty()).then(|| t.to_string()))
-            }
+            Ok(t) => sanitize(&t),
             Err(_) => Ok(None),
         }
     }
+}
+
+/// Resolve the Signal K bearer token from CLI/env and install it into the
+/// process-global slot so downstream WS/REST connect paths can read it.
+/// Designed to be called once during startup from the binary entry point.
+pub fn install_signalk_token(args: &Cli) -> std::io::Result<()> {
+    let token = args.resolved_signalk_token()?;
+    if token.is_some() {
+        log::info!("Signal K bearer token loaded");
+    }
+    signalk::set_signalk_token(token);
+    Ok(())
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq, Hash, ToSchema)]
@@ -686,5 +707,30 @@ mod tests {
             ..parse_cli(&[])
         };
         assert!(cli.resolved_signalk_token().is_err());
+    }
+
+    #[test]
+    fn token_with_embedded_control_char_is_rejected() {
+        let cli = Cli {
+            signalk_token: Some("abc\r\nX-Injected: yes".to_string()),
+            signalk_token_file: None,
+            ..parse_cli(&[])
+        };
+        let err = cli.resolved_signalk_token().unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn token_file_with_embedded_control_char_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("tok");
+        std::fs::write(&file, "abc\r\nX-Injected: yes\n").unwrap();
+        let cli = Cli {
+            signalk_token: None,
+            signalk_token_file: Some(file),
+            ..parse_cli(&[])
+        };
+        let err = cli.resolved_signalk_token().unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     }
 }

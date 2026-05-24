@@ -85,7 +85,7 @@ static SIGNALK_TOKEN: std::sync::OnceLock<Option<String>> = std::sync::OnceLock:
 /// Install the upstream Signal K bearer token. Must be called at most once
 /// per process; subsequent calls are silently ignored (the value is
 /// captured in a `OnceLock`).
-pub fn set_signalk_token(token: Option<String>) {
+pub(crate) fn set_signalk_token(token: Option<String>) {
     let _ = SIGNALK_TOKEN.set(token);
 }
 
@@ -549,9 +549,10 @@ async fn connect_websocket(
 }
 
 /// Append `token=<urlencoded>` to the query string of `url`. Picks `?` vs
-/// `&` based on whether the URL already has a query component. Returns the
-/// original URL unchanged when `token` is `None`. Fragments are preserved
-/// (the token slots in before any `#fragment`).
+/// `&` based on whether the URL already has non-empty query content (a
+/// bare trailing `?` is treated as empty so we don't produce `?&token=`).
+/// Returns the original URL unchanged when `token` is `None`. Fragments
+/// are preserved (the token slots in before any `#fragment`).
 fn append_token_query(url: &str, token: Option<&str>) -> String {
     let Some(t) = token else {
         return url.to_string();
@@ -561,7 +562,9 @@ fn append_token_query(url: &str, token: Option<&str>) -> String {
         Some(i) => (&url[..i], &url[i..]),
         None => (url, ""),
     };
-    let separator = if head.contains('?') { '&' } else { '?' };
+    let has_query = head.contains('?') && !head.ends_with('?');
+    let separator = if has_query { '&' } else { '?' };
+    let head = head.strip_suffix('?').unwrap_or(head);
     format!("{head}{separator}token={encoded}{fragment}")
 }
 
@@ -1064,6 +1067,20 @@ mod tests {
         let url = "ws://h/path#frag";
         assert_eq!(
             append_token_query(url, Some("x")),
+            "ws://h/path?token=x#frag"
+        );
+    }
+
+    #[test]
+    fn append_token_query_handles_bare_question_mark() {
+        // Some clients produce URLs ending in `?` when their query
+        // builder emits no params. Treat as empty query.
+        assert_eq!(
+            append_token_query("ws://h/path?", Some("x")),
+            "ws://h/path?token=x"
+        );
+        assert_eq!(
+            append_token_query("ws://h/path?#frag", Some("x")),
             "ws://h/path?token=x#frag"
         );
     }

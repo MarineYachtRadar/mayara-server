@@ -38,21 +38,10 @@ async fn main() -> Result<()> {
 
     network::set_replay(args.is_replay());
 
-    // Resolve and install the upstream Signal K token before any subsystem
-    // can read it (start_session spawns the AIS Seed task in turn).
-    match args.resolved_signalk_token() {
-        Ok(token) => {
-            if token.is_some() {
-                info!("Signal K bearer token loaded");
-            }
-            mayara::signalk::set_signalk_token(token);
-        }
-        Err(e) => {
-            return Err(miette::miette!(
-                "Failed to read --signalk-token-file: {}",
-                e
-            ));
-        }
+    // Install the upstream Signal K token before any subsystem can read it
+    // (start_session spawns the AIS Seed task in turn).
+    if let Err(e) = mayara::install_signalk_token(&args) {
+        return Err(miette::miette!("Failed to install Signal K token: {}", e));
     }
 
     #[cfg(feature = "pcap-replay")]
