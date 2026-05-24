@@ -347,6 +347,10 @@ async fn discover(
 /// support chunked transfer-encoding (Signal K servers use Content-Length for
 /// the small JSON discovery payload) but returns a clear error if encountered.
 async fn http_get_signalk(addr: SocketAddr, use_tls: bool) -> Result<String, RadarError> {
+    // SAFETY against header injection: `Cli::resolved_signalk_token`
+    // (the only writer of `SIGNALK_TOKEN`) rejects control characters,
+    // so `t` cannot contain `\r`/`\n` and embedding it via `format!` is
+    // safe.
     let auth_header = match get_signalk_token() {
         Some(t) => format!("Authorization: Bearer {}\r\n", t),
         None => String::new(),

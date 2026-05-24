@@ -733,4 +733,54 @@ mod tests {
         let err = cli.resolved_signalk_token().unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     }
+
+    // Env-var tests are gated by `#[serial]` so they can't observe or
+    // clobber each other's MAYARA_SIGNALK_TOKEN. Literal/file-precedence
+    // tests above don't need serialization because those paths short-
+    // circuit before reading the env var.
+
+    #[test]
+    #[serial_test::serial]
+    fn token_env_var_is_read_and_trimmed() {
+        // SAFETY: serialized by #[serial]; no other test mutates this
+        // env var concurrently.
+        unsafe { std::env::set_var("MAYARA_SIGNALK_TOKEN", "  eyJenv.abc  \n") };
+        let cli = Cli {
+            signalk_token: None,
+            signalk_token_file: None,
+            ..parse_cli(&[])
+        };
+        let resolved = cli.resolved_signalk_token();
+        unsafe { std::env::remove_var("MAYARA_SIGNALK_TOKEN") };
+        assert_eq!(resolved.unwrap().as_deref(), Some("eyJenv.abc"));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn empty_env_var_resolves_to_none() {
+        unsafe { std::env::set_var("MAYARA_SIGNALK_TOKEN", "   \t  ") };
+        let cli = Cli {
+            signalk_token: None,
+            signalk_token_file: None,
+            ..parse_cli(&[])
+        };
+        let resolved = cli.resolved_signalk_token();
+        unsafe { std::env::remove_var("MAYARA_SIGNALK_TOKEN") };
+        assert!(resolved.unwrap().is_none());
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn env_var_with_control_char_is_rejected() {
+        unsafe { std::env::set_var("MAYARA_SIGNALK_TOKEN", "abc\nX-Injected: yes") };
+        let cli = Cli {
+            signalk_token: None,
+            signalk_token_file: None,
+            ..parse_cli(&[])
+        };
+        let result = cli.resolved_signalk_token();
+        unsafe { std::env::remove_var("MAYARA_SIGNALK_TOKEN") };
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
 }
