@@ -83,12 +83,17 @@ fn set_own_ship_context(context: &str) {
     let lock = OWN_SHIP_CONTEXT.get_or_init(|| RwLock::new(None));
     if let Ok(mut guard) = lock.write() {
         // Set on first sight, OR upgrade from the "vessels.self" placeholder
-        // to a concrete `vessels.urn:...` once one arrives. Without the
-        // upgrade, later own-ship URN deltas would compare false against the
-        // stored "vessels.self" and get misrouted into the AIS store.
+        // to a concrete `vessels.urn:mrn:signalk:uuid:...` once one arrives.
+        // Constrain the upgrade target so an AIS-vessel context (e.g.
+        // `vessels.urn:mrn:imo:mmsi:...`) cannot latch as own-ship and
+        // misroute later own-ship URN deltas into the AIS store.
         let should_set = match guard.as_deref() {
             None => true,
-            Some("vessels.self") if context != "vessels.self" => true,
+            Some("vessels.self")
+                if context.starts_with("vessels.urn:mrn:signalk:uuid:") =>
+            {
+                true
+            }
             _ => false,
         };
         if should_set {

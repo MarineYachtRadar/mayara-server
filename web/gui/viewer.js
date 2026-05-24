@@ -310,9 +310,13 @@ async function subscribeToAisViaSignalK() {
   const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   const streamUrl = `${wsProtocol}//${window.location.host}/signalk/v1/stream?subscribe=none`;
 
-  aisSocket = new WebSocket(streamUrl);
+  // Hold a local reference so handlers that fire after `aisSocket` is
+  // replaced (e.g. a late `onclose` from a previous socket) can detect
+  // they're stale and skip teardown / reconnect work.
+  const socket = new WebSocket(streamUrl);
+  aisSocket = socket;
 
-  aisSocket.onopen = () => {
+  socket.onopen = () => {
     console.log("AIS WebSocket connected");
     // `vessels.*` triggers mayara's AIS-store full-snapshot replay; the
     // remaining leaf paths drive Signal K's incremental delta delivery
@@ -333,10 +337,10 @@ async function subscribeToAisViaSignalK() {
         { path: "navigation.headingTrue", period: 1000 },
       ],
     };
-    aisSocket.send(JSON.stringify(subscription));
+    socket.send(JSON.stringify(subscription));
   };
 
-  aisSocket.onmessage = (event) => {
+  socket.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data);
       if (data.updates) {
@@ -349,11 +353,12 @@ async function subscribeToAisViaSignalK() {
     }
   };
 
-  aisSocket.onerror = (e) => {
+  socket.onerror = (e) => {
     console.log("AIS WebSocket error:", e);
   };
 
-  aisSocket.onclose = () => {
+  socket.onclose = () => {
+    if (aisSocket !== socket) return; // stale close from a replaced socket
     aisSocket = null;
     if (showAis) {
       console.log("AIS WebSocket closed, reconnecting in 5s...");

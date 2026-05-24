@@ -477,13 +477,14 @@ pub async fn start_session(
     navdata::init_ais_store(radars.get_sk_client_tx());
 
     // Seed the AIS store from the upstream Signal K REST snapshot as
-    // soon as discovery resolves an HTTP URL. Retries briefly because
-    // the WS task and discovery race startup.
+    // soon as discovery resolves an HTTP URL. Polls until either shutdown
+    // or discovery resolves; the WS task and discovery race startup and
+    // discovery may take arbitrarily long on a quiet network.
     let accept_invalid_certs = args.accept_invalid_certs;
     subsystem.start(SubsystemBuilder::new(
         "AIS Seed",
         async move |subsys: &mut SubsystemHandle| {
-            for _ in 0..20 {
+            loop {
                 tokio::select! { biased;
                     _ = subsys.on_shutdown_requested() => break,
                     _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {},
