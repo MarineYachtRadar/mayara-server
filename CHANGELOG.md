@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **furuno:** correct DRS to DRS2D in supported radars list (#204) ([PR #204](https://github.com/MarineYachtRadar/mayara-server/pull/204))
+- add capturing-traffic guide and cross-links (#230) ([PR #230](https://github.com/MarineYachtRadar/mayara-server/pull/230))
 
 ### Fixed
 
