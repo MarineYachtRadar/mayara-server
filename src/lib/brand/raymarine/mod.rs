@@ -225,7 +225,7 @@ impl RaymarineLocator {
         report: &[u8],
         from: &Ipv4Addr,
         radars: &SharedRadars,
-    ) -> Result<Option<RadarInfo>, Error> {
+    ) -> Result<Option<(RadarInfo, BaseModel)>, Error> {
         match deserialize::<RaymarineBeacon36>(report) {
             Ok(data) => {
                 let beacon_type = u32::from_le_bytes(data.beacon_type);
@@ -322,7 +322,7 @@ impl RaymarineLocator {
                         false,
                     );
 
-                    return Ok(Some(location_info));
+                    return Ok(Some((location_info, model)));
                 } else {
                     log::trace!(
                         "{}: Raymarine 36 report: link_id {:08X} not found in ids: {:02X?}",
@@ -454,7 +454,13 @@ impl RaymarineLocator {
         Ok(())
     }
 
-    fn found(&self, info: RadarInfo, radars: &SharedRadars, subsys: &SubsystemHandle) {
+    fn found(
+        &self,
+        info: RadarInfo,
+        base_model: BaseModel,
+        radars: &SharedRadars,
+        subsys: &SubsystemHandle,
+    ) {
         info.controls
             .set_string(&ControlId::UserName, info.key())
             .unwrap();
@@ -486,7 +492,7 @@ impl RaymarineLocator {
             ));
 
             let report_receiver =
-                report::RaymarineReportReceiver::new(&self.args, info, radars.clone());
+                report::RaymarineReportReceiver::new(&self.args, info, radars.clone(), base_model);
 
             subsys.start(SubsystemBuilder::new(
                 report_name,
@@ -520,8 +526,8 @@ impl RadarLocator for RaymarineLocator {
         match report.len() {
             protocol::beacon36::LEN => {
                 match Self::process_beacon_36_report(self, report, nic_addr, radars) {
-                    Ok(Some(info)) => {
-                        self.found(info, radars, subsys);
+                    Ok(Some((info, base_model))) => {
+                        self.found(info, base_model, radars, subsys);
                     }
                     Ok(None) => {}
                     Err(e) => {
@@ -602,7 +608,7 @@ mod tests {
 
     use clap::Parser;
 
-    use super::protocol;
+    use super::{BaseModel, protocol};
     use crate::{Cli, brand::raymarine::RaymarineLocator, radar::SharedRadars};
 
     #[test]
@@ -691,8 +697,9 @@ mod tests {
         assert!(r.is_ok());
         let r = r.unwrap();
         assert!(r.is_some());
-        let r = r.unwrap();
-        log::debug!("Radar: {:?}", r);
+        let (r, model) = r.unwrap();
+        log::debug!("Radar: {:?} model: {:?}", r, model);
+        assert_eq!(model, BaseModel::Quantum);
         assert_eq!(r.controls.model_name(), Some("Quantum".to_string()));
         assert_eq!(r.serial_no, None);
         assert_eq!(
@@ -719,8 +726,9 @@ mod tests {
         assert!(r.is_ok());
         let r = r.unwrap();
         assert!(r.is_some());
-        let r = r.unwrap();
-        log::debug!("Radar: {:?}", r);
+        let (r, model) = r.unwrap();
+        log::debug!("Radar: {:?} model: {:?}", r, model);
+        assert_eq!(model, BaseModel::Quantum);
         assert_eq!(r.controls.model_name(), Some("Quantum".to_string()));
         assert_eq!(r.serial_no, None);
         assert_eq!(
@@ -747,8 +755,9 @@ mod tests {
         assert!(r.is_ok());
         let r = r.unwrap();
         assert!(r.is_some());
-        let r = r.unwrap();
-        log::debug!("Radar: {:?}", r);
+        let (r, model) = r.unwrap();
+        log::debug!("Radar: {:?} model: {:?}", r, model);
+        assert_eq!(model, BaseModel::RD);
         assert_eq!(r.controls.model_name(), Some("RD".to_string()));
         assert_eq!(r.serial_no, None);
         assert_eq!(
@@ -830,7 +839,10 @@ mod tests {
                     let _ = locator.process_beacon_56_report(data, src);
                 }
                 protocol::beacon36::LEN => {
-                    if let Ok(Some(info)) = locator.process_beacon_36_report(data, src, radars) {
+                    if let Ok(Some((info, model))) =
+                        locator.process_beacon_36_report(data, src, radars)
+                    {
+                        assert_eq!(model, BaseModel::Quantum);
                         assert_eq!(
                             info.report_addr,
                             SocketAddrV4::new(Ipv4Addr::new(232, 1, 160, 1), 2574),

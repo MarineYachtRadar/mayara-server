@@ -347,18 +347,16 @@ pub(super) fn process_info_report(receiver: &mut RaymarineReportReceiver, data: 
             receiver.wire_to_legend = wire_to_legend(&receiver.common.info.get_legend());
             receiver.common.update();
 
-            // If we are in replay mode, we don't need a command sender, as we will not send any commands
-            let command_sender = if !receiver.common.replay {
+            // The command_sender was primed at construction with the
+            // BaseModel known from discovery so the heartbeat loop could
+            // start immediately (issue #228). The model-specific BaseModel
+            // (Quantum vs RD) doesn't change between then and now, so we
+            // keep the existing sender rather than recreating it.
+            if receiver.command_sender.is_none() && !receiver.common.replay {
                 log::debug!("{}: Starting command sender", receiver.common.key);
-                Some(Command::new(
-                    receiver.common.info.clone(),
-                    model.model.clone(),
-                ))
-            } else {
-                log::debug!("{}: No command sender, replay mode", receiver.common.key);
-                None
-            };
-            receiver.command_sender = command_sender;
+                receiver.command_sender =
+                    Some(Command::new(receiver.common.info.clone(), model.model.clone()));
+            }
             receiver.model = Some(model);
             receiver.state = ReceiverState::InfoRequestReceived;
         }
