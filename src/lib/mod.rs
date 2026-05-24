@@ -82,15 +82,15 @@ pub struct Cli {
     /// (restricts mDNS to that interface) or `<scheme>:<address>:<port>`.
     ///
     /// Schemes:
-    /// - `tcp:` — plain TCP Signal K stream (anonymous only; auth not supported)
+    /// - `tcp:` — plain TCP Signal K stream (anonymous only)
     /// - `udp:` — UDP listener for NMEA 0183 broadcasts
-    /// - `ws:`  — WebSocket via Signal K discovery (anonymous)
-    /// - `wss:` — WebSocket Secure via Signal K discovery; requires
-    ///            `--accept-invalid-certs`
+    /// - `ws:`  — WebSocket via Signal K discovery; supports `--signalk-token`
+    /// - `wss:` — WebSocket Secure via Signal K discovery; supports
+    ///            `--signalk-token`; requires `--accept-invalid-certs` for
+    ///            self-signed certificates
     ///
-    /// Authenticated Signal K servers can only be reached via `ws:` or `wss:`
-    /// (auth is not yet implemented; tracked as follow-up work). The plain
-    /// `tcp:` transport is strictly for anonymous setups.
+    /// Authenticated Signal K servers can only be reached via `ws:` or `wss:`.
+    /// The plain `tcp:` transport is strictly for anonymous setups.
     #[arg(short, long)]
     pub navigation_address: Option<String>,
 
@@ -149,6 +149,20 @@ pub struct Cli {
     #[arg(long, default_value_t = false)]
     pub accept_invalid_certs: bool,
 
+    /// Signal K bearer token for authenticating to the upstream `ws:`/`wss:`
+    /// server. Sent as `?token=...` on WebSocket and as
+    /// `Authorization: Bearer ...` on REST discovery and AIS-store seeding.
+    /// Conflicts with `--signalk-token-file`. Has no effect on `tcp:` or
+    /// `udp:` transports.
+    #[arg(long, conflicts_with = "signalk_token_file")]
+    pub signalk_token: Option<String>,
+
+    /// File containing a Signal K bearer token (single line, trailing
+    /// whitespace trimmed). Re-read at startup only. Use this instead of
+    /// `--signalk-token` to keep the token out of the process argv.
+    #[arg(long, conflicts_with = "signalk_token")]
+    pub signalk_token_file: Option<std::path::PathBuf>,
+
     /// Use emulator radar instead of real radar discovery
     #[arg(long, default_value_t = false)]
     pub emulator: bool,
@@ -195,6 +209,31 @@ impl Cli {
                 None
             }
         })
+    }
+
+    /// Resolve the upstream Signal K bearer token by precedence:
+    /// `--signalk-token` > `--signalk-token-file` > env `MAYARA_SIGNALK_TOKEN`
+    /// > none. The file is read once; the trailing newline (if any) is
+    /// trimmed. An empty literal or empty/whitespace-only file resolves to
+    /// `None` so misconfigured deployments don't silently send blank
+    /// tokens.
+    pub fn resolved_signalk_token(&self) -> std::io::Result<Option<String>> {
+        if let Some(t) = self.signalk_token.as_deref() {
+            let t = t.trim();
+            return Ok((!t.is_empty()).then(|| t.to_string()));
+        }
+        if let Some(path) = self.signalk_token_file.as_deref() {
+            let raw = std::fs::read_to_string(path)?;
+            let t = raw.trim();
+            return Ok((!t.is_empty()).then(|| t.to_string()));
+        }
+        match std::env::var("MAYARA_SIGNALK_TOKEN") {
+            Ok(t) => {
+                let t = t.trim();
+                Ok((!t.is_empty()).then(|| t.to_string()))
+            }
+            Err(_) => Ok(None),
+        }
     }
 }
 
@@ -581,4 +620,71 @@ pub async fn start_session(
     }
 
     (radars, tx_interface_request)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    fn parse_cli(args: &[&str]) -> Cli {
+        let mut full = vec!["mayara-server"];
+        full.extend_from_slice(args);
+        Cli::parse_from(full)
+    }
+
+    #[test]
+    fn token_literal_takes_precedence_over_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("tok");
+        std::fs::write(&file, "from-file\n").unwrap();
+        let cli = Cli {
+            signalk_token: Some("from-literal".to_string()),
+            signalk_token_file: None, // clap conflict precludes both at once
+            ..parse_cli(&[])
+        };
+        assert_eq!(
+            cli.resolved_signalk_token().unwrap().as_deref(),
+            Some("from-literal")
+        );
+    }
+
+    #[test]
+    fn token_file_is_read_and_trimmed() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("tok");
+        std::fs::write(&file, "  eyJabc.def\n\n").unwrap();
+        let cli = Cli {
+            signalk_token: None,
+            signalk_token_file: Some(file),
+            ..parse_cli(&[])
+        };
+        assert_eq!(
+            cli.resolved_signalk_token().unwrap().as_deref(),
+            Some("eyJabc.def")
+        );
+    }
+
+    #[test]
+    fn empty_token_file_resolves_to_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("tok");
+        std::fs::write(&file, "   \n").unwrap();
+        let cli = Cli {
+            signalk_token: None,
+            signalk_token_file: Some(file),
+            ..parse_cli(&[])
+        };
+        assert!(cli.resolved_signalk_token().unwrap().is_none());
+    }
+
+    #[test]
+    fn missing_token_file_returns_io_error() {
+        let cli = Cli {
+            signalk_token: None,
+            signalk_token_file: Some(std::path::PathBuf::from("/nonexistent/path/tok")),
+            ..parse_cli(&[])
+        };
+        assert!(cli.resolved_signalk_token().is_err());
+    }
 }

@@ -166,7 +166,11 @@ pub(crate) async fn seed_ais_from_upstream(accept_invalid_certs: bool) {
             return;
         }
     };
-    let tree: Value = match client.get(&url).send().await {
+    let mut req = client.get(&url);
+    if let Some(token) = crate::signalk::get_signalk_token() {
+        req = req.bearer_auth(token);
+    }
+    let tree: Value = match req.send().await {
         Ok(r) if r.status().is_success() => match r.json().await {
             Ok(v) => v,
             Err(e) => {
