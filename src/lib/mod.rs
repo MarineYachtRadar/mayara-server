@@ -219,6 +219,17 @@ impl Cli {
     /// characters (including `\r`/`\n`) cause an `InvalidData` error so a
     /// token can never inject extra HTTP headers downstream.
     pub fn resolved_signalk_token(&self) -> std::io::Result<Option<String>> {
+        self.resolved_signalk_token_with_env(|k| std::env::var(k).ok())
+    }
+
+    /// Inner resolver that takes an env source. Lets tests exercise the
+    /// env-var fallback branch without mutating the process environment
+    /// (which is `unsafe` on Unix and not actually serialized by
+    /// `serial_test`).
+    fn resolved_signalk_token_with_env<F>(&self, env: F) -> std::io::Result<Option<String>>
+    where
+        F: FnOnce(&str) -> Option<String>,
+    {
         fn sanitize(raw: &str) -> std::io::Result<Option<String>> {
             let t = raw.trim();
             if t.is_empty() {
@@ -239,9 +250,9 @@ impl Cli {
             let raw = std::fs::read_to_string(path)?;
             return sanitize(&raw);
         }
-        match std::env::var("MAYARA_SIGNALK_TOKEN") {
-            Ok(t) => sanitize(&t),
-            Err(_) => Ok(None),
+        match env("MAYARA_SIGNALK_TOKEN") {
+            Some(t) => sanitize(&t),
+            None => Ok(None),
         }
     }
 }
@@ -734,53 +745,67 @@ mod tests {
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     }
 
-    // Env-var tests are gated by `#[serial]` so they can't observe or
-    // clobber each other's MAYARA_SIGNALK_TOKEN. Literal/file-precedence
-    // tests above don't need serialization because those paths short-
-    // circuit before reading the env var.
+    // Env-var fallback tests exercise the inner resolver with an
+    // injected env source. Avoids `std::env::set_var`, which is
+    // `unsafe` on Unix (it requires no other threads be reading the
+    // environment concurrently — a contract tests can't honor).
+
+    fn no_env(_: &str) -> Option<String> {
+        None
+    }
+
+    fn env_with(value: &str) -> impl FnOnce(&str) -> Option<String> + '_ {
+        move |k| {
+            if k == "MAYARA_SIGNALK_TOKEN" {
+                Some(value.to_string())
+            } else {
+                None
+            }
+        }
+    }
 
     #[test]
-    #[serial_test::serial]
     fn token_env_var_is_read_and_trimmed() {
-        // SAFETY: serialized by #[serial]; no other test mutates this
-        // env var concurrently.
-        unsafe { std::env::set_var("MAYARA_SIGNALK_TOKEN", "  eyJenv.abc  \n") };
         let cli = Cli {
             signalk_token: None,
             signalk_token_file: None,
             ..parse_cli(&[])
         };
-        let resolved = cli.resolved_signalk_token();
-        unsafe { std::env::remove_var("MAYARA_SIGNALK_TOKEN") };
+        let env = env_with("  eyJenv.abc  \n");
+        let resolved = cli.resolved_signalk_token_with_env(env);
         assert_eq!(resolved.unwrap().as_deref(), Some("eyJenv.abc"));
     }
 
     #[test]
-    #[serial_test::serial]
     fn empty_env_var_resolves_to_none() {
-        unsafe { std::env::set_var("MAYARA_SIGNALK_TOKEN", "   \t  ") };
         let cli = Cli {
             signalk_token: None,
             signalk_token_file: None,
             ..parse_cli(&[])
         };
-        let resolved = cli.resolved_signalk_token();
-        unsafe { std::env::remove_var("MAYARA_SIGNALK_TOKEN") };
-        assert!(resolved.unwrap().is_none());
+        let env = env_with("   \t  ");
+        assert!(cli.resolved_signalk_token_with_env(env).unwrap().is_none());
     }
 
     #[test]
-    #[serial_test::serial]
     fn env_var_with_control_char_is_rejected() {
-        unsafe { std::env::set_var("MAYARA_SIGNALK_TOKEN", "abc\nX-Injected: yes") };
         let cli = Cli {
             signalk_token: None,
             signalk_token_file: None,
             ..parse_cli(&[])
         };
-        let result = cli.resolved_signalk_token();
-        unsafe { std::env::remove_var("MAYARA_SIGNALK_TOKEN") };
-        let err = result.unwrap_err();
+        let env = env_with("abc\nX-Injected: yes");
+        let err = cli.resolved_signalk_token_with_env(env).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn missing_env_var_resolves_to_none() {
+        let cli = Cli {
+            signalk_token: None,
+            signalk_token_file: None,
+            ..parse_cli(&[])
+        };
+        assert!(cli.resolved_signalk_token_with_env(no_env).unwrap().is_none());
     }
 }
