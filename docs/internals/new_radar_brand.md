@@ -6,7 +6,7 @@ This guide covers every step needed to add support for a new marine radar brand 
 
 Before writing code, you need:
 
-- **Network captures** of the radar's traffic (pcap format). Use Wireshark or tcpdump to capture all multicast/broadcast UDP traffic while the radar boots, transmits, and responds to control changes.
+- **Network captures** of the radar's traffic (pcap format). See [Capturing Radar Traffic](../capturing-traffic.md) for capture-host topology, brand-specific physical access, and tcpdump command recipes — record the radar during boot, transmit, and operator control changes.
 - **Protocol documentation** if available, or reverse-engineered knowledge of the wire format: discovery packets, spoke data encoding, command formats, and status reports.
 - A **radar-recordings** repository checkout (sibling to this repo) if you want to generate test fixtures.
 
