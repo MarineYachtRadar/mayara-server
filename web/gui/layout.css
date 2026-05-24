@@ -317,6 +317,92 @@ div.myr_ppi {
   display: none;
 }
 
+/* ============================================
+   AIS Lozenge - AIS overlay toggle (bottom-left)
+   ============================================ */
+
+.myr_ais_lozenge {
+  position: absolute;
+  bottom: 20px;
+  left: 20px;
+  display: flex;
+  align-items: stretch;
+  height: 36px;
+  background: rgba(0, 0, 0, 0.7);
+  border: 2px solid #446;
+  border-radius: 18px;
+  z-index: 100;
+  overflow: hidden;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.myr_ais_lozenge_button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  padding: 0;
+  background: #222;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.myr_ais_lozenge_button:hover {
+  background: #333;
+}
+
+.myr_ais_lozenge_button:active {
+  transform: scale(0.95);
+}
+
+.myr_ais_lozenge_button:focus-visible {
+  outline: 2px solid #4dc8ff;
+  outline-offset: 2px;
+}
+
+.myr_ais_icon {
+  width: 20px;
+  height: 20px;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
+}
+
+.myr_ais_lozenge.myr_ais_on .myr_ais_lozenge_button {
+  background: #1a3d4d;
+}
+
+.myr_ais_lozenge.myr_ais_on .myr_ais_icon {
+  stroke: #4dc8ff;
+}
+
+.myr_ais_lozenge.myr_ais_on .myr_ais_icon path:first-child {
+  fill: #4dc8ff;
+}
+
+.myr_ais_lozenge.myr_ais_on .myr_ais_outline {
+  stroke: #4dc8ff;
+}
+
+.myr_ais_lozenge.myr_ais_off .myr_ais_lozenge_button {
+  background: #2a2a2a;
+}
+
+.myr_ais_lozenge.myr_ais_off .myr_ais_icon {
+  stroke: #666;
+}
+
+.myr_ais_lozenge.myr_ais_off .myr_ais_icon path:first-child {
+  fill: #666;
+}
+
+.myr_ais_lozenge.myr_ais_off .myr_ais_outline {
+  stroke: #666;
+}
+
 /* Range lozenge - vertical, left side, centered */
 .myr_range_lozenge {
   position: absolute;

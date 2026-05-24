@@ -127,6 +127,23 @@ impl SignalKDelta {
         self.updates.push(delta_update);
     }
 
+    /// Add a `navigation.position` update.
+    pub fn add_position_update(&mut self, latitude: f64, longitude: f64, source: &str) {
+        let delta_update = DeltaUpdate {
+            timestamp: Some(Utc::now()),
+            source: Some(source.to_string()),
+            meta: Vec::new(),
+            values: vec![DeltaValue::NavigationPosition {
+                path: "navigation.position".to_string(),
+                value: PositionValue {
+                    latitude,
+                    longitude,
+                },
+            }],
+        };
+        self.updates.push(delta_update);
+    }
+
     /// Add an AIS vessel update to the delta message.
     pub fn add_ais_vessel_update(&mut self, path: &str, vessel: &crate::ais::AisVesselApi) {
         let value = serde_json::to_value(vessel).unwrap_or(serde_json::Value::Null);
@@ -222,6 +239,14 @@ enum DeltaValue {
         /// Navigation value (radians for heading, m/s for speed, etc.)
         value: f64,
     },
+    /// Navigation position update (separate variant — Signal K position is
+    /// a `{latitude, longitude}` object, not a scalar).
+    NavigationPosition {
+        /// Always "navigation.position".
+        path: String,
+        /// `{latitude, longitude}` in decimal degrees.
+        value: PositionValue,
+    },
     /// AIS vessel update (structured data from AIS store)
     Ais {
         /// Vessel path (e.g., "vessels.227334400")
@@ -231,12 +256,21 @@ enum DeltaValue {
     },
 }
 
+/// Geographic position (decimal degrees) serialized to match the Signal K
+/// `navigation.position` payload shape.
+#[derive(Serialize, Clone, Debug, ToSchema)]
+pub(crate) struct PositionValue {
+    pub(crate) latitude: f64,
+    pub(crate) longitude: f64,
+}
+
 impl DeltaValue {
     fn path(&self) -> &str {
         match self {
             DeltaValue::Control { path, .. } => path,
             DeltaValue::Target { path, .. } => path,
             DeltaValue::Navigation { path, .. } => path,
+            DeltaValue::NavigationPosition { path, .. } => path,
             DeltaValue::Ais { path, .. } => path,
         }
     }

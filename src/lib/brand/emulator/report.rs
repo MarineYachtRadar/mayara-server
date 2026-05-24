@@ -301,6 +301,7 @@ impl EmulatorReportReceiver {
         crate::navdata::set_position(
             Some(self.boat_position.lat()),
             Some(self.boat_position.lon()),
+            "emulator",
         );
         crate::navdata::set_heading_true(Some(self.boat_heading * DEG_TO_RAD), "emulator");
         crate::navdata::set_sog(Some(self.boat_speed * KNOTS_TO_MS));
@@ -316,12 +317,10 @@ impl EmulatorReportReceiver {
         for _ in 0..SPOKES_PER_BATCH {
             let spoke_data = self.generate_spoke(self.current_spoke);
 
-            // Convert heading to raw spoke units (0-4096 like Navico hardware)
-            // to_protobuf_spoke divides by 2 to convert to 0-2048 display space
-            // Note: Do NOT include the 0x4000 flag here - that flag is used in the raw
-            // Navico protocol but is stripped by extract_heading_value() before add_spoke.
-            const NAVICO_SPOKES_RAW: f64 = 4096.0;
-            let heading_spoke = ((self.boat_heading / 360.0) * NAVICO_SPOKES_RAW) as u16;
+            // Heading in `EMULATOR_SPOKES`-units, matching the convention
+            // every brand's normalized `add_spoke` heading uses now.
+            let heading_spoke =
+                ((self.boat_heading / 360.0) * EMULATOR_SPOKES as f64) as u16;
 
             self.common.add_spoke(
                 self.current_range,

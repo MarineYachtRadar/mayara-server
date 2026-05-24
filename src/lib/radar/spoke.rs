@@ -20,8 +20,10 @@ pub(crate) fn to_protobuf_spoke(
         generic_spoke.len()
     );
 
+    // `heading` is expected to already be in `spokes_per_revolution`-units
+    // (each brand normalizes before calling add_spoke).
     let heading = if heading.is_some() {
-        heading.map(|h| (((h / 2) + angle) % spokes_per_revolution) as u32)
+        heading.map(|h| ((h + angle) % spokes_per_revolution) as u32)
     } else {
         let heading = crate::navdata::get_heading_true();
         heading.map(|h| {

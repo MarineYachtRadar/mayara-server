@@ -145,10 +145,6 @@ pub struct Cli {
     #[arg(long, default_value_t = false)]
     pub transmit: bool,
 
-    /// Pass AIS targets from Signal K server to GUI clients
-    #[arg(long, default_value_t = false)]
-    pub pass_ais: bool,
-
     /// Accept invalid TLS certificates (e.g. self-signed) when connecting to Signal K
     #[arg(long, default_value_t = false)]
     pub accept_invalid_certs: bool,
@@ -440,7 +436,7 @@ pub async fn start_session(
             && (-180.0..=180.0).contains(&static_pos.lon)
         {
             let heading_rad = static_pos.heading.to_radians();
-            navdata::set_position(Some(static_pos.lat), Some(static_pos.lon));
+            navdata::set_position(Some(static_pos.lat), Some(static_pos.lon), "static");
             navdata::set_heading_true(Some(heading_rad), "static");
             navdata::set_sog(Some(0.0));
             navdata::set_cog(Some(heading_rad));
@@ -474,12 +470,38 @@ pub async fn start_session(
         }
     }
 
-    // Initialize AIS vessel store if pass_ais is enabled
-    if args.pass_ais {
-        navdata::init_ais_store(radars.get_sk_client_tx());
+    // AIS support is unconditional: the GUI subscribes to vessels.* on
+    // Signal K via the heading WebSocket, and standalone mayara mirrors
+    // upstream `vessels.*` into the local AIS store so the same
+    // subscription works against either backend.
+    navdata::init_ais_store(radars.get_sk_client_tx());
 
-        // Start background task to check for AIS vessel timeouts (every 30 seconds)
-        subsystem.start(SubsystemBuilder::new("AIS Timeout", async move |subsys: &mut SubsystemHandle| {
+    // Seed the AIS store from the upstream Signal K REST snapshot as
+    // soon as discovery resolves an HTTP URL. Polls until either shutdown
+    // or discovery resolves; the WS task and discovery race startup and
+    // discovery may take arbitrarily long on a quiet network.
+    let accept_invalid_certs = args.accept_invalid_certs;
+    subsystem.start(SubsystemBuilder::new(
+        "AIS Seed",
+        async move |subsys: &mut SubsystemHandle| {
+            loop {
+                tokio::select! { biased;
+                    _ = subsys.on_shutdown_requested() => break,
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {},
+                }
+                if crate::signalk::get_upstream_http_base().is_some() {
+                    navdata::seed_ais_from_upstream(accept_invalid_certs).await;
+                    break;
+                }
+            }
+            Ok::<(), miette::Report>(())
+        },
+    ));
+
+    // Check for AIS vessel timeouts every 30 seconds.
+    subsystem.start(SubsystemBuilder::new(
+        "AIS Timeout",
+        async move |subsys: &mut SubsystemHandle| {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
             loop {
                 tokio::select! { biased;
@@ -498,31 +520,30 @@ pub async fn start_session(
                 }
             }
             Ok::<(), miette::Report>(())
-        }));
+        },
+    ));
 
-        // Start background task to flush pending AIS broadcasts (every 50ms)
-        // This coalesces rapid updates into single broadcasts
-        subsystem.start(SubsystemBuilder::new(
-            "AIS Broadcast",
-            async move |subsys: &mut SubsystemHandle| {
-                let mut interval = tokio::time::interval(std::time::Duration::from_millis(50));
-                loop {
-                    tokio::select! { biased;
-                        _ = subsys.on_shutdown_requested() => {
-                            log::debug!("AIS broadcast task shutdown");
-                            break;
-                        },
-                        _ = interval.tick() => {
-                            if let Some(store) = navdata::get_ais_store() {
-                                store.flush_pending_broadcasts();
-                            }
+    // Coalesce rapid AIS deltas into 50 ms broadcast batches.
+    subsystem.start(SubsystemBuilder::new(
+        "AIS Broadcast",
+        async move |subsys: &mut SubsystemHandle| {
+            let mut interval = tokio::time::interval(std::time::Duration::from_millis(50));
+            loop {
+                tokio::select! { biased;
+                    _ = subsys.on_shutdown_requested() => {
+                        log::debug!("AIS broadcast task shutdown");
+                        break;
+                    },
+                    _ = interval.tick() => {
+                        if let Some(store) = navdata::get_ais_store() {
+                            store.flush_pending_broadcasts();
                         }
                     }
                 }
-                Ok::<(), miette::Report>(())
-            },
-        ));
-    }
+            }
+            Ok::<(), miette::Report>(())
+        },
+    ));
 
     let locator = Locator::new(args.clone(), radars.clone());
 

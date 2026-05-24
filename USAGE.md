@@ -79,7 +79,6 @@ Command Line Options
 |                                   | `ws:ip:port`: Signal K WebSocket (via discovery)                            |
 |                                   | `wss:ip:port`: Signal K secure WebSocket (requires `--accept-invalid-certs`)|
 | `--nmea0183`                      | Use NMEA 0183 instead of Signal K for navigation                            |
-| `--pass-ais`                      | Forward AIS targets from Signal K to GUI clients                            |
 | `--accept-invalid-certs`          | Accept self-signed TLS certificates when connecting to Signal K via         |
 |                                   | HTTPS/WSS. Required for boat-LAN setups that use self-signed certs.         |
 

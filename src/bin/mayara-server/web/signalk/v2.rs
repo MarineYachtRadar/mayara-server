@@ -1458,6 +1458,36 @@ async fn handle_subscription(
         send_all_ais_vessels(socket).await?;
     }
 
+    send_current_navigation(socket, subscriptions).await?;
+
+    Ok(())
+}
+
+/// Send the current value of any navigation paths the client is subscribed
+/// to, so the client doesn't have to wait for the next upstream change to
+/// receive a starting value. Position rarely changes when stationary, so
+/// without this a freshly-connected client may see no position for minutes.
+async fn send_current_navigation(
+    socket: &mut WebSocket,
+    subscriptions: &mut ActiveSubscriptions,
+) -> Result<(), RadarError> {
+    let mut delta = SignalKDelta::new();
+
+    if subscriptions.is_subscribed_path("navigation.position", false) {
+        let (lat, lon) = navdata::get_position();
+        if let (Some(lat), Some(lon)) = (lat, lon) {
+            delta.add_position_update(lat, lon, "mayara");
+        }
+    }
+    if subscriptions.is_subscribed_path("navigation.headingTrue", false) {
+        if let Some(h) = navdata::get_heading_true() {
+            delta.add_navigation_update("navigation.headingTrue", h, "mayara");
+        }
+    }
+
+    if let Some(d) = delta.build() {
+        send_message(socket, d).await?;
+    }
     Ok(())
 }
 

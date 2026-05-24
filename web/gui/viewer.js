@@ -24,8 +24,6 @@ import {
   getCurrentRangeDisplay,
   isAcquireTargetMode,
   acquireTargetAtPosition,
-  subscribeToAis,
-  unsubscribeFromAis,
 } from "./control.js";
 import { isStandaloneMode, detectMode } from "./api.js";
 import "./vendor/protobuf.min.js";
@@ -36,6 +34,12 @@ import { PPI } from "./ppi.js";
 
 var webSocket;
 var headingSocket;
+var aisSocket;
+const aisVesselState = new Map(); // mmsi → aggregated vessel snapshot
+// Own-ship identifiers learned from Signal K's REST snapshot (`tree.self`)
+// and via the vessel.mmsi field. Deltas matching either are dropped so the
+// operator's own MMSI never shows up as an AIS target on top of own ship.
+const ownShipIdentifiers = new Set();
 var RadarMessage;
 var ppi; // The PPI display instance
 var renderer; // The backend renderer (WebGPU or WebGL)
@@ -47,8 +51,6 @@ var headingMode = "headingUp";
 var trueHeading = 0; // in radians
 var lastLoggedHeading = null; // last heading value logged to console
 var lastHeadingTime = 0; // Timestamp of last heading update
-var headingTimeoutId = null; // Timer for heading timeout
-const HEADING_TIMEOUT_MS = 5000; // Revert to HU after 5 seconds without heading
 
 // Position display
 var lastRadarLat = null;
@@ -56,8 +58,14 @@ var lastRadarLon = null;
 var lastRadarHeading = null;
 var isStationary = false; // Set from server config
 
-// AIS display
-var showAis = null; // null = not yet received from server, then true/false
+// AIS overlay enabled state (client-only toggle, persists in localStorage)
+var showAis = (() => {
+  try {
+    return localStorage.getItem("mayaraShowAis") !== "false";
+  } catch {
+    return true;
+  }
+})();
 
 registerRadarCallback(radarLoaded);
 registerControlCallback(controlUpdate);
@@ -156,6 +164,9 @@ window.onload = async function () {
   // Create speaker lozenge (audio alerts toggle)
   createSpeakerLozenge();
 
+  // Create AIS lozenge (bottom-left, toggles vessels.* subscription)
+  createAisLozenge();
+
   // Create range lozenge
   createRangeLozenge();
 
@@ -187,13 +198,18 @@ function subscribeToHeading() {
 
   headingSocket.onopen = () => {
     console.log("Heading WebSocket connected");
+    // Also subscribe to own-ship position so the AIS overlay can place
+    // other vessels relative to us without waiting for radar spokes
+    // (which carry position metadata, but only while transmitting).
     const subscription = {
       context: "vessels.self",
       subscribe: [
-        {
-          path: "navigation.headingTrue",
-          period: 200,
-        },
+        { path: "navigation.headingTrue", period: 200 },
+        // Position drives AIS overlay placement — without this the
+        // overlay falls back to spoke metadata, which is only updated
+        // when the radar is transmitting and can disagree with the
+        // chartplotter GPS, causing visible target jumps.
+        { path: "navigation.position", period: 1000 },
       ],
     };
     headingSocket.send(JSON.stringify(subscription));
@@ -220,6 +236,23 @@ function subscribeToHeading() {
                 }
                 onHeadingReceived();
                 updateHeadingDisplay();
+              } else if (
+                value.path === "navigation.position" &&
+                value.value?.latitude != null &&
+                value.value?.longitude != null
+              ) {
+                // Routes through updatePositionBox so the on-screen
+                // ship-position display, the PPI's AIS reference point,
+                // and the lastRadarLat/Lon used by the AIS proximity
+                // filter all stay in sync regardless of radar TX state.
+                // Pass null for heading — the position delta tells us
+                // nothing about heading; preserve whatever the spoke
+                // handler (or a future heading source) has set.
+                updatePositionBox(
+                  value.value.latitude,
+                  value.value.longitude,
+                  null,
+                );
               }
             }
           }
@@ -236,8 +269,292 @@ function subscribeToHeading() {
 
   headingSocket.onclose = () => {
     console.log("Heading WebSocket closed, reconnecting in 5s...");
+    onHeadingLost();
     setTimeout(subscribeToHeading, 5000);
   };
+}
+
+// Subscribe to vessels.* on Signal K and aggregate per-MMSI updates into the
+// flat snapshot the PPI overlay expects. Works against both a real Signal K
+// server (deltas like `vessels.{mmsi}.navigation.position`) and standalone
+// mayara's `/signalk/v1/stream`, which serves `vessels.{mmsi}` with a flat
+// value from its AIS store.
+async function subscribeToAisViaSignalK() {
+  if (aisSocket) {
+    return; // already subscribed
+  }
+
+  // Re-render anything we still have in the local cache from a previous
+  // session (the cache survives unsubscribe). The operator sees vessels
+  // immediately while the prime fetch and WS deltas freshen the data.
+  if (ppi) {
+    for (const [mmsi, vessel] of aisVesselState) {
+      ppi.updateAisVessel(mmsi, vessel);
+    }
+  }
+
+  // Prime the local AIS cache from Signal K's REST snapshot before opening
+  // the WS. Without this, vessels only appear as upstream pushes deltas
+  // (~5-60s per vessel) so the operator sees the overlay fill in slowly.
+  // The prime also populates `ownShipIdentifiers` so the WS handler can
+  // filter own ship's MMSI-keyed deltas; awaiting here avoids a race where
+  // a delta arrives before the prime has learned the operator's MMSI.
+  // mayara standalone doesn't serve /v1/api/vessels/ — the fetch 404s and
+  // we fall through to the WS-only path.
+  await primeAisFromRestSnapshot();
+
+  if (!showAis) {
+    return; // operator turned AIS off while prime was in flight
+  }
+
+  const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const streamUrl = `${wsProtocol}//${window.location.host}/signalk/v1/stream?subscribe=none`;
+
+  // Hold a local reference so handlers that fire after `aisSocket` is
+  // replaced (e.g. a late `onclose` from a previous socket) can detect
+  // they're stale and skip teardown / reconnect work.
+  const socket = new WebSocket(streamUrl);
+  aisSocket = socket;
+
+  socket.onopen = () => {
+    console.log("AIS WebSocket connected");
+    // `vessels.*` triggers mayara's AIS-store full-snapshot replay; the
+    // remaining leaf paths drive Signal K's incremental delta delivery
+    // under context = "vessels.*". Sending both lets one subscription work
+    // against either backend without having to detect mode first.
+    // mayara's stream subscriber rejects unknown bare-leaf paths (e.g.
+    // "name") with CannotParseControlId, which short-circuits the AIS
+    // snapshot. Stick to paths it knows: `vessels.*` triggers the full
+    // snapshot replay (which already includes vessel names), and the
+    // `navigation.*` leaves drive incremental deltas in plugin mode.
+    const subscription = {
+      context: "vessels.*",
+      subscribe: [
+        { path: "vessels.*", period: 1000 },
+        { path: "navigation.position", period: 1000 },
+        { path: "navigation.courseOverGroundTrue", period: 1000 },
+        { path: "navigation.speedOverGround", period: 1000 },
+        { path: "navigation.headingTrue", period: 1000 },
+      ],
+    };
+    socket.send(JSON.stringify(subscription));
+  };
+
+  socket.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      if (data.updates) {
+        for (const update of data.updates) {
+          handleAisDelta(data.context, update);
+        }
+      }
+    } catch (e) {
+      // Ignore parse errors (e.g., hello message)
+    }
+  };
+
+  socket.onerror = (e) => {
+    console.log("AIS WebSocket error:", e);
+  };
+
+  socket.onclose = () => {
+    if (aisSocket !== socket) return; // stale close from a replaced socket
+    aisSocket = null;
+    if (showAis) {
+      console.log("AIS WebSocket closed, reconnecting in 5s...");
+      setTimeout(() => {
+        if (showAis) subscribeToAisViaSignalK();
+      }, 5000);
+    }
+  };
+}
+
+// Fetch the full Signal K vessel tree once and populate the local AIS state
+// before WebSocket deltas start trickling in. Fire-and-forget; failures are
+// silent (mayara standalone doesn't serve this endpoint).
+async function primeAisFromRestSnapshot() {
+  try {
+    const res = await fetch("/signalk/v1/api/vessels/");
+    if (!res.ok) return;
+    const tree = await res.json();
+    const URN = "urn:mrn:imo:mmsi:";
+    const SK_UUID = "urn:mrn:signalk:uuid:";
+    // Any urn:mrn:signalk:uuid: entry represents own ship (or another
+    // local vessel without an MMSI yet). Skip those and remember any MMSI
+    // they carry so WS deltas keyed by that MMSI are filtered too.
+    for (const [ctxKey, vessel] of Object.entries(tree)) {
+      if (
+        ctxKey.startsWith(SK_UUID) &&
+        typeof vessel === "object" &&
+        vessel !== null
+      ) {
+        ownShipIdentifiers.add(ctxKey);
+        if (vessel.mmsi) ownShipIdentifiers.add(String(vessel.mmsi));
+      }
+    }
+    for (const [ctxKey, vessel] of Object.entries(tree)) {
+      if (typeof vessel !== "object" || vessel === null) continue;
+      if (ownShipIdentifiers.has(ctxKey)) continue;
+      let mmsi = ctxKey.startsWith(URN) ? ctxKey.slice(URN.length) : ctxKey;
+      if (!/^\d+$/.test(mmsi)) continue; // only IMO-MMSI vessels
+      if (ownShipIdentifiers.has(mmsi)) continue;
+      const nav = vessel.navigation;
+      const agg = aisVesselState.get(mmsi) || { mmsi, status: "Active" };
+      if (vessel.name?.value) agg.name = vessel.name.value;
+      if (nav?.position?.value) agg.position = nav.position.value;
+      if (nav?.courseOverGroundTrue?.value != null)
+        agg.cog = nav.courseOverGroundTrue.value;
+      if (nav?.speedOverGround?.value != null)
+        agg.sog = nav.speedOverGround.value;
+      if (nav?.headingTrue?.value != null)
+        agg.heading = nav.headingTrue.value;
+      if (!agg.position) continue;
+      aisVesselState.set(mmsi, agg);
+      if (ppi) ppi.updateAisVessel(mmsi, agg);
+    }
+    console.log(
+      `AIS primed from REST snapshot: ${aisVesselState.size} vessels`
+    );
+  } catch (e) {
+    // Network error, JSON parse error, or REST endpoint absent — no-op.
+  }
+}
+
+function unsubscribeFromAisViaSignalK() {
+  if (aisSocket) {
+    aisSocket.close();
+    aisSocket = null;
+  }
+  // Intentionally keep `aisVesselState` and `ownShipIdentifiers` populated
+  // across the toggle. When the operator re-enables AIS, the previous
+  // snapshot is rendered instantly and WS deltas (plus the on-connect REST
+  // prime) refresh it — better than starting empty and waiting for
+  // upstream to push each vessel again.
+  if (ppi) {
+    ppi.clearAisVessels();
+  }
+}
+
+// Apply a single Signal K delta update to the per-MMSI aggregate, then push
+// the merged snapshot to the PPI. Handles two delta shapes:
+//   - Real Signal K: context = `vessels.{mmsi}`, values[].path = leaf path
+//     (e.g. "navigation.position"). Aggregator promotes leaves to flat fields.
+//   - Mayara standalone: context = "vessels.*" wildcard, values[].path =
+//     `vessels.{mmsi}`, value = whole flat snapshot. Merged directly.
+function handleAisDelta(context, update) {
+  if (!update.values) return;
+
+  for (const item of update.values) {
+    let mmsi = null;
+    let leafPath = null;
+
+    if (item.path && item.path.startsWith("vessels.")) {
+      // Mayara-style: path = "vessels.{mmsi}", value = flat snapshot
+      mmsi = item.path.slice("vessels.".length);
+    } else if (context && context.startsWith("vessels.")) {
+      // Signal K-style: context = "vessels.{mmsi}", path = leaf
+      mmsi = context.slice("vessels.".length);
+      leafPath = item.path;
+    } else {
+      continue;
+    }
+
+    if (!mmsi || mmsi === "self" || mmsi === "*") continue;
+
+    // Strip the Signal K URN prefix so the bare MMSI shows in labels and acts
+    // as a stable map key across delta shapes.
+    const URN_PREFIX = "urn:mrn:imo:mmsi:";
+    if (mmsi.startsWith(URN_PREFIX)) {
+      mmsi = mmsi.slice(URN_PREFIX.length);
+    }
+
+    if (ownShipIdentifiers.has(mmsi)) continue;
+
+    const agg = aisVesselState.get(mmsi) || { mmsi, status: "Active" };
+
+    if (leafPath === null) {
+      // Mayara style: value is the full flat object
+      if (typeof item.value !== "object" || item.value === null) continue;
+      Object.assign(agg, item.value);
+    } else {
+      // Signal K style: promote leaf to flat field
+      switch (leafPath) {
+        case "navigation.position":
+          agg.position = item.value;
+          break;
+        case "navigation.courseOverGroundTrue":
+          agg.cog = item.value;
+          break;
+        case "navigation.speedOverGround":
+          agg.sog = item.value;
+          break;
+        case "navigation.headingTrue":
+          agg.heading = item.value;
+          break;
+        case "name":
+          agg.name = item.value;
+          break;
+        default:
+          continue; // unknown leaf — don't push a redundant update
+      }
+    }
+
+    // Position-proximity own-ship filter: if a vessel reports a position
+    // within ~75m of our last-known own-ship location, treat it as us and
+    // suppress. Picks up the operator's own AIS transmission that other
+    // receivers on the network echo back as a separate MMSI-keyed vessel.
+    // The threshold is generous enough to cover the gap between AIS
+    // (antenna) and GPS (chartplotter) positions on the same boat.
+    if (
+      agg.position &&
+      lastRadarLat != null &&
+      lastRadarLon != null &&
+      isSamePosition(agg.position, lastRadarLat, lastRadarLon)
+    ) {
+      ownShipIdentifiers.add(mmsi);
+      // If this MMSI was already on the PPI from earlier deltas
+      // (before it moved into the own-ship proximity bubble), evict it
+      // now — otherwise the stale target sticks until the operator
+      // moves and `evictOwnShipFromAis` runs.
+      if (aisVesselState.delete(mmsi) && ppi) {
+        ppi.removeAisVessel(mmsi);
+      }
+      continue;
+    }
+
+    aisVesselState.set(mmsi, agg);
+    if (ppi) {
+      ppi.updateAisVessel(mmsi, agg);
+    }
+  }
+}
+
+// Great-circle distance under ~75m. Approximates with equirectangular
+// projection — fine at this scale and avoids trig per delta.
+function isSamePosition(pos, refLat, refLon) {
+  const dLatM = (pos.latitude - refLat) * 111320;
+  const dLonM =
+    (pos.longitude - refLon) *
+    111320 *
+    Math.cos((refLat * Math.PI) / 180);
+  return dLatM * dLatM + dLonM * dLonM < 75 * 75;
+}
+
+// Remove any AIS vessel whose last-known position is close enough to be us.
+// Used after own-ship position becomes known to retroactively prune vessels
+// that were added before the proximity filter could run.
+function evictOwnShipFromAis() {
+  if (lastRadarLat == null || lastRadarLon == null) return;
+  for (const [mmsi, vessel] of aisVesselState) {
+    if (
+      vessel.position &&
+      isSamePosition(vessel.position, lastRadarLat, lastRadarLon)
+    ) {
+      ownShipIdentifiers.add(mmsi);
+      aisVesselState.delete(mmsi);
+      if (ppi) ppi.removeAisVessel(mmsi);
+    }
+  }
 }
 
 // Update PPI with current heading
@@ -248,7 +565,19 @@ function updateHeadingDisplay(mode) {
       return ppi.setHeadingMode(mode);
     }
   }
+  // Refresh the position box's HdgT field so it tracks the live
+  // Signal K heading even when the position itself isn't changing.
+  refreshPositionBoxHeading();
   return mode || headingMode;
+}
+
+function refreshPositionBoxHeading() {
+  const box = document.getElementById("myr_position_box");
+  if (!box) return;
+  const hdgEl = box.querySelector(".myr_pos_heading");
+  if (hdgEl && trueHeading != null && !Number.isNaN(trueHeading)) {
+    hdgEl.textContent = `HdgT: ${((trueHeading * 180) / Math.PI).toFixed(1)}°`;
+  }
 }
 
 // Coordinate format: 0 = DMS (degrees/minutes/seconds), 1 = DDM (degrees/decimal minutes), 2 = DD (decimal degrees)
@@ -268,7 +597,7 @@ function createPositionBox() {
     <div class="myr_pos_label">Ship Pos</div>
     <div class="myr_pos_coords">--°--'--" N</div>
     <div class="myr_pos_coords">--°--'--" E</div>
-    <div class="myr_pos_heading">Hdg: ---°</div>
+    <div class="myr_pos_heading">HdgT: ---°</div>
   `;
   box.addEventListener("click", cycleCoordFormat);
   container.appendChild(box);
@@ -338,6 +667,10 @@ function updatePositionBox(lat, lon, heading) {
   if (heading !== null && heading !== undefined) {
     lastRadarHeading = heading;
   }
+  // AIS deltas that arrived before own-ship position was known couldn't be
+  // checked against the proximity filter. Re-check them now and evict any
+  // that turn out to be us.
+  evictOwnShipFromAis();
 
   // Update PPI with own-ship position for AIS vessel relative positioning
   if (ppi && lat !== null && lon !== null) {
@@ -357,8 +690,12 @@ function updatePositionBox(lat, lon, heading) {
     coords[1].textContent = formatCoord(lon, false);
   }
 
-  if (hdgEl && lastRadarHeading !== null) {
-    hdgEl.textContent = `Hdg: ${lastRadarHeading.toFixed(1)}°`;
+  // Use the Signal K true heading (navigation.headingTrue) rather than the
+  // spoke-derived value. The radar's inline bearing field encodes heading
+  // in brand-specific units and is unreliable as a navigation display;
+  // Signal K's stream is the authoritative source.
+  if (hdgEl && trueHeading != null && !Number.isNaN(trueHeading)) {
+    hdgEl.textContent = `HdgT: ${((trueHeading * 180) / Math.PI).toFixed(1)}°`;
   }
 
   box.style.display = "block";
@@ -400,31 +737,25 @@ function createHeadingModeToggle() {
   container.appendChild(toggleBtn);
 }
 
-// Called when heading data is received
+// Called when heading data is received. Mayara's heading stream is
+// event-driven (initial snapshot + broadcast on change), so silence means
+// "heading is stable" — not "heading is stale". Don't disable the toggle
+// on silence; let the socket-close path handle real loss-of-source.
 function onHeadingReceived() {
   lastHeadingTime = Date.now();
 
-  // Enable the heading toggle button
   const toggleBtn = document.getElementById("myr_heading_toggle");
   if (toggleBtn) {
     toggleBtn.classList.remove("myr_heading_disabled");
     toggleBtn.title = "Click to toggle: Heading Up / North Up";
   }
-
-  // Clear existing timeout and set a new one
-  if (headingTimeoutId) {
-    clearTimeout(headingTimeoutId);
-  }
-  headingTimeoutId = setTimeout(onHeadingTimeout, HEADING_TIMEOUT_MS);
 }
 
-// Called when heading data times out (not received for 5 seconds)
-function onHeadingTimeout() {
-  headingTimeoutId = null;
-  console.log("Heading data lost");
+// Called when the heading WebSocket closes — true loss of source.
+function onHeadingLost() {
+  console.log("Heading source lost");
   lastLoggedHeading = null;
 
-  // Revert to heading-up mode
   if (headingMode !== "headingUp") {
     headingMode = "headingUp";
     updateHeadingDisplay(headingMode);
@@ -433,7 +764,6 @@ function onHeadingTimeout() {
     }
   }
 
-  // Disable the toggle button
   const toggleBtn = document.getElementById("myr_heading_toggle");
   if (toggleBtn) {
     toggleBtn.classList.add("myr_heading_disabled");
@@ -548,6 +878,63 @@ function updateSpeakerLozenge() {
   } else {
     lozenge.classList.add("myr_speaker_off");
   }
+}
+
+// Create the AIS overlay toggle lozenge (bottom-left, mirrors the speaker
+// lozenge in the top-left). Click toggles vessels.* subscription on/off.
+function createAisLozenge() {
+  const container = document.querySelector(".myr_ppi");
+  if (!container) return;
+
+  const lozenge = document.createElement("div");
+  lozenge.id = "myr_ais_lozenge";
+  lozenge.className =
+    "myr_ais_lozenge " + (showAis ? "myr_ais_on" : "myr_ais_off");
+  lozenge.title = "Click to toggle AIS overlay";
+
+  const aisBtn = document.createElement("button");
+  aisBtn.className = "myr_ais_lozenge_button";
+  // Two-vessel pictogram (filled triangle + smaller outline triangle)
+  aisBtn.innerHTML = `<svg class="myr_ais_icon" viewBox="0 0 24 24">
+    <path d="M8 4 L13 17 L8 14 L3 17 Z"/>
+    <path class="myr_ais_outline" d="M17 9 L20 17 L17 15 L14 17 Z" fill="none"/>
+  </svg>`;
+  aisBtn.addEventListener("click", toggleAisOverlay);
+
+  lozenge.appendChild(aisBtn);
+  container.appendChild(lozenge);
+
+  if (showAis) {
+    subscribeToAisViaSignalK();
+  }
+  if (ppi) {
+    ppi.setShowAis(showAis);
+  }
+}
+
+function toggleAisOverlay() {
+  showAis = !showAis;
+  try {
+    localStorage.setItem("mayaraShowAis", String(showAis));
+  } catch {
+    // ignore quota errors
+  }
+  if (showAis) {
+    subscribeToAisViaSignalK();
+  } else {
+    unsubscribeFromAisViaSignalK();
+  }
+  if (ppi) {
+    ppi.setShowAis(showAis);
+  }
+  updateAisLozenge();
+}
+
+function updateAisLozenge() {
+  const lozenge = document.getElementById("myr_ais_lozenge");
+  if (!lozenge) return;
+  lozenge.classList.remove("myr_ais_on", "myr_ais_off");
+  lozenge.classList.add(showAis ? "myr_ais_on" : "myr_ais_off");
 }
 
 // Play an audio alert
@@ -888,23 +1275,6 @@ function controlUpdate(controlId, value) {
     if (index >= 0 && index < 4 && ppi) {
       ppi.setNoTransmitSector(index, parseNoTransmitSector(value));
     }
-  } else if (controlId === "showAis") {
-    const newShowAis = value.value === 1;
-    // Subscribe or unsubscribe based on state change
-    // showAis === null means first time receiving control from server
-    if (newShowAis && (showAis === null || !showAis)) {
-      subscribeToAis();
-    } else if (!newShowAis && (showAis === null || showAis)) {
-      unsubscribeFromAis();
-      // Clear all AIS vessels from display when turning off
-      if (ppi) {
-        ppi.clearAisVessels();
-      }
-    }
-    showAis = newShowAis;
-    if (ppi) {
-      ppi.setShowAis(showAis);
-    }
   } else {
     const control = getControl(controlId);
     if (control?.name === "Range") {
@@ -949,22 +1319,8 @@ function handleStreamMessage(path, value) {
     }
   }
 
-  // Handle AIS vessel updates: vessels.{mmsi}
-  if (path.startsWith("vessels.") && !path.includes("radars")) {
-    const parts = path.split(".");
-    if (parts.length >= 2) {
-      const mmsi = parts[1];
-      if (ppi) {
-        if (value === null || value.status === "Lost") {
-          // Vessel lost
-          ppi.removeAisVessel(mmsi);
-        } else {
-          // Vessel update
-          ppi.updateAisVessel(mmsi, value);
-        }
-      }
-    }
-  }
+  // AIS vessels are handled by subscribeToAisViaSignalK on a dedicated
+  // Signal K WebSocket, not via the radar state stream.
 }
 
 // Parse guard zone control value into drawing parameters
