@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **gui:** subscribe AIS overlay to Signal K vessels.* directly (#211) ([PR #211](https://github.com/MarineYachtRadar/mayara-server/pull/211))
+
 ### Changed
 
 - **furuno:** correct DRS to DRS2D in supported radars list (#204) ([PR #204](https://github.com/MarineYachtRadar/mayara-server/pull/204))
