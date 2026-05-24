@@ -1440,6 +1440,23 @@ impl CommonRadar {
                     } else {
                         self.info.controls.set_refresh(&cv.id);
                     }
+                } else {
+                    // Without this branch a PUT against a radar whose brand
+                    // module has not yet wired up its command channel
+                    // silently disappears with HTTP 200, which has cost
+                    // contributors many hours of misdiagnosis (issue #228).
+                    log::warn!(
+                        "{}: control PUT {:?}={:?} dropped — command channel \
+                         not initialised yet for this radar",
+                        self.key,
+                        cv.id,
+                        cv.value
+                    );
+                    return self
+                        .info
+                        .controls
+                        .send_error_to_client(reply_tx, &cv, &RadarError::NotConnected)
+                        .await;
                 }
             }
         }

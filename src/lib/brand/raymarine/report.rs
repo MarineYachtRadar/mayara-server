@@ -13,6 +13,7 @@ use crate::radar::range::Ranges;
 use crate::radar::{BYTE_LOOKUP_LENGTH, CommonRadar, Legend, RadarError, RadarInfo, SharedRadars};
 
 // use super::command::Command;
+use super::BaseModel;
 use super::command::Command;
 
 mod quantum;
@@ -118,6 +119,7 @@ impl RaymarineReportReceiver {
         args: &Cli,
         info: RadarInfo, // Quick access to our own RadarInfo
         radars: SharedRadars,
+        base_model: BaseModel,
     ) -> RaymarineReportReceiver {
         let key = info.key();
 
@@ -127,7 +129,18 @@ impl RaymarineReportReceiver {
             key,
             args
         );
-        let command_sender = None; // Only known after we receive the model info
+
+        // Quantum wired radars (and some RD variants) won't send the
+        // 0x280001 info-report until they have received a host keep-alive
+        // first — see issue #228. Create the command_sender now with the
+        // base model the locator already determined, so the heartbeat loop
+        // starts priming the radar immediately. process_info_report() will
+        // not overwrite this once the radar replies.
+        let command_sender = if !replay {
+            Some(Command::new(info.clone(), base_model))
+        } else {
+            None
+        };
 
         let control_update_rx = info.control_update_subscribe();
         let blob_tx = radars.get_blob_tx();
