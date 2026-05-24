@@ -2335,11 +2335,6 @@ impl ControlBuilder {
         self
     }
 
-    pub(crate) fn set_value(mut self, value: f64) -> Self {
-        self.control.value = Some(value);
-        self
-    }
-
     pub(crate) fn build(self, controls: &mut HashMap<ControlId, Control>) {
         controls.insert(self.control.item.control_id, self.control);
     }
