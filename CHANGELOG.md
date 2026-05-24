@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **gui:** subscribe AIS overlay to Signal K vessels.* directly (#211) ([PR #211](https://github.com/MarineYachtRadar/mayara-server/pull/211))
+- **signalk:** support bearer-token auth for upstream Signal K (#227) ([PR #227](https://github.com/MarineYachtRadar/mayara-server/pull/227))
 
 ### Changed
 
