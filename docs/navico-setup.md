@@ -71,3 +71,6 @@ Without heading data, HALO Doppler mode will not activate.
 - Ensure a heading source is connected (Signal K server or NMEA 0183).
 - Check that the radar firmware supports Doppler (most HALO firmware versions do).
 - Verify heading data is arriving: look for heading values in the Mayara log output with `-v`.
+
+**Capturing traffic:**
+- For packet capture instructions used in bug reports, see [Capturing Radar Traffic](./capturing-traffic.md).

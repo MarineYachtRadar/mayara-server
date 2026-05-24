@@ -52,3 +52,6 @@ RD-series radars are wired Ethernet only.
 **Quantum WiFi unreliable:**
 - WiFi performance depends on signal strength and interference. For best results, use a wired connection when possible.
 - If spokes are missing, move the Mayara machine closer to the radar or switch to a wired connection.
+
+**Capturing traffic:**
+- For packet capture instructions used in bug reports, see [Capturing Radar Traffic](./capturing-traffic.md).

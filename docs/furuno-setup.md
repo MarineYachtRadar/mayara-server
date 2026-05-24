@@ -81,3 +81,6 @@ Unrecognized part codes still work with default capabilities. Please report the 
 
 **FAR shows "Unknown" model:**
 The part code is not in the lookup table. The radar will work with default capabilities. Report the part code from the log output so it can be added.
+
+**Capturing traffic:**
+- For packet capture instructions used in bug reports, see [Capturing Radar Traffic](./capturing-traffic.md).

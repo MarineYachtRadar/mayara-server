@@ -169,4 +169,5 @@ Integration tests in `tests/replay_*.rs` replay brand-specific pcap fixtures and
 ## Further Reading
 
 - [Adding a New Radar Brand](new_radar_brand.md) — full guide with checklist
+- [Capturing Radar Traffic](../capturing-traffic.md) — pcap capture for bug reports and new-brand fixtures
 - [ARPA Target Tracking](arpa.md) — IMM filtering and blob detection

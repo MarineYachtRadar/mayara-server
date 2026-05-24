@@ -47,3 +47,6 @@ still work without it. Please report to us whether it does!
 
 **Wrong model detected:**
 - Garmin model detection relies on the capability bitmap broadcast by the radar. If the detected model name seems wrong, please report it along with the log output from `mayara-server -vv`.
+
+**Capturing traffic:**
+- For packet capture instructions used in bug reports, see [Capturing Radar Traffic](./capturing-traffic.md).

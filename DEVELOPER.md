@@ -81,6 +81,8 @@ cargo test
 
 Integration tests replay captured pcap files through the full radar pipeline. Unit tests cover protocol parsing, target tracking, and control logic.
 
+To capture new pcap fixtures, see [docs/capturing-traffic.md](docs/capturing-traffic.md).
+
 ## Target tracking
 
 Mayara includes software-based ARPA (Automatic Radar Plotting Aid) target tracking. When enabled with `--targets arpa`, the server detects and tracks radar returns, computing course, speed, CPA, and TCPA.
