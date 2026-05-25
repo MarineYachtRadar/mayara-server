@@ -81,10 +81,27 @@ Command Line Options
 | `--nmea0183`                      | Use NMEA 0183 instead of Signal K for navigation                            |
 | `--accept-invalid-certs`          | Accept self-signed TLS certificates when connecting to Signal K via         |
 |                                   | HTTPS/WSS. Required for boat-LAN setups that use self-signed certs.         |
+| `--signalk-token <TOKEN>`         | Signal K bearer token for authenticating to a `ws:` or `wss:` upstream.     |
+|                                   | Sent as `?token=...` on the WebSocket and as `Authorization: Bearer ...`    |
+|                                   | on the REST discovery and AIS-store seeding probes. Has no effect on        |
+|                                   | `tcp:` or `udp:` transports.                                                |
+| `--signalk-token-file <PATH>`     | Read the bearer token from a file (single line, trailing whitespace         |
+|                                   | trimmed). Use this instead of `--signalk-token` to keep the token out       |
+|                                   | of the process argv.                                                        |
 
 **Note on authentication:** Authenticated Signal K servers can only be reached
-via `ws:` or `wss:`. The plain `tcp:` transport is anonymous-only. Authentication
-support is tracked as follow-up work.
+via `ws:` or `wss:`. The plain `tcp:` transport is anonymous-only. Pass the
+token via `--signalk-token`, `--signalk-token-file`, or the
+`MAYARA_SIGNALK_TOKEN` environment variable (in that order of precedence).
+Embedded control characters (e.g. `\r`/`\n` in a token read from a file) are
+rejected at startup to prevent HTTP header injection.
+
+The token must grant at least `readonly` on `vessels.*` so Mayara can seed
+its in-memory AIS store from the upstream `/signalk/v1/api/vessels/` snapshot.
+The standard way to obtain such a token is to POST an access request to
+`POST /signalk/v1/access/requests` with your `clientId` and have the Signal K
+administrator approve it under **Security → Access Requests**; the issued
+token then survives Signal K restarts.
 
 **Note on TLS SNI:** `wss:ip:port` and mDNS-discovered HTTPS Signal K servers
 use the server's IP address (not hostname) during the TLS handshake. Some
