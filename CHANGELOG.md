@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **gui:** keep PPI sized to the visible viewport on mobile (#249) ([PR #249](https://github.com/MarineYachtRadar/mayara-server/pull/249))
+- **gui:** exponential backoff for heading and AIS reconnects (#254) ([PR #254](https://github.com/MarineYachtRadar/mayara-server/pull/254))
 
 ## [3.5.2] - 2026-05-25
 
