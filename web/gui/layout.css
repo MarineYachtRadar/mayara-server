@@ -614,6 +614,23 @@ div.myr_ppi {
   color: rgb(100, 200, 180);
 }
 
+.myr_renderer_badge {
+  font-size: 10px;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  text-transform: lowercase;
+  color: #88a;
+  border: 1px solid #446;
+  border-radius: 3px;
+  padding: 1px 6px;
+  margin-left: 8px;
+  margin-right: auto; /* push close button to the right */
+  letter-spacing: 0.5px;
+}
+
+.myr_renderer_badge:empty {
+  display: none;
+}
+
 .myr_close_button {
   width: 32px;
   height: 32px;

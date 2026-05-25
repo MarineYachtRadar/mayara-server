@@ -104,6 +104,11 @@ window.onload = async function () {
 
   console.log(`Using ${renderMethod} renderer`);
 
+  const badge = document.getElementById("myr_renderer_badge");
+  if (badge) {
+    badge.textContent = renderMethod;
+  }
+
   // Load protobuf definition - must complete before websocket can process messages
   const protobufPromise = new Promise((resolve, reject) => {
     protobuf.load("./proto/RadarMessage.proto", function (err, root) {
