@@ -35,6 +35,20 @@ import { PPI } from "./ppi.js";
 var webSocket;
 var headingSocket;
 var aisSocket;
+
+// Exponential reconnect backoff for the heading + AIS WebSockets. Caps at
+// 30s so the console doesn't log a reconnect attempt every five seconds
+// while the server is down (we used to log >300 attempts/30min outage).
+// The state stream in control.js has its own equivalent counter — keep
+// them independent so a working AIS socket doesn't reset the others.
+const RECONNECT_BASE_MS = 1000;
+const RECONNECT_MAX_MS = 30000;
+let headingReconnectAttempts = 0;
+let aisReconnectAttempts = 0;
+
+function reconnectDelay(attempts) {
+  return Math.min(RECONNECT_BASE_MS * Math.pow(2, attempts), RECONNECT_MAX_MS);
+}
 const aisVesselState = new Map(); // mmsi → aggregated vessel snapshot
 // Own-ship identifiers learned from Signal K's REST snapshot (`tree.self`)
 // and via the vessel.mmsi field. Deltas matching either are dropped so the
@@ -241,6 +255,7 @@ function subscribeToHeading() {
 
   headingSocket.onopen = () => {
     console.log("Heading WebSocket connected");
+    headingReconnectAttempts = 0;
     // Also subscribe to own-ship position so the AIS overlay can place
     // other vessels relative to us without waiting for radar spokes
     // (which carry position metadata, but only while transmitting).
@@ -311,9 +326,13 @@ function subscribeToHeading() {
   };
 
   headingSocket.onclose = () => {
-    console.log("Heading WebSocket closed, reconnecting in 5s...");
     onHeadingLost();
-    setTimeout(subscribeToHeading, 5000);
+    const delay = reconnectDelay(headingReconnectAttempts);
+    headingReconnectAttempts += 1;
+    console.log(
+      `Heading WebSocket closed, reconnecting in ${delay}ms (attempt ${headingReconnectAttempts})`,
+    );
+    setTimeout(subscribeToHeading, delay);
   };
 }
 
@@ -361,6 +380,7 @@ async function subscribeToAisViaSignalK() {
 
   socket.onopen = () => {
     console.log("AIS WebSocket connected");
+    aisReconnectAttempts = 0;
     // `vessels.*` triggers mayara's AIS-store full-snapshot replay; the
     // remaining leaf paths drive Signal K's incremental delta delivery
     // under context = "vessels.*". Sending both lets one subscription work
@@ -404,10 +424,14 @@ async function subscribeToAisViaSignalK() {
     if (aisSocket !== socket) return; // stale close from a replaced socket
     aisSocket = null;
     if (showAis) {
-      console.log("AIS WebSocket closed, reconnecting in 5s...");
+      const delay = reconnectDelay(aisReconnectAttempts);
+      aisReconnectAttempts += 1;
+      console.log(
+        `AIS WebSocket closed, reconnecting in ${delay}ms (attempt ${aisReconnectAttempts})`,
+      );
       setTimeout(() => {
         if (showAis) subscribeToAisViaSignalK();
-      }, 5000);
+      }, delay);
     }
   };
 }
@@ -468,6 +492,7 @@ function unsubscribeFromAisViaSignalK() {
     aisSocket.close();
     aisSocket = null;
   }
+  aisReconnectAttempts = 0;
   // Intentionally keep `aisVesselState` and `ownShipIdentifiers` populated
   // across the toggle. When the operator re-enables AIS, the previous
   // snapshot is rendered instantly and WS deltas (plus the on-connect REST
