@@ -1645,8 +1645,8 @@ impl FurunoReportReceiver {
     /// The DRS4W is special: every spoke carries 430 samples on the wire, but
     /// only the first N of those cover the configured display range. N varies
     /// per wire_index because the radar changes pulse width with range.
-    /// Callers pass `src_effective = effective_samples(wi)` for DRS4W and
-    /// `src_effective = src.len()` otherwise.
+    /// Callers pass `src_effective` as the number of source samples that are
+    /// physically meaningful for the active model and range.
     fn stretch_spoke(src: &[u8], src_effective: usize, dst_len: usize) -> Vec<u8> {
         if src.is_empty() || dst_len == 0 {
             return vec![0; dst_len];
