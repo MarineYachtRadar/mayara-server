@@ -454,9 +454,14 @@ impl ConnectionType {
 use crate::signalk::WsStream;
 
 enum Stream {
-    Tcp(TcpStream),
+    /// Plain TCP. For Signal K connections `peer` carries the upstream we
+    /// resolved so the cooldown logic can mark the server silent on close.
+    /// For non-Signal K (e.g. raw NMEA 0183) it is `None`.
+    Tcp(TcpStream, Option<SocketAddr>),
     Udp(UdpSocket),
-    WebSocket(WsStream, String),
+    /// Signal K WebSocket. `peer` carries the discovery-time SocketAddr; the
+    /// url string is the WS endpoint URL for logging.
+    WebSocket(WsStream, String, SocketAddr),
 }
 
 pub(crate) struct NavigationData {
@@ -464,6 +469,21 @@ pub(crate) struct NavigationData {
     nmea0183_mode: bool,
     what: &'static str,
     nmea_parser: Option<NmeaParser>,
+}
+
+/// Set true the first time the current Signal K receive loop sees a real
+/// delta. Reset to false in `run` before each receive loop starts; read
+/// (and reset) after the loop returns so an empty connection can be marked
+/// as a "silent" server and skipped on subsequent reconnects. Process-wide
+/// `AtomicBool` because the only writers are the receive loops on a single
+/// `NavigationData::run` task and the only reader is its caller.
+static SIGNALK_DELIVERED_DATA: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Mark the current Signal K receive loop as having delivered at least one
+/// real delta. Idempotent; safe to call on every message.
+fn mark_signalk_delivered() {
+    SIGNALK_DELIVERED_DATA.store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
 impl NavigationData {
@@ -482,6 +502,31 @@ impl NavigationData {
                 what: "Signal K",
                 nmea_parser: None,
             },
+        }
+    }
+
+    /// Called after a Signal K receive loop returns. If a SocketAddr is
+    /// present (Signal K paths only) and the loop never delivered any
+    /// deltas before closing, mark the server as silent so the next
+    /// discovery cycle skips it for `SILENT_SERVER_COOLDOWN`. Conversely,
+    /// a productive connection clears any prior silent marker so a
+    /// previously-bad server that's been fixed is re-trusted right away.
+    fn update_signalk_silent_state(
+        signalk_peer: Option<SocketAddr>,
+        result: &Result<(), RadarError>,
+    ) {
+        let Some(addr) = signalk_peer else {
+            return;
+        };
+        // Shutdowns don't reflect server health — leave the cooldown alone.
+        if matches!(result, Err(RadarError::Shutdown)) {
+            return;
+        }
+        let delivered = SIGNALK_DELIVERED_DATA.swap(false, std::sync::atomic::Ordering::SeqCst);
+        if delivered {
+            crate::signalk::clear_signalk_server_silent(addr);
+        } else {
+            crate::signalk::mark_signalk_server_silent(addr);
         }
     }
 
@@ -542,7 +587,7 @@ impl NavigationData {
                 .find_service(&subsys, &mut rx_ip_change, &navigation_address)
                 .await
             {
-                Ok(Stream::Tcp(stream)) => {
+                Ok(Stream::Tcp(stream, signalk_peer)) => {
                     log::info!(
                         "Listening to {} data via TCP from {}",
                         self.what,
@@ -551,7 +596,9 @@ impl NavigationData {
                             .map(|a| a.to_string())
                             .unwrap_or_else(|_| "<unknown>".to_string())
                     );
-                    match self.receive_loop(stream, &subsys).await {
+                    let result = self.receive_loop(stream, &subsys).await;
+                    Self::update_signalk_silent_state(signalk_peer, &result);
+                    match result {
                         Err(RadarError::Shutdown) => {
                             log::debug!("{} receive_loop shutdown", self.what);
                             return Ok(());
@@ -580,9 +627,11 @@ impl NavigationData {
                         }
                     }
                 }
-                Ok(Stream::WebSocket(ws, url)) => {
+                Ok(Stream::WebSocket(ws, url, signalk_peer)) => {
                     log::info!("Listening to {} data via WebSocket from {}", self.what, url);
-                    match self.receive_ws_loop(ws, &subsys).await {
+                    let result = self.receive_ws_loop(ws, &subsys).await;
+                    Self::update_signalk_silent_state(Some(signalk_peer), &result);
+                    match result {
                         Err(RadarError::Shutdown) => {
                             log::debug!("{} receive_ws_loop shutdown", self.what);
                             return Ok(());
@@ -713,7 +762,7 @@ impl NavigationData {
 
                     match connect_first(known_addresses.clone()).await {
                         Ok(stream) => {
-                            r = Ok(Stream::Tcp(stream));
+                            r = Ok(Stream::Tcp(stream, None));
                             break;
                         }
                         Err(_e) => {}
@@ -747,7 +796,16 @@ impl NavigationData {
                 stream = connect_to_socket(addr) => {
                     match stream {
                         Ok(stream) => {
-                            return Ok(Stream::Tcp(stream));
+                            // `find_tcp_service` covers both Signal K's
+                            // explicit `tcp://host:port` and explicit
+                            // NMEA0183-over-TCP. NMEA0183 lines don't run
+                            // through `signalk_actions_for_line` so they
+                            // never call `mark_signalk_delivered` — passing
+                            // `Some(addr)` there would falsely mark a busy
+                            // NMEA server as silent. Only Signal K mode
+                            // participates in silent-server tracking.
+                            let peer = if self.nmea0183_mode { None } else { Some(addr) };
+                            return Ok(Stream::Tcp(stream, peer));
                         }
                         Err(e) => {
                             log::trace!("Failed to connect {} to {addr}: {e}", self.what);
@@ -814,6 +872,8 @@ impl NavigationData {
                 .map(|a| a.to_string())
                 .unwrap_or_else(|_| "<unknown>".to_string())
         );
+        // Each new connection starts as "no deltas seen yet".
+        SIGNALK_DELIVERED_DATA.store(false, std::sync::atomic::Ordering::SeqCst);
         let (read_half, mut write_half) = stream.split();
         let mut lines = BufReader::new(read_half).lines();
 
@@ -864,6 +924,12 @@ impl NavigationData {
             return vec![SignalKSubscription::OwnShip];
         }
 
+        // Any non-hello line is a real delta. Marking delivered_data here
+        // means a connection that produced even one update is treated as
+        // healthy; only servers that go silent after handshake get the
+        // silent-server cooldown on close.
+        mark_signalk_delivered();
+
         let had_own_ship = get_own_ship_context().is_some();
 
         if let Err(e) = parse_signalk(line) {
@@ -898,6 +964,8 @@ impl NavigationData {
     ) -> Result<(), RadarError> {
         log::info!("{} WebSocket receive_loop started", self.what);
 
+        // Each new connection starts as "no deltas seen yet".
+        SIGNALK_DELIVERED_DATA.store(false, std::sync::atomic::Ordering::SeqCst);
         let (mut write, mut read) = ws.split();
 
         loop {
@@ -1169,7 +1237,7 @@ where
 fn signalk_connection_to_stream(conn: crate::signalk::Connection) -> Stream {
     use crate::signalk::Connection;
     match conn {
-        Connection::Tcp(s) => Stream::Tcp(s),
-        Connection::WebSocket(ws, url) => Stream::WebSocket(ws, url),
+        Connection::Tcp(s, addr) => Stream::Tcp(s, Some(addr)),
+        Connection::WebSocket(ws, url, addr) => Stream::WebSocket(ws, url, addr),
     }
 }
