@@ -19,9 +19,10 @@
 
 use mdns_sd::{ServiceDaemon, ServiceEvent};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::broadcast::Receiver;
@@ -29,6 +30,61 @@ use tokio::time::sleep;
 use tokio_graceful_shutdown::SubsystemHandle;
 
 use crate::radar::RadarError;
+
+/// How long to skip a Signal K server after it accepted a connection but
+/// produced no deltas before closing. Five minutes is short enough that an
+/// admin restarting the server with corrected auth gets picked up quickly,
+/// long enough that mayara doesn't thrash reconnecting to a misconfigured
+/// server every few seconds.
+const SILENT_SERVER_COOLDOWN: Duration = Duration::from_secs(300);
+
+fn silent_servers() -> &'static Mutex<HashMap<SocketAddr, Instant>> {
+    static MAP: OnceLock<Mutex<HashMap<SocketAddr, Instant>>> = OnceLock::new();
+    MAP.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Remember that the Signal K server at `addr` accepted a connection but did
+/// not send any deltas before closing. Cooldown elapses after
+/// `SILENT_SERVER_COOLDOWN`. Logs at info level so the operator sees which
+/// servers are being skipped — most often this means the server requires
+/// authentication and mayara was started without `--signalk-token`.
+pub(crate) fn mark_signalk_server_silent(addr: SocketAddr) {
+    if let Ok(mut map) = silent_servers().lock() {
+        map.insert(addr, Instant::now());
+    }
+    log::info!(
+        "Signal K server at {} closed without sending any deltas — skipping for {:?}. \
+         If this server requires authentication, pass `--signalk-token` or \
+         `--signalk-token-file`.",
+        addr,
+        SILENT_SERVER_COOLDOWN
+    );
+}
+
+/// Forget any prior "silent" marker for `addr`. Called when a connection to
+/// the server starts delivering data, so a previously-bad server that's been
+/// fixed is re-trusted immediately.
+pub(crate) fn clear_signalk_server_silent(addr: SocketAddr) {
+    if let Ok(mut map) = silent_servers().lock() {
+        map.remove(&addr);
+    }
+}
+
+/// Returns true if `addr` is still within the silent-disconnect cooldown.
+/// Expired entries are pruned on lookup.
+fn is_signalk_server_silent(addr: SocketAddr) -> bool {
+    let Ok(mut map) = silent_servers().lock() else {
+        return false;
+    };
+    match map.get(&addr) {
+        Some(&t) if t.elapsed() < SILENT_SERVER_COOLDOWN => true,
+        Some(_) => {
+            map.remove(&addr);
+            false
+        }
+        None => false,
+    }
+}
 
 /// mDNS service names used to locate Signal K servers on the local network.
 /// Once found, we perform Discovery and Connection Establishment per the
@@ -49,10 +105,12 @@ const EXPLICIT_RETRY_DELAY: Duration = Duration::from_secs(5);
 pub(crate) type WsStream =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>;
 
-/// Result of a successful Signal K connection.
+/// Result of a successful Signal K connection. The `SocketAddr` is the
+/// concrete upstream we resolved and connected to — surfaced so the receive
+/// loop can mark the server silent if it never delivers any deltas.
 pub(crate) enum Connection {
-    Tcp(TcpStream),
-    WebSocket(WsStream, String),
+    Tcp(TcpStream, SocketAddr),
+    WebSocket(WsStream, String, SocketAddr),
 }
 
 /// Last-resolved upstream Signal K REST base URL (e.g.
@@ -202,6 +260,14 @@ pub(crate) async fn find_mdns_service(
         }
 
         for (addr, transport) in &addresses {
+            if is_signalk_server_silent(*addr) {
+                log::debug!(
+                    "Signal K {:?} from {} skipped (within silent-server cooldown)",
+                    transport,
+                    addr
+                );
+                continue;
+            }
             match connect_transport(*addr, *transport, accept_invalid_certs).await {
                 Ok(conn) => return Ok(conn),
                 Err(e) => {
@@ -259,7 +325,7 @@ async fn connect_transport(
         Transport::Tcp => {
             let stream = TcpStream::connect(addr).await.map_err(RadarError::Io)?;
             log::info!("Connected to Signal K via TCP: {}", addr);
-            Ok(Connection::Tcp(stream))
+            Ok(Connection::Tcp(stream, addr))
         }
         Transport::HttpDiscovery => connect_via_discovery(addr, false, accept_invalid_certs).await,
         Transport::HttpsDiscovery => connect_via_discovery(addr, true, accept_invalid_certs).await,
@@ -290,7 +356,7 @@ async fn connect_via_discovery(
     // authentication, so any future auth work will want to land there.
     if let Some(ref ws_url) = discovery.ws_url {
         match connect_websocket(ws_url, accept_invalid_certs).await {
-            Ok(ws) => return Ok(Connection::WebSocket(ws, ws_url.clone())),
+            Ok(ws) => return Ok(Connection::WebSocket(ws, ws_url.clone(), addr)),
             Err(e) => {
                 log::debug!("WS {} failed: {}, falling back to TCP", ws_url, e);
             }
@@ -302,7 +368,7 @@ async fn connect_via_discovery(
         if let Some(tcp_addr) = parse_tcp_url(tcp_url) {
             let stream = TcpStream::connect(tcp_addr).await.map_err(RadarError::Io)?;
             log::info!("Connected to Signal K via TCP: {}", tcp_url);
-            return Ok(Connection::Tcp(stream));
+            return Ok(Connection::Tcp(stream, tcp_addr));
         }
     }
 
@@ -1100,5 +1166,41 @@ mod tests {
     fn url_encode_token_escapes_reserved_chars() {
         assert_eq!(url_encode_token("a b/c"), "a%20b%2Fc");
         assert_eq!(url_encode_token("="), "%3D");
+    }
+
+    // -- silent server cooldown tests --
+    // Tests share a process-wide static map; each test uses a distinct
+    // SocketAddr (TEST-NET-1 .. TEST-NET-3 reserved per RFC 5737) so
+    // concurrent runs don't interfere.
+
+    #[test]
+    fn silent_server_is_remembered_until_cooldown() {
+        let addr: SocketAddr = "192.0.2.10:3000".parse().unwrap();
+        assert!(!is_signalk_server_silent(addr));
+        mark_signalk_server_silent(addr);
+        assert!(is_signalk_server_silent(addr));
+        clear_signalk_server_silent(addr);
+    }
+
+    #[test]
+    fn silent_server_is_cleared_when_productive_again() {
+        let addr: SocketAddr = "192.0.2.11:3000".parse().unwrap();
+        mark_signalk_server_silent(addr);
+        assert!(is_signalk_server_silent(addr));
+        clear_signalk_server_silent(addr);
+        assert!(!is_signalk_server_silent(addr));
+    }
+
+    #[test]
+    fn silent_server_expires_after_cooldown() {
+        // Insert with an old timestamp so the lookup-time pruning kicks in.
+        let addr: SocketAddr = "192.0.2.12:3000".parse().unwrap();
+        {
+            let mut map = silent_servers().lock().unwrap();
+            map.insert(addr, Instant::now() - SILENT_SERVER_COOLDOWN - Duration::from_secs(1));
+        }
+        assert!(!is_signalk_server_silent(addr));
+        // Stale entry must have been pruned.
+        assert!(silent_servers().lock().unwrap().get(&addr).is_none());
     }
 }
