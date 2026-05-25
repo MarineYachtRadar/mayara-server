@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **deps:** use system-configuration's core-foundation re-export (#218) ([PR #218](https://github.com/MarineYachtRadar/mayara-server/pull/218))
 - **macos:** handle Option return from SCDynamicStoreBuilder::build (#221) ([PR #221](https://github.com/MarineYachtRadar/mayara-server/pull/221))
 - **raymarine:** prime command_sender at discovery so Quantum wired wakes without an MFD (#232) ([PR #232](https://github.com/MarineYachtRadar/mayara-server/pull/232))
+- **web:** send Cache-Control: no-cache on embedded GUI assets (#237) ([PR #237](https://github.com/MarineYachtRadar/mayara-server/pull/237))
 
 ## [3.5.0] - 2026-05-09
 
