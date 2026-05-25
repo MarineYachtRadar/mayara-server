@@ -1598,20 +1598,6 @@ impl FurunoReportReceiver {
         (spoke, used)
     }
 
-    /// Stretch a decoded spoke of `src_effective` meaningful samples (taken
-    /// from the front of `src`) to `dst_len` samples using nearest-neighbour
-    /// interpolation.
-    ///
-    /// On most Furuno models the native spoke length matches SPOKE_LEN
-    /// and `src_effective == src.len()` — the stretch becomes a no-op copy.
-    ///
-    /// The DRS4W is special: every spoke carries 430 samples on the wire, but
-    /// only the first N of those cover the configured display range.
-    /// N varies per wire_index because the radar changes pulse
-    /// width with range. Callers pass `src_effective = effective_samples(wi)`
-    /// for DRS4W and `src_effective = src.len()` otherwise, so sample `i` of
-    /// the output always represents physical distance
-    /// `i / dst_len * metadata.range`.
     /// Map a Furuno spoke into the fixed-size GUI buffer while preserving the
     /// oversampled tail beyond the configured display range.
     ///
@@ -1649,6 +1635,18 @@ impl FurunoReportReceiver {
         (stretched, widened.max(range_meters))
     }
 
+    /// Stretch a decoded spoke of `src_effective` meaningful samples (taken
+    /// from the front of `src`) to `dst_len` samples using nearest-neighbour
+    /// interpolation.
+    ///
+    /// On most Furuno models the native spoke length matches SPOKE_LEN
+    /// and `src_effective == src.len()` — the stretch becomes a no-op copy.
+    ///
+    /// The DRS4W is special: every spoke carries 430 samples on the wire, but
+    /// only the first N of those cover the configured display range. N varies
+    /// per wire_index because the radar changes pulse width with range.
+    /// Callers pass `src_effective = effective_samples(wi)` for DRS4W and
+    /// `src_effective = src.len()` otherwise.
     fn stretch_spoke(src: &[u8], src_effective: usize, dst_len: usize) -> Vec<u8> {
         if src.is_empty() || dst_len == 0 {
             return vec![0; dst_len];
@@ -2141,5 +2139,46 @@ mod tests {
         // The fix in process_frame is `sweep = &sweep[used.min(sweep.len())..]`;
         // verify the clamp keeps us in bounds.
         let _ = &sweep[used.min(sweep.len())..];
+    }
+
+    #[test]
+    fn map_with_overshoot_widens_range_when_scale_is_shorter() {
+        // sweep_len = 8 samples, scale = 4 → spoke physically extends 2x the
+        // configured range. Renderer-side machinery uses the widened value to
+        // scale the polar texture past the outer ring.
+        let src = vec![7u8; 8];
+        let (spoke, spoke_range) =
+            FurunoReportReceiver::map_with_overshoot(&src, 4, 8, 1000);
+        assert_eq!(spoke.len(), SPOKE_LEN);
+        assert_eq!(spoke_range, 2000);
+    }
+
+    #[test]
+    fn map_with_overshoot_falls_back_when_scale_covers_whole_sweep() {
+        // scale == usable: no overshoot exists, range stays as configured.
+        let src = vec![7u8; 8];
+        let (_, same_range) =
+            FurunoReportReceiver::map_with_overshoot(&src, 8, 8, 1000);
+        assert_eq!(same_range, 1000);
+    }
+
+    #[test]
+    fn map_with_overshoot_falls_back_when_range_is_zero() {
+        // range_meters == 0 happens when the radar hasn't reported a range
+        // yet; widening would multiply zero by a fraction, so preserve zero.
+        let src = vec![7u8; 8];
+        let (_, zero_range) =
+            FurunoReportReceiver::map_with_overshoot(&src, 4, 8, 0);
+        assert_eq!(zero_range, 0);
+    }
+
+    #[test]
+    fn map_with_overshoot_falls_back_when_scale_is_zero() {
+        // scale == 0 means metadata didn't carry a usable scale field; the
+        // safe default is to map the whole spoke 1:1 with the reported range.
+        let src = vec![7u8; 8];
+        let (_, same_range) =
+            FurunoReportReceiver::map_with_overshoot(&src, 0, 8, 1000);
+        assert_eq!(same_range, 1000);
     }
 }
