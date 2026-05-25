@@ -81,7 +81,7 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["ring",
 tokio-graceful-shutdown = "0.19.3"
 tokio-util = "0.7.18"
 tower = "0.5.3"
-tower-http = { version = "0.6", features = ["trace"] }
+tower-http = { version = "0.6", features = ["set-header", "trace"] }
 utoipa = { version = "5", features = ["macros", "axum_extras", "chrono", "time", "url", "repr" ] }
 serde_string_enum = "0.2.1"
 unicase = "2.9.0"

@@ -1,6 +1,7 @@
 use axum::{
     Json, Router, debug_handler,
     extract::{Path, State},
+    http::{HeaderValue, header},
     response::{IntoResponse, Redirect, Response},
     routing::get,
 };
@@ -24,6 +25,8 @@ use tokio::{
 };
 use tokio_graceful_shutdown::SubsystemHandle;
 use tokio_rustls::{TlsAcceptor, server::TlsStream};
+use tower::ServiceBuilder;
+use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 use utoipa::ToSchema;
 
@@ -167,7 +170,18 @@ impl Web {
             _ => None,
         };
 
-        let serve_assets = ServeEmbed::<Assets>::new();
+        // Wrap the embedded GUI in `Cache-Control: no-cache` so a fresh
+        // mayara image's `web/gui/*` is picked up on the next normal F5
+        // (browser revalidates via the ETags axum-embed already emits).
+        // Without this header, the browser's heuristic cache holds onto
+        // viewer.js/layout.css across mayara updates and the user has
+        // to hard-refresh (Ctrl+Shift+R) to see new GUI features.
+        let serve_assets = ServiceBuilder::new()
+            .layer(SetResponseHeaderLayer::overriding(
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("no-cache"),
+            ))
+            .service(ServeEmbed::<Assets>::new());
         let mut shutdown_rx = self.shutdown_tx.subscribe();
         let shutdown_tx = self.shutdown_tx.clone();
 
