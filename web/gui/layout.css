@@ -2,10 +2,15 @@
    Layout - Container, Panels, PPI, Canvas
    ============================================ */
 
-/* Main container */
+/* Main container.
+ * `100dvh` (dynamic viewport height) tracks the visible area as Chrome
+ * Mobile's URL bar collapses/expands, so the PPI canvas no longer extends
+ * past the visible viewport and the radar circle stays centred.
+ * `100vh` is the fallback for browsers without dvh support. */
 div.myr_container {
   width: 100%;
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
 }
 
@@ -17,7 +22,9 @@ div.myr_controller {
   right: 0;
   top: 0;
   height: 100vh;
+  height: 100dvh;
   max-height: 100vh;
+  max-height: 100dvh;
   overflow-y: auto;
   background-color: #111;
   z-index: 200;
@@ -38,6 +45,7 @@ div.myr_ppi {
   position: relative;
   width: 100%;
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
 }
 

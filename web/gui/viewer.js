@@ -197,6 +197,21 @@ window.onload = async function () {
     ppi.redrawCanvas();
   };
 
+  // Chrome Mobile collapses/expands its URL bar without firing window.resize,
+  // but does fire visualViewport.resize. Without this, the PPI canvas keeps
+  // the old `100dvh` size from when the bar was in the other state, and the
+  // WebGL/WebGPU backing buffer drifts out of sync with the overlay canvas —
+  // the radar image then floats above or below the range rings. Same story
+  // on orientation change for tablets.
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener("resize", () => ppi.redrawCanvas());
+  }
+  if (screen.orientation) {
+    screen.orientation.addEventListener("change", () => ppi.redrawCanvas());
+  } else {
+    window.addEventListener("orientationchange", () => ppi.redrawCanvas());
+  }
+
   // Keyboard shortcuts for display zoom
   document.addEventListener("keydown", (event) => {
     if (event.key === "i" || event.key === "I") {
