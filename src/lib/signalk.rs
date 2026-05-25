@@ -61,6 +61,26 @@ pub(crate) fn mark_signalk_server_silent(addr: SocketAddr) {
     );
 }
 
+/// Remember that the Signal K server at `addr` accepted a connection and
+/// even sent some deltas, but never published own-ship navigation
+/// (`navigation.position` / `navigation.headingTrue`). Same cooldown as
+/// `mark_signalk_server_silent` but with a more specific log message —
+/// this case typically means the upstream has no GPS configured or its
+/// security settings hide `vessels.self` from anonymous readers.
+pub(crate) fn mark_signalk_server_silent_no_nav(addr: SocketAddr) {
+    if let Ok(mut map) = silent_servers().lock() {
+        map.insert(addr, Instant::now());
+    }
+    log::info!(
+        "Signal K server at {} did not publish own-ship navigation — skipping for {:?}. \
+         Check that the upstream is producing `navigation.position` or \
+         `navigation.headingTrue` for `vessels.self` (anonymous-read security \
+         policies or a missing GPS source are the usual culprits).",
+        addr,
+        SILENT_SERVER_COOLDOWN
+    );
+}
+
 /// Forget any prior "silent" marker for `addr`. Called when a connection to
 /// the server starts delivering data, so a previously-bad server that's been
 /// fixed is re-trusted immediately.
@@ -231,6 +251,14 @@ pub(crate) async fn find_mdns_service(
 
     log::debug!("Signal K find_mdns_service (re)start");
 
+    // Every Signal K SocketAddr we've ever resolved during this discovery
+    // cycle. Used purely to produce the one-shot "all known servers in
+    // cooldown" WARN below; cleared on successful connect (in the caller's
+    // next iteration this function starts fresh).
+    let mut seen_addresses: std::collections::HashSet<SocketAddr> =
+        std::collections::HashSet::new();
+    let mut all_failed_warned = false;
+
     loop {
         // `biased` gives HTTPS precedence over HTTP, and both over plain TCP,
         // so when a server advertises multiple transports we naturally pick
@@ -259,6 +287,10 @@ pub(crate) async fn find_mdns_service(
             continue;
         }
 
+        for (addr, _) in &addresses {
+            seen_addresses.insert(*addr);
+        }
+
         for (addr, transport) in &addresses {
             if is_signalk_server_silent(*addr) {
                 log::debug!(
@@ -274,6 +306,33 @@ pub(crate) async fn find_mdns_service(
                     log::debug!("Signal K {:?} from {} failed: {}", transport, addr, e);
                 }
             }
+        }
+
+        // After working through this batch, check whether every Signal K
+        // server we've ever seen this cycle is now in cooldown. If so,
+        // tell the operator once — mDNS may still surface re-resolution
+        // events for the same servers, so without this gate the operator
+        // sees nothing while mayara silently waits for the cooldowns to
+        // expire (5 min). The warning is reset as soon as we succeed in
+        // connecting to anything (return path above).
+        if !all_failed_warned
+            && !seen_addresses.is_empty()
+            && seen_addresses.iter().all(|a| is_signalk_server_silent(*a))
+        {
+            let list = seen_addresses
+                .iter()
+                .map(|a| a.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            log::warn!(
+                "All discovered Signal K servers are in cooldown: {}. \
+                 mayara will keep retrying as cooldowns expire ({:?} each). \
+                 Configure `--signalk-token`/`--signalk-token-file` or fix the \
+                 upstream nav data source to recover.",
+                list,
+                SILENT_SERVER_COOLDOWN
+            );
+            all_failed_warned = true;
         }
     }
 }
@@ -1202,5 +1261,17 @@ mod tests {
         assert!(!is_signalk_server_silent(addr));
         // Stale entry must have been pruned.
         assert!(silent_servers().lock().unwrap().get(&addr).is_none());
+    }
+
+    #[test]
+    fn silent_server_no_nav_marker_uses_same_cooldown_map() {
+        // The no-nav variant has a different log message but feeds the
+        // same cooldown set, so the discovery loop skips both equally.
+        let addr: SocketAddr = "192.0.2.13:3000".parse().unwrap();
+        assert!(!is_signalk_server_silent(addr));
+        mark_signalk_server_silent_no_nav(addr);
+        assert!(is_signalk_server_silent(addr));
+        clear_signalk_server_silent(addr);
+        assert!(!is_signalk_server_silent(addr));
     }
 }
