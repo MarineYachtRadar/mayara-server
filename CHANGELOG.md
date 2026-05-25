@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **gui:** show active renderer (webgpu/webgl) in the controls header (#252) ([PR #252](https://github.com/MarineYachtRadar/mayara-server/pull/252))
+
 ### Fixed
 
 - **gui:** keep PPI sized to the visible viewport on mobile (#249) ([PR #249](https://github.com/MarineYachtRadar/mayara-server/pull/249))
