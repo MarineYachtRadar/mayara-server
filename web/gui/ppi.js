@@ -159,6 +159,19 @@ class PPI {
     this.acquireTargetMode = false;
     this.onTargetAcquire = null; // Callback: (bearing, distance) => void
 
+    // VRM/EBL markers - two independent markers, each combining a Variable
+    // Range Marker (range ring) and an Electronic Bearing Line. Each marker
+    // defines a point at (bearing, distance) shown with a draggable ring and
+    // line plus a readout of true bearing and distance.
+    // Each entry: { enabled: bool, bearing: rad (relative to bow), distance: meters }
+    // bearing is stored relative to bow so HU/NU mode switches don't relocate it.
+    this.vrmEbl = [
+      { enabled: false, bearing: 0, distance: 0 },
+      { enabled: false, bearing: 0, distance: 0 },
+    ];
+    this.onVrmEblChange = null; // Callback: (markers) => void (for persistence)
+    this._vrmEblDrag = null;    // { index, mode: 'ring'|'line'|'point', startBearing, startDistance }
+
     // Display zoom (1.0 = 100%, range 0.33 to 3.0)
     this.displayZoom = 1.0;
   }
@@ -184,6 +197,50 @@ class PPI {
    */
   getDisplayZoom() {
     return this.displayZoom;
+  }
+
+  // ============================================================
+  // VRM/EBL public API
+  // ============================================================
+
+  setVrmEblEnabled(index, enabled) {
+    const marker = this.vrmEbl[index];
+    if (!marker) return;
+    if (marker.enabled === enabled) return;
+
+    if (enabled && marker.distance <= 0) {
+      // First-time enable: pick a sensible default of half the displayed range
+      // on a north-easterly bearing so it lands in clear space.
+      const rangeMeters = this.range || this.spoke_range || 1852;
+      marker.distance = rangeMeters * 0.5;
+      marker.bearing = index === 0 ? Math.PI / 4 : -Math.PI / 4;
+    }
+    marker.enabled = enabled;
+    this.#installVrmEblHandlersIfNeeded();
+    this.redrawCanvas();
+    if (this.onVrmEblChange) this.onVrmEblChange(this.vrmEbl);
+  }
+
+  // Restore marker positions from external storage. The onVrmEblChange
+  // callback is intentionally not fired here: this is the inverse of
+  // persistence, so notifying the callback would write the just-restored
+  // values straight back to localStorage.
+  setVrmEblMarkers(markers) {
+    if (!Array.isArray(markers)) return;
+    for (let i = 0; i < Math.min(2, markers.length); i++) {
+      const m = markers[i];
+      if (!m) continue;
+      const target = this.vrmEbl[i];
+      if (typeof m.bearing === "number") target.bearing = m.bearing;
+      if (typeof m.distance === "number") target.distance = m.distance;
+      if (typeof m.enabled === "boolean") target.enabled = m.enabled;
+    }
+    this.#installVrmEblHandlersIfNeeded();
+    this.redrawCanvas();
+  }
+
+  getVrmEblMarkers() {
+    return this.vrmEbl.map((m) => ({ ...m }));
   }
 
   /**
@@ -791,6 +848,9 @@ class PPI {
 
     // Draw compass rose
     this.#drawCompassRose(ctx);
+
+    // Draw VRM/EBL markers on top so labels stay readable
+    this.#drawVrmEbl(ctx, range);
   }
 
   #drawStandbyOverlay(ctx) {
@@ -1442,6 +1502,137 @@ class PPI {
   }
 
   // ============================================================
+  // VRM/EBL drawing
+  // ============================================================
+
+  static VRM_EBL_COLORS = ["#00ffff", "#ff00ff"];
+
+  #drawVrmEbl(ctx, range) {
+    if (!range || range <= 0) return;
+    const pixelsPerMeter = this.beam_length / range;
+
+    for (let i = 0; i < this.vrmEbl.length; i++) {
+      const marker = this.vrmEbl[i];
+      if (!marker.enabled) continue;
+      this.#drawVrmEblMarker(ctx, i, marker, pixelsPerMeter, range);
+    }
+  }
+
+  #drawVrmEblMarker(ctx, index, marker, pixelsPerMeter, range) {
+    const color = PPI.VRM_EBL_COLORS[index];
+    const screenAngle = marker.bearing + this.headingRotation;
+    const radius = marker.distance * pixelsPerMeter;
+    // Line extends to the edge of the PPI so it's always visible even when the
+    // VRM is outside the displayed range.
+    const lineLength = Math.max(radius, this.beam_length);
+
+    const dirX = Math.sin(screenAngle);
+    const dirY = -Math.cos(screenAngle);
+    const lineEndX = this.center_x + lineLength * dirX;
+    const lineEndY = this.center_y + lineLength * dirY;
+    const pointX = this.center_x + radius * dirX;
+    const pointY = this.center_y + radius * dirY;
+
+    ctx.save();
+
+    // EBL: dashed bearing line from centre out
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    ctx.moveTo(this.center_x, this.center_y);
+    ctx.lineTo(lineEndX, lineEndY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // VRM: range ring at distance
+    if (radius > 0 && radius < this.beam_length * 3) {
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(this.center_x, this.center_y, radius, 0, 2 * Math.PI);
+      ctx.stroke();
+    }
+
+    // Intersection handle - the point this marker defines
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(pointX, pointY, 6, 0, 2 * Math.PI);
+    ctx.fill();
+    ctx.strokeStyle = "#000";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // Readout: true bearing + distance, anchored just outside the ring along
+    // the bearing line. Offset perpendicularly so two markers don't overlap.
+    this.#drawVrmEblReadout(ctx, index, marker, screenAngle, radius, color, range);
+
+    ctx.restore();
+  }
+
+  #drawVrmEblReadout(ctx, index, marker, screenAngle, radius, color, range) {
+    // Anchor 24 px beyond the intersection along the bearing line.
+    const anchorRadius = radius + 24;
+    const ax = this.center_x + anchorRadius * Math.sin(screenAngle);
+    const ay = this.center_y - anchorRadius * Math.cos(screenAngle);
+
+    let bearingText;
+    if (this.trueHeading !== null && this.trueHeading !== undefined) {
+      let trueBearing = marker.bearing + this.trueHeading;
+      while (trueBearing < 0) trueBearing += 2 * Math.PI;
+      while (trueBearing >= 2 * Math.PI) trueBearing -= 2 * Math.PI;
+      bearingText = `${((trueBearing * 180) / Math.PI).toFixed(1)}° T`;
+    } else {
+      let rel = marker.bearing;
+      while (rel < 0) rel += 2 * Math.PI;
+      while (rel >= 2 * Math.PI) rel -= 2 * Math.PI;
+      bearingText = `${((rel * 180) / Math.PI).toFixed(1)}° R`;
+    }
+
+    const distanceText = formatRangeValue(is_metric(range), marker.distance);
+
+    const label = `VRM/EBL ${index + 1}`;
+    const lines = [label, bearingText, distanceText];
+
+    ctx.font = "bold 11px/1 Verdana, Geneva, sans-serif";
+    let maxWidth = 0;
+    for (const line of lines) {
+      const w = ctx.measureText(line).width;
+      if (w > maxWidth) maxWidth = w;
+    }
+    const padX = 6;
+    const padY = 4;
+    const lineHeight = 13;
+    const boxW = maxWidth + padX * 2;
+    const boxH = lineHeight * lines.length + padY * 2;
+
+    // Place box so it sits beside (not on top of) the bearing line. Bias to
+    // the side away from screen centre and clamp to viewport.
+    let boxX = ax - boxW / 2;
+    let boxY = ay - boxH / 2;
+    if (Math.sin(screenAngle) > 0) boxX += 12;
+    else boxX -= boxW + 12;
+    if (-Math.cos(screenAngle) > 0) boxY += 12;
+    else boxY -= 12;
+    boxX = Math.max(4, Math.min(this.width - boxW - 4, boxX));
+    boxY = Math.max(4, Math.min(this.height - boxH - 4, boxY));
+
+    ctx.fillStyle = "rgba(0, 0, 0, 0.75)";
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.rect(boxX, boxY, boxW, boxH);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = color;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    for (let i = 0; i < lines.length; i++) {
+      ctx.fillText(lines[i], boxX + padX, boxY + padY + i * lineHeight);
+    }
+  }
+
+  // ============================================================
   // Drag handles for zone/sector editing
   // ============================================================
 
@@ -1450,7 +1641,9 @@ class PPI {
       this.creatingZoneIndex !== null || this.creatingRectIndex !== null;
     const isEditing =
       this.editingZoneIndex !== null || this.editingSectorIndex !== null;
-    const needsPointerEvents = isCreating || isEditing || this.acquireTargetMode;
+    const hasVrmEbl = this.vrmEbl.some((m) => m.enabled);
+    const needsPointerEvents =
+      isCreating || isEditing || this.acquireTargetMode || hasVrmEbl;
 
     if (needsPointerEvents && this.overlay_dom) {
       this.overlay_dom.style.pointerEvents = "auto";
@@ -1463,6 +1656,10 @@ class PPI {
       this.overlay_dom.style.cursor = "default";
       this.#removeDragHandlers();
     }
+  }
+
+  #installVrmEblHandlersIfNeeded() {
+    this.#updatePointerEvents();
   }
 
   #setupDragHandlers() {
@@ -1623,6 +1820,87 @@ class PPI {
     return null;
   }
 
+  #hitTestVrmEbl(x, y) {
+    if (!this.range || this.range <= 0) return null;
+    const pixelsPerMeter = this.beam_length / this.range;
+    const pointRadius = 12;     // intersection handle priority area
+    const ringTolerance = 8;    // px from ring to grab range
+    const lineTolerance = 8;    // px from line to grab bearing
+
+    // Check intersection handles first (highest priority)
+    let best = null;
+    for (let i = 0; i < this.vrmEbl.length; i++) {
+      const m = this.vrmEbl[i];
+      if (!m.enabled) continue;
+      const screenAngle = m.bearing + this.headingRotation;
+      const radius = m.distance * pixelsPerMeter;
+      const px = this.center_x + radius * Math.sin(screenAngle);
+      const py = this.center_y - radius * Math.cos(screenAngle);
+      const dx = x - px;
+      const dy = y - py;
+      const d2 = dx * dx + dy * dy;
+      if (d2 <= pointRadius * pointRadius) {
+        if (!best || d2 < best.d2) {
+          best = { index: i, mode: "point", d2 };
+        }
+      }
+    }
+    if (best) return { index: best.index, mode: best.mode };
+
+    // Then rings: closeness to the ring circumference.
+    for (let i = 0; i < this.vrmEbl.length; i++) {
+      const m = this.vrmEbl[i];
+      if (!m.enabled) continue;
+      const radius = m.distance * pixelsPerMeter;
+      if (radius <= 0) continue;
+      const dx = x - this.center_x;
+      const dy = y - this.center_y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (Math.abs(dist - radius) <= ringTolerance) {
+        return { index: i, mode: "ring" };
+      }
+    }
+
+    // Then bearing lines: perpendicular distance from the line segment.
+    for (let i = 0; i < this.vrmEbl.length; i++) {
+      const m = this.vrmEbl[i];
+      if (!m.enabled) continue;
+      const screenAngle = m.bearing + this.headingRotation;
+      const dirX = Math.sin(screenAngle);
+      const dirY = -Math.cos(screenAngle);
+      const dx = x - this.center_x;
+      const dy = y - this.center_y;
+      // Project onto direction; only count points on the positive ray.
+      const t = dx * dirX + dy * dirY;
+      if (t < 0) continue;
+      const perp = Math.abs(dx * dirY - dy * dirX);
+      if (perp <= lineTolerance && t <= this.beam_length * 1.2) {
+        return { index: i, mode: "line" };
+      }
+    }
+
+    return null;
+  }
+
+  #updateVrmEblFromDrag(x, y) {
+    const drag = this._vrmEblDrag;
+    if (!drag) return;
+    const marker = this.vrmEbl[drag.index];
+    if (!marker) return;
+    const radarCoords = this.#pixelToRadarCoords(x, y);
+
+    if (drag.mode === "ring") {
+      marker.distance = Math.max(0, radarCoords.distance);
+    } else if (drag.mode === "line") {
+      marker.bearing = radarCoords.angle;
+    } else if (drag.mode === "point") {
+      marker.bearing = radarCoords.angle;
+      marker.distance = Math.max(0, radarCoords.distance);
+    }
+    this.redrawCanvas();
+    if (this.onVrmEblChange) this.onVrmEblChange(this.vrmEbl);
+  }
+
   #handleMouseDown(event) {
     const coords = this.#getCanvasCoords(event);
 
@@ -1696,6 +1974,15 @@ class PPI {
       }
       this.overlay_dom.style.cursor = "grabbing";
       event.preventDefault();
+      return;
+    }
+
+    const vrmHit = this.#hitTestVrmEbl(coords.x, coords.y);
+    if (vrmHit) {
+      this._vrmEblDrag = vrmHit;
+      this.dragState = { type: "vrmEbl" };
+      this.overlay_dom.style.cursor = "grabbing";
+      event.preventDefault();
     }
   }
 
@@ -1719,14 +2006,26 @@ class PPI {
       } else if (this.dragState.type === "sector") {
         this.#updateSectorFromDrag(coords.x, coords.y);
         event.preventDefault();
+      } else if (this.dragState.type === "vrmEbl") {
+        this.#updateVrmEblFromDrag(coords.x, coords.y);
+        event.preventDefault();
       }
     } else {
       const hit = this.#hitTestHandles(coords.x, coords.y);
       const newHovered = hit ? hit.handle : null;
+      let cursor = "default";
+      if (hit) {
+        cursor = "grab";
+      } else {
+        const vrmHit = this.#hitTestVrmEbl(coords.x, coords.y);
+        if (vrmHit) cursor = "grab";
+      }
       if (newHovered !== this.hoveredHandle) {
         this.hoveredHandle = newHovered;
-        this.overlay_dom.style.cursor = hit ? "grab" : "default";
+        this.overlay_dom.style.cursor = cursor;
         this.redrawCanvas();
+      } else {
+        this.overlay_dom.style.cursor = cursor;
       }
     }
   }
@@ -1754,9 +2053,22 @@ class PPI {
         if (this.onSectorDragEnd && newSector) {
           this.onSectorDragEnd(sectorIndex, newSector);
         }
+      } else if (this.dragState.type === "vrmEbl") {
+        this._vrmEblDrag = null;
+        if (this.onVrmEblChange) this.onVrmEblChange(this.vrmEbl);
       }
       this.dragState = null;
-      this.overlay_dom.style.cursor = this.hoveredHandle ? "grab" : "default";
+      // Re-hit-test under the released pointer so the cursor reflects the
+      // current target (VRM/EBL or zone/sector handle), not the stale
+      // hoveredHandle that only tracks zone/sector handles.
+      const releaseCoords = this.#getCanvasCoords(event);
+      const stillOverHandle = this.#hitTestHandles(
+        releaseCoords.x,
+        releaseCoords.y,
+      );
+      const stillOverVrm = this.#hitTestVrmEbl(releaseCoords.x, releaseCoords.y);
+      this.overlay_dom.style.cursor =
+        stillOverHandle || stillOverVrm ? "grab" : "default";
     } else if (this.acquireTargetMode && this._clickStart) {
       // Handle click for target acquisition
       const coords = this.#getCanvasCoords(event);
@@ -1830,6 +2142,14 @@ class PPI {
           };
           event.preventDefault();
         }
+        return;
+      }
+
+      const vrmHit = this.#hitTestVrmEbl(x, y);
+      if (vrmHit) {
+        this._vrmEblDrag = vrmHit;
+        this.dragState = { type: "vrmEbl" };
+        event.preventDefault();
       }
     }
   }
@@ -1844,6 +2164,8 @@ class PPI {
         this.#updateZoneFromDrag(x, y);
       } else if (this.dragState.type === "sector") {
         this.#updateSectorFromDrag(x, y);
+      } else if (this.dragState.type === "vrmEbl") {
+        this.#updateVrmEblFromDrag(x, y);
       }
       event.preventDefault();
     }
@@ -1863,6 +2185,9 @@ class PPI {
         if (this.onSectorDragEnd && newSector) {
           this.onSectorDragEnd(sectorIndex, newSector);
         }
+      } else if (this.dragState.type === "vrmEbl") {
+        this._vrmEblDrag = null;
+        if (this.onVrmEblChange) this.onVrmEblChange(this.vrmEbl);
       }
       this.dragState = null;
     }

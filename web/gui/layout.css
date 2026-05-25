@@ -403,6 +403,101 @@ div.myr_ppi {
   stroke: #666;
 }
 
+/* ============================================
+   VRM/EBL Lozenge - VRM/EBL marker toggle (bottom-left, above AIS)
+   ============================================ */
+
+.myr_vrmebl_lozenge {
+  position: absolute;
+  bottom: 62px; /* Above AIS lozenge (20px + 36px height + 6px gap) */
+  left: 20px;
+  display: flex;
+  align-items: stretch;
+  height: 36px;
+  background: rgba(0, 0, 0, 0.7);
+  border: 2px solid #446;
+  border-radius: 18px;
+  z-index: 100;
+  overflow: hidden;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.myr_vrmebl_lozenge_button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  padding: 0;
+  background: #222;
+  border: none;
+  cursor: pointer;
+  color: #888;
+  transition: all 0.2s ease;
+}
+
+.myr_vrmebl_lozenge_button:hover {
+  background: #333;
+}
+
+.myr_vrmebl_lozenge_button:active {
+  transform: scale(0.95);
+}
+
+.myr_vrmebl_lozenge_button:focus-visible {
+  outline: 2px solid #00ffff;
+  outline-offset: 2px;
+}
+
+.myr_vrmebl_icon {
+  width: 22px;
+  height: 22px;
+}
+
+.myr_vrmebl_dot1 {
+  fill: #00ffff;
+}
+
+.myr_vrmebl_dot2 {
+  fill: #ff00ff;
+}
+
+/* Off: both dots dim, crosshair dim */
+.myr_vrmebl_lozenge.myr_vrmebl_off .myr_vrmebl_lozenge_button {
+  color: #666;
+}
+
+.myr_vrmebl_lozenge.myr_vrmebl_off .myr_vrmebl_dot1,
+.myr_vrmebl_lozenge.myr_vrmebl_off .myr_vrmebl_dot2 {
+  fill: #555;
+}
+
+/* Marker 1 only: cyan dot lit, magenta dim */
+.myr_vrmebl_lozenge.myr_vrmebl_m1 .myr_vrmebl_lozenge_button {
+  color: #00ffff;
+  background: #0a3d3d;
+}
+
+.myr_vrmebl_lozenge.myr_vrmebl_m1 .myr_vrmebl_dot2 {
+  fill: #555;
+}
+
+/* Marker 2 only: magenta dot lit, cyan dim */
+.myr_vrmebl_lozenge.myr_vrmebl_m2 .myr_vrmebl_lozenge_button {
+  color: #ff00ff;
+  background: #3d0a3d;
+}
+
+.myr_vrmebl_lozenge.myr_vrmebl_m2 .myr_vrmebl_dot1 {
+  fill: #555;
+}
+
+/* Both markers: crosshair shown in mixed tone, both dots lit */
+.myr_vrmebl_lozenge.myr_vrmebl_both .myr_vrmebl_lozenge_button {
+  color: #ddccff;
+  background: #2a1d3d;
+}
+
 /* Range lozenge - vertical, left side, centered */
 .myr_range_lozenge {
   position: absolute;

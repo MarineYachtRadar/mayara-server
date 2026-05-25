@@ -67,6 +67,26 @@ var showAis = (() => {
   }
 })();
 
+// VRM/EBL marker localStorage keys. Hoisted to module scope so the
+// initialization IIFEs below and the persistence helpers further down
+// reference the same constants.
+const VRM_EBL_STATE_KEY = "mayaraVrmEbl";
+const VRM_EBL_VISIBLE_KEY = "mayaraVrmEblVisible";
+
+// VRM/EBL markers - persisted between sessions. Stored as a plain object so the
+// data survives reload; bearing is in radians relative to bow.
+var vrmEblState = (() => {
+  try {
+    const raw = localStorage.getItem(VRM_EBL_STATE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+})();
+
 registerRadarCallback(radarLoaded);
 registerControlCallback(controlUpdate);
 registerStreamMessageCallback(handleStreamMessage);
@@ -166,6 +186,9 @@ window.onload = async function () {
 
   // Create AIS lozenge (bottom-left, toggles vessels.* subscription)
   createAisLozenge();
+
+  // Create VRM/EBL lozenge (above AIS lozenge) - cycles through marker states
+  createVrmEblLozenge();
 
   // Create range lozenge
   createRangeLozenge();
@@ -935,6 +958,111 @@ function updateAisLozenge() {
   if (!lozenge) return;
   lozenge.classList.remove("myr_ais_on", "myr_ais_off");
   lozenge.classList.add(showAis ? "myr_ais_on" : "myr_ais_off");
+}
+
+// VRM/EBL lozenge - cycles through marker visibility states. Click steps
+// forward through {none, #1 only, #2 only, both}; right-click steps backward.
+// Two colored dots on the icon mirror the marker colors so the operator can
+// see at a glance which marker is active.
+// Persisted visible-state bitmask: bit 0 = marker 1, bit 1 = marker 2.
+var vrmEblVisible = (() => {
+  try {
+    const raw = localStorage.getItem(VRM_EBL_VISIBLE_KEY);
+    if (raw === null) return 0;
+    const n = parseInt(raw, 10);
+    return Number.isFinite(n) ? n & 0x3 : 0;
+  } catch {
+    return 0;
+  }
+})();
+
+function createVrmEblLozenge() {
+  const container = document.querySelector(".myr_ppi");
+  if (!container) return;
+
+  const lozenge = document.createElement("div");
+  lozenge.id = "myr_vrmebl_lozenge";
+  lozenge.className = "myr_vrmebl_lozenge";
+  lozenge.title =
+    "VRM/EBL — click to cycle markers, right-click to step back. " +
+    "Drag the ring to set range, the line to set bearing, the dot to set both.";
+
+  const btn = document.createElement("button");
+  btn.className = "myr_vrmebl_lozenge_button";
+  // Icon: crosshair + two small color dots for marker 1 and 2
+  btn.innerHTML = `<svg class="myr_vrmebl_icon" viewBox="0 0 24 24">
+    <circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="1.5"/>
+    <line x1="12" y1="3" x2="12" y2="21" stroke="currentColor" stroke-width="1.5"/>
+    <line x1="3" y1="12" x2="21" y2="12" stroke="currentColor" stroke-width="1.5"/>
+    <circle class="myr_vrmebl_dot1" cx="6" cy="6" r="2.4"/>
+    <circle class="myr_vrmebl_dot2" cx="18" cy="18" r="2.4"/>
+  </svg>`;
+  btn.addEventListener("click", (e) => {
+    e.preventDefault();
+    cycleVrmEbl(1);
+  });
+  btn.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    cycleVrmEbl(-1);
+  });
+
+  lozenge.appendChild(btn);
+  container.appendChild(lozenge);
+
+  // Restore persisted marker positions and visibility into the PPI.
+  if (vrmEblState && ppi) {
+    ppi.setVrmEblMarkers(vrmEblState);
+  }
+  if (ppi) {
+    ppi.setVrmEblEnabled(0, (vrmEblVisible & 0x1) !== 0);
+    ppi.setVrmEblEnabled(1, (vrmEblVisible & 0x2) !== 0);
+    ppi.onVrmEblChange = persistVrmEbl;
+  }
+  updateVrmEblLozenge();
+}
+
+// State sequence: 0b00 -> 0b01 -> 0b10 -> 0b11 -> 0b00
+const VRM_EBL_CYCLE = [0b00, 0b01, 0b10, 0b11];
+
+function cycleVrmEbl(direction) {
+  if (!ppi) return;
+  const idx = VRM_EBL_CYCLE.indexOf(vrmEblVisible);
+  const cur = idx >= 0 ? idx : 0;
+  const next =
+    (cur + (direction >= 0 ? 1 : VRM_EBL_CYCLE.length - 1)) %
+    VRM_EBL_CYCLE.length;
+  vrmEblVisible = VRM_EBL_CYCLE[next];
+  ppi.setVrmEblEnabled(0, (vrmEblVisible & 0x1) !== 0);
+  ppi.setVrmEblEnabled(1, (vrmEblVisible & 0x2) !== 0);
+  try {
+    localStorage.setItem(VRM_EBL_VISIBLE_KEY, String(vrmEblVisible));
+  } catch {
+    // ignore quota errors
+  }
+  updateVrmEblLozenge();
+}
+
+function updateVrmEblLozenge() {
+  const lozenge = document.getElementById("myr_vrmebl_lozenge");
+  if (!lozenge) return;
+  lozenge.classList.remove(
+    "myr_vrmebl_off",
+    "myr_vrmebl_m1",
+    "myr_vrmebl_m2",
+    "myr_vrmebl_both",
+  );
+  if (vrmEblVisible === 0) lozenge.classList.add("myr_vrmebl_off");
+  else if (vrmEblVisible === 0b11) lozenge.classList.add("myr_vrmebl_both");
+  else if (vrmEblVisible & 0b01) lozenge.classList.add("myr_vrmebl_m1");
+  else lozenge.classList.add("myr_vrmebl_m2");
+}
+
+function persistVrmEbl(markers) {
+  try {
+    localStorage.setItem(VRM_EBL_STATE_KEY, JSON.stringify(markers));
+  } catch {
+    // ignore quota errors
+  }
 }
 
 // Play an audio alert
