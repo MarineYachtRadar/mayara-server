@@ -73,8 +73,8 @@ var showAis = (() => {
 const VRM_EBL_STATE_KEY = "mayaraVrmEbl";
 const VRM_EBL_VISIBLE_KEY = "mayaraVrmEblVisible";
 
-// VRM/EBL markers - persisted between sessions. Stored as a plain object so the
-// data survives reload; bearing is in radians relative to bow.
+// VRM/EBL markers - persisted between sessions as an array payload consumed
+// by PPI.setVrmEblMarkers; bearing is in radians relative to bow.
 var vrmEblState = (() => {
   try {
     const raw = localStorage.getItem(VRM_EBL_STATE_KEY);
@@ -989,7 +989,6 @@ function createVrmEblLozenge() {
 
   const btn = document.createElement("button");
   btn.className = "myr_vrmebl_lozenge_button";
-  // Icon: crosshair + two small color dots for marker 1 and 2
   btn.innerHTML = `<svg class="myr_vrmebl_icon" viewBox="0 0 24 24">
     <circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="1.5"/>
     <line x1="12" y1="3" x2="12" y2="21" stroke="currentColor" stroke-width="1.5"/>
@@ -1009,7 +1008,6 @@ function createVrmEblLozenge() {
   lozenge.appendChild(btn);
   container.appendChild(lozenge);
 
-  // Restore persisted marker positions and visibility into the PPI.
   if (vrmEblState && ppi) {
     ppi.setVrmEblMarkers(vrmEblState);
   }
@@ -1021,7 +1019,6 @@ function createVrmEblLozenge() {
   updateVrmEblLozenge();
 }
 
-// State sequence: 0b00 -> 0b01 -> 0b10 -> 0b11 -> 0b00
 const VRM_EBL_CYCLE = [0b00, 0b01, 0b10, 0b11];
 
 function cycleVrmEbl(direction) {
