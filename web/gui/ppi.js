@@ -23,6 +23,21 @@ function is_metric(v) {
   return divides_near(v, 500);
 }
 
+// Format a distance for a VRM/EBL readout. Unlike `formatRangeValue` (which
+// snaps to nice radar-tick fractions such as 1/4 nm), this returns a smooth
+// 2-decimal value in the unit the operator already sees: nm imperial, m/km
+// metric. Rounding to .01 nm (~18 m) or 1 m keeps the readout precise enough
+// for navigation without showing raw float noise like "0.073077... nm".
+function formatVrmDistance(metric, v) {
+  if (metric) {
+    if (v >= 1000) {
+      return (v / 1000).toFixed(2) + " km";
+    }
+    return Math.round(v) + " m";
+  }
+  return (v / NAUTICAL_MILE).toFixed(2) + " nm";
+}
+
 function formatRangeValue(metric, v) {
   if (metric) {
     v = Math.round(v);
@@ -1588,7 +1603,7 @@ class PPI {
       bearingText = `${((rel * 180) / Math.PI).toFixed(1)}° R`;
     }
 
-    const distanceText = formatRangeValue(is_metric(range), marker.distance);
+    const distanceText = formatVrmDistance(is_metric(range), marker.distance);
 
     const label = `VRM/EBL ${index + 1}`;
     const lines = [label, bearingText, distanceText];
