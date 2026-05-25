@@ -206,7 +206,7 @@ window.onload = async function () {
   if (window.visualViewport) {
     window.visualViewport.addEventListener("resize", () => ppi.redrawCanvas());
   }
-  if (screen.orientation) {
+  if (screen.orientation && typeof screen.orientation.addEventListener === "function") {
     screen.orientation.addEventListener("change", () => ppi.redrawCanvas());
   } else {
     window.addEventListener("orientationchange", () => ppi.redrawCanvas());
