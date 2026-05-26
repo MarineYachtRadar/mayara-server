@@ -25,8 +25,14 @@ const DELETE_REVOLUTION_COUNT: u64 = 4;
 /// Extended to handle buoys/anchored vessels that may temporarily disappear behind a passing ship.
 const STATIONARY_DELETE_REVOLUTION_COUNT: u64 = 10;
 
-/// Speed threshold (m/s) below which a target is considered stationary
-/// 0.5 m/s = ~1 knot - accounts for GPS drift and minor movement
+/// Speed threshold (m/s) below which a target is considered stationary.
+/// 0.5 m/s ≈ 1 kn — covers GPS drift and minor movement on a moored or
+/// anchored vessel. Targets caught by this threshold receive the longer
+/// stationary lost/delete timeouts. A slowly drifting anchored vessel
+/// or a small boat doing < 1 kn under tide will be over-classified as
+/// stationary; the cost is a slightly longer wait before garbage-
+/// collecting a genuinely gone target, which is preferable to dropping
+/// a real low-speed track too early.
 const STATIONARY_SPEED_THRESHOLD: f64 = 0.5;
 
 /// Maximum separation (meters) between two targets that are considered duplicates.
@@ -34,8 +40,13 @@ const STATIONARY_SPEED_THRESHOLD: f64 = 0.5;
 /// each within this distance of the others but all representing the same physical target.
 const DUPLICATE_MERGE_DISTANCE_M: f64 = 100.0;
 
-/// Minimum number of updates before a target can be considered stationary
-/// Prevents false positives from slow-starting tracks
+/// Minimum number of updates before a target can be considered stationary.
+///
+/// Promotion to Tracking requires `update_count >= 4`, so this is one
+/// step further: a stationary classification needs not just a promoted
+/// track but also a converged motion estimate. That prevents the
+/// extended stationary timeouts being applied to a track that was only
+/// just confirmed and may still have a noisy Kalman SOG.
 const MIN_UPDATES_FOR_STATIONARY: u32 = 5;
 
 /// Minimum match distance (meters) for matching a blob to an active target
