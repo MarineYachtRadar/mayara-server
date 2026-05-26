@@ -771,14 +771,13 @@ fn millis_to_iso8601(millis: u64) -> String {
     datetime.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
-/// Calculate CPA/TCPA danger assessment for a target
+/// Calculate CPA/TCPA danger assessment for a target.
+/// Reads own-ship SOG/COG from navdata; delegates the math to
+/// `compute_danger` so tests can exercise the pure helper.
 fn calculate_danger(
     target: &super::tracker::ActiveTarget,
     radar_position: Option<&GeoPosition>,
 ) -> TargetDangerApi {
-    use crate::radar::cpa::calculate_cpa_from_motion;
-
-    // Need own-ship position and motion
     let Some(own_pos) = radar_position else {
         return TargetDangerApi {
             cpa: 0.0,
@@ -786,11 +785,23 @@ fn calculate_danger(
         };
     };
 
-    // Get own-ship SOG/COG from navdata
     let own_sog = crate::navdata::get_sog().unwrap_or(0.0);
     let own_cog = crate::navdata::get_cog().unwrap_or(0.0);
+    compute_danger(target, own_pos, own_sog, own_cog)
+}
 
-    // Need target motion data
+/// Pure CPA/TCPA helper. Uses the Kalman-filtered position from the motion
+/// model rather than the raw last measurement — that raw value swings tens
+/// of metres revolution-to-revolution, and using it produces equally noisy
+/// CPA output that's not what consumers expect.
+fn compute_danger(
+    target: &super::tracker::ActiveTarget,
+    own_pos: &GeoPosition,
+    own_sog: f64,
+    own_cog: f64,
+) -> TargetDangerApi {
+    use crate::radar::cpa::calculate_cpa_from_motion;
+
     let Some(target_sog) = target.sog else {
         return TargetDangerApi {
             cpa: 0.0,
@@ -804,12 +815,13 @@ fn calculate_danger(
         };
     };
 
-    // Calculate CPA/TCPA
+    let target_pos = target.predict_position(target.last_update);
+
     match calculate_cpa_from_motion(
         *own_pos,
         own_sog,
         own_cog,
-        target.position,
+        target_pos,
         target_sog,
         target_cog,
     ) {
@@ -1133,5 +1145,81 @@ mod tests {
         manager.leave_guard_zone("nav1", 1);
         // No prior enter; leaves should not emit a `normal` from nothing.
         assert!(drain_sk_deltas(rx).is_empty());
+    }
+
+    /// After a noisy measurement, the Kalman filter's smoothed position is
+    /// significantly closer to the true track than the raw measurement.
+    /// `compute_danger` uses the smoothed position; this test confirms that
+    /// using `target.position` (the raw last sighting) would produce a
+    /// materially different CPA than the smoothed value the new code uses.
+    /// That difference is exactly the noise suppression #10 is fixing.
+    #[test]
+    fn compute_danger_uses_filtered_position_not_raw_measurement() {
+        use super::super::tracker::{CandidateSource, TargetCandidate, TargetTracker};
+        use crate::radar::cpa::calculate_cpa_from_motion;
+
+        let radar_pos = GeoPosition::new(52.0, 4.0);
+        let max_speed = SpokeContext::max_speed_from_mode(2);
+
+        // Target starts ~400m north and closes due south at ~10 m/s for
+        // 6 clean revolutions (the Kalman filter has fully converged).
+        let mut tracker = TargetTracker::new_merged(2048);
+        let lat_step = 30.0 / super::super::METERS_PER_DEGREE_LATITUDE;
+        let start_lat = 52.0 + 400.0 / super::super::METERS_PER_DEGREE_LATITUDE;
+        for i in 0..6u64 {
+            tracker.process_candidate(TargetCandidate {
+                time: i * 3000,
+                position: GeoPosition::new(start_lat - lat_step * i as f64, 4.0),
+                size_meters: 30.0,
+                radar_key: "test".to_string(),
+                radar_position: Some(radar_pos),
+                max_target_speed_ms: max_speed,
+                source: CandidateSource::GuardZone(1),
+            });
+        }
+
+        // One badly noisy measurement: ~80m east of the true track.
+        let lon_noise = 80.0 / super::super::meters_per_degree_longitude(&52.0);
+        let noisy_true_lat = start_lat - lat_step * 6.0;
+        let noisy_true_lon = 4.0 + lon_noise;
+        tracker.process_candidate(TargetCandidate {
+            time: 6 * 3000,
+            position: GeoPosition::new(noisy_true_lat, noisy_true_lon),
+            size_meters: 30.0,
+            radar_key: "test".to_string(),
+            radar_position: Some(radar_pos),
+            max_target_speed_ms: max_speed,
+            source: CandidateSource::GuardZone(1),
+        });
+
+        let target = tracker.get_active_targets().next().unwrap();
+
+        // Smoothed CPA — what compute_danger uses now.
+        let smoothed = compute_danger(target, &radar_pos, 0.0, 0.0);
+        assert!(smoothed.tcpa > 0.0, "expected closing geometry");
+
+        // Raw CPA — what the previous code did. Pass target.position
+        // (the raw 80m-east last measurement) instead of the filtered one.
+        let raw = calculate_cpa_from_motion(
+            radar_pos,
+            0.0,
+            0.0,
+            target.position,
+            target.sog.unwrap(),
+            target.cog.unwrap(),
+        )
+        .expect("raw CPA should also be a closing situation");
+
+        // The smoothed Kalman position barely moved (it weights the noisy
+        // measurement against many clean priors), while the raw position is
+        // exactly the 80m-east noise. So the raw CPA should be materially
+        // larger than the smoothed CPA.
+        assert!(
+            raw.cpa > smoothed.cpa + 30.0,
+            "raw CPA ({:.1}m) should be ≥ 30m larger than smoothed CPA ({:.1}m); \
+             the Kalman state must filter the noise spike",
+            raw.cpa,
+            smoothed.cpa
+        );
     }
 }
