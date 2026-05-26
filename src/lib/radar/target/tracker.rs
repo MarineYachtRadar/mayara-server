@@ -58,6 +58,16 @@ const MIN_MATCH_DISTANCE_M: f64 = 50.0;
 /// within max_speed * delta_time. We use 1.5x to account for prediction error.
 const MATCH_DISTANCE_SPEED_MULTIPLIER: f64 = 1.5;
 
+/// Maximum COG difference (radians) for two close-by candidate targets
+/// to be treated as duplicates. Two real vessels close together (a tug
+/// and tow within 100 m, a row of moored boats) can sit inside the
+/// `DUPLICATE_MERGE_DISTANCE_M` ring of each other; the only way to tell
+/// them apart from a single physical target producing multiple blobs is
+/// motion: a single large vessel's blobs share the vessel's heading,
+/// while two distinct vessels generally don't. 30° matches the typical
+/// IMO close-quarters convention for "same/different course."
+const DEDUP_MAX_COG_DIFF_RAD: f64 = 30.0 * std::f64::consts::PI / 180.0;
+
 /// Maximum allowed turn angle (degrees) between consecutive sightings of
 /// a target moving faster than `TURN_REJECTION_SPEED_MS`. A real planing
 /// boat at 5 m/s can hard-over and pivot well under 90° per 3-second
@@ -439,14 +449,21 @@ impl TargetTracker {
         self.stats = TrackerStats::default();
     }
 
-    /// Merge duplicate targets that are within DUPLICATE_MERGE_DISTANCE_M of each other.
-    /// Only young targets (< 4 updates) are candidates for removal. An established target
-    /// (>= 4 updates) is never discarded, but a young target is merged into any nearby
-    /// target — young or established. Two established targets are never merged.
-    /// A large vessel can produce multiple blobs per rotation from different hull sections,
-    /// each starting a separate acquiring track near an already-established one.
-    /// For young+young pairs the one with fewer updates is discarded; ties go to the
-    /// higher (newer) ID. For young+established pairs the young one is always discarded.
+    /// Merge duplicate targets that are within DUPLICATE_MERGE_DISTANCE_M
+    /// of each other. Only young targets (< 4 updates) are candidates for
+    /// removal — established targets are never discarded.
+    ///
+    /// A large vessel can produce multiple blobs per rotation from
+    /// different hull sections, each starting a separate acquiring
+    /// track near an already-established one. Those duplicates share
+    /// the vessel's heading, so they should be merged.
+    ///
+    /// Two genuinely distinct vessels (a tug and tow, a row of moored
+    /// boats) can sit equally close together. When both candidates
+    /// have a COG estimate, the merge is suppressed if their courses
+    /// differ by more than `DEDUP_MAX_COG_DIFF_RAD` — that's the
+    /// signature of two real tracks rather than blob fragmentation
+    /// from one vessel.
     fn deduplicate_targets(&mut self) {
         let ids: Vec<u64> = self.active_targets.keys().copied().collect();
         let mut to_remove: Vec<u64> = Vec::new();
@@ -474,6 +491,31 @@ impl TargetTracker {
                 if dist > DUPLICATE_MERGE_DISTANCE_M {
                     continue;
                 }
+
+                // Motion-aware exemption: if both targets have a COG
+                // and the courses materially differ, treat them as two
+                // distinct vessels rather than blob fragmentation.
+                if let (Some(cog_a), Some(cog_b)) =
+                    (self.active_targets[&a].cog, self.active_targets[&b].cog)
+                {
+                    let mut diff = (cog_a - cog_b).abs();
+                    if diff > std::f64::consts::PI {
+                        diff = TAU - diff;
+                    }
+                    if diff > DEDUP_MAX_COG_DIFF_RAD {
+                        log::debug!(
+                            "Skipping dedup: target {} (cog {:.0}°) and {} (cog {:.0}°) \
+                             differ by {:.0}°, treating as distinct vessels",
+                            a,
+                            cog_a.to_degrees(),
+                            b,
+                            cog_b.to_degrees(),
+                            diff.to_degrees()
+                        );
+                        continue;
+                    }
+                }
+
                 // a is young; keep whichever has more updates (b wins ties since a is young)
                 let updates_a = self.active_targets[&a].update_count;
                 let updates_b = self.active_targets[&b].update_count;
@@ -1832,6 +1874,63 @@ mod tests {
                 tracker.active_count()
             );
         }
+    }
+
+    #[test]
+    fn dedup_keeps_distinct_close_vessels_with_different_courses() {
+        // Two vessels within DUPLICATE_MERGE_DISTANCE_M of each other,
+        // each moving in a clearly different direction. The pre-fix
+        // dedup would merge whichever had fewer updates into the other;
+        // the motion-aware check now keeps both because their courses
+        // diverge.
+        let mut tracker = TargetTracker::new_merged(2048);
+        let max_speed_ms = TEST_MAX_SPEED_MS;
+        let radar = Some(GeoPosition::new(52.0, 4.0));
+
+        let lat_step = 30.0 / METERS_PER_DEGREE_LATITUDE; // ~10 m/s northbound
+        let lon_step = 30.0 / meters_per_degree_longitude(&52.0); // ~10 m/s eastbound
+
+        // Target A: heading north, 4 updates (gets a COG estimate)
+        for i in 0..4u64 {
+            tracker.process_candidate(TargetCandidate {
+                time: i * 3000,
+                position: GeoPosition::new(52.0 + lat_step * i as f64, 4.0),
+                size_meters: 30.0,
+                radar_key: "test".to_string(),
+                radar_position: radar,
+                max_target_speed_ms: max_speed_ms,
+                source: CandidateSource::GuardZone(1),
+            });
+        }
+
+        // Target B: heading east, 80m east of A's start (within merge
+        // distance). 3 updates so it stays under the established
+        // threshold and would otherwise be a merge candidate.
+        let b_start_lon = 4.0 + 80.0 / meters_per_degree_longitude(&52.0);
+        for i in 0..3u64 {
+            tracker.process_candidate(TargetCandidate {
+                time: i * 3000,
+                position: GeoPosition::new(52.0, b_start_lon + lon_step * i as f64),
+                size_meters: 30.0,
+                radar_key: "test".to_string(),
+                radar_position: radar,
+                max_target_speed_ms: max_speed_ms,
+                source: CandidateSource::GuardZone(1),
+            });
+        }
+
+        // Force a revolution-complete event to trigger the dedup pass.
+        tracker.check_revolution(2000, 12_000);
+        tracker.check_revolution(100, 13_000);
+
+        // Both vessels must still be present.
+        assert_eq!(
+            tracker.active_count(),
+            2,
+            "two distinct close-by vessels with different COGs must NOT \
+             be merged, but {} target(s) remain",
+            tracker.active_count()
+        );
     }
 
     #[test]
