@@ -424,6 +424,12 @@ pub struct ActiveSubscriptions {
     navigation_subscriptions: Vec<String>,
     /// Vessel (AIS) path subscriptions (e.g., "vessels.*")
     vessel_subscriptions: Vec<String>,
+    /// Signal K `notifications.*` path subscriptions (e.g.,
+    /// `notifications.radar.*`, `notifications.radar.nav1.guardZone.1`).
+    /// Without this list `apply_subscriptions` would drop every emitted
+    /// notification delta because the generic control-path matcher
+    /// rejects the `notifications.` prefix as an unknown control id.
+    notification_subscriptions: Vec<String>,
 }
 
 impl ActiveSubscriptions {
@@ -435,6 +441,7 @@ impl ActiveSubscriptions {
             target_subscriptions: HashMap::new(),
             navigation_subscriptions: Vec::new(),
             vessel_subscriptions: Vec::new(),
+            notification_subscriptions: Vec::new(),
         }
     }
 
@@ -492,6 +499,16 @@ impl ActiveSubscriptions {
                 if !self.vessel_subscriptions.contains(path) {
                     self.vessel_subscriptions.push(path.clone());
                     ais_subscribed = true;
+                }
+                continue;
+            }
+
+            // Handle Signal K notification subscriptions
+            // (e.g., "notifications.radar.*", "notifications.radar.nav1.guardZone.1").
+            if path.starts_with("notifications.") {
+                log::debug!("Subscribing to notification path: {}", path);
+                if !self.notification_subscriptions.contains(path) {
+                    self.notification_subscriptions.push(path.clone());
                 }
                 continue;
             }
@@ -580,6 +597,13 @@ impl ActiveSubscriptions {
             if path.starts_with("vessels.") {
                 log::debug!("Desubscribing from vessel path: {}", path);
                 self.vessel_subscriptions.retain(|p| p != path);
+                continue;
+            }
+
+            // Handle Signal K notification desubscriptions.
+            if path.starts_with("notifications.") {
+                log::debug!("Desubscribing from notification path: {}", path);
+                self.notification_subscriptions.retain(|p| p != path);
                 continue;
             }
 
@@ -701,6 +725,12 @@ impl ActiveSubscriptions {
             return self.is_subscribed_vessel_path(path);
         }
 
+        // Handle Signal K notifications paths (e.g.,
+        // "notifications.radar.nav1.guardZone.1").
+        if path.starts_with("notifications.") {
+            return self.is_subscribed_notification_path(path);
+        }
+
         // Handle control paths (existing logic)
         let (radar_id, control_id) = extract_path(path);
         let control_id = match ControlId::from_str(control_id) {
@@ -798,6 +828,25 @@ impl ActiveSubscriptions {
                 return true;
             }
             // Support wildcard matching (e.g., "vessels.*" matches "vessels.227334400")
+            if subscribed_path.contains('*') {
+                let matcher = WildMatch::new(subscribed_path);
+                if matcher.matches(path) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Check if subscribed to a Signal K notification path. Same exact /
+    /// wildcard semantics as the navigation and vessel helpers so a
+    /// subscription to `notifications.radar.*` covers every per-radar /
+    /// per-zone leaf path mayara emits.
+    fn is_subscribed_notification_path(&self, path: &str) -> bool {
+        for subscribed_path in &self.notification_subscriptions {
+            if subscribed_path == path {
+                return true;
+            }
             if subscribed_path.contains('*') {
                 let matcher = WildMatch::new(subscribed_path);
                 if matcher.matches(path) {
@@ -1070,5 +1119,78 @@ mod test {
         })
         .unwrap();
         assert_eq!(subs.navigation_subscriptions, vec!["navigation.position"]);
+    }
+
+    #[test]
+    fn notification_exact_path_matches() {
+        let mut subs = ActiveSubscriptions::new(Subscribe::Some);
+        subs.subscribe(Subscription {
+            subscribe: vec![path("notifications.radar.fur6424A.guardZone.1")],
+        })
+        .unwrap();
+        assert!(subs.is_subscribed_path("notifications.radar.fur6424A.guardZone.1", false));
+        // Unrelated radar/zone must not match an exact subscription.
+        assert!(!subs.is_subscribed_path("notifications.radar.fur6424B.guardZone.1", false));
+    }
+
+    #[test]
+    fn notification_wildcard_matches_per_zone_paths() {
+        let mut subs = ActiveSubscriptions::new(Subscribe::Some);
+        subs.subscribe(Subscription {
+            subscribe: vec![path("notifications.radar.*")],
+        })
+        .unwrap();
+        assert!(subs.is_subscribed_path("notifications.radar.fur6424A.guardZone.1", false));
+        assert!(subs.is_subscribed_path("notifications.radar.fur6424B.guardZone.2", false));
+        // The wildcard scope is `notifications.radar.*`, so other
+        // notification subtrees stay outside.
+        assert!(!subs.is_subscribed_path("notifications.security.accessRequest.x", false));
+    }
+
+    #[test]
+    fn notification_desubscribe_removes_path() {
+        let mut subs = ActiveSubscriptions::new(Subscribe::Some);
+        subs.subscribe(Subscription {
+            subscribe: vec![path("notifications.radar.*"), path("notifications.foo")],
+        })
+        .unwrap();
+        assert_eq!(subs.notification_subscriptions.len(), 2);
+
+        subs.desubscribe(Desubscription {
+            desubscribe: vec![path("notifications.foo")],
+        })
+        .unwrap();
+        assert_eq!(subs.notification_subscriptions, vec!["notifications.radar.*"]);
+        assert!(subs.is_subscribed_path("notifications.radar.fur6424A.guardZone.1", false));
+    }
+
+    #[test]
+    fn notification_apply_subscriptions_retains_subscribed_paths() {
+        use crate::stream::{NotificationMethod, NotificationState, NotificationValue};
+
+        let mut subs = ActiveSubscriptions::new(Subscribe::Some);
+        subs.subscribe(Subscription {
+            subscribe: vec![path("notifications.radar.*")],
+        })
+        .unwrap();
+
+        let value = NotificationValue {
+            state: NotificationState::Alert,
+            method: vec![NotificationMethod::Visual, NotificationMethod::Sound],
+            message: "test".to_string(),
+        };
+        let mut delta = SignalKDelta::new();
+        delta.add_notification_update(
+            "notifications.radar.fur6424A.guardZone.1",
+            value,
+            "mayara",
+        );
+
+        delta.apply_subscriptions(&mut subs);
+        // The notification update must survive the subscription filter
+        // — this is the bug the fix addresses; without the new branch in
+        // is_subscribed_path the update list would be empty here.
+        assert_eq!(delta.updates.len(), 1);
+        assert_eq!(delta.updates[0].values.len(), 1);
     }
 }
