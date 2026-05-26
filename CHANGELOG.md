@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **signalk:** skip upstream servers that accept then go silent (#256) ([PR #256](https://github.com/MarineYachtRadar/mayara-server/pull/256))
 - **signalk:** require own-ship navigation before trusting an upstream (#258) ([PR #258](https://github.com/MarineYachtRadar/mayara-server/pull/258))
 - **signalk:** match notifications.* in subscription filter (#262) ([PR #262](https://github.com/MarineYachtRadar/mayara-server/pull/262))
+- **web:** respect X-Forwarded-Proto and Host port for advertised WS URLs (#264) ([PR #264](https://github.com/MarineYachtRadar/mayara-server/pull/264))
 
 ## [3.5.2] - 2026-05-25
 
