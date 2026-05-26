@@ -324,32 +324,6 @@ impl KalmanFilter {
         self.q[(0, 0)] = noise;
         self.q[(1, 1)] = noise;
     }
-
-    /// Force position and velocity state (for maneuvering targets)
-    /// This bypasses the Kalman filtering when direct measurements are trusted more.
-    /// Based on radar_pi's forced position override for early tracking phases.
-    pub fn force_state(&mut self, position: GeoPosition, sog: f64, cog: f64, time: u64) {
-        // Convert position to local coordinates
-        let (lat_m, lon_m) = self.geo_to_local(&position);
-
-        // Convert SOG/COG to velocity components
-        // COG is in radians, 0 = North, clockwise
-        let lat_vel = sog * cog.cos(); // North component
-        let lon_vel = sog * cog.sin(); // East component
-
-        // Set state directly
-        self.state[0] = lat_m;
-        self.state[1] = lon_m;
-        self.state[2] = lat_vel;
-        self.state[3] = lon_vel;
-
-        self.last_time = time;
-
-        // Increase P to reflect uncertainty from forcing
-        // This allows future measurements to correct if needed
-        self.p[(2, 2)] = 4.0; // velocity variance
-        self.p[(3, 3)] = 4.0;
-    }
 }
 
 impl Default for KalmanFilter {

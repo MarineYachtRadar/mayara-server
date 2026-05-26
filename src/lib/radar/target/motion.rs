@@ -39,9 +39,6 @@ pub trait MotionModel: Send {
     /// Get position uncertainty in meters
     fn get_uncertainty(&self) -> f64;
 
-    /// Force the model state (for manual overrides)
-    fn force_state(&mut self, position: GeoPosition, sog: f64, cog: f64, time: u64);
-
     /// Clone the model into a boxed trait object
     fn clone_box(&self) -> Box<dyn MotionModel>;
 }
@@ -146,8 +143,7 @@ impl ImmMotionModel {
     ///
     /// Requires all three filters to be in the same local-metre frame.
     /// That's automatic here because `init_with_uncertainty` sets the
-    /// same ref_lat/ref_lon on all three from the same first measurement,
-    /// and `force_state` updates all three together with one position.
+    /// same ref_lat/ref_lon on all three from the same first measurement.
     fn mix_states(&mut self) {
         let mut c_bar = [0.0; 3];
         for j in 0..3 {
@@ -181,8 +177,10 @@ impl ImmMotionModel {
         // change could break it silently.
         debug_assert!(
             (self.cv_filter.ref_lat() - self.ca_filter.ref_lat()).abs() < 1e-12
-                && (self.cv_filter.ref_lat() - self.ct_filter.ref_lat()).abs() < 1e-12,
-            "IMM filters must share ref_lat for mixing to be valid"
+                && (self.cv_filter.ref_lat() - self.ct_filter.ref_lat()).abs() < 1e-12
+                && (self.cv_filter.ref_lon() - self.ca_filter.ref_lon()).abs() < 1e-12
+                && (self.cv_filter.ref_lon() - self.ct_filter.ref_lon()).abs() < 1e-12,
+            "IMM filters must share ref_lat/ref_lon for mixing to be valid"
         );
 
         let mut mixed: [(Vector4, Matrix4x4); 3] =
@@ -378,16 +376,6 @@ impl MotionModel for ImmMotionModel {
         self.model_probs[0] * self.cv_filter.get_uncertainty()
             + self.model_probs[1] * self.ca_filter.get_uncertainty()
             + self.model_probs[2] * self.ct_filter.get_uncertainty()
-    }
-
-    fn force_state(&mut self, position: GeoPosition, sog: f64, cog: f64, time: u64) {
-        self.cv_filter.force_state(position, sog, cog, time);
-        self.ca_filter.force_state(position, sog, cog, time);
-        self.ct_filter.force_state(position, sog, cog, time);
-        self.last_position = position;
-        self.sog = sog;
-        self.cog = cog;
-        self.last_time = time;
     }
 
     fn clone_box(&self) -> Box<dyn MotionModel> {
