@@ -166,6 +166,11 @@ pub(crate) const CDM_OFFSET_SIMULATOR_MODE: usize = 4;
 /// Offset of the `product_subtype` byte within the heartbeat payload.
 pub(crate) const CDM_OFFSET_PRODUCT_SUBTYPE: usize = 5;
 
+/// Offset of the `syc_group_id` byte within the heartbeat payload. Devices
+/// on the same boat share this value; the radar broadcasts the value the
+/// MFD configured, and the MFD reads it from gmcfg `"syc.group_id"`.
+pub(crate) const CDM_OFFSET_SYC_GROUP_ID: usize = 6;
+
 // =============================================================================
 // Legacy HD message IDs (0x02xx)
 // =============================================================================
