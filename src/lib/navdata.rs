@@ -493,9 +493,10 @@ static SIGNALK_OWN_SHIP_NAV_SEEN: std::sync::atomic::AtomicBool =
 /// own-ship `navigation.position` or `navigation.headingTrue` delta
 /// before we consider the server unproductive and cool it down. Healthy
 /// Signal K servers publish nav at multi-Hz once a vessel.self GPS is
-/// configured, so 30s is generous; misconfigured servers (no GPS, no
-/// auth on a secured stream) will reliably miss this window.
-const OWN_SHIP_NAV_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
+/// configured, so 5s is plenty; misconfigured servers (no GPS, no auth
+/// on a secured stream) miss this window with margin to spare, and
+/// the operator gets useful diagnostics in seconds rather than minutes.
+const OWN_SHIP_NAV_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Mark the current Signal K receive loop as having delivered at least one
 /// real delta. Idempotent; safe to call on every message.
