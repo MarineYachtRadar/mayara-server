@@ -15,7 +15,6 @@ use std::{
     collections::HashMap,
     io,
     net::{IpAddr, Ipv6Addr, SocketAddr},
-    str::FromStr,
     sync::Arc,
 };
 use thiserror::Error;
@@ -298,24 +297,246 @@ async fn root_redirect() -> Redirect {
     Redirect::to("/gui/")
 }
 
+/// Derive the public-facing host, HTTP scheme, and WS scheme from request headers.
+///
+/// Checks `X-Forwarded-Host` before `Host` so that proxies which overwrite the
+/// `Host` header with the backend address (and forward the original via
+/// `X-Forwarded-Host`) are handled correctly. Proxies that preserve the
+/// original `Host` header (Traefik default, nginx `proxy_set_header Host
+/// $host`) work equally well — `X-Forwarded-Host` is simply absent in that
+/// case and `Host` is used directly.
+///
+/// `X-Forwarded-Proto` and `X-Forwarded-Host` are trusted unconditionally;
+/// ensure mayara is only reachable from trusted proxies when running behind one.
+pub(crate) fn derive_public_base(
+    headers: &hyper::header::HeaderMap,
+    tls: bool,
+    fallback_port: u16,
+) -> (String, &'static str, &'static str) {
+    // X-Forwarded-Proto may be comma-chained ("https, http") when requests
+    // pass through multiple proxies; the leftmost value is the original.
+    // Accept any casing — some proxies emit "HTTPS" or "Https".
+    let proxied_https = headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .map(|s| s.trim().eq_ignore_ascii_case("https"))
+        .unwrap_or(false);
+
+    let behind_proxy = headers.contains_key("x-forwarded-proto");
+
+    // X-Forwarded-Host takes precedence over Host for proxies that overwrite it.
+    let raw_host = headers
+        .get("x-forwarded-host")
+        .or_else(|| headers.get(axum::http::header::HOST))
+        .and_then(|v| v.to_str().ok());
+
+    let host = match raw_host {
+        Some(h) if h.contains(':') => h.to_string(),
+        Some(h) if behind_proxy => {
+            // Proxy present, no port in host: proxy is on the protocol's
+            // default port (80/443) — omit port, let the scheme imply it.
+            h.to_string()
+        }
+        Some(h) => format!("{}:{}", h, fallback_port),
+        None => format!("localhost:{}", fallback_port),
+    };
+
+    let (http_scheme, ws_scheme) = if proxied_https || (!behind_proxy && tls) {
+        ("https", "wss")
+    } else {
+        ("http", "ws")
+    };
+
+    (host, http_scheme, ws_scheme)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hyper::header::HeaderMap;
+
+    fn headers(pairs: &[(&str, &str)]) -> HeaderMap {
+        let mut map = HeaderMap::new();
+        for (k, v) in pairs {
+            map.insert(
+                hyper::header::HeaderName::from_bytes(k.as_bytes()).unwrap(),
+                hyper::header::HeaderValue::from_str(v).unwrap(),
+            );
+        }
+        map
+    }
+
+    #[test]
+    fn no_headers_uses_fallback() {
+        let (host, http, ws) = derive_public_base(&HeaderMap::new(), false, 6502);
+        assert_eq!(host, "localhost:6502");
+        assert_eq!(http, "http");
+        assert_eq!(ws, "ws");
+    }
+
+    #[test]
+    fn no_headers_native_tls_uses_https() {
+        let (host, http, ws) = derive_public_base(&HeaderMap::new(), true, 6502);
+        assert_eq!(host, "localhost:6502");
+        assert_eq!(http, "https");
+        assert_eq!(ws, "wss");
+    }
+
+    #[test]
+    fn host_with_port_preserved() {
+        let h = headers(&[("host", "halos.local:4434")]);
+        let (host, http, ws) = derive_public_base(&h, false, 6502);
+        assert_eq!(host, "halos.local:4434");
+        assert_eq!(http, "http");
+        assert_eq!(ws, "ws");
+    }
+
+    #[test]
+    fn host_without_port_appends_fallback_on_direct_access() {
+        let h = headers(&[("host", "halos.local")]);
+        let (host, _, _) = derive_public_base(&h, false, 6502);
+        assert_eq!(host, "halos.local:6502");
+    }
+
+    #[test]
+    fn forwarded_proto_https_sets_wss() {
+        let h = headers(&[
+            ("host", "halos.local:4434"),
+            ("x-forwarded-proto", "https"),
+        ]);
+        let (host, http, ws) = derive_public_base(&h, false, 6502);
+        assert_eq!(host, "halos.local:4434");
+        assert_eq!(http, "https");
+        assert_eq!(ws, "wss");
+    }
+
+    #[test]
+    fn forwarded_proto_https_no_port_in_host_omits_port() {
+        // Proxy on standard port 443: Host has no port, X-Forwarded-Proto: https.
+        // We must NOT append fallback_port — the URL should be wss://halos.local.
+        let h = headers(&[
+            ("host", "halos.local"),
+            ("x-forwarded-proto", "https"),
+        ]);
+        let (host, http, ws) = derive_public_base(&h, false, 6502);
+        assert_eq!(host, "halos.local");
+        assert_eq!(http, "https");
+        assert_eq!(ws, "wss");
+    }
+
+    #[test]
+    fn forwarded_proto_case_insensitive() {
+        for proto in &["HTTPS", "Https", "hTTpS"] {
+            let h = headers(&[("host", "halos.local:4434"), ("x-forwarded-proto", proto)]);
+            let (_, http, ws) = derive_public_base(&h, false, 6502);
+            assert_eq!(http, "https", "proto={proto}");
+            assert_eq!(ws, "wss", "proto={proto}");
+        }
+    }
+
+    #[test]
+    fn forwarded_proto_comma_chained_takes_first() {
+        // Multiple proxies can append values: "https, http"
+        let h = headers(&[
+            ("host", "halos.local:4434"),
+            ("x-forwarded-proto", "https, http"),
+        ]);
+        let (_, http, ws) = derive_public_base(&h, false, 6502);
+        assert_eq!(http, "https");
+        assert_eq!(ws, "wss");
+    }
+
+    #[test]
+    fn forwarded_proto_http_gives_ws() {
+        let h = headers(&[
+            ("host", "halos.local:8080"),
+            ("x-forwarded-proto", "http"),
+        ]);
+        let (_, http, ws) = derive_public_base(&h, false, 6502);
+        assert_eq!(http, "http");
+        assert_eq!(ws, "ws");
+    }
+
+    #[test]
+    fn forwarded_proto_unknown_falls_back_to_ws() {
+        let h = headers(&[
+            ("host", "halos.local:8080"),
+            ("x-forwarded-proto", "ftp"),
+        ]);
+        let (_, http, ws) = derive_public_base(&h, false, 6502);
+        assert_eq!(http, "http");
+        assert_eq!(ws, "ws");
+    }
+
+    #[test]
+    fn native_tls_without_proxy_uses_https() {
+        let h = headers(&[("host", "halos.local:8443")]);
+        let (host, http, ws) = derive_public_base(&h, true, 6502);
+        assert_eq!(host, "halos.local:8443");
+        assert_eq!(http, "https");
+        assert_eq!(ws, "wss");
+    }
+
+    #[test]
+    fn proxy_overrides_native_tls_flag() {
+        // Proxy says http even though server has TLS certs loaded — trust proxy.
+        let h = headers(&[
+            ("host", "halos.local:80"),
+            ("x-forwarded-proto", "http"),
+        ]);
+        let (_, http, ws) = derive_public_base(&h, true, 6502);
+        assert_eq!(http, "http");
+        assert_eq!(ws, "ws");
+    }
+
+    // X-Forwarded-Host tests
+
+    #[test]
+    fn x_forwarded_host_takes_precedence_over_host() {
+        // Proxy overwrites Host with backend address; original is in X-Forwarded-Host.
+        let h = headers(&[
+            ("host", "127.0.0.1:6502"),
+            ("x-forwarded-host", "halos.local:4434"),
+            ("x-forwarded-proto", "https"),
+        ]);
+        let (host, http, ws) = derive_public_base(&h, false, 6502);
+        assert_eq!(host, "halos.local:4434");
+        assert_eq!(http, "https");
+        assert_eq!(ws, "wss");
+    }
+
+    #[test]
+    fn x_forwarded_host_without_port_and_https_omits_port() {
+        let h = headers(&[
+            ("host", "127.0.0.1:6502"),
+            ("x-forwarded-host", "halos.local"),
+            ("x-forwarded-proto", "https"),
+        ]);
+        let (host, _, _) = derive_public_base(&h, false, 6502);
+        assert_eq!(host, "halos.local");
+    }
+
+    #[test]
+    fn x_forwarded_host_absent_falls_back_to_host() {
+        // No X-Forwarded-Host → ordinary Host header is used.
+        let h = headers(&[
+            ("host", "halos.local:4434"),
+            ("x-forwarded-proto", "https"),
+        ]);
+        let (host, _, _) = derive_public_base(&h, false, 6502);
+        assert_eq!(host, "halos.local:4434");
+    }
+}
+
 async fn quit_handler(State(state): State<Web>) -> &'static str {
     let _ = state.shutdown_tx.send(());
     "bye\n"
 }
 
 async fn endpoints(State(state): State<Web>, headers: hyper::header::HeaderMap) -> Response {
-    let host: String = match headers.get(axum::http::header::HOST) {
-        Some(host) => host.to_str().unwrap_or("localhost").to_string(),
-        None => "localhost".to_string(),
-    };
-    let host = format!(
-        "{}:{}",
-        match Uri::from_str(&host) {
-            Ok(uri) => uri.host().unwrap_or("localhost").to_string(),
-            Err(_) => "localhost".to_string(),
-        },
-        state.args.port
-    );
+    let (host, http_scheme, ws_scheme) =
+        derive_public_base(&headers, state.tls, state.args.port);
 
     let mut endpoints = Endpoints {
         endpoints: HashMap::new(),
@@ -323,11 +544,6 @@ async fn endpoints(State(state): State<Web>, headers: hyper::header::HeaderMap) 
             version: VERSION,
             id: PACKAGE,
         },
-    };
-    let (http_scheme, ws_scheme) = if state.tls {
-        ("https", "wss")
-    } else {
-        ("http", "ws")
     };
     endpoints.endpoints.insert(
         "v2".to_string(),
