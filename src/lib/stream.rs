@@ -144,6 +144,31 @@ impl SignalKDelta {
         self.updates.push(delta_update);
     }
 
+    /// Add a Signal K `notifications.*` alarm update.
+    ///
+    /// The notification payload follows the Signal K alarm shape:
+    /// `{ state, method, message }`. State drives downstream UI severity
+    /// (alert < warn < alarm < emergency); `normal` clears a prior
+    /// notification at the same path. Method tells consumers whether to
+    /// show a visual badge, play a sound, or both.
+    pub(crate) fn add_notification_update(
+        &mut self,
+        path: &str,
+        value: NotificationValue,
+        source: &str,
+    ) {
+        let delta_update = DeltaUpdate {
+            timestamp: Some(Utc::now()),
+            source: Some(source.to_string()),
+            meta: Vec::new(),
+            values: vec![DeltaValue::Notification {
+                path: path.to_string(),
+                value,
+            }],
+        };
+        self.updates.push(delta_update);
+    }
+
     /// Add an AIS vessel update to the delta message.
     pub fn add_ais_vessel_update(&mut self, path: &str, vessel: &crate::ais::AisVesselApi) {
         let value = serde_json::to_value(vessel).unwrap_or(serde_json::Value::Null);
@@ -254,6 +279,46 @@ enum DeltaValue {
         /// Structured vessel data
         value: serde_json::Value,
     },
+    /// Signal K `notifications.*` alarm. Payload shape matches the
+    /// notification value defined in the Signal K spec.
+    Notification {
+        /// Full path under `notifications.` (e.g.
+        /// `notifications.radar.fur6424A.guardZone.1`).
+        path: String,
+        value: NotificationValue,
+    },
+}
+
+/// Signal K notification alarm payload. State / method / message map
+/// directly to the spec's notification value object; `state == "normal"`
+/// clears a prior alarm at the same path.
+#[derive(Serialize, Clone, Debug, ToSchema)]
+pub(crate) struct NotificationValue {
+    pub(crate) state: NotificationState,
+    pub(crate) method: Vec<NotificationMethod>,
+    pub(crate) message: String,
+}
+
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq, ToSchema)]
+#[serde(rename_all = "lowercase")]
+// Warn / Alarm / Emergency exist to match the Signal K spec ordering
+// (Normal < Alert < Warn < Alarm < Emergency); they aren't constructed
+// yet but follow-up notification types (e.g. radar connection lost,
+// CPA/TCPA breach) will need them.
+#[allow(dead_code)]
+pub(crate) enum NotificationState {
+    Normal,
+    Alert,
+    Warn,
+    Alarm,
+    Emergency,
+}
+
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum NotificationMethod {
+    Visual,
+    Sound,
 }
 
 /// Geographic position (decimal degrees) serialized to match the Signal K
@@ -272,6 +337,7 @@ impl DeltaValue {
             DeltaValue::Navigation { path, .. } => path,
             DeltaValue::NavigationPosition { path, .. } => path,
             DeltaValue::Ais { path, .. } => path,
+            DeltaValue::Notification { path, .. } => path,
         }
     }
 }

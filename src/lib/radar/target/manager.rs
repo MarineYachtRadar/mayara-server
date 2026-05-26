@@ -109,6 +109,14 @@ pub struct TrackerManager {
     sk_client_tx: broadcast::Sender<SignalKDelta>,
     /// Command receiver for MARPA requests and control changes
     command_rx: mpsc::Receiver<TrackerCommand>,
+    /// Active target count per (radar_key, guard_zone_index). Indexes 0
+    /// and 1 correspond to guard zones 1 and 2 (manual MARPA acquisitions
+    /// use GuardZone(0), which we skip). The counter is incremented when
+    /// a target is first acquired (Acquiring) inside the zone and
+    /// decremented when it goes Lost. A 0->1 transition emits an `alert`
+    /// `notifications.radar.<key>.guardZone.<n>`; a non-zero->0
+    /// transition emits the matching `normal` clear.
+    guard_zone_active: HashMap<String, [u32; 2]>,
 }
 
 impl TrackerManager {
@@ -131,9 +139,88 @@ impl TrackerManager {
             next_radar_index: 1,
             sk_client_tx,
             command_rx,
+            guard_zone_active: HashMap::new(),
         };
 
         (manager, command_tx)
+    }
+
+    /// Record a new guard-zone target acquisition and emit the SK
+    /// `notifications.radar.<key>.guardZone.<zone>` alert on the
+    /// 0 -> 1 transition. Idempotent on higher counts so a flurry of
+    /// blob hits inside the same zone produces a single alarm.
+    fn enter_guard_zone(&mut self, radar_key: &str, zone: u8) {
+        if zone == 0 || zone > 2 {
+            return;
+        }
+        let counts = self
+            .guard_zone_active
+            .entry(radar_key.to_string())
+            .or_insert([0; 2]);
+        let idx = (zone - 1) as usize;
+        let prev = counts[idx];
+        counts[idx] = prev.saturating_add(1);
+        if prev == 0 {
+            self.emit_guard_zone_notification(
+                radar_key,
+                zone,
+                crate::stream::NotificationState::Alert,
+                format!("Radar {} guard zone {}: target acquired", radar_key, zone),
+            );
+        }
+    }
+
+    /// Record a guard-zone target transitioning to Lost and emit the
+    /// matching `normal` clear when the last target in the zone leaves.
+    fn leave_guard_zone(&mut self, radar_key: &str, zone: u8) {
+        if zone == 0 || zone > 2 {
+            return;
+        }
+        let Some(counts) = self.guard_zone_active.get_mut(radar_key) else {
+            return;
+        };
+        let idx = (zone - 1) as usize;
+        let prev = counts[idx];
+        if prev == 0 {
+            return;
+        }
+        counts[idx] = prev - 1;
+        if counts[idx] == 0 {
+            self.emit_guard_zone_notification(
+                radar_key,
+                zone,
+                crate::stream::NotificationState::Normal,
+                format!("Radar {} guard zone {}: clear", radar_key, zone),
+            );
+        }
+    }
+
+    fn emit_guard_zone_notification(
+        &self,
+        radar_key: &str,
+        zone: u8,
+        state: crate::stream::NotificationState,
+        message: String,
+    ) {
+        use crate::stream::{NotificationMethod, NotificationValue};
+        let path = format!(
+            "notifications.radar.{}.guardZone.{}",
+            radar_key, zone
+        );
+        let method = match state {
+            crate::stream::NotificationState::Normal => Vec::new(),
+            _ => vec![NotificationMethod::Visual, NotificationMethod::Sound],
+        };
+        let value = NotificationValue {
+            state,
+            method,
+            message,
+        };
+        let mut delta = SignalKDelta::new();
+        delta.add_notification_update(&path, value, "mayara");
+        if let Err(e) = self.sk_client_tx.send(delta) {
+            log::trace!("Failed to broadcast guard-zone notification: {}", e);
+        }
     }
 
     /// Get or create tracker for a radar
@@ -240,6 +327,15 @@ impl TrackerManager {
                 if let Err(e) = self.sk_client_tx.send(delta) {
                     log::trace!("Failed to broadcast promoted target: {}", e);
                 }
+            }
+        }
+
+        // Fire the guard-zone alarm on the first acquisition of a target
+        // inside the zone. Subsequent matches against the same target go
+        // through ProcessResult::Updated and don't touch the counter.
+        if let ProcessResult::NewAcquiring(_) = result {
+            if let CandidateSource::GuardZone(zone) = source {
+                self.enter_guard_zone(&msg.radar_key, zone);
             }
         }
 
@@ -445,6 +541,10 @@ impl TrackerManager {
         // Format: (target_id, radar_key, api)
         let mut lost_updates: Vec<(u64, String, ArpaTargetApi)> = Vec::new();
         let mut deletions: Vec<(u64, String)> = Vec::new(); // (target_id, radar_key)
+        // (radar_key, zone) pairs to decrement the guard-zone counter for.
+        // Collected here so the SK notification emission happens outside
+        // the tracker borrow below.
+        let mut guard_zone_exits: Vec<(String, u8)> = Vec::new();
 
         if self.merge_mode {
             if let Some(ref mut tracker) = self.shared_tracker {
@@ -454,6 +554,9 @@ impl TrackerManager {
                 for id in &lost_ids {
                     if let Some(target) = tracker.get_target(*id) {
                         let radar_key = target.last_radar_key.clone();
+                        if let Some(zone) = target.source_zone {
+                            guard_zone_exits.push((radar_key.clone(), zone));
+                        }
                         let api = active_target_to_api(target, target.last_radar_position.as_ref());
                         lost_updates.push((*id, radar_key, api));
                     }
@@ -478,6 +581,9 @@ impl TrackerManager {
                     // Collect lost status updates
                     for id in &lost_ids {
                         if let Some(target) = tracker.get_target(*id) {
+                            if let Some(zone) = target.source_zone {
+                                guard_zone_exits.push((radar_key.clone(), zone));
+                            }
                             let api =
                                 active_target_to_api(target, target.last_radar_position.as_ref());
                             lost_updates.push((*id, radar_key.clone(), api));
@@ -490,6 +596,12 @@ impl TrackerManager {
                     }
                 }
             }
+        }
+
+        // Drive the guard-zone counter and emit any 0-transition `normal`
+        // notifications now that the tracker borrow has ended.
+        for (radar_key, zone) in guard_zone_exits {
+            self.leave_guard_zone(&radar_key, zone);
         }
 
         // Now broadcast outside the tracker borrow
@@ -951,5 +1063,75 @@ mod tests {
         let radar_pos = GeoPosition::new(52.0, 4.0);
         let targets = manager.get_targets_api(Some(radar_pos));
         assert!(targets.is_empty()); // No blobs processed yet
+    }
+
+    /// Sink that drains the broadcast channel into a Vec so tests can
+    /// assert on the deltas the manager emits.
+    fn drain_sk_deltas(
+        mut rx: tokio::sync::broadcast::Receiver<SignalKDelta>,
+    ) -> Vec<SignalKDelta> {
+        let mut out = Vec::new();
+        while let Ok(delta) = rx.try_recv() {
+            out.push(delta);
+        }
+        out
+    }
+
+    fn make_test_manager_with_rx() -> (TrackerManager, tokio::sync::broadcast::Receiver<SignalKDelta>) {
+        let (sk_tx, sk_rx) = broadcast::channel(16);
+        let (manager, _command_tx) = TrackerManager::new(false, sk_tx);
+        (manager, sk_rx)
+    }
+
+    #[test]
+    fn guard_zone_alert_fires_on_first_acquisition_only() {
+        let (mut manager, rx) = make_test_manager_with_rx();
+        manager.enter_guard_zone("nav1", 1);
+        manager.enter_guard_zone("nav1", 1);
+        manager.enter_guard_zone("nav1", 1);
+        let deltas = drain_sk_deltas(rx);
+        // 0->1 fires alert; the next two are 1->2 and 2->3 so stay quiet.
+        assert_eq!(deltas.len(), 1);
+    }
+
+    #[test]
+    fn guard_zone_normal_fires_on_last_target_leaving() {
+        let (mut manager, rx) = make_test_manager_with_rx();
+        manager.enter_guard_zone("nav1", 1);
+        manager.enter_guard_zone("nav1", 1);
+        manager.leave_guard_zone("nav1", 1); // 2 -> 1, still alarming
+        manager.leave_guard_zone("nav1", 1); // 1 -> 0, clear
+        let deltas = drain_sk_deltas(rx);
+        // First alert + final normal.
+        assert_eq!(deltas.len(), 2);
+    }
+
+    #[test]
+    fn guard_zone_counters_are_per_radar_and_per_zone() {
+        let (mut manager, rx) = make_test_manager_with_rx();
+        manager.enter_guard_zone("nav1", 1);
+        manager.enter_guard_zone("nav1", 2);
+        manager.enter_guard_zone("nav2", 1);
+        // Three independent 0->1 transitions, three alerts.
+        assert_eq!(drain_sk_deltas(rx).len(), 3);
+    }
+
+    #[test]
+    fn guard_zone_skips_marpa_zone_zero() {
+        let (mut manager, rx) = make_test_manager_with_rx();
+        manager.enter_guard_zone("nav1", 0);
+        manager.leave_guard_zone("nav1", 0);
+        // Zone 0 is MARPA / manual acquisition and shouldn't produce
+        // guard-zone notifications.
+        assert!(drain_sk_deltas(rx).is_empty());
+    }
+
+    #[test]
+    fn guard_zone_leave_below_zero_is_noop() {
+        let (mut manager, rx) = make_test_manager_with_rx();
+        manager.leave_guard_zone("nav1", 1);
+        manager.leave_guard_zone("nav1", 1);
+        // No prior enter; leaves should not emit a `normal` from nothing.
+        assert!(drain_sk_deltas(rx).is_empty());
     }
 }
