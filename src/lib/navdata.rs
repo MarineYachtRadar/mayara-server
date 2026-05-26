@@ -1242,19 +1242,24 @@ fn apply_signalk_value(values_entry: &Value, source: &str) {
     log::trace!("parse_signalk: path = '{}', value = {:?}", path, value);
     match path {
         "navigation.position" => {
-            set_position(
-                value["latitude"].as_f64(),
-                value["longitude"].as_f64(),
-                source,
-            );
-            // First own-ship position turns the probe deadline off for the
-            // life of this connection — even a single delta tells us the
-            // upstream is publishing what the radar overlay needs.
-            mark_signalk_own_ship_nav_seen();
+            let lat = value["latitude"].as_f64();
+            let lon = value["longitude"].as_f64();
+            set_position(lat, lon, source);
+            // Only arm the probe-satisfied flag for a delta that carries a
+            // real fix. Signal K servers do publish `value: null` (or a
+            // partial position) when the upstream loses GPS — counting
+            // those would keep mayara stuck on a server that isn't
+            // actually providing nav.
+            if lat.is_some() && lon.is_some() {
+                mark_signalk_own_ship_nav_seen();
+            }
         }
         "navigation.headingTrue" => {
-            set_heading_true(value.as_f64(), source);
-            mark_signalk_own_ship_nav_seen();
+            let heading = value.as_f64();
+            set_heading_true(heading, source);
+            if heading.is_some() {
+                mark_signalk_own_ship_nav_seen();
+            }
         }
         "navigation.speedOverGround" => {
             set_sog(value.as_f64());
