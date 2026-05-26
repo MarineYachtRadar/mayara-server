@@ -47,9 +47,15 @@ const MIN_MATCH_DISTANCE_M: f64 = 50.0;
 /// within max_speed * delta_time. We use 1.5x to account for prediction error.
 const MATCH_DISTANCE_SPEED_MULTIPLIER: f64 = 1.5;
 
-/// Maximum allowed turn angle (degrees) for high-speed targets
-/// Targets appearing to turn more than this at speed are rejected as false matches
-const MAX_TURN_ANGLE_DEG: f64 = 130.0;
+/// Maximum allowed turn angle (degrees) between consecutive sightings of
+/// a target moving faster than `TURN_REJECTION_SPEED_MS`. A real planing
+/// boat at 5 m/s can hard-over and pivot well under 90° per 3-second
+/// radar revolution; turns beyond this are almost certainly a stray blob
+/// being mistakenly associated with the wrong target. Applied for the
+/// entire lifetime of a target — the previous early-tracking-only check
+/// missed the most dangerous case (a long-tracked target suddenly
+/// "teleporting" via a false association).
+const MAX_TURN_ANGLE_DEG: f64 = 90.0;
 
 /// Speed threshold (m/s) above which turn rejection is applied
 const TURN_REJECTION_SPEED_MS: f64 = 5.0;
@@ -201,13 +207,21 @@ impl ActiveTarget {
             None
         };
 
-        // Turn rejection: reject implausible maneuvers for fast targets in early tracking
-        // Based on radar_pi: turn > 130° at speed > 5 m/s for status < 5
-        // Use Kalman-estimated SOG rather than measured SOG: a stationary target's blob
-        // position varies by tens of meters per rotation, producing apparent measured
-        // speeds of 8-10 m/s with random directions. The Kalman filter correctly
-        // converges toward the true low speed and avoids false rejections.
-        if self.update_count >= 2 && self.update_count < 5 {
+        // Turn rejection: reject implausible maneuvers for fast targets.
+        // Applies for the entire lifetime of a target (update_count >= 2,
+        // once a previous COG exists). The previous early-tracking-only
+        // window (update_count < 5) let a mature track suddenly teleport
+        // to a false association without challenge — the worst case
+        // operationally because a stable track is the one the navigator
+        // is most likely to be relying on.
+        //
+        // SOG is read from the Kalman estimate rather than from the raw
+        // measured displacement: a stationary target's blob centre wanders
+        // by tens of metres per rotation, producing apparent measured
+        // speeds of 8-10 m/s with random direction. The Kalman filter
+        // correctly converges toward the true low speed and avoids
+        // false rejections of stationary buoys.
+        if self.update_count >= 2 {
             if let (Some(current_cog), Some(new_cog), Some(kalman_sog)) =
                 (self.cog, measured_cog, self.sog)
             {
@@ -1807,5 +1821,77 @@ mod tests {
                 tracker.active_count()
             );
         }
+    }
+
+    #[test]
+    fn turn_rejection_applies_to_mature_tracks() {
+        // A long-tracked fast target suddenly receives an "update" 180°
+        // off its heading. This is the kind of false association the
+        // old early-tracking-only window let through, and the kind most
+        // likely to mislead a navigator (mature tracks are trusted).
+        // After #4 the rejection applies for the entire lifetime so
+        // the bogus update is rejected even when the target is well
+        // established.
+        let mut tracker = TargetTracker::new_merged(2048);
+        let max_speed_ms = TEST_MAX_SPEED_MS;
+
+        // 10 clean revolutions heading east at ~10 m/s. After the 4th
+        // update the target is in Tracking; we go far past that.
+        let lat = 52.0;
+        let start_lon = 4.0;
+        let lon_step = 30.0 / meters_per_degree_longitude(&lat);
+        for i in 0..10u64 {
+            tracker.process_candidate(TargetCandidate {
+                time: i * 3000,
+                position: GeoPosition::new(lat, start_lon + lon_step * i as f64),
+                size_meters: 30.0,
+                radar_key: "test".to_string(),
+                radar_position: Some(GeoPosition::new(52.0, 4.0)),
+                max_target_speed_ms: max_speed_ms,
+                source: CandidateSource::GuardZone(1),
+            });
+        }
+        let target = tracker.get_active_targets().next().unwrap();
+        assert_eq!(target.status, TargetStatus::Tracking);
+        assert!(
+            target.update_count >= 9,
+            "target should be well past the old <5 window: update_count={}",
+            target.update_count
+        );
+
+        // Now feed a candidate that would represent a 180° course
+        // reversal at the same speed (jumping 30m west of the prior
+        // position rather than 30m east). With the old early-only check,
+        // the mature track would silently accept this and corrupt itself.
+        let last_lon = start_lon + lon_step * 9.0;
+        let bogus = TargetCandidate {
+            time: 10 * 3000,
+            position: GeoPosition::new(lat, last_lon - lon_step),
+            size_meters: 30.0,
+            radar_key: "test".to_string(),
+            radar_position: Some(GeoPosition::new(52.0, 4.0)),
+            max_target_speed_ms: max_speed_ms,
+            source: CandidateSource::GuardZone(1),
+        };
+        // The mature track rejects the bogus update; because the candidate
+        // comes from a guard zone, a fresh acquiring target is created
+        // instead. Either way the original mature track must NOT have
+        // been updated to the reversed position.
+        let _ = tracker.process_candidate(bogus);
+
+        // Find the mature track (the one with high update count) and
+        // confirm its position is still where the eastbound run left it,
+        // not pulled west by the bogus 180° measurement.
+        let mature = tracker
+            .get_active_targets()
+            .max_by_key(|t| t.update_count)
+            .unwrap();
+        assert!(
+            (mature.position.lon() - last_lon).abs() < 1e-9,
+            "mature track position must not have been pulled west by the bogus update: \
+             got lon={}, expected {}",
+            mature.position.lon(),
+            last_lon
+        );
     }
 }
