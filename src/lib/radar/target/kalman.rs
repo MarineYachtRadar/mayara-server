@@ -11,8 +11,8 @@ use nalgebra::{SMatrix, SVector};
 use super::{METERS_PER_DEGREE_LATITUDE, meters_per_degree_longitude};
 use crate::radar::GeoPosition;
 
-type Vector4 = SVector<f64, 4>;
-type Matrix4x4 = SMatrix<f64, 4, 4>;
+pub(super) type Vector4 = SVector<f64, 4>;
+pub(super) type Matrix4x4 = SMatrix<f64, 4, 4>;
 type Matrix2x2 = SMatrix<f64, 2, 2>;
 type Matrix4x2 = SMatrix<f64, 4, 2>;
 type Matrix2x4 = SMatrix<f64, 2, 4>;
@@ -288,6 +288,34 @@ impl KalmanFilter {
     pub fn get_speed_uncertainty(&self) -> f64 {
         // Rough approximation of standard deviation of speed
         ((self.p[(2, 2)] + self.p[(3, 3)]) / 2.0).sqrt()
+    }
+
+    /// Return the (state, covariance) pair for IMM mixing.
+    /// Callers must respect the filter's `ref_lat` / `ref_lon` — the
+    /// state vector is in local metres relative to that reference.
+    pub(super) fn state_and_covariance(&self) -> (Vector4, Matrix4x4) {
+        (self.state, self.p)
+    }
+
+    /// Replace `(state, P)` for IMM mixing. Time and reference position
+    /// are unchanged. Used by `ImmMotionModel` to seed each filter with
+    /// its mixed initial state at the start of each measurement step.
+    pub(super) fn set_state_and_covariance(&mut self, state: Vector4, p: Matrix4x4) {
+        self.state = state;
+        self.p = p;
+    }
+
+    /// Reference latitude used to convert geographic positions to the
+    /// filter's local-metres coordinate frame. Exposed for IMM mixing,
+    /// which must convert all filters to a common frame before averaging
+    /// their states.
+    pub(super) fn ref_lat(&self) -> f64 {
+        self.ref_lat
+    }
+
+    /// Reference longitude — see `ref_lat`.
+    pub(super) fn ref_lon(&self) -> f64 {
+        self.ref_lon
     }
 
     /// Set process noise level (higher = more maneuverable targets)

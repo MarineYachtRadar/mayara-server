@@ -6,7 +6,7 @@
 
 use std::f64::consts::TAU;
 
-use super::kalman::KalmanFilter;
+use super::kalman::{KalmanFilter, Matrix4x4, Vector4};
 use crate::radar::GeoPosition;
 
 /// Motion estimation result
@@ -131,32 +131,86 @@ impl ImmMotionModel {
         exponent.exp() / (sigma * TAU.sqrt())
     }
 
-    /// Mix model states based on mixing probabilities
+    /// IMM interaction/mixing step. Produces, for each filter j, a mixed
+    /// initial state and covariance that the filter then uses as its prior
+    /// for this measurement. Without this step the three filters drift
+    /// apart over time and the IMM degenerates to "three parallel Kalmans
+    /// with a softmax over likelihoods" — which is much less informative
+    /// than the literature suggests by name.
+    ///
+    /// Bar-Shalom, *Estimation with Applications to Tracking and
+    /// Navigation*, eq. 11.6.6:
+    ///   x0_j = Σ_i μ_{i|j} · x_i
+    ///   P0_j = Σ_i μ_{i|j} · (P_i + (x_i - x0_j)(x_i - x0_j)ᵀ)
+    /// Then `model_probs[j] = c_bar[j]` is the predicted weight for j.
+    ///
+    /// Requires all three filters to be in the same local-metre frame.
+    /// That's automatic here because `init_with_uncertainty` sets the
+    /// same ref_lat/ref_lon on all three from the same first measurement,
+    /// and `force_state` updates all three together with one position.
     fn mix_states(&mut self) {
-        // Calculate mixing probabilities
-        let mut mixing_probs = [[0.0; 3]; 3];
         let mut c_bar = [0.0; 3];
-
-        // c_bar[j] = sum_i(p_ij * mu_i)
         for j in 0..3 {
             for i in 0..3 {
                 c_bar[j] += TRANSITION_PROB[i][j] * self.model_probs[i];
             }
         }
 
-        // mixing_prob[i|j] = p_ij * mu_i / c_bar[j]
+        let mut mixing_probs = [[0.0_f64; 3]; 3];
         for j in 0..3 {
-            for i in 0..3 {
-                if c_bar[j] > 1e-10 {
-                    mixing_probs[i][j] = TRANSITION_PROB[i][j] * self.model_probs[i] / c_bar[j];
+            if c_bar[j] > 1e-10 {
+                for i in 0..3 {
+                    mixing_probs[i][j] =
+                        TRANSITION_PROB[i][j] * self.model_probs[i] / c_bar[j];
                 }
             }
         }
 
-        // Store predicted probabilities for next update
+        // Snapshot current (state, P) for each filter once — we read them
+        // multiple times to build the mixed priors and must not see our
+        // own writes mid-loop.
+        let filters = [&self.cv_filter, &self.ca_filter, &self.ct_filter];
+        let snapshots: [(Vector4, Matrix4x4); 3] = [
+            filters[0].state_and_covariance(),
+            filters[1].state_and_covariance(),
+            filters[2].state_and_covariance(),
+        ];
+
+        // Sanity check: all filters must share the same local frame. The
+        // IMM constructor and init paths guarantee this, but a future
+        // change could break it silently.
+        debug_assert!(
+            (self.cv_filter.ref_lat() - self.ca_filter.ref_lat()).abs() < 1e-12
+                && (self.cv_filter.ref_lat() - self.ct_filter.ref_lat()).abs() < 1e-12,
+            "IMM filters must share ref_lat for mixing to be valid"
+        );
+
+        let mut mixed: [(Vector4, Matrix4x4); 3] =
+            [(Vector4::zeros(), Matrix4x4::zeros()); 3];
         for j in 0..3 {
-            self.model_probs[j] = c_bar[j];
+            // x0_j = Σ_i μ_{i|j} · x_i
+            let mut x0 = Vector4::zeros();
+            for i in 0..3 {
+                x0 += mixing_probs[i][j] * snapshots[i].0;
+            }
+
+            // P0_j = Σ_i μ_{i|j} · (P_i + (x_i - x0_j)(x_i - x0_j)ᵀ)
+            let mut p0 = Matrix4x4::zeros();
+            for i in 0..3 {
+                let dx = snapshots[i].0 - x0;
+                p0 += mixing_probs[i][j] * (snapshots[i].1 + dx * dx.transpose());
+            }
+
+            mixed[j] = (x0, p0);
         }
+
+        // Write the mixed priors back into each filter.
+        self.cv_filter.set_state_and_covariance(mixed[0].0, mixed[0].1);
+        self.ca_filter.set_state_and_covariance(mixed[1].0, mixed[1].1);
+        self.ct_filter.set_state_and_covariance(mixed[2].0, mixed[2].1);
+
+        // Predicted model probabilities for the upcoming update step.
+        self.model_probs = c_bar;
     }
 
     /// Update model probabilities based on measurement likelihoods
@@ -523,6 +577,47 @@ mod tests {
             "Final SOG {:.1} m/s should be close to actual {:.1} m/s",
             final_motion.sog,
             speed_ms
+        );
+    }
+
+    /// IMM mixing must pull the three filters' state estimates together.
+    /// Without mixing, each filter drifts independently with its own Q,
+    /// so after many updates the high-Q CT filter is materially offset
+    /// from the low-Q CV one. With proper mixing the filters stay in the
+    /// same neighbourhood.
+    #[test]
+    fn imm_mixing_keeps_filter_states_consistent() {
+        let mut model = ImmMotionModel::new();
+        let start = GeoPosition::new(52.0, 4.0);
+        model.init(start, 0);
+
+        // 20 clean updates moving north at ~10 m/s.
+        let delta_lat = 30.0 / super::super::METERS_PER_DEGREE_LATITUDE;
+        for i in 1..=20u64 {
+            model.update(
+                GeoPosition::new(52.0 + delta_lat * i as f64, 4.0),
+                i * 3000,
+            );
+        }
+
+        // All three filters should predict the same future position to
+        // within a few metres. The blended prediction relies on this; if
+        // the filters drift apart the blended position is no longer at
+        // any of them.
+        let future_time = 21 * 3000;
+        let cv_pred = model.cv_filter.predict(future_time);
+        let ca_pred = model.ca_filter.predict(future_time);
+        let ct_pred = model.ct_filter.predict(future_time);
+
+        let max_spread = calculate_distance(&cv_pred, &ca_pred)
+            .max(calculate_distance(&cv_pred, &ct_pred))
+            .max(calculate_distance(&ca_pred, &ct_pred));
+
+        assert!(
+            max_spread < 5.0,
+            "IMM mixing should keep filter predictions within 5m of each \
+             other after 20 clean steady-state updates; got max spread {:.2}m",
+            max_spread
         );
     }
 }
