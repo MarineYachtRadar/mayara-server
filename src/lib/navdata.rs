@@ -472,18 +472,48 @@ pub(crate) struct NavigationData {
 }
 
 /// Set true the first time the current Signal K receive loop sees a real
-/// delta. Reset to false in `run` before each receive loop starts; read
-/// (and reset) after the loop returns so an empty connection can be marked
-/// as a "silent" server and skipped on subsequent reconnects. Process-wide
-/// `AtomicBool` because the only writers are the receive loops on a single
-/// `NavigationData::run` task and the only reader is its caller.
+/// delta. Reset to false in the receive loop's preamble. After the loop
+/// returns, the caller uses this to mark an entirely-silent server in the
+/// cooldown map.
 static SIGNALK_DELIVERED_DATA: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+
+/// Set true the first time the current Signal K receive loop sees an
+/// own-ship `navigation.position` or `navigation.headingTrue` delta. This
+/// is the tighter "useful" criterion: a server that holds the connection
+/// open and even emits some chatter but never publishes own-ship nav
+/// data is no good to a radar app, because we can't place AIS targets
+/// or rotate the overlay without it. The 30-second probe in each receive
+/// loop watches this flag and tears the connection down if it stays
+/// false past the deadline.
+static SIGNALK_OWN_SHIP_NAV_SEEN: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// How long a Signal K connection is given to publish at least one
+/// own-ship `navigation.position` or `navigation.headingTrue` delta
+/// before we consider the server unproductive and cool it down. Healthy
+/// Signal K servers publish nav at multi-Hz once a vessel.self GPS is
+/// configured, so 5s is plenty; misconfigured servers (no GPS, no auth
+/// on a secured stream) miss this window with margin to spare, and
+/// the operator gets useful diagnostics in seconds rather than minutes.
+const OWN_SHIP_NAV_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Mark the current Signal K receive loop as having delivered at least one
 /// real delta. Idempotent; safe to call on every message.
 fn mark_signalk_delivered() {
     SIGNALK_DELIVERED_DATA.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Mark that the current Signal K receive loop has seen own-ship
+/// position or heading. Called from `apply_signalk_value` when a
+/// `navigation.position` / `navigation.headingTrue` delta lands on an
+/// own-ship context.
+fn mark_signalk_own_ship_nav_seen() {
+    SIGNALK_OWN_SHIP_NAV_SEEN.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn own_ship_nav_seen() -> bool {
+    SIGNALK_OWN_SHIP_NAV_SEEN.load(std::sync::atomic::Ordering::SeqCst)
 }
 
 impl NavigationData {
@@ -506,11 +536,16 @@ impl NavigationData {
     }
 
     /// Called after a Signal K receive loop returns. If a SocketAddr is
-    /// present (Signal K paths only) and the loop never delivered any
-    /// deltas before closing, mark the server as silent so the next
-    /// discovery cycle skips it for `SILENT_SERVER_COOLDOWN`. Conversely,
-    /// a productive connection clears any prior silent marker so a
-    /// previously-bad server that's been fixed is re-trusted right away.
+    /// present (Signal K paths only), decide which cooldown action to take
+    /// based on what arrived during the connection:
+    ///
+    /// - Own-ship navigation seen → server is fully working; clear any
+    ///   prior silent marker so a recovered server is trusted again.
+    /// - Some deltas but no own-ship nav → server holds the connection
+    ///   open but isn't publishing what mayara needs (no GPS, no auth on
+    ///   a secured stream). Mark silent with the no-nav reason.
+    /// - No deltas at all → server is completely silent. Mark silent with
+    ///   the no-deltas reason.
     fn update_signalk_silent_state(
         signalk_peer: Option<SocketAddr>,
         result: &Result<(), RadarError>,
@@ -523,8 +558,11 @@ impl NavigationData {
             return;
         }
         let delivered = SIGNALK_DELIVERED_DATA.swap(false, std::sync::atomic::Ordering::SeqCst);
-        if delivered {
+        let own_ship = SIGNALK_OWN_SHIP_NAV_SEEN.swap(false, std::sync::atomic::Ordering::SeqCst);
+        if own_ship {
             crate::signalk::clear_signalk_server_silent(addr);
+        } else if delivered {
+            crate::signalk::mark_signalk_server_silent_no_nav(addr);
         } else {
             crate::signalk::mark_signalk_server_silent(addr);
         }
@@ -872,15 +910,34 @@ impl NavigationData {
                 .map(|a| a.to_string())
                 .unwrap_or_else(|_| "<unknown>".to_string())
         );
-        // Each new connection starts as "no deltas seen yet".
+        // Each new connection starts fresh: no deltas seen yet, no own-ship
+        // nav seen yet. The own-ship-nav flag is also reset so a previous
+        // healthy connection's state doesn't make a new unhealthy one look
+        // OK on close.
         SIGNALK_DELIVERED_DATA.store(false, std::sync::atomic::Ordering::SeqCst);
+        SIGNALK_OWN_SHIP_NAV_SEEN.store(false, std::sync::atomic::Ordering::SeqCst);
         let (read_half, mut write_half) = stream.split();
         let mut lines = BufReader::new(read_half).lines();
+
+        // The own-ship-nav probe only applies to Signal K connections;
+        // NMEA0183-over-TCP carries its own sentences and isn't expected
+        // to produce Signal K navigation deltas.
+        let probe_active = !self.nmea0183_mode;
+        let probe_deadline = tokio::time::sleep(OWN_SHIP_NAV_PROBE_TIMEOUT);
+        tokio::pin!(probe_deadline);
 
         loop {
             tokio::select! { biased;
                 _ = subsys.on_shutdown_requested() => {
                     log::debug!("{} receive_loop shutdown", self.what);
+                    return Ok(());
+                },
+                _ = &mut probe_deadline, if probe_active && !own_ship_nav_seen() => {
+                    log::warn!(
+                        "{} no own-ship navigation within {:?}; dropping connection",
+                        self.what,
+                        OWN_SHIP_NAV_PROBE_TIMEOUT,
+                    );
                     return Ok(());
                 },
                 r = lines.next_line() => {
@@ -964,14 +1021,33 @@ impl NavigationData {
     ) -> Result<(), RadarError> {
         log::info!("{} WebSocket receive_loop started", self.what);
 
-        // Each new connection starts as "no deltas seen yet".
+        // Each new connection starts fresh; see receive_loop preamble for
+        // the rationale on resetting both flags.
         SIGNALK_DELIVERED_DATA.store(false, std::sync::atomic::Ordering::SeqCst);
+        SIGNALK_OWN_SHIP_NAV_SEEN.store(false, std::sync::atomic::Ordering::SeqCst);
         let (mut write, mut read) = ws.split();
+
+        // Probe deadline: if no own-ship navigation arrives within
+        // OWN_SHIP_NAV_PROBE_TIMEOUT, return Ok so the caller's
+        // update_signalk_silent_state cools the server down with the
+        // no-nav reason. The select arm is guarded by `if !own_ship_nav_seen()`
+        // so it stops firing as soon as we get the data we wanted.
+        let probe_deadline = tokio::time::sleep(OWN_SHIP_NAV_PROBE_TIMEOUT);
+        tokio::pin!(probe_deadline);
 
         loop {
             tokio::select! { biased;
                 _ = subsys.on_shutdown_requested() => {
                     log::debug!("{} receive_ws_loop shutdown", self.what);
+                    let _ = write.close().await;
+                    return Ok(());
+                },
+                _ = &mut probe_deadline, if !own_ship_nav_seen() => {
+                    log::warn!(
+                        "{} no own-ship navigation within {:?}; dropping connection",
+                        self.what,
+                        OWN_SHIP_NAV_PROBE_TIMEOUT,
+                    );
                     let _ = write.close().await;
                     return Ok(());
                 },
@@ -1167,14 +1243,24 @@ fn apply_signalk_value(values_entry: &Value, source: &str) {
     log::trace!("parse_signalk: path = '{}', value = {:?}", path, value);
     match path {
         "navigation.position" => {
-            set_position(
-                value["latitude"].as_f64(),
-                value["longitude"].as_f64(),
-                source,
-            );
+            let lat = value["latitude"].as_f64();
+            let lon = value["longitude"].as_f64();
+            set_position(lat, lon, source);
+            // Only arm the probe-satisfied flag for a delta that carries a
+            // real fix. Signal K servers do publish `value: null` (or a
+            // partial position) when the upstream loses GPS — counting
+            // those would keep mayara stuck on a server that isn't
+            // actually providing nav.
+            if lat.is_some() && lon.is_some() {
+                mark_signalk_own_ship_nav_seen();
+            }
         }
         "navigation.headingTrue" => {
-            set_heading_true(value.as_f64(), source);
+            let heading = value.as_f64();
+            set_heading_true(heading, source);
+            if heading.is_some() {
+                mark_signalk_own_ship_nav_seen();
+            }
         }
         "navigation.speedOverGround" => {
             set_sog(value.as_f64());
