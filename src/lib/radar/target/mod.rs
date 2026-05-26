@@ -97,17 +97,77 @@ pub struct TargetMotionApi {
 }
 
 /// Collision danger assessment in the API format.
-/// Entire field is omitted when vessels are diverging (no CPA).
+///
+/// Emitted whenever the two vessels have non-zero relative velocity, so
+/// consumers can show the historical CPA of a vessel that has just passed
+/// us (negative TCPA) as well as the upcoming CPA of a converging one.
+/// Omitted only when relative motion is undefined (both stationary, or
+/// motion data not yet available).
 #[derive(Serialize, Clone, Debug, ToSchema)]
 pub struct TargetDangerApi {
     /// Closest Point of Approach in meters
     pub cpa: f64,
-    /// Time to CPA in seconds
+    /// Time to CPA in seconds. Positive = future (closing); negative =
+    /// past (already passed). Magnitude is the time interval to/from
+    /// the closest point.
     pub tcpa: f64,
+    /// True when the target is a close-quarters situation by IMO defaults:
+    /// CPA < 0.5 nm (≈926 m) AND TCPA in [0, 6 min]. Historical CPAs
+    /// (negative TCPA) never trigger this flag.
+    pub is_dangerous: bool,
 }
 
 impl TargetDangerApi {
+    /// CPA threshold for the danger flag (0.5 nautical miles in metres).
+    pub const DANGER_CPA_M: f64 = 0.5 * super::NAUTICAL_MILE_F64;
+    /// TCPA threshold for the danger flag (6 minutes in seconds).
+    pub const DANGER_TCPA_S: f64 = 6.0 * 60.0;
+
+    pub fn new(cpa: f64, tcpa: f64) -> Self {
+        let is_dangerous =
+            cpa < Self::DANGER_CPA_M && tcpa >= 0.0 && tcpa <= Self::DANGER_TCPA_S;
+        TargetDangerApi {
+            cpa,
+            tcpa,
+            is_dangerous,
+        }
+    }
+
     fn is_empty(&self) -> bool {
-        self.cpa == 0.0 && self.tcpa == 0.0
+        self.cpa == 0.0 && self.tcpa == 0.0 && !self.is_dangerous
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn target_danger_api_flags_imminent_close_pass() {
+        // 200m CPA in 3 minutes is a close-quarters IMO situation.
+        let d = TargetDangerApi::new(200.0, 180.0);
+        assert!(d.is_dangerous);
+    }
+
+    #[test]
+    fn target_danger_api_does_not_flag_distant_cpa() {
+        // 2000m at 3 min is well outside the 0.5 nm threshold.
+        let d = TargetDangerApi::new(2000.0, 180.0);
+        assert!(!d.is_dangerous);
+    }
+
+    #[test]
+    fn target_danger_api_does_not_flag_far_future() {
+        // 200m CPA but 10 min away — outside the 6 min IMO window.
+        let d = TargetDangerApi::new(200.0, 600.0);
+        assert!(!d.is_dangerous);
+    }
+
+    #[test]
+    fn target_danger_api_does_not_flag_historical_cpa() {
+        // Close CPA but TCPA is in the past — already passed, not a
+        // future close-quarters situation.
+        let d = TargetDangerApi::new(50.0, -30.0);
+        assert!(!d.is_dangerous);
     }
 }

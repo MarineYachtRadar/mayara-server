@@ -779,10 +779,7 @@ fn calculate_danger(
     radar_position: Option<&GeoPosition>,
 ) -> TargetDangerApi {
     let Some(own_pos) = radar_position else {
-        return TargetDangerApi {
-            cpa: 0.0,
-            tcpa: 0.0,
-        };
+        return TargetDangerApi::new(0.0, 0.0);
     };
 
     let own_sog = crate::navdata::get_sog().unwrap_or(0.0);
@@ -803,16 +800,10 @@ fn compute_danger(
     use crate::radar::cpa::calculate_cpa_from_motion;
 
     let Some(target_sog) = target.sog else {
-        return TargetDangerApi {
-            cpa: 0.0,
-            tcpa: 0.0,
-        };
+        return TargetDangerApi::new(0.0, 0.0);
     };
     let Some(target_cog) = target.cog else {
-        return TargetDangerApi {
-            cpa: 0.0,
-            tcpa: 0.0,
-        };
+        return TargetDangerApi::new(0.0, 0.0);
     };
 
     let target_pos = target.predict_position(target.last_update);
@@ -825,14 +816,8 @@ fn compute_danger(
         target_sog,
         target_cog,
     ) {
-        Some(result) => TargetDangerApi {
-            cpa: result.cpa,
-            tcpa: result.tcpa,
-        },
-        None => TargetDangerApi {
-            cpa: 0.0,
-            tcpa: 0.0,
-        },
+        Some(result) => TargetDangerApi::new(result.cpa, result.tcpa),
+        None => TargetDangerApi::new(0.0, 0.0),
     }
 }
 
