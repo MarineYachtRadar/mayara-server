@@ -218,7 +218,21 @@ impl KalmanFilter {
 
         // Kalman gain: K = P * HT * (H * P * HT + R)^-1
         let s = h * self.p * ht + self.r;
-        let s_inv = s.try_inverse().unwrap_or(Matrix2x2::identity());
+        let Some(s_inv) = s.try_inverse() else {
+            // S is the innovation covariance H·P·Hᵀ + R. With positive-
+            // definite P and R this should never be singular. If it is,
+            // something has gone wrong (NaN propagation, numerical drift)
+            // and substituting identity for s_inv silently corrupts the
+            // filter. Skip this update — keep state at the prediction and
+            // hope the next measurement gives a well-conditioned S.
+            log::error!(
+                "Kalman: singular innovation covariance, skipping update at t={}",
+                time
+            );
+            self.state = predicted_state;
+            self.last_time = time;
+            return self.get_motion();
+        };
         let k: Matrix4x2 = self.p * ht * s_inv;
 
         // Updated state: X = X + K * y
