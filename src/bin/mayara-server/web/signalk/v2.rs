@@ -1,7 +1,6 @@
 use axum::{
     Error, Json,
     extract::{self, Path, Query, State},
-    http::Uri,
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -14,7 +13,6 @@ use serde_json::Value;
 use std::{
     collections::{HashMap, HashSet},
     net::Ipv4Addr,
-    str::FromStr,
 };
 use strum::EnumCount;
 use tokio::sync::{
@@ -25,7 +23,7 @@ use utoipa::OpenApi;
 use utoipa::ToSchema;
 use utoipa_swagger_ui::{Config as SwaggerConfig, SwaggerUi};
 
-use crate::web::spokes_handler;
+use crate::web::{derive_public_base, spokes_handler};
 
 use super::super::{Message, Web, WebSocket, WebSocketUpgrade};
 use mayara::{
@@ -218,25 +216,9 @@ struct RadarApiV3 {
     tag = "Radars"
 )]
 async fn get_radars(State(state): State<Web>, headers: hyper::header::HeaderMap) -> Response {
-    let host: String = match headers.get(axum::http::header::HOST) {
-        Some(host) => host.to_str().unwrap_or("localhost").to_string(),
-        None => "localhost".to_string(),
-    };
+    let (host, _, ws_scheme) = derive_public_base(&headers, state.tls, state.args.port);
 
-    log::debug!("Radar state request for host '{}'", host);
-
-    let host = format!(
-        "{}:{}",
-        match Uri::from_str(&host) {
-            Ok(uri) => uri.host().unwrap_or("localhost").to_string(),
-            Err(_) => "localhost".to_string(),
-        },
-        state.args.port
-    );
-
-    log::debug!("target host = '{}'", host);
-
-    let ws_scheme = if state.tls { "wss" } else { "ws" };
+    log::debug!("Radar state request, target host = '{}'", host);
     let mut api: HashMap<String, RadarApiV3> = HashMap::new();
     for info in state.radars.get_active().clone() {
         let spoke_data_uri = SPOKES_URI.replace("{id}", &info.key());
@@ -421,23 +403,13 @@ async fn get_radar(
     State(state): State<Web>,
     headers: hyper::header::HeaderMap,
 ) -> Response {
-    let host: String = match headers.get(axum::http::header::HOST) {
-        Some(host) => host.to_str().unwrap_or("localhost").to_string(),
-        None => "localhost".to_string(),
-    };
-
-    log::debug!("Radar capabilities request for host '{}'", host);
-
-    let host = format!(
-        "{}:{}",
-        match Uri::from_str(&host) {
-            Ok(uri) => uri.host().unwrap_or("localhost").to_string(),
-            Err(_) => "localhost".to_string(),
-        },
-        state.args.port
+    log::debug!(
+        "Radar capabilities request for host '{}'",
+        headers
+            .get(axum::http::header::HOST)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("unknown")
     );
-
-    log::debug!("target host = '{}'", host);
 
     if let Some(info) = state.radars.get_by_key(&radar_id) {
         let controls = info.controls.get_controls();

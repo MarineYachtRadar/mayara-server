@@ -15,7 +15,6 @@ use std::{
     collections::HashMap,
     io,
     net::{IpAddr, Ipv6Addr, SocketAddr},
-    str::FromStr,
     sync::Arc,
 };
 use thiserror::Error;
@@ -298,24 +297,55 @@ async fn root_redirect() -> Redirect {
     Redirect::to("/gui/")
 }
 
+/// Derive the public-facing host, HTTP scheme, and WS scheme from request headers.
+///
+/// Respects `X-Forwarded-Proto` for reverse-proxy setups (e.g. Traefik TLS
+/// termination) and uses the `Host` header as-is so that external ports are
+/// preserved rather than replaced with the internal listen port.
+pub(crate) fn derive_public_base(
+    headers: &hyper::header::HeaderMap,
+    tls: bool,
+    fallback_port: u16,
+) -> (String, &'static str, &'static str) {
+    let host = headers
+        .get(axum::http::header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .map(|h| {
+            // Append fallback port only when the Host header has none.
+            if h.contains(':') {
+                h.to_string()
+            } else {
+                format!("{}:{}", h, fallback_port)
+            }
+        })
+        .unwrap_or_else(|| format!("localhost:{}", fallback_port));
+
+    let forwarded_proto = headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok());
+    let (http_scheme, ws_scheme) = match forwarded_proto {
+        Some("https") => ("https", "wss"),
+        Some(_) => ("http", "ws"),
+        None => {
+            if tls {
+                ("https", "wss")
+            } else {
+                ("http", "ws")
+            }
+        }
+    };
+
+    (host, http_scheme, ws_scheme)
+}
+
 async fn quit_handler(State(state): State<Web>) -> &'static str {
     let _ = state.shutdown_tx.send(());
     "bye\n"
 }
 
 async fn endpoints(State(state): State<Web>, headers: hyper::header::HeaderMap) -> Response {
-    let host: String = match headers.get(axum::http::header::HOST) {
-        Some(host) => host.to_str().unwrap_or("localhost").to_string(),
-        None => "localhost".to_string(),
-    };
-    let host = format!(
-        "{}:{}",
-        match Uri::from_str(&host) {
-            Ok(uri) => uri.host().unwrap_or("localhost").to_string(),
-            Err(_) => "localhost".to_string(),
-        },
-        state.args.port
-    );
+    let (host, http_scheme, ws_scheme) =
+        derive_public_base(&headers, state.tls, state.args.port);
 
     let mut endpoints = Endpoints {
         endpoints: HashMap::new(),
@@ -323,11 +353,6 @@ async fn endpoints(State(state): State<Web>, headers: hyper::header::HeaderMap) 
             version: VERSION,
             id: PACKAGE,
         },
-    };
-    let (http_scheme, ws_scheme) = if state.tls {
-        ("https", "wss")
-    } else {
-        ("http", "ws")
     };
     endpoints.endpoints.insert(
         "v2".to_string(),
