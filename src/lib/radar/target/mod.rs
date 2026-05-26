@@ -125,7 +125,7 @@ impl TargetDangerApi {
 
     pub fn new(cpa: f64, tcpa: f64) -> Self {
         let is_dangerous =
-            cpa < Self::DANGER_CPA_M && tcpa >= 0.0 && tcpa <= Self::DANGER_TCPA_S;
+            cpa < Self::DANGER_CPA_M && (0.0..=Self::DANGER_TCPA_S).contains(&tcpa);
         TargetDangerApi {
             cpa,
             tcpa,
