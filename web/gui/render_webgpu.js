@@ -252,20 +252,32 @@ class WebGPURenderer {
    * @param {number} headingRotation - Heading rotation in radians
    */
   resize(width, height, beam_length, headingRotation) {
+    // Only re-assign canvas dimensions and re-configure the WebGPU
+    // context when the size actually changed. Re-configure is
+    // expensive (drops the swap chain) and re-assigning canvas.width
+    // clears the bitmap; for transform-only updates (heading rotation,
+    // beam-length / zoom change) we just push the new uniforms and
+    // keep the existing frame.
+    const sizeChanged = this.width !== width || this.height !== height;
+
     this.width = width;
     this.height = height;
     this.beam_length = beam_length;
     this.headingRotation = headingRotation;
 
-    this.dom.width = width;
-    this.dom.height = height;
+    if (sizeChanged) {
+      this.dom.width = width;
+      this.dom.height = height;
+      if (this.ready) {
+        this.context.configure({
+          device: this.device,
+          format: this.canvasFormat,
+          alphaMode: "premultiplied",
+        });
+      }
+    }
 
     if (this.ready) {
-      this.context.configure({
-        device: this.device,
-        format: this.canvasFormat,
-        alphaMode: "premultiplied",
-      });
       this.#updateUniforms();
     }
   }
