@@ -190,16 +190,27 @@ class WebGLRenderer {
    * @param {number} headingRotation - Heading rotation in radians
    */
   resize(width, height, beam_length, headingRotation) {
+    // Only re-assign canvas dimensions when they actually changed.
+    // Assigning to canvas.width / .height clears the bitmap and resets
+    // the WebGL context's framebuffer, so for transform-only updates
+    // (heading rotation, beam-length / zoom change) we skip the reset
+    // and just push the new transform.
+    const sizeChanged = this.width !== width || this.height !== height;
+
     this.width = width;
     this.height = height;
     this.beam_length = beam_length;
     this.headingRotation = headingRotation;
 
-    this.dom.width = width;
-    this.dom.height = height;
+    if (sizeChanged) {
+      this.dom.width = width;
+      this.dom.height = height;
+      if (this.ready) {
+        this.gl.viewport(0, 0, width, height);
+      }
+    }
 
     if (this.ready) {
-      this.gl.viewport(0, 0, width, height);
       this.#updateTransform();
     }
   }

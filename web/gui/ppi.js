@@ -774,13 +774,27 @@ class PPI {
     const w = parseInt(styles.getPropertyValue("width"), 10);
     const h = parseInt(styles.getPropertyValue("height"), 10);
 
-    if (this.overlay_dom) {
-      this.overlay_dom.width = w;
-      this.overlay_dom.height = h;
-    }
-    if (this.background_dom) {
-      this.background_dom.width = w;
-      this.background_dom.height = h;
+    // Assigning to canvas.width / .height clears the bitmap regardless
+    // of whether the value actually changed. Without the size-changed
+    // guard, every control update (guard-zone save, exclusion edit,
+    // no-transmit sector change, range/zoom update) that fires
+    // redrawCanvas wipes the overlay/background canvases, producing a
+    // visible flash of "spokes disappear, then re-paint over the next
+    // sweep". Only touch the canvas dimensions when the parent
+    // actually resized. The renderer applies the same guard internally
+    // so transform-only updates (heading rotation, range scale, beam
+    // length) don't clear the spoke canvas either.
+    const sizeChanged = this.width !== w || this.height !== h;
+
+    if (sizeChanged) {
+      if (this.overlay_dom) {
+        this.overlay_dom.width = w;
+        this.overlay_dom.height = h;
+      }
+      if (this.background_dom) {
+        this.background_dom.width = w;
+        this.background_dom.height = h;
+      }
     }
 
     this.width = w;
