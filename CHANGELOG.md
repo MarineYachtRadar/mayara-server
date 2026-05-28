@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **gui:** show active renderer (webgpu/webgl) in the controls header (#252) ([PR #252](https://github.com/MarineYachtRadar/mayara-server/pull/252))
 - **arpa:** emit Signal K notifications for guard-zone target acquisition (#260) ([PR #260](https://github.com/MarineYachtRadar/mayara-server/pull/260))
 
+### Changed
+
+- **agents:** note the GUI must use relative API/WS base paths (#272) ([PR #272](https://github.com/MarineYachtRadar/mayara-server/pull/272))
+
 ### Fixed
 
 - **gui:** keep PPI sized to the visible viewport on mobile (#249) ([PR #249](https://github.com/MarineYachtRadar/mayara-server/pull/249))
