@@ -11,6 +11,7 @@
 import { createEventTimeline, updateTimeline, selectEvent, clearEvents } from './event-timeline.js';
 import { createPacketView, showPacketDetails, clearPacketView } from './packet-view.js';
 import { createStateDiffView, showStateDiff } from './state-diff.js';
+import { apiBase, wsBase } from './api.js';
 
 // ============================================================================
 // State
@@ -39,10 +40,9 @@ let onEventSelected = null;
 // Debug API
 // ============================================================================
 
-const DEBUG_WS_URL = '/v2/api/debug';
-const DEBUG_EVENTS_URL = '/v2/api/debug/events';
-const DEBUG_RECORDING_START_URL = '/v2/api/debug/recording/start';
-const DEBUG_RECORDING_STOP_URL = '/v2/api/debug/recording/stop';
+const DEBUG_EVENTS_URL = apiBase('/v2/api/debug/events');
+const DEBUG_RECORDING_START_URL = apiBase('/v2/api/debug/recording/start');
+const DEBUG_RECORDING_STOP_URL = apiBase('/v2/api/debug/recording/stop');
 
 /**
  * Check if debug mode is available (server built with --features dev)
@@ -64,8 +64,7 @@ function connectWebSocket() {
     return;
   }
 
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${protocol}//${window.location.host}${DEBUG_WS_URL}`;
+  const wsUrl = wsBase('/v2/api/debug');
 
   console.log('Debug: Connecting to', wsUrl);
   webSocket = new WebSocket(wsUrl);
