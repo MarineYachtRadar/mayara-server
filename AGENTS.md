@@ -6,6 +6,12 @@ Key components:
 
 - **Core server**: Express-based HTTP/WebSocket server (Rust and JS for the GUI)
 
+## Web GUI (`web/gui/`)
+
+The hand-written ES-module GUI is embedded into the binary at compile time via `rust-embed` (`#[folder = "web/"]`), so **changing a GUI file requires a rebuild** before the running server serves it.
+
+The GUI runs in two contexts: served directly by mayara at `/gui/…` (API at the origin root), and proxied through a Signal K server at `/plugins/<id>/gui/…` (API under that mount). To work in both, **all REST and WebSocket URLs must be built through the `apiBase()` / `wsBase()` helpers in `api.js`** — never hardcode an absolute `/signalk/...` path. `basePrefix()` derives the mount prefix from `window.location` (empty when served directly), so a hardcoded absolute path silently bypasses the proxy and 404s when the GUI is opened behind Signal K. The radar state stream is `/signalk/v1/stream` and spoke data is `…/radars/<id>/spokes` — not `…/radars/<id>/stream`.
+
 ## Code Quality Principles
 
 ### Scope and Complexity
