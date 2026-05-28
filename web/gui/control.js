@@ -39,6 +39,7 @@ import {
   detectMode,
   isStandaloneMode,
   isPlaybackRadar,
+  wsBase,
 } from "./api.js";
 import { setZoneEditMode, setZoneCreateMode, setRectCreateMode, setSectorEditMode, updateZoneForEditing, updateRectForEditing } from "./viewer.js";
 import { SpokeProcessingMode } from "./spoke_processor.js";
@@ -1850,20 +1851,16 @@ async function loadRadar(id) {
     // Connect to state stream
     let controlStreamUrl = radarInfo?.streamUrl;
     if (!controlStreamUrl) {
-      const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      if (isStandaloneMode()) {
-        controlStreamUrl = `${wsProtocol}//${window.location.host}/v3/api/stream`;
-      } else {
-        controlStreamUrl = `${wsProtocol}//${window.location.host}/signalk/v2/api/vessels/self/radar/stream`;
-      }
+      controlStreamUrl = wsBase("/signalk/v1/stream");
     }
     connectStateStream(controlStreamUrl, radarId);
 
     // Get spokeDataUrl
     let spokeDataUrl = radarInfo?.spokeDataUrl;
     if (!spokeDataUrl) {
-      const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      spokeDataUrl = `${wsProtocol}//${window.location.host}/signalk/v2/api/vessels/self/radars/${radarId}/stream`;
+      spokeDataUrl = wsBase(
+        `/signalk/v2/api/vessels/self/radars/${radarId}/spokes`
+      );
     }
 
     // Notify callbacks

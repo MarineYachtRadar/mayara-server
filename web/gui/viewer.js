@@ -25,7 +25,13 @@ import {
   isAcquireTargetMode,
   acquireTargetAtPosition,
 } from "./control.js";
-import { isStandaloneMode, detectMode } from "./api.js";
+import {
+  isStandaloneMode,
+  detectMode,
+  fetchRadarIds,
+  apiBase,
+  wsBase,
+} from "./api.js";
 import "./vendor/protobuf.min.js";
 
 import { WebGPURenderer } from "./render_webgpu.js";
@@ -107,7 +113,7 @@ registerStreamMessageCallback(handleStreamMessage);
 
 window.onload = async function () {
   const urlParams = new URLSearchParams(window.location.search);
-  const id = urlParams.get("id");
+  let id = urlParams.get("id");
   const requestedRenderer = urlParams.get("renderer");
 
   // Determine which renderer to use
@@ -174,6 +180,28 @@ window.onload = async function () {
       }
     });
   });
+
+  // A bare or stale `?id` (missing, empty, or the legacy `0` placeholder) and
+  // any id the server doesn't recognise would otherwise drive an endless
+  // failing capabilities fetch. Resolve it against the discovered radars,
+  // falling back to the first one, and send the operator to the index when
+  // there are none.
+  try {
+    const ids = await fetchRadarIds();
+    if (!id || !ids.includes(id)) {
+      if (ids.length === 0) {
+        window.location.href = "index.html";
+        return;
+      }
+      id = ids[0];
+      // Reflect the radar we actually loaded so a refresh or bookmark
+      // doesn't reuse the bogus id.
+      urlParams.set("id", id);
+      history.replaceState(null, "", `?${urlParams}`);
+    }
+  } catch (e) {
+    console.error(`Could not resolve radar id: ${e}`);
+  }
 
   // Process any pending radar data that arrived before renderer was ready
   if (pendingRadarData) {
@@ -248,8 +276,7 @@ function subscribeToHeading() {
     return;
   }
 
-  const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const streamUrl = `${wsProtocol}//${window.location.host}/signalk/v1/stream?subscribe=none`;
+  const streamUrl = wsBase("/signalk/v1/stream?subscribe=none");
 
   headingSocket = new WebSocket(streamUrl);
 
@@ -369,8 +396,7 @@ async function subscribeToAisViaSignalK() {
     return; // operator turned AIS off while prime was in flight
   }
 
-  const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const streamUrl = `${wsProtocol}//${window.location.host}/signalk/v1/stream?subscribe=none`;
+  const streamUrl = wsBase("/signalk/v1/stream?subscribe=none");
 
   // Hold a local reference so handlers that fire after `aisSocket` is
   // replaced (e.g. a late `onclose` from a previous socket) can detect
@@ -441,7 +467,7 @@ async function subscribeToAisViaSignalK() {
 // silent (mayara standalone doesn't serve this endpoint).
 async function primeAisFromRestSnapshot() {
   try {
-    const res = await fetch("/signalk/v1/api/vessels/");
+    const res = await fetch(apiBase("/signalk/v1/api/vessels/"));
     if (!res.ok) return;
     const tree = await res.json();
     const URN = "urn:mrn:imo:mmsi:";
@@ -1319,8 +1345,9 @@ function radarLoaded(r) {
     spokeDataUrl === "undefined" ||
     spokeDataUrl === "null"
   ) {
-    const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    spokeDataUrl = `${wsProtocol}//${window.location.host}/signalk/v2/api/vessels/self/radars/${r.id}/stream`;
+    spokeDataUrl = wsBase(
+      `/signalk/v2/api/vessels/self/radars/${r.id}/spokes`
+    );
   } else {
     spokeDataUrl = spokeDataUrl.replace("{id}", r.id);
   }

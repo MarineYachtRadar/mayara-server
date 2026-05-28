@@ -11,6 +11,31 @@ const STANDALONE_INTERFACES_API =
   "/signalk/v2/api/vessels/self/radars/interfaces";
 const ENDPOINT_API = "/signalk";
 
+// Mount prefix to prepend to every API/WS path.
+//
+// Served directly by mayara, the GUI lives at `/gui/…` while its API lives at
+// the origin root (`/signalk/…`), so the prefix is empty. Behind the Signal K
+// reverse proxy the GUI is mounted at `/plugins/<id>/gui/…` and the proxy
+// forwards everything under that mount to mayara — so the API must be reached
+// at `/plugins/<id>/gui/signalk/…`, i.e. the prefix is whatever precedes
+// `/gui` *plus* `/gui` itself. The discriminator is therefore whether anything
+// precedes `/gui`: nothing → direct (empty); a sub-path → proxied.
+export function basePrefix() {
+  // Match the `…/gui` segment whether or not a trailing slash follows
+  // (e.g. `/plugins/<id>/gui` with no slash still needs the prefix).
+  const m = window.location.pathname.match(/^(.*\/gui)(?:\/|$)/);
+  return m && m[1] !== "/gui" ? m[1] : "";
+}
+
+export function apiBase(path) {
+  return basePrefix() + path;
+}
+
+export function wsBase(path) {
+  const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${wsProtocol}//${window.location.host}${basePrefix()}${path}`;
+}
+
 // Detected mode (null = not detected yet)
 let detectedMode = null;
 
@@ -28,7 +53,7 @@ export async function detectMode() {
 
   // Try standalone first - check if / returns server mayara
   try {
-    const response = await fetch(ENDPOINT_API, {
+    const response = await fetch(apiBase(ENDPOINT_API), {
       headers: { Accept: "application/json" },
     });
     const data = await response.json();
@@ -43,7 +68,7 @@ export async function detectMode() {
 
   // Try SignalK - check if endpoint returns 200
   try {
-    const response = await fetch(SIGNALK_RADARS_API, { method: "HEAD" });
+    const response = await fetch(apiBase(SIGNALK_RADARS_API), { method: "HEAD" });
     if (response.ok) {
       detectedMode = "signalk";
       console.log("Detected SignalK mode");
@@ -64,7 +89,7 @@ export async function detectMode() {
  * @returns {string} API URL
  */
 export function getRadarsPath() {
-  return SIGNALK_RADARS_API;
+  return apiBase(SIGNALK_RADARS_API);
 }
 
 /**
@@ -72,7 +97,7 @@ export function getRadarsPath() {
  * @returns {string|null} API URL or null if not available
  */
 export function getInterfacesUrl() {
-  return STANDALONE_INTERFACES_API;
+  return apiBase(STANDALONE_INTERFACES_API);
 }
 
 /**
@@ -261,7 +286,7 @@ export function isPlaybackRadar(radarId) {
 // Recordings API
 // ============================================================================
 
-const RECORDINGS_API = "/v2/api/vessels/self/radars/recordings";
+const RECORDINGS_API = apiBase("/v2/api/vessels/self/radars/recordings");
 
 /**
  * List available recordings
