@@ -161,9 +161,15 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
+        # git-cliff has already rewritten CHANGELOG.md in the working
+        # tree during the previous step. Snapshot it, then force the
+        # switch to main so the uncommitted modification doesn't block
+        # the checkout (the snapshot is restored right after). Without
+        # -f, `git switch -C` aborts with "Your local changes ... would
+        # be overwritten by checkout" and the changelog PR never opens.
         cp CHANGELOG.md /tmp/CHANGELOG.md
         git fetch origin main
-        git switch -C main origin/main
+        git switch -fC main origin/main
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
         cp /tmp/CHANGELOG.md CHANGELOG.md
