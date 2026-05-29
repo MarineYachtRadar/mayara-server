@@ -133,6 +133,20 @@ impl TargetDangerApi {
         }
     }
 
+    /// Placeholder for targets whose CPA can't be computed yet — either
+    /// the radar has no own-ship position, the target's Kalman filter
+    /// hasn't produced a motion estimate, or the relative velocity is
+    /// zero. Distinct from `new(0.0, 0.0)` which would otherwise
+    /// satisfy the danger thresholds (CPA < 926 m AND 0 ≤ TCPA ≤ 360 s)
+    /// and incorrectly flag every motion-less target as dangerous.
+    pub fn unknown() -> Self {
+        TargetDangerApi {
+            cpa: 0.0,
+            tcpa: 0.0,
+            is_dangerous: false,
+        }
+    }
+
     fn is_empty(&self) -> bool {
         self.cpa == 0.0 && self.tcpa == 0.0 && !self.is_dangerous
     }
@@ -169,5 +183,15 @@ mod tests {
         // future close-quarters situation.
         let d = TargetDangerApi::new(50.0, -30.0);
         assert!(!d.is_dangerous);
+    }
+
+    #[test]
+    fn target_danger_api_unknown_is_not_dangerous() {
+        // Targets without motion data must NOT be flagged as dangerous.
+        // new(0.0, 0.0) would otherwise satisfy both threshold checks
+        // (cpa < 926m AND tcpa in [0, 360s]) and incorrectly fire.
+        let d = TargetDangerApi::unknown();
+        assert!(!d.is_dangerous);
+        assert!(d.is_empty());
     }
 }

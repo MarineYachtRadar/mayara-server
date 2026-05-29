@@ -779,7 +779,7 @@ fn calculate_danger(
     radar_position: Option<&GeoPosition>,
 ) -> TargetDangerApi {
     let Some(own_pos) = radar_position else {
-        return TargetDangerApi::new(0.0, 0.0);
+        return TargetDangerApi::unknown();
     };
 
     let own_sog = crate::navdata::get_sog().unwrap_or(0.0);
@@ -800,10 +800,10 @@ fn compute_danger(
     use crate::radar::cpa::calculate_cpa_from_motion;
 
     let Some(target_sog) = target.sog else {
-        return TargetDangerApi::new(0.0, 0.0);
+        return TargetDangerApi::unknown();
     };
     let Some(target_cog) = target.cog else {
-        return TargetDangerApi::new(0.0, 0.0);
+        return TargetDangerApi::unknown();
     };
 
     let target_pos = target.predict_position(target.last_update);
@@ -817,7 +817,7 @@ fn compute_danger(
         target_cog,
     ) {
         Some(result) => TargetDangerApi::new(result.cpa, result.tcpa),
-        None => TargetDangerApi::new(0.0, 0.0),
+        None => TargetDangerApi::unknown(),
     }
 }
 
@@ -1179,12 +1179,13 @@ mod tests {
 
         let target = tracker.get_active_targets().next().unwrap();
 
-        // Smoothed CPA — what compute_danger uses now.
+        // Smoothed CPA: compute_danger uses target.predict_position
+        // (the Kalman state).
         let smoothed = compute_danger(target, &radar_pos, 0.0, 0.0);
         assert!(smoothed.tcpa > 0.0, "expected closing geometry");
 
-        // Raw CPA — what the previous code did. Pass target.position
-        // (the raw 80m-east last measurement) instead of the filtered one.
+        // Raw CPA: same math but fed with target.position (the raw
+        // 80m-east last measurement) instead of the filtered estimate.
         let raw = calculate_cpa_from_motion(
             radar_pos,
             0.0,
