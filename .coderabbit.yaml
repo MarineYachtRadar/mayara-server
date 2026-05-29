@@ -41,6 +41,14 @@ reviews:
     - '!testdata/**/*.pcap'
     - '!**/*.min.js'
     - '!**/*.min.css'
+    # CHANGELOG.md is rewritten on every push to main by
+    # .github/workflows/changelog.yml running git-cliff. Any contributor
+    # edit is either redundant (will be overwritten by the workflow's
+    # own follow-up PR) or wrong. Hand-curated entries belong in
+    # CHANGELOG.manual.md, which the workflow appends. Excluding the
+    # generated file from review stops CR from repeatedly flagging
+    # phantom CHANGELOG.md edits on PRs that don't actually touch it.
+    - '!CHANGELOG.md'
 
   high_level_summary_instructions: |
     Write summaries in present tense. Describe what the code does, not
