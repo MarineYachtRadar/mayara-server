@@ -477,6 +477,11 @@ async fn set_control_value(
     let (controls, control_value, radar_key) = {
         match state.radars.get_by_key(&radar_id) {
             Some(radar) => {
+                // Any control PUT means someone is interacting with this
+                // radar — exit idle synchronously so the response stream
+                // and any subsequent spoke decode kicks in this tick, not
+                // the next 5s recheck.
+                radar.wake_up();
                 // Look up the control by name
                 let control = match radar.controls.get_by_id(&control_id) {
                     Some(c) => c,

@@ -11,7 +11,10 @@ use std::{
     collections::HashMap,
     fmt::{self, Display, Write},
     net::{Ipv4Addr, SocketAddrV4},
-    sync::{Arc, RwLock},
+    sync::{
+        Arc, RwLock,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 use thiserror::Error;
 use tokio::sync::{broadcast, mpsc};
@@ -323,6 +326,18 @@ pub struct RadarInfo {
 
     // Channels
     pub message_tx: tokio::sync::broadcast::Sender<Vec<u8>>, // Serialized RadarMessage
+
+    /// Soft idle flag. When `true`, the radar's data_loop drains the spoke
+    /// multicast/broadcast socket but skips frame decoding and blob detection
+    /// — saving ~1.5 cores on Furuno radars that emit spokes even in Standby
+    /// (see issue #274). Entry condition: power == Standby AND
+    /// `message_tx.receiver_count() == 0`. Exit: power transitions, spoke WS
+    /// subscribe, or any control PUT — each of those call sites stores
+    /// `false` directly. Wrapped in Arc so cloned RadarInfos (e.g. from
+    /// `SharedRadars::get_by_key`) share the same flag. Kept private so the
+    /// load/store contract stays narrow; callers use `is_idle()` and
+    /// `wake_up()` below.
+    is_idle: Arc<AtomicBool>,
 }
 
 impl RadarInfo {
@@ -400,6 +415,10 @@ impl RadarInfo {
             sparse_spokes,
             stationary: args.stationary,
             rotation_timestamp: Instant::now() - Duration::from_secs(2),
+            // Start non-idle so the first ~5s of operation always processes
+            // frames; the data_loop's periodic re-check will flip it once
+            // power and subscriber count have settled.
+            is_idle: Arc::new(AtomicBool::new(false)),
         };
 
         log::trace!("Created RadarInfo {:?}", info);
@@ -416,6 +435,26 @@ impl RadarInfo {
 
     pub fn key(&self) -> String {
         self.key.to_owned()
+    }
+
+    /// True when this radar's data_loop is currently dropping decoded frames
+    /// to save CPU (see the `is_idle` field comment). Reads with Relaxed
+    /// ordering; the gate tolerates a one-frame race in either direction.
+    pub fn is_idle(&self) -> bool {
+        self.is_idle.load(Ordering::Relaxed)
+    }
+
+    /// Mark this radar as non-idle. Idempotent. Called from any path that
+    /// should immediately resume frame decoding — control PUTs, spoke WS
+    /// subscribes, power-state transitions in the report parser.
+    pub fn wake_up(&self) {
+        self.is_idle.store(false, Ordering::Relaxed);
+    }
+
+    /// Set the idle flag from a precomputed value. Used only by the data_loop's
+    /// periodic refresh; external callers should prefer `wake_up()`.
+    pub(crate) fn set_idle(&self, idle: bool) {
+        self.is_idle.store(idle, Ordering::Relaxed);
     }
 
     pub fn replay(&self) -> bool {

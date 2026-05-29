@@ -572,6 +572,13 @@ async fn spokes_handler(
 
     match state.radars.get_by_key(&params.id) {
         Some(radar) => {
+            // Exit idle before subscribing so the frame already in flight
+            // when the WS connects gets decoded, not the next one. The
+            // data_loop's 5s periodic re-check would catch this eventually
+            // but the window between subscribe and the first revolution is
+            // exactly what users see as "PPI took a couple seconds to fill"
+            // — better to flip synchronously here.
+            radar.wake_up();
             let shutdown_rx = state.shutdown_tx.subscribe();
             let radar_message_rx = radar.message_tx.subscribe();
             // finalize the upgrade process by returning upgrade callback.
