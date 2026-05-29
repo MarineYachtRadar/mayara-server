@@ -73,9 +73,8 @@ const DEDUP_MAX_COG_DIFF_RAD: f64 = 30.0 * std::f64::consts::PI / 180.0;
 /// boat at 5 m/s can hard-over and pivot well under 90° per 3-second
 /// radar revolution; turns beyond this are almost certainly a stray blob
 /// being mistakenly associated with the wrong target. Applied for the
-/// entire lifetime of a target — the previous early-tracking-only check
-/// missed the most dangerous case (a long-tracked target suddenly
-/// "teleporting" via a false association).
+/// entire lifetime of a target so a mature, trusted track cannot silently
+/// accept an implausible jump from a false association.
 const MAX_TURN_ANGLE_DEG: f64 = 90.0;
 
 /// Speed threshold (m/s) above which turn rejection is applied
@@ -230,11 +229,9 @@ impl ActiveTarget {
 
         // Turn rejection: reject implausible maneuvers for fast targets.
         // Applies for the entire lifetime of a target (update_count >= 2,
-        // once a previous COG exists). The previous early-tracking-only
-        // window (update_count < 5) let a mature track suddenly teleport
-        // to a false association without challenge — the worst case
-        // operationally because a stable track is the one the navigator
-        // is most likely to be relying on.
+        // once a previous COG exists), so a mature track cannot silently
+        // accept a "teleport" from a false association — the case a
+        // navigator is most likely to be relying on.
         //
         // SOG is read from the Kalman estimate rather than from the raw
         // measured displacement: a stationary target's blob centre wanders
@@ -1965,14 +1962,14 @@ mod tests {
         assert_eq!(target.status, TargetStatus::Tracking);
         assert!(
             target.update_count >= 9,
-            "target should be well past the old <5 window: update_count={}",
+            "target must be a mature Tracking track: update_count={}",
             target.update_count
         );
 
-        // Now feed a candidate that would represent a 180° course
-        // reversal at the same speed (jumping 30m west of the prior
-        // position rather than 30m east). With the old early-only check,
-        // the mature track would silently accept this and corrupt itself.
+        // Feed a candidate representing a 180° course reversal at the
+        // same speed (jumping 30m west of the prior position rather
+        // than 30m east). Without the lifetime turn check, the mature
+        // track would silently accept this and corrupt itself.
         let last_lon = start_lon + lon_step * 9.0;
         let bogus = TargetCandidate {
             time: 10 * 3000,
