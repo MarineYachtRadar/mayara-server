@@ -31,6 +31,16 @@ use crate::radar::settings::ControlId;
 use crate::radar::{Power, RadarError, RadarInfo};
 use crate::util::PrintableSpoke;
 
+/// TCP keepalive timing for the Furuno control socket. Tunes how quickly the
+/// kernel detects that the radar has silently dropped the connection after
+/// idle (DRS4D-NXT does this after ~2 min in standby). With these settings the
+/// kernel tears the socket down within ~60 s of the peer going silent, so the
+/// next user PUT sees either a fresh writer or a clean NotConnected — never a
+/// stale half-closed socket that just hangs.
+const CONTROL_KEEPALIVE_IDLE: Duration = Duration::from_secs(30);
+const CONTROL_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
+const CONTROL_KEEPALIVE_RETRIES: u32 = 3;
+
 /// Furuno wire-format decoding mode. When Target Analyzer is active on NXT
 /// radars, each echo byte encodes `[dopplerClass:2 | intensity:4 | 00:2]`
 /// rather than a plain intensity in 0..PIXEL_VALUES. The report receiver
@@ -192,11 +202,28 @@ impl FurunoReportReceiver {
             return Err(RadarError::InvalidPort);
         }
         let sock = TcpSocket::new_v4().map_err(|e| RadarError::Io(e))?;
-        self.stream = Some(
-            sock.connect(std::net::SocketAddr::V4(self.common.info.send_command_addr))
-                .await
-                .map_err(|e| RadarError::Io(e))?,
-        );
+        let stream = sock
+            .connect(std::net::SocketAddr::V4(self.common.info.send_command_addr))
+            .await
+            .map_err(|e| RadarError::Io(e))?;
+
+        // Furuno radars silently drop the control TCP socket after an idle
+        // period (observed on DRS4D-NXT after ~2 min). Without keepalive the
+        // first PUT after idle hits the stale half-closed socket, write_all
+        // fails with BrokenPipe, and the user sees a 400 "I/O operation
+        // failed". The data_loop only notices on its next 5s report-tick
+        // and reconnects, but by then the GUI has already shown the error
+        // and the radar is still in standby. Timing constants are at the
+        // top of the file.
+        let keepalive = socket2::TcpKeepalive::new()
+            .with_time(CONTROL_KEEPALIVE_IDLE)
+            .with_interval(CONTROL_KEEPALIVE_INTERVAL)
+            .with_retries(CONTROL_KEEPALIVE_RETRIES);
+        socket2::SockRef::from(&stream)
+            .set_tcp_keepalive(&keepalive)
+            .map_err(RadarError::Io)?;
+
+        self.stream = Some(stream);
         Ok(())
     }
 
