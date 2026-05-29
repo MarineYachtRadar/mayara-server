@@ -81,7 +81,18 @@ impl Command {
 
         match &mut self.write {
             Some(w) => {
-                w.write_all(&bytes).await.map_err(RadarError::Io)?;
+                if let Err(e) = w.write_all(&bytes).await {
+                    // Drop the half-closed writer so the next call fast-
+                    // fails with NotConnected and the periodic 5s report-
+                    // request tick in data_loop sees the error and
+                    // triggers a reconnect immediately, instead of every
+                    // user PUT queuing more writes onto a dead socket.
+                    // Furuno radars silently drop the control TCP socket
+                    // after idle; SO_KEEPALIVE in start_command_stream
+                    // shortens that window but doesn't eliminate it.
+                    self.write = None;
+                    return Err(RadarError::Io(e));
+                }
             }
             None => return Err(RadarError::NotConnected),
         };

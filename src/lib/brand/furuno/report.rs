@@ -192,11 +192,31 @@ impl FurunoReportReceiver {
             return Err(RadarError::InvalidPort);
         }
         let sock = TcpSocket::new_v4().map_err(|e| RadarError::Io(e))?;
-        self.stream = Some(
-            sock.connect(std::net::SocketAddr::V4(self.common.info.send_command_addr))
-                .await
-                .map_err(|e| RadarError::Io(e))?,
-        );
+        let stream = sock
+            .connect(std::net::SocketAddr::V4(self.common.info.send_command_addr))
+            .await
+            .map_err(|e| RadarError::Io(e))?;
+
+        // Furuno radars silently drop the control TCP socket after an idle
+        // period (observed on DRS4D-NXT after ~2 min). Without keepalive the
+        // first PUT after idle hits the stale half-closed socket, write_all
+        // fails with BrokenPipe, and the user sees a 400 "I/O operation
+        // failed". The data_loop only notices on its next 5s report-tick
+        // and reconnects, but by then the GUI has already shown the error
+        // and the radar is still in standby. SO_KEEPALIVE with a 30s
+        // idle threshold and 10s probes lets the kernel tear the socket
+        // down within ~60s of the peer going silent, so by the time the
+        // user clicks transmit the writer is either fresh or visibly
+        // missing — never silently dead.
+        let keepalive = socket2::TcpKeepalive::new()
+            .with_time(Duration::from_secs(30))
+            .with_interval(Duration::from_secs(10))
+            .with_retries(3);
+        socket2::SockRef::from(&stream)
+            .set_tcp_keepalive(&keepalive)
+            .map_err(RadarError::Io)?;
+
+        self.stream = Some(stream);
         Ok(())
     }
 
