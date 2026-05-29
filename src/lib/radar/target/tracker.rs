@@ -1875,19 +1875,32 @@ mod tests {
 
     #[test]
     fn dedup_keeps_distinct_close_vessels_with_different_courses() {
-        // Two vessels within DUPLICATE_MERGE_DISTANCE_M of each other,
-        // each moving in a clearly different direction. The pre-fix
-        // dedup would merge whichever had fewer updates into the other;
-        // the motion-aware check now keeps both because their courses
-        // diverge.
+        // Two vessels that must remain within DUPLICATE_MERGE_DISTANCE_M
+        // (100m) of each other AT DEDUP TIME but moving on perpendicular
+        // courses. Picked geometry:
+        //
+        // - 8m step per 3-second revolution (~2.7 m/s SOG) so neither
+        //   target drifts out of the 100m merge ring.
+        // - 70m initial east offset so B's first blob doesn't match A
+        //   on candidate association (with max_target_speed_ms = 5 m/s
+        //   the per-candidate gate is max(50m, 5·3·1.5) = 50m).
+        // - max_target_speed_ms intentionally low for the same reason:
+        //   with TEST_MAX_SPEED_MS (≈25.7 m/s) A's match window would
+        //   reach 115m and absorb B before dedup is even consulted.
+        //
+        // At dedup time: A at ~24m north, B at ~86m east of (52, 4) →
+        // separation `sqrt(24² + 86²)` ≈ 89m, inside the merge ring.
+        // Only the new motion-aware COG exemption keeps them distinct.
+        // Removing the exemption causes this test to fail.
         let mut tracker = TargetTracker::new_merged(2048);
-        let max_speed_ms = TEST_MAX_SPEED_MS;
+        let max_speed_ms = 5.0;
         let radar = Some(GeoPosition::new(52.0, 4.0));
 
-        let lat_step = 30.0 / METERS_PER_DEGREE_LATITUDE; // ~10 m/s northbound
-        let lon_step = 30.0 / meters_per_degree_longitude(&52.0); // ~10 m/s eastbound
+        let lat_step = 8.0 / METERS_PER_DEGREE_LATITUDE; // ~2.7 m/s northbound
+        let lon_step = 8.0 / meters_per_degree_longitude(&52.0); // ~2.7 m/s eastbound
 
-        // Target A: heading north, 4 updates (gets a COG estimate)
+        // Target A: heading north, 4 updates so it reaches Tracking
+        // and gets a converged COG estimate.
         for i in 0..4u64 {
             tracker.process_candidate(TargetCandidate {
                 time: i * 3000,
@@ -1900,10 +1913,9 @@ mod tests {
             });
         }
 
-        // Target B: heading east, 80m east of A's start (within merge
-        // distance). 3 updates so it stays under the established
-        // threshold and would otherwise be a merge candidate.
-        let b_start_lon = 4.0 + 80.0 / meters_per_degree_longitude(&52.0);
+        // Target B: heading east, 70m east of A's start. 3 updates so
+        // it stays a young (< 4) dedup candidate.
+        let b_start_lon = 4.0 + 70.0 / meters_per_degree_longitude(&52.0);
         for i in 0..3u64 {
             tracker.process_candidate(TargetCandidate {
                 time: i * 3000,
@@ -1916,6 +1928,21 @@ mod tests {
             });
         }
 
+        // Sanity: the two physical separations must straddle the merge
+        // distance correctly — close enough at dedup time that the
+        // distance gate alone wouldn't separate them, but each target's
+        // own match window mustn't reach the other.
+        let a = tracker.get_active_targets().find(|t| t.id == 1).unwrap();
+        let b = tracker.get_active_targets().find(|t| t.id == 2).unwrap();
+        let separation = calculate_distance(&a.position, &b.position);
+        assert!(
+            separation < DUPLICATE_MERGE_DISTANCE_M,
+            "test geometry must keep the targets inside the merge ring; \
+             separation was {:.1}m, threshold is {:.1}m",
+            separation,
+            DUPLICATE_MERGE_DISTANCE_M
+        );
+
         // Force a revolution-complete event to trigger the dedup pass.
         tracker.check_revolution(2000, 12_000);
         tracker.check_revolution(100, 13_000);
@@ -1924,26 +1951,23 @@ mod tests {
         assert_eq!(
             tracker.active_count(),
             2,
-            "two distinct close-by vessels with different COGs must NOT \
-             be merged, but {} target(s) remain",
+            "two close-by vessels with different COGs must NOT be merged, \
+             but {} target(s) remain",
             tracker.active_count()
         );
     }
 
     #[test]
     fn turn_rejection_applies_to_mature_tracks() {
-        // A long-tracked fast target suddenly receives an "update" 180°
-        // off its heading. This is the kind of false association the
-        // old early-tracking-only window let through, and the kind most
-        // likely to mislead a navigator (mature tracks are trusted).
-        // After #4 the rejection applies for the entire lifetime so
-        // the bogus update is rejected even when the target is well
-        // established.
+        // A long-tracked fast target receives an "update" 180° off its
+        // heading. Mature tracks are the ones a navigator is most
+        // likely to rely on, so the lifetime turn-rejection guarantee
+        // is what protects them from a false association.
         let mut tracker = TargetTracker::new_merged(2048);
         let max_speed_ms = TEST_MAX_SPEED_MS;
 
-        // 10 clean revolutions heading east at ~10 m/s. After the 4th
-        // update the target is in Tracking; we go far past that.
+        // 10 clean revolutions heading east at ~10 m/s — well past the
+        // 4-update Tracking promotion threshold.
         let lat = 52.0;
         let start_lon = 4.0;
         let lon_step = 30.0 / meters_per_degree_longitude(&lat);
