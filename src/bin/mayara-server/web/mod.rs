@@ -578,9 +578,19 @@ async fn spokes_handler(
             // but the window between subscribe and the first revolution is
             // exactly what users see as "PPI took a couple seconds to fill"
             // — better to flip synchronously here.
+            //
+            // Wake twice: before AND after subscribe. The data_loop's 5 s
+            // tick could race between the first wake_up and message_tx.
+            // subscribe(); it sees power=Standby and receiver_count==0
+            // (subscribe hasn't completed yet) and flips us back to idle.
+            // The post-subscribe wake_up wins this race — by the time it
+            // runs, subscribe has incremented receiver_count, so even if
+            // the next tick fires immediately afterwards it computes
+            // should_idle() = false and leaves the flag alone.
             radar.wake_up();
             let shutdown_rx = state.shutdown_tx.subscribe();
             let radar_message_rx = radar.message_tx.subscribe();
+            radar.wake_up();
             // finalize the upgrade process by returning upgrade callback.
             // we can customize the callback by sending additional info such as address.
             ws.permessage_deflate()
