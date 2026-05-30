@@ -57,7 +57,10 @@ pub struct ArpaTargetApi {
     /// Present with zero values for confirmed stationary targets.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub motion: Option<TargetMotionApi>,
-    /// Collision danger assessment - omitted if vessels diverging
+    /// Collision danger assessment. Present whenever the two vessels
+    /// have non-zero relative motion (TCPA may be negative for a
+    /// recently-passed CPA); omitted only when relative motion is
+    /// undefined or own-ship / target motion is not yet known.
     #[serde(skip_serializing_if = "TargetDangerApi::is_empty")]
     pub danger: TargetDangerApi,
     /// How target was acquired: "auto" or "manual"
