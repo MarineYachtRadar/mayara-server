@@ -496,7 +496,55 @@ static SIGNALK_OWN_SHIP_NAV_SEEN: std::sync::atomic::AtomicBool =
 /// configured, so 5s is plenty; misconfigured servers (no GPS, no auth
 /// on a secured stream) miss this window with margin to spare, and
 /// the operator gets useful diagnostics in seconds rather than minutes.
+///
+/// This is the *initial* probe timeout. After consecutive no-own-ship-nav
+/// cycles, `probe_timeout_for` grows it (capped at
+/// `OWN_SHIP_NAV_PROBE_TIMEOUT_MAX`) so we stop interrogating a peer we've
+/// already learned has no GPS every 5 seconds. Resets to this initial
+/// value the moment any peer delivers own-ship nav.
 const OWN_SHIP_NAV_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Cap for the grown probe timeout. 60s is generous enough that a peer
+/// where GPS comes online during a long probe is still reached the same
+/// minute; tighter than that and we'd be busy-polling a server we already
+/// know is silent.
+const OWN_SHIP_NAV_PROBE_TIMEOUT_MAX: Duration = Duration::from_secs(60);
+
+/// Cap for the outer-loop reconnect backoff sleep. Same reasoning as
+/// `OWN_SHIP_NAV_PROBE_TIMEOUT_MAX` — once we're in steady-state no-GPS
+/// failure, both brakes settle at 60s so a healthy GPS recovery within
+/// the next minute is picked up promptly.
+const RECONNECT_BACKOFF_MAX: Duration = Duration::from_secs(60);
+
+/// Backoff sleep to apply BEFORE the next `find_service` call when the
+/// previous receive loop returned without seeing own-ship nav. n=0 is
+/// the first failure — no wait; n=1 is the second consecutive failure
+/// — 2s wait; doubles each time up to `RECONNECT_BACKOFF_MAX`.
+///
+/// Capping `n` at 6 before the shift avoids u64 overflow even though we
+/// could clamp the result instead; the shift itself never gets close to
+/// the cap given the `.min(60)` on the final value.
+fn reconnect_backoff_for(consecutive_no_nav: u32) -> Duration {
+    if consecutive_no_nav == 0 {
+        return Duration::ZERO;
+    }
+    let shift = consecutive_no_nav.min(6);
+    Duration::from_secs(1u64 << shift).min(RECONNECT_BACKOFF_MAX)
+}
+
+/// Probe timeout to use for the next receive loop. Grows exponentially
+/// from the 5s base on consecutive no-own-ship-nav failures so we don't
+/// re-interrogate a known-silent peer every 5s. Capped at
+/// `OWN_SHIP_NAV_PROBE_TIMEOUT_MAX`.
+fn probe_timeout_for(consecutive_no_nav: u32) -> Duration {
+    if consecutive_no_nav == 0 {
+        return OWN_SHIP_NAV_PROBE_TIMEOUT;
+    }
+    let shift = consecutive_no_nav.min(4);
+    let scaled =
+        OWN_SHIP_NAV_PROBE_TIMEOUT.saturating_mul(1u32 << shift);
+    scaled.min(OWN_SHIP_NAV_PROBE_TIMEOUT_MAX)
+}
 
 /// Mark the current Signal K receive loop as having delivered at least one
 /// real delta. Idempotent; safe to call on every message.
@@ -514,6 +562,18 @@ fn mark_signalk_own_ship_nav_seen() {
 
 fn own_ship_nav_seen() -> bool {
     SIGNALK_OWN_SHIP_NAV_SEEN.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Compute the next value of the consecutive-no-nav counter for the
+/// reconnect backoff. Reset to 0 the moment any peer delivers own-ship
+/// nav so a recovered upstream is reached promptly. Saturating add so a
+/// pathologically long run of failures can't overflow.
+fn next_consecutive(current: u32, saw_own_ship_nav: bool) -> u32 {
+    if saw_own_ship_nav {
+        0
+    } else {
+        current.saturating_add(1)
+    }
 }
 
 impl NavigationData {
@@ -616,10 +676,47 @@ impl NavigationData {
         let mut rx_ip_change = rx_ip_change;
         let navigation_address = self.args.navigation_address.clone();
 
+        // Exponential backoff for the no-own-ship-nav storm. When the
+        // upstream Signal K has no GPS, every reconnect cycle is a 5 s
+        // probe + a tight outer loop, burning ~0.3 cores forever. We grow
+        // both the outer wait between reconnects AND the per-cycle probe
+        // timeout, so the steady-state cost converges to one cheap
+        // attempt per minute. Reset to 0 the instant any peer delivers
+        // own-ship nav.
+        let mut consecutive_no_nav: u32 = 0;
+
         loop {
             // Clear per-session state so a reconnect to a different Signal K
             // server cannot inherit a stale own-ship URN from the previous one.
             reset_own_ship_context();
+
+            // Brake A: sleep before the next find_service if we've already
+            // been told there's no GPS. First failure is free; subsequent
+            // failures wait 1 s, 2 s, 4 s, ... up to RECONNECT_BACKOFF_MAX.
+            // Shutdown wins over the sleep so the subsystem can exit
+            // promptly even from deep in steady-state backoff.
+            let backoff = reconnect_backoff_for(consecutive_no_nav);
+            if !backoff.is_zero() {
+                log::debug!(
+                    "{} reconnect backoff: sleeping {:?} (consecutive no-nav cycles: {})",
+                    self.what,
+                    backoff,
+                    consecutive_no_nav
+                );
+                tokio::select! { biased;
+                    _ = subsys.on_shutdown_requested() => {
+                        log::debug!("{} run_loop shutdown during backoff", self.what);
+                        return Ok(());
+                    },
+                    _ = tokio::time::sleep(backoff) => {},
+                }
+            }
+
+            // Brake B: per-cycle probe timeout. The same n drives this so
+            // we don't re-probe a known-silent peer every 5 s. Healthy
+            // peers always deliver well inside the initial 5 s, so the
+            // growth only kicks in once we're already in the storm path.
+            let probe_timeout = probe_timeout_for(consecutive_no_nav);
 
             match self
                 .find_service(&subsys, &mut rx_ip_change, &navigation_address)
@@ -634,8 +731,10 @@ impl NavigationData {
                             .map(|a| a.to_string())
                             .unwrap_or_else(|_| "<unknown>".to_string())
                     );
-                    let result = self.receive_loop(stream, &subsys).await;
+                    let result = self.receive_loop(stream, &subsys, probe_timeout).await;
+                    let saw_own_ship = own_ship_nav_seen();
                     Self::update_signalk_silent_state(signalk_peer, &result);
+                    consecutive_no_nav = next_consecutive(consecutive_no_nav, saw_own_ship);
                     match result {
                         Err(RadarError::Shutdown) => {
                             log::debug!("{} receive_loop shutdown", self.what);
@@ -655,6 +754,9 @@ impl NavigationData {
                             .map(|a| a.to_string())
                             .unwrap_or_else(|_| "<unknown>".to_string())
                     );
+                    // NMEA0183-over-UDP has no Signal K own-ship probe so
+                    // it's outside the backoff path: success or failure
+                    // here doesn't update consecutive_no_nav.
                     match self.receive_udp_loop(socket, &subsys).await {
                         Err(RadarError::Shutdown) => {
                             log::debug!("{} receive_loop shutdown", self.what);
@@ -667,8 +769,10 @@ impl NavigationData {
                 }
                 Ok(Stream::WebSocket(ws, url, signalk_peer)) => {
                     log::info!("Listening to {} data via WebSocket from {}", self.what, url);
-                    let result = self.receive_ws_loop(ws, &subsys).await;
+                    let result = self.receive_ws_loop(ws, &subsys, probe_timeout).await;
+                    let saw_own_ship = own_ship_nav_seen();
                     Self::update_signalk_silent_state(Some(signalk_peer), &result);
+                    consecutive_no_nav = next_consecutive(consecutive_no_nav, saw_own_ship);
                     match result {
                         Err(RadarError::Shutdown) => {
                             log::debug!("{} receive_ws_loop shutdown", self.what);
@@ -690,6 +794,12 @@ impl NavigationData {
                     }
                     e => {
                         log::debug!("{} find_service restart on result {:?}", self.what, e);
+                        // find_service failed before any peer could even be
+                        // probed. That's a transient discovery error
+                        // (mDNS hiccup, IP change race) — treat as a
+                        // no-nav cycle so we don't busy-loop, but a
+                        // single bad attempt doesn't blow the counter.
+                        consecutive_no_nav = next_consecutive(consecutive_no_nav, false);
                     }
                 },
             }
@@ -901,6 +1011,7 @@ impl NavigationData {
         &mut self,
         mut stream: TcpStream,
         subsys: &SubsystemHandle,
+        probe_timeout: Duration,
     ) -> Result<(), RadarError> {
         log::info!(
             "{} receive_loop started for {}",
@@ -923,7 +1034,7 @@ impl NavigationData {
         // NMEA0183-over-TCP carries its own sentences and isn't expected
         // to produce Signal K navigation deltas.
         let probe_active = !self.nmea0183_mode;
-        let probe_deadline = tokio::time::sleep(OWN_SHIP_NAV_PROBE_TIMEOUT);
+        let probe_deadline = tokio::time::sleep(probe_timeout);
         tokio::pin!(probe_deadline);
 
         loop {
@@ -936,7 +1047,7 @@ impl NavigationData {
                     log::warn!(
                         "{} no own-ship navigation within {:?}; dropping connection",
                         self.what,
-                        OWN_SHIP_NAV_PROBE_TIMEOUT,
+                        probe_timeout,
                     );
                     return Ok(());
                 },
@@ -1018,6 +1129,7 @@ impl NavigationData {
         &mut self,
         ws: WsStream,
         subsys: &SubsystemHandle,
+        probe_timeout: Duration,
     ) -> Result<(), RadarError> {
         log::info!("{} WebSocket receive_loop started", self.what);
 
@@ -1028,11 +1140,11 @@ impl NavigationData {
         let (mut write, mut read) = ws.split();
 
         // Probe deadline: if no own-ship navigation arrives within
-        // OWN_SHIP_NAV_PROBE_TIMEOUT, return Ok so the caller's
+        // probe_timeout, return Ok so the caller's
         // update_signalk_silent_state cools the server down with the
         // no-nav reason. The select arm is guarded by `if !own_ship_nav_seen()`
         // so it stops firing as soon as we get the data we wanted.
-        let probe_deadline = tokio::time::sleep(OWN_SHIP_NAV_PROBE_TIMEOUT);
+        let probe_deadline = tokio::time::sleep(probe_timeout);
         tokio::pin!(probe_deadline);
 
         loop {
@@ -1046,7 +1158,7 @@ impl NavigationData {
                     log::warn!(
                         "{} no own-ship navigation within {:?}; dropping connection",
                         self.what,
-                        OWN_SHIP_NAV_PROBE_TIMEOUT,
+                        probe_timeout,
                     );
                     let _ = write.close().await;
                     return Ok(());
@@ -1325,5 +1437,85 @@ fn signalk_connection_to_stream(conn: crate::signalk::Connection) -> Stream {
     match conn {
         Connection::Tcp(s, addr) => Stream::Tcp(s, Some(addr)),
         Connection::WebSocket(ws, url, addr) => Stream::WebSocket(ws, url, addr),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ----- reconnect backoff (issue #274 companion to PR #284) -----
+
+    #[test]
+    fn reconnect_backoff_first_failure_is_free() {
+        // The very first attempt after startup or after a clean reconnect
+        // should not wait — we have no evidence yet that the upstream is
+        // broken. Backoff only grows on consecutive failures.
+        assert_eq!(reconnect_backoff_for(0), Duration::ZERO);
+    }
+
+    #[test]
+    fn reconnect_backoff_doubles_until_cap() {
+        assert_eq!(reconnect_backoff_for(1), Duration::from_secs(2));
+        assert_eq!(reconnect_backoff_for(2), Duration::from_secs(4));
+        assert_eq!(reconnect_backoff_for(3), Duration::from_secs(8));
+        assert_eq!(reconnect_backoff_for(4), Duration::from_secs(16));
+        assert_eq!(reconnect_backoff_for(5), Duration::from_secs(32));
+        // 64 would exceed the 60 s cap; we land on the cap.
+        assert_eq!(reconnect_backoff_for(6), Duration::from_secs(60));
+    }
+
+    #[test]
+    fn reconnect_backoff_caps_at_one_minute() {
+        // Pathological consecutive failures (boat stuck offline for hours)
+        // settle at the cap rather than overflowing or busy-shifting.
+        assert_eq!(reconnect_backoff_for(100), RECONNECT_BACKOFF_MAX);
+        assert_eq!(reconnect_backoff_for(u32::MAX), RECONNECT_BACKOFF_MAX);
+    }
+
+    #[test]
+    fn probe_timeout_first_is_5_seconds() {
+        // Healthy Signal K servers deliver own-ship nav within seconds of
+        // a vessel.self subscription, so a fresh probe stays at the
+        // original 5 s window — fast diagnosis for the operator.
+        assert_eq!(probe_timeout_for(0), OWN_SHIP_NAV_PROBE_TIMEOUT);
+    }
+
+    #[test]
+    fn probe_timeout_grows_to_cap() {
+        assert_eq!(probe_timeout_for(1), Duration::from_secs(10));
+        assert_eq!(probe_timeout_for(2), Duration::from_secs(20));
+        assert_eq!(probe_timeout_for(3), Duration::from_secs(40));
+        // 5 * 2^4 = 80 would exceed the 60 s cap.
+        assert_eq!(probe_timeout_for(4), Duration::from_secs(60));
+        assert_eq!(probe_timeout_for(u32::MAX), OWN_SHIP_NAV_PROBE_TIMEOUT_MAX);
+    }
+
+    #[test]
+    fn next_consecutive_resets_on_own_ship_nav() {
+        // The moment any peer delivers own-ship navigation, we reset
+        // immediately so a subsequent transient failure starts fresh
+        // rather than inheriting a long-baked backoff. This is what
+        // makes a boat that just got GPS responsive within seconds.
+        assert_eq!(next_consecutive(0, true), 0);
+        assert_eq!(next_consecutive(5, true), 0);
+        assert_eq!(next_consecutive(u32::MAX, true), 0);
+    }
+
+    #[test]
+    fn next_consecutive_increments_on_no_nav() {
+        assert_eq!(next_consecutive(0, false), 1);
+        assert_eq!(next_consecutive(1, false), 2);
+        assert_eq!(next_consecutive(5, false), 6);
+    }
+
+    #[test]
+    fn next_consecutive_saturates_at_u32_max() {
+        // A boat that never gets GPS will eventually run the counter
+        // past whatever shift cap we have; saturating add keeps us out
+        // of overflow undefined behaviour without affecting the
+        // already-capped backoff or probe timeout.
+        assert_eq!(next_consecutive(u32::MAX, false), u32::MAX);
+        assert_eq!(next_consecutive(u32::MAX - 1, false), u32::MAX);
     }
 }
