@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **ci:** force-switch to main when committing the regenerated CHANGELOG (#280) ([PR #280](https://github.com/MarineYachtRadar/mayara-server/pull/280))
 - **furuno:** detect dead control socket so first PUT after idle succeeds (#282) ([PR #282](https://github.com/MarineYachtRadar/mayara-server/pull/282))
+- **furuno:** skip spoke decode in idle mode to free ~1.5 cores at idle (#284) ([PR #284](https://github.com/MarineYachtRadar/mayara-server/pull/284))
 
 ## [3.5.3] - 2026-05-29
 
