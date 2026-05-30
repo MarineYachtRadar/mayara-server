@@ -1,5 +1,4 @@
 use anyhow::{Error, bail};
-use bincode::deserialize;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
@@ -11,7 +10,7 @@ use crate::locator::LocatorAddress;
 use crate::network::LittleEndianSocketAddrV4;
 use crate::radar::settings::ControlId;
 use crate::radar::{RadarInfo, SharedRadars};
-use crate::util::{PrintableSlice, c_string};
+use crate::util::{PrintableSlice, c_string, decode_bin};
 use crate::{Brand, Cli};
 
 use super::LocatorId;
@@ -226,7 +225,7 @@ impl RaymarineLocator {
         from: &Ipv4Addr,
         radars: &SharedRadars,
     ) -> Result<Option<(RadarInfo, BaseModel)>, Error> {
-        match deserialize::<RaymarineBeacon36>(report) {
+        match decode_bin::<RaymarineBeacon36>(report) {
             Ok(data) => {
                 let beacon_type = u32::from_le_bytes(data.beacon_type);
                 let link_id_preview = u32::from_le_bytes(data.link_id);
@@ -340,7 +339,7 @@ impl RaymarineLocator {
     }
 
     fn process_beacon_56_report(&mut self, report: &[u8], from: &Ipv4Addr) -> Result<(), Error> {
-        match deserialize::<RaymarineBeacon56>(report) {
+        match decode_bin::<RaymarineBeacon56>(report) {
             Ok(data) => {
                 let beacon_type = u32::from_le_bytes(data.beacon_type);
                 let subtype = u32::from_le_bytes(data.subtype);

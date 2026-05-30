@@ -459,7 +459,7 @@ const BLANKING_SECTORS: [(usize, ControlId); 4] = [
 mod tests {
     use super::*;
     use crate::network::NetworkSocketAddrV4;
-    use bincode::deserialize;
+    use crate::util::decode_bin;
     use serde::Deserialize as TestDeserialize;
     use std::net::{Ipv4Addr, SocketAddrV4};
 
@@ -692,7 +692,7 @@ mod tests {
             ("HALO 24", &BEACON_HALO24[..]),
         ] {
             let old: NavicoBeaconDual =
-                deserialize(packet).expect(&format!("{}: bincode failed", name));
+                decode_bin(packet).expect(&format!("{}: bincode failed", name));
             let new =
                 parse_gen3plus_beacon(packet).expect(&format!("{}: dynamic parse failed", name));
 

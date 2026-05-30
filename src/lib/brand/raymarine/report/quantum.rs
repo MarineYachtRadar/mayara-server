@@ -9,6 +9,7 @@ use crate::radar::range::{Range, Ranges};
 use crate::radar::settings::ControlId;
 use crate::radar::spoke::GenericSpoke;
 use crate::radar::{Power, SpokeBearing};
+use crate::util::decode_bin;
 
 use super::{RaymarineReportReceiver, ReceiverState};
 
@@ -44,7 +45,7 @@ pub(crate) fn process_frame(receiver: &mut RaymarineReportReceiver, data: &[u8])
         return;
     }
     let header = &data[..FRAME_HEADER_LENGTH];
-    let header: FrameHeader = match bincode::deserialize(header) {
+    let header: FrameHeader = match decode_bin(header) {
         Ok(h) => h,
         Err(e) => {
             log::error!(
@@ -178,7 +179,7 @@ impl StatusReport {
             );
         }
         let report = &data[0..STATUS_REPORT_LENGTH];
-        let report: StatusReport = match bincode::deserialize(report) {
+        let report: StatusReport = match decode_bin(report) {
             Ok(h) => h,
             Err(e) => {
                 bail!(

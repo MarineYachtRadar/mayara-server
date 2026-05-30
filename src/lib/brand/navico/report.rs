@@ -1,5 +1,4 @@
 use anyhow::{Error, bail};
-use bincode::deserialize;
 use num_traits::FromPrimitive;
 use serde::Deserialize;
 use std::cmp::min;
@@ -34,7 +33,7 @@ use crate::radar::{
 };
 use crate::replay::RadarSocket;
 use crate::util::PrintableSpoke;
-use crate::util::{c_string, c_wide_string};
+use crate::util::{c_string, c_wide_string, decode_bin};
 
 /*
  Heading on radar. Observed in field:
@@ -1303,7 +1302,7 @@ impl NavicoReportReceiver {
         scanline: usize,
     ) -> Option<(u32, SpokeBearing, Option<u16>)> {
         match self.model {
-            Model::BR24 | Model::Gen3 => match deserialize::<GenBr24Header>(&header_slice) {
+            Model::BR24 | Model::Gen3 => match decode_bin::<GenBr24Header>(&header_slice) {
                 Ok(header) => {
                     log::trace!("Received {:04} header {:?}", scanline, header);
 
@@ -1314,7 +1313,7 @@ impl NavicoReportReceiver {
                     return None;
                 }
             },
-            _ => match deserialize::<Gen3PlusHeader>(&header_slice) {
+            _ => match decode_bin::<Gen3PlusHeader>(&header_slice) {
                 Ok(header) => {
                     log::trace!("Received {:04} header {:?}", scanline, header);
 
