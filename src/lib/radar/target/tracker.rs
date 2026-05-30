@@ -25,8 +25,14 @@ const DELETE_REVOLUTION_COUNT: u64 = 4;
 /// Extended to handle buoys/anchored vessels that may temporarily disappear behind a passing ship.
 const STATIONARY_DELETE_REVOLUTION_COUNT: u64 = 10;
 
-/// Speed threshold (m/s) below which a target is considered stationary
-/// 0.5 m/s = ~1 knot - accounts for GPS drift and minor movement
+/// Speed threshold (m/s) below which a target is considered stationary.
+/// 0.5 m/s ≈ 1 kn — covers GPS drift and minor movement on a moored or
+/// anchored vessel. Targets caught by this threshold receive the longer
+/// stationary lost/delete timeouts. A slowly drifting anchored vessel
+/// or a small boat doing < 1 kn under tide will be over-classified as
+/// stationary; the cost is a slightly longer wait before garbage-
+/// collecting a genuinely gone target, which is preferable to dropping
+/// a real low-speed track too early.
 const STATIONARY_SPEED_THRESHOLD: f64 = 0.5;
 
 /// Maximum separation (meters) between two targets that are considered duplicates.
@@ -34,8 +40,13 @@ const STATIONARY_SPEED_THRESHOLD: f64 = 0.5;
 /// each within this distance of the others but all representing the same physical target.
 const DUPLICATE_MERGE_DISTANCE_M: f64 = 100.0;
 
-/// Minimum number of updates before a target can be considered stationary
-/// Prevents false positives from slow-starting tracks
+/// Minimum number of updates before a target can be considered stationary.
+///
+/// Promotion to Tracking requires `update_count >= 4`, so this is one
+/// step further: a stationary classification needs not just a promoted
+/// track but also a converged motion estimate. That prevents the
+/// extended stationary timeouts being applied to a track that was only
+/// just confirmed and may still have a noisy Kalman SOG.
 const MIN_UPDATES_FOR_STATIONARY: u32 = 5;
 
 /// Minimum match distance (meters) for matching a blob to an active target
@@ -47,12 +58,32 @@ const MIN_MATCH_DISTANCE_M: f64 = 50.0;
 /// within max_speed * delta_time. We use 1.5x to account for prediction error.
 const MATCH_DISTANCE_SPEED_MULTIPLIER: f64 = 1.5;
 
-/// Maximum allowed turn angle (degrees) for high-speed targets
-/// Targets appearing to turn more than this at speed are rejected as false matches
-const MAX_TURN_ANGLE_DEG: f64 = 130.0;
+/// Maximum COG difference (radians) for two close-by candidate targets
+/// to be treated as duplicates. Two real vessels close together (a tug
+/// and tow within 100 m, a row of moored boats) can sit inside the
+/// `DUPLICATE_MERGE_DISTANCE_M` ring of each other; the only way to tell
+/// them apart from a single physical target producing multiple blobs is
+/// motion: a single large vessel's blobs share the vessel's heading,
+/// while two distinct vessels generally don't. 30° matches the typical
+/// IMO close-quarters convention for "same/different course."
+const DEDUP_MAX_COG_DIFF_RAD: f64 = 30.0 * std::f64::consts::PI / 180.0;
+
+/// Maximum allowed turn angle (degrees) between consecutive sightings of
+/// a target moving faster than `TURN_REJECTION_SPEED_MS`. A real planing
+/// boat at 5 m/s can hard-over and pivot well under 90° per 3-second
+/// radar revolution; turns beyond this are almost certainly a stray blob
+/// being mistakenly associated with the wrong target. Applied for the
+/// entire lifetime of a target so a mature, trusted track cannot silently
+/// accept an implausible jump from a false association.
+const MAX_TURN_ANGLE_DEG: f64 = 90.0;
 
 /// Speed threshold (m/s) above which turn rejection is applied
 const TURN_REJECTION_SPEED_MS: f64 = 5.0;
+
+/// Minimum number of updates before turn rejection can fire. Needs a
+/// previous COG to compare against, so the very first measurement
+/// after creation never triggers a rejection.
+const MIN_UPDATES_FOR_TURN_REJECTION: u32 = 2;
 
 /// Multiplier for per-radar target IDs.
 /// In per-radar mode, radar N gets IDs in range [N * RADAR_ID_MULTIPLIER, (N+1) * RADAR_ID_MULTIPLIER - 1].
@@ -201,13 +232,20 @@ impl ActiveTarget {
             None
         };
 
-        // Turn rejection: reject implausible maneuvers for fast targets in early tracking
-        // Based on radar_pi: turn > 130° at speed > 5 m/s for status < 5
-        // Use Kalman-estimated SOG rather than measured SOG: a stationary target's blob
-        // position varies by tens of meters per rotation, producing apparent measured
-        // speeds of 8-10 m/s with random directions. The Kalman filter correctly
-        // converges toward the true low speed and avoids false rejections.
-        if self.update_count >= 2 && self.update_count < 5 {
+        // Turn rejection: reject implausible maneuvers for fast targets.
+        // Applies for the entire lifetime of a target once a previous
+        // COG exists (see `MIN_UPDATES_FOR_TURN_REJECTION`), so a mature
+        // track cannot silently accept a "teleport" from a false
+        // association — the case a navigator is most likely to be
+        // relying on.
+        //
+        // SOG is read from the Kalman estimate rather than from the raw
+        // measured displacement: a stationary target's blob centre wanders
+        // by tens of metres per rotation, producing apparent measured
+        // speeds of 8-10 m/s with random direction. The Kalman filter
+        // correctly converges toward the true low speed and avoids
+        // false rejections of stationary buoys.
+        if self.update_count >= MIN_UPDATES_FOR_TURN_REJECTION {
             if let (Some(current_cog), Some(new_cog), Some(kalman_sog)) =
                 (self.cog, measured_cog, self.sog)
             {
@@ -414,14 +452,21 @@ impl TargetTracker {
         self.stats = TrackerStats::default();
     }
 
-    /// Merge duplicate targets that are within DUPLICATE_MERGE_DISTANCE_M of each other.
-    /// Only young targets (< 4 updates) are candidates for removal. An established target
-    /// (>= 4 updates) is never discarded, but a young target is merged into any nearby
-    /// target — young or established. Two established targets are never merged.
-    /// A large vessel can produce multiple blobs per rotation from different hull sections,
-    /// each starting a separate acquiring track near an already-established one.
-    /// For young+young pairs the one with fewer updates is discarded; ties go to the
-    /// higher (newer) ID. For young+established pairs the young one is always discarded.
+    /// Merge duplicate targets that are within DUPLICATE_MERGE_DISTANCE_M
+    /// of each other. Only young targets (< 4 updates) are candidates for
+    /// removal — established targets are never discarded.
+    ///
+    /// A large vessel can produce multiple blobs per rotation from
+    /// different hull sections, each starting a separate acquiring
+    /// track near an already-established one. Those duplicates share
+    /// the vessel's heading, so they should be merged.
+    ///
+    /// Two genuinely distinct vessels (a tug and tow, a row of moored
+    /// boats) can sit equally close together. When both candidates
+    /// have a COG estimate, the merge is suppressed if their courses
+    /// differ by more than `DEDUP_MAX_COG_DIFF_RAD` — that's the
+    /// signature of two real tracks rather than blob fragmentation
+    /// from one vessel.
     fn deduplicate_targets(&mut self) {
         let ids: Vec<u64> = self.active_targets.keys().copied().collect();
         let mut to_remove: Vec<u64> = Vec::new();
@@ -449,6 +494,31 @@ impl TargetTracker {
                 if dist > DUPLICATE_MERGE_DISTANCE_M {
                     continue;
                 }
+
+                // Motion-aware exemption: if both targets have a COG
+                // and the courses materially differ, treat them as two
+                // distinct vessels rather than blob fragmentation.
+                if let (Some(cog_a), Some(cog_b)) =
+                    (self.active_targets[&a].cog, self.active_targets[&b].cog)
+                {
+                    let mut diff = (cog_a - cog_b).abs();
+                    if diff > std::f64::consts::PI {
+                        diff = TAU - diff;
+                    }
+                    if diff > DEDUP_MAX_COG_DIFF_RAD {
+                        log::debug!(
+                            "Skipping dedup: target {} (cog {:.0}°) and {} (cog {:.0}°) \
+                             differ by {:.0}°, treating as distinct vessels",
+                            a,
+                            cog_a.to_degrees(),
+                            b,
+                            cog_b.to_degrees(),
+                            diff.to_degrees()
+                        );
+                        continue;
+                    }
+                }
+
                 // a is young; keep whichever has more updates (b wins ties since a is young)
                 let updates_a = self.active_targets[&a].update_count;
                 let updates_b = self.active_targets[&b].update_count;
@@ -1807,5 +1877,164 @@ mod tests {
                 tracker.active_count()
             );
         }
+    }
+
+    #[test]
+    fn dedup_keeps_distinct_close_vessels_with_different_courses() {
+        // Two vessels that must remain within DUPLICATE_MERGE_DISTANCE_M
+        // (100m) of each other AT DEDUP TIME but moving on perpendicular
+        // courses. Picked geometry:
+        //
+        // - 8m step per 3-second revolution (~2.7 m/s SOG) so neither
+        //   target drifts out of the 100m merge ring.
+        // - 70m initial east offset so B's first blob doesn't match A
+        //   on candidate association (with max_target_speed_ms = 5 m/s
+        //   the per-candidate gate is max(50m, 5·3·1.5) = 50m).
+        // - max_target_speed_ms intentionally low for the same reason:
+        //   with TEST_MAX_SPEED_MS (≈25.7 m/s) A's match window would
+        //   reach 115m and absorb B before dedup is even consulted.
+        //
+        // At dedup time: A at ~24m north, B at ~86m east of (52, 4) →
+        // separation `sqrt(24² + 86²)` ≈ 89m, inside the merge ring.
+        // Only the new motion-aware COG exemption keeps them distinct.
+        // Removing the exemption causes this test to fail.
+        let mut tracker = TargetTracker::new_merged(2048);
+        let max_speed_ms = 5.0;
+        let radar = Some(GeoPosition::new(52.0, 4.0));
+
+        let lat_step = 8.0 / METERS_PER_DEGREE_LATITUDE; // ~2.7 m/s northbound
+        let lon_step = 8.0 / meters_per_degree_longitude(&52.0); // ~2.7 m/s eastbound
+
+        // Target A: heading north, 4 updates so it reaches Tracking
+        // and gets a converged COG estimate.
+        for i in 0..4u64 {
+            tracker.process_candidate(TargetCandidate {
+                time: i * 3000,
+                position: GeoPosition::new(52.0 + lat_step * i as f64, 4.0),
+                size_meters: 30.0,
+                radar_key: "test".to_string(),
+                radar_position: radar,
+                max_target_speed_ms: max_speed_ms,
+                source: CandidateSource::GuardZone(1),
+            });
+        }
+
+        // Target B: heading east, 70m east of A's start. 3 updates so
+        // it stays a young (< 4) dedup candidate.
+        let b_start_lon = 4.0 + 70.0 / meters_per_degree_longitude(&52.0);
+        for i in 0..3u64 {
+            tracker.process_candidate(TargetCandidate {
+                time: i * 3000,
+                position: GeoPosition::new(52.0, b_start_lon + lon_step * i as f64),
+                size_meters: 30.0,
+                radar_key: "test".to_string(),
+                radar_position: radar,
+                max_target_speed_ms: max_speed_ms,
+                source: CandidateSource::GuardZone(1),
+            });
+        }
+
+        // Sanity: the two physical separations must straddle the merge
+        // distance correctly — close enough at dedup time that the
+        // distance gate alone wouldn't separate them, but each target's
+        // own match window mustn't reach the other. Compute the max
+        // pairwise separation across however many targets the tracker
+        // ended up with, so the test doesn't depend on the internal ID
+        // numbering or on which candidate became which id.
+        let positions: Vec<_> = tracker
+            .get_active_targets()
+            .map(|t| t.position)
+            .collect();
+        assert_eq!(positions.len(), 2, "expected 2 candidate targets pre-dedup");
+        let separation = calculate_distance(&positions[0], &positions[1]);
+        assert!(
+            separation < DUPLICATE_MERGE_DISTANCE_M,
+            "test geometry must keep the targets inside the merge ring; \
+             separation was {:.1}m, threshold is {:.1}m",
+            separation,
+            DUPLICATE_MERGE_DISTANCE_M
+        );
+
+        // Force a revolution-complete event to trigger the dedup pass.
+        tracker.check_revolution(2000, 12_000);
+        tracker.check_revolution(100, 13_000);
+
+        // Both vessels must still be present.
+        assert_eq!(
+            tracker.active_count(),
+            2,
+            "two close-by vessels with different COGs must NOT be merged, \
+             but {} target(s) remain",
+            tracker.active_count()
+        );
+    }
+
+    #[test]
+    fn turn_rejection_applies_to_mature_tracks() {
+        // A long-tracked fast target receives an "update" 180° off its
+        // heading. Mature tracks are the ones a navigator is most
+        // likely to rely on, so the lifetime turn-rejection guarantee
+        // is what protects them from a false association.
+        let mut tracker = TargetTracker::new_merged(2048);
+        let max_speed_ms = TEST_MAX_SPEED_MS;
+
+        // 10 clean revolutions heading east at ~10 m/s — well past the
+        // 4-update Tracking promotion threshold.
+        let lat = 52.0;
+        let start_lon = 4.0;
+        let lon_step = 30.0 / meters_per_degree_longitude(&lat);
+        for i in 0..10u64 {
+            tracker.process_candidate(TargetCandidate {
+                time: i * 3000,
+                position: GeoPosition::new(lat, start_lon + lon_step * i as f64),
+                size_meters: 30.0,
+                radar_key: "test".to_string(),
+                radar_position: Some(GeoPosition::new(52.0, 4.0)),
+                max_target_speed_ms: max_speed_ms,
+                source: CandidateSource::GuardZone(1),
+            });
+        }
+        let target = tracker.get_active_targets().next().unwrap();
+        assert_eq!(target.status, TargetStatus::Tracking);
+        assert!(
+            target.update_count >= 9,
+            "target must be a mature Tracking track: update_count={}",
+            target.update_count
+        );
+
+        // Feed a candidate representing a 180° course reversal at the
+        // same speed (jumping 30m west of the prior position rather
+        // than 30m east). Without the lifetime turn check, the mature
+        // track would silently accept this and corrupt itself.
+        let last_lon = start_lon + lon_step * 9.0;
+        let bogus = TargetCandidate {
+            time: 10 * 3000,
+            position: GeoPosition::new(lat, last_lon - lon_step),
+            size_meters: 30.0,
+            radar_key: "test".to_string(),
+            radar_position: Some(GeoPosition::new(52.0, 4.0)),
+            max_target_speed_ms: max_speed_ms,
+            source: CandidateSource::GuardZone(1),
+        };
+        // The mature track rejects the bogus update; because the candidate
+        // comes from a guard zone, a fresh acquiring target is created
+        // instead. Either way the original mature track must NOT have
+        // been updated to the reversed position.
+        let _ = tracker.process_candidate(bogus);
+
+        // Find the mature track (the one with high update count) and
+        // confirm its position is still where the eastbound run left it,
+        // not pulled west by the bogus 180° measurement.
+        let mature = tracker
+            .get_active_targets()
+            .max_by_key(|t| t.update_count)
+            .unwrap();
+        assert!(
+            (mature.position.lon() - last_lon).abs() < 1e-9,
+            "mature track position must not have been pulled west by the bogus update: \
+             got lon={}, expected {}",
+            mature.position.lon(),
+            last_lon
+        );
     }
 }

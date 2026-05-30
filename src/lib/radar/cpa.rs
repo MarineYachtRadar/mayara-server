@@ -6,12 +6,17 @@
 use super::GeoPosition;
 use super::target::{METERS_PER_DEGREE_LATITUDE, meters_per_degree_longitude};
 
-/// Result of CPA/TCPA calculation
+/// Result of CPA/TCPA calculation.
+///
+/// `tcpa` is signed: positive when CPA is in the future (vessels closing),
+/// negative when CPA was in the past (vessels diverging after a recent
+/// passage). Consumers that only care about closing situations should
+/// filter on `tcpa >= 0.0`.
 #[derive(Debug, Clone, Copy)]
 pub struct CpaResult {
     /// Closest Point of Approach in meters
     pub cpa: f64,
-    /// Time to CPA in seconds (always positive when vessels are closing)
+    /// Time to CPA in seconds (signed; see struct doc)
     pub tcpa: f64,
 }
 
@@ -39,56 +44,34 @@ pub struct TargetVessel {
 
 /// Calculate CPA and TCPA between own vessel and target.
 ///
-/// Returns `Some(CpaResult)` if vessels are closing (TCPA > 0),
-/// or `None` if vessels are moving apart or stationary.
-///
-/// The calculation uses a relative velocity approach:
-/// 1. Convert positions to local Cartesian coordinates (meters)
-/// 2. Calculate relative velocity vector
-/// 3. Find time when distance is minimized
-/// 4. Calculate distance at that time
+/// Returns `Some(CpaResult)` with a signed `tcpa` (positive = future,
+/// negative = past) whenever the two vessels have any relative motion.
+/// Returns `None` only when relative velocity is essentially zero — in
+/// that case the inter-vessel distance is constant and CPA is undefined.
 pub fn calculate_cpa(own: &OwnVessel, target: &TargetVessel) -> Option<CpaResult> {
-    // Convert positions to local Cartesian coordinates (meters)
-    // Using own vessel position as origin
     let lat_scale = METERS_PER_DEGREE_LATITUDE;
     let lon_scale = meters_per_degree_longitude(&own.position.lat());
 
-    // Target position relative to own vessel (in meters)
     let dx = (target.position.lon() - own.position.lon()) * lon_scale;
     let dy = (target.position.lat() - own.position.lat()) * lat_scale;
 
-    // Velocity vectors (m/s) - convert from COG (North=0, clockwise) to Cartesian (East=+x, North=+y)
     let own_vx = own.sog * own.cog.sin();
     let own_vy = own.sog * own.cog.cos();
     let target_vx = target.sog * target.cog.sin();
     let target_vy = target.sog * target.cog.cos();
 
-    // Relative velocity (target relative to own)
     let dvx = target_vx - own_vx;
     let dvy = target_vy - own_vy;
 
-    // Relative velocity squared
     let dv_squared = dvx * dvx + dvy * dvy;
-
-    // If relative velocity is essentially zero, vessels maintain constant distance
     if dv_squared < 1e-10 {
         return None;
     }
 
-    // Time to CPA: t = -(dx*dvx + dy*dvy) / (dvx² + dvy²)
-    // This is the time when the derivative of distance² equals zero
     let tcpa = -(dx * dvx + dy * dvy) / dv_squared;
 
-    // Only return result if TCPA is positive (vessels are closing)
-    if tcpa <= 0.0 {
-        return None;
-    }
-
-    // Position at CPA time
     let cpa_dx = dx + dvx * tcpa;
     let cpa_dy = dy + dvy * tcpa;
-
-    // CPA distance
     let cpa = (cpa_dx * cpa_dx + cpa_dy * cpa_dy).sqrt();
 
     Some(CpaResult { cpa, tcpa })
@@ -201,7 +184,7 @@ mod tests {
     }
 
     #[test]
-    fn test_vessels_diverging() {
+    fn test_vessels_diverging_returns_negative_tcpa() {
         // Own vessel heading North
         let own = OwnVessel {
             position: GeoPosition::new(52.0, 4.0),
@@ -209,7 +192,8 @@ mod tests {
             cog: 0.0, // North
         };
 
-        // Target 1000m South, also heading South (moving away)
+        // Target 1000m South, also heading South — already past their
+        // closest approach. CPA is now historical.
         let target_pos = own.position.position_from_bearing(PI, 1000.0);
         let target = TargetVessel {
             position: target_pos,
@@ -217,22 +201,21 @@ mod tests {
             cog: PI, // South
         };
 
-        let result = calculate_cpa(&own, &target);
-
-        // Vessels are diverging, should return None
-        assert!(result.is_none(), "Diverging vessels should return None");
+        let result = calculate_cpa(&own, &target).expect("relative velocity is non-zero");
+        // TCPA must be negative — the closest point is in the past.
+        assert!(result.tcpa < 0.0, "TCPA should be negative, got {}", result.tcpa);
     }
 
     #[test]
-    fn test_stationary_target() {
-        // Own vessel heading North
+    fn test_stationary_target_perpendicular_passed() {
+        // Own vessel heading North, stationary target due East. We're
+        // moving perpendicular to the target, so we're already at our
+        // closest point and any further travel only opens the range.
         let own = OwnVessel {
             position: GeoPosition::new(52.0, 4.0),
             sog: 10.0,
-            cog: 0.0, // North
+            cog: 0.0,
         };
-
-        // Stationary target 500m East
         let target_pos = own.position.position_from_bearing(PI / 2.0, 500.0);
         let target = TargetVessel {
             position: target_pos,
@@ -240,24 +223,14 @@ mod tests {
             cog: 0.0,
         };
 
-        let result = calculate_cpa(&own, &target);
-
-        // We're moving North, target is East - we're not closing on it
-        // Actually, as we move North, the distance decreases then increases
-        // So there should be a CPA
-        // Wait, if target is due East and we're heading North, we're moving
-        // perpendicular to the target - distance stays constant
-        // Actually no: we're moving away from the initial point, so distance
-        // to a fixed point East would stay ~constant at closest approach
-        // CPA would be when we're at the same latitude as the target
-
-        // For a stationary target due East while we head North:
-        // Distance is sqrt(500² + (our_north_travel)²)
-        // This is minimized at our_north_travel = 0, i.e., TCPA = 0 or already past
-        // So this should return None
+        let result = calculate_cpa(&own, &target).expect("relative velocity is non-zero");
+        // We're moving away from the closest-approach point right now,
+        // so TCPA must be non-positive. CPA is the current ~500m distance.
+        assert!(result.tcpa <= 0.0, "TCPA should be ≤ 0, got {}", result.tcpa);
         assert!(
-            result.is_none(),
-            "Should return None for perpendicular stationary target"
+            approx_eq(result.cpa, 500.0, 5.0),
+            "CPA should be ~500m, got {}",
+            result.cpa
         );
     }
 
@@ -312,6 +285,31 @@ mod tests {
 
         // Both stationary, should return None
         assert!(result.is_none(), "Both stationary should return None");
+    }
+
+    #[test]
+    fn test_parallel_same_velocity_returns_none() {
+        // Two vessels on the same course at the same speed: relative
+        // velocity is zero, the inter-vessel distance is constant, and
+        // CPA is undefined. This is the same `None` case as both-
+        // stationary, but with both vessels actually moving — the
+        // contract change should not regress this geometry.
+        let own = OwnVessel {
+            position: GeoPosition::new(52.0, 4.0),
+            sog: 12.0,
+            cog: PI / 4.0, // NE
+        };
+        let target = TargetVessel {
+            position: GeoPosition::new(52.001, 4.001),
+            sog: 12.0,
+            cog: PI / 4.0, // same NE course
+        };
+
+        let result = calculate_cpa(&own, &target);
+        assert!(
+            result.is_none(),
+            "Zero relative velocity must return None even when both vessels move",
+        );
     }
 
     #[test]

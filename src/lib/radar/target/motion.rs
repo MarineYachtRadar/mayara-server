@@ -6,7 +6,7 @@
 
 use std::f64::consts::TAU;
 
-use super::kalman::KalmanFilter;
+use super::kalman::{KalmanFilter, Matrix4x4, Vector4};
 use crate::radar::GeoPosition;
 
 /// Motion estimation result
@@ -38,9 +38,6 @@ pub trait MotionModel: Send {
 
     /// Get position uncertainty in meters
     fn get_uncertainty(&self) -> f64;
-
-    /// Force the model state (for manual overrides)
-    fn force_state(&mut self, position: GeoPosition, sog: f64, cog: f64, time: u64);
 
     /// Clone the model into a boxed trait object
     fn clone_box(&self) -> Box<dyn MotionModel>;
@@ -131,32 +128,87 @@ impl ImmMotionModel {
         exponent.exp() / (sigma * TAU.sqrt())
     }
 
-    /// Mix model states based on mixing probabilities
+    /// IMM interaction/mixing step. Produces, for each filter j, a mixed
+    /// initial state and covariance that the filter then uses as its prior
+    /// for this measurement. Without this step the three filters drift
+    /// apart over time and the IMM degenerates to "three parallel Kalmans
+    /// with a softmax over likelihoods" — which is much less informative
+    /// than the literature suggests by name.
+    ///
+    /// Bar-Shalom, *Estimation with Applications to Tracking and
+    /// Navigation*, eq. 11.6.6:
+    ///   x0_j = Σ_i μ_{i|j} · x_i
+    ///   P0_j = Σ_i μ_{i|j} · (P_i + (x_i - x0_j)(x_i - x0_j)ᵀ)
+    /// Then `model_probs[j] = c_bar[j]` is the predicted weight for j.
+    ///
+    /// Requires all three filters to be in the same local-metre frame.
+    /// That's automatic here because `init_with_uncertainty` sets the
+    /// same ref_lat/ref_lon on all three from the same first measurement.
     fn mix_states(&mut self) {
-        // Calculate mixing probabilities
-        let mut mixing_probs = [[0.0; 3]; 3];
         let mut c_bar = [0.0; 3];
-
-        // c_bar[j] = sum_i(p_ij * mu_i)
         for j in 0..3 {
             for i in 0..3 {
                 c_bar[j] += TRANSITION_PROB[i][j] * self.model_probs[i];
             }
         }
 
-        // mixing_prob[i|j] = p_ij * mu_i / c_bar[j]
+        let mut mixing_probs = [[0.0_f64; 3]; 3];
         for j in 0..3 {
-            for i in 0..3 {
-                if c_bar[j] > 1e-10 {
-                    mixing_probs[i][j] = TRANSITION_PROB[i][j] * self.model_probs[i] / c_bar[j];
+            if c_bar[j] > 1e-10 {
+                for i in 0..3 {
+                    mixing_probs[i][j] =
+                        TRANSITION_PROB[i][j] * self.model_probs[i] / c_bar[j];
                 }
             }
         }
 
-        // Store predicted probabilities for next update
+        // Snapshot current (state, P) for each filter once — we read them
+        // multiple times to build the mixed priors and must not see our
+        // own writes mid-loop.
+        let filters = [&self.cv_filter, &self.ca_filter, &self.ct_filter];
+        let snapshots: [(Vector4, Matrix4x4); 3] = [
+            filters[0].state_and_covariance(),
+            filters[1].state_and_covariance(),
+            filters[2].state_and_covariance(),
+        ];
+
+        // Sanity check: all filters must share the same local frame. The
+        // IMM constructor and init paths guarantee this, but a future
+        // change could break it silently.
+        debug_assert!(
+            (self.cv_filter.ref_lat() - self.ca_filter.ref_lat()).abs() < 1e-12
+                && (self.cv_filter.ref_lat() - self.ct_filter.ref_lat()).abs() < 1e-12
+                && (self.cv_filter.ref_lon() - self.ca_filter.ref_lon()).abs() < 1e-12
+                && (self.cv_filter.ref_lon() - self.ct_filter.ref_lon()).abs() < 1e-12,
+            "IMM filters must share ref_lat/ref_lon for mixing to be valid"
+        );
+
+        let mut mixed: [(Vector4, Matrix4x4); 3] =
+            [(Vector4::zeros(), Matrix4x4::zeros()); 3];
         for j in 0..3 {
-            self.model_probs[j] = c_bar[j];
+            // x0_j = Σ_i μ_{i|j} · x_i
+            let mut x0 = Vector4::zeros();
+            for i in 0..3 {
+                x0 += mixing_probs[i][j] * snapshots[i].0;
+            }
+
+            // P0_j = Σ_i μ_{i|j} · (P_i + (x_i - x0_j)(x_i - x0_j)ᵀ)
+            let mut p0 = Matrix4x4::zeros();
+            for i in 0..3 {
+                let dx = snapshots[i].0 - x0;
+                p0 += mixing_probs[i][j] * (snapshots[i].1 + dx * dx.transpose());
+            }
+
+            mixed[j] = (x0, p0);
         }
+
+        // Write the mixed priors back into each filter.
+        self.cv_filter.set_state_and_covariance(mixed[0].0, mixed[0].1);
+        self.ca_filter.set_state_and_covariance(mixed[1].0, mixed[1].1);
+        self.ct_filter.set_state_and_covariance(mixed[2].0, mixed[2].1);
+
+        // Predicted model probabilities for the upcoming update step.
+        self.model_probs = c_bar;
     }
 
     /// Update model probabilities based on measurement likelihoods
@@ -248,6 +300,17 @@ impl MotionModel for ImmMotionModel {
             return MotionEstimate { sog: 0.0, cog: 0.0 };
         }
 
+        // Reject stale or duplicate measurements before doing any work.
+        // KalmanFilter::update bails on `time <= last_time`, but the
+        // mixing step that runs first would still rewrite all three
+        // filter states for an out-of-order sample — corrupting future
+        // predictions and model probabilities even though no new
+        // measurement was actually accepted. Match the per-filter
+        // contract by returning the current motion estimate unchanged.
+        if time <= self.last_time {
+            return self.get_motion();
+        }
+
         // Step 1: Interaction/Mixing
         self.mix_states();
 
@@ -324,16 +387,6 @@ impl MotionModel for ImmMotionModel {
         self.model_probs[0] * self.cv_filter.get_uncertainty()
             + self.model_probs[1] * self.ca_filter.get_uncertainty()
             + self.model_probs[2] * self.ct_filter.get_uncertainty()
-    }
-
-    fn force_state(&mut self, position: GeoPosition, sog: f64, cog: f64, time: u64) {
-        self.cv_filter.force_state(position, sog, cog, time);
-        self.ca_filter.force_state(position, sog, cog, time);
-        self.ct_filter.force_state(position, sog, cog, time);
-        self.last_position = position;
-        self.sog = sog;
-        self.cog = cog;
-        self.last_time = time;
     }
 
     fn clone_box(&self) -> Box<dyn MotionModel> {
@@ -524,5 +577,87 @@ mod tests {
             final_motion.sog,
             speed_ms
         );
+    }
+
+    /// IMM mixing must pull the three filters' state estimates together.
+    /// Without mixing, each filter drifts independently with its own Q,
+    /// so after many updates the high-Q CT filter is materially offset
+    /// from the low-Q CV one. With proper mixing the filters stay in the
+    /// same neighbourhood.
+    #[test]
+    fn imm_mixing_keeps_filter_states_consistent() {
+        let mut model = ImmMotionModel::new();
+        let start = GeoPosition::new(52.0, 4.0);
+        model.init(start, 0);
+
+        // 20 clean updates moving north at ~10 m/s.
+        let delta_lat = 30.0 / super::super::METERS_PER_DEGREE_LATITUDE;
+        for i in 1..=20u64 {
+            model.update(
+                GeoPosition::new(52.0 + delta_lat * i as f64, 4.0),
+                i * 3000,
+            );
+        }
+
+        // All three filters should predict the same future position to
+        // within a few metres. The blended prediction relies on this; if
+        // the filters drift apart the blended position is no longer at
+        // any of them.
+        let future_time = 21 * 3000;
+        let cv_pred = model.cv_filter.predict(future_time);
+        let ca_pred = model.ca_filter.predict(future_time);
+        let ct_pred = model.ct_filter.predict(future_time);
+
+        let max_spread = calculate_distance(&cv_pred, &ca_pred)
+            .max(calculate_distance(&cv_pred, &ct_pred))
+            .max(calculate_distance(&ca_pred, &ct_pred));
+
+        assert!(
+            max_spread < 5.0,
+            "IMM mixing should keep filter predictions within 5m of each \
+             other after 20 clean steady-state updates; got max spread {:.2}m",
+            max_spread
+        );
+    }
+
+    /// A duplicate or out-of-order timestamp must be a no-op from the
+    /// caller's perspective: same SOG/COG returned, no mutation of the
+    /// internal filters or model probabilities. Without the stale-time
+    /// guard, mix_states would rewrite all three filter states even
+    /// though no new measurement was accepted, drifting future
+    /// predictions for a replayed sample.
+    #[test]
+    fn imm_update_is_idempotent_on_stale_or_duplicate_timestamps() {
+        let mut model = ImmMotionModel::new();
+        model.init(GeoPosition::new(52.0, 4.0), 0);
+
+        let lat_step = 30.0 / super::super::METERS_PER_DEGREE_LATITUDE;
+        for i in 1..=5u64 {
+            model.update(
+                GeoPosition::new(52.0 + lat_step * i as f64, 4.0),
+                i * 3000,
+            );
+        }
+
+        let baseline_motion = model.get_motion();
+        let baseline_probs = model.model_probs;
+        let baseline_cv = model.cv_filter.state_and_covariance();
+        let baseline_ca = model.ca_filter.state_and_covariance();
+        let baseline_ct = model.ct_filter.state_and_covariance();
+
+        // Same timestamp as last update — must be a no-op.
+        let returned = model.update(GeoPosition::new(53.0, 5.0), 5 * 3000);
+        assert!((returned.sog - baseline_motion.sog).abs() < 1e-12);
+        assert!((returned.cog - baseline_motion.cog).abs() < 1e-12);
+        assert_eq!(model.model_probs, baseline_probs);
+        assert_eq!(model.cv_filter.state_and_covariance().0, baseline_cv.0);
+        assert_eq!(model.ca_filter.state_and_covariance().0, baseline_ca.0);
+        assert_eq!(model.ct_filter.state_and_covariance().0, baseline_ct.0);
+
+        // Strictly older timestamp — also a no-op.
+        let returned = model.update(GeoPosition::new(54.0, 6.0), 2 * 3000);
+        assert!((returned.sog - baseline_motion.sog).abs() < 1e-12);
+        assert_eq!(model.model_probs, baseline_probs);
+        assert_eq!(model.cv_filter.state_and_covariance().0, baseline_cv.0);
     }
 }

@@ -11,8 +11,8 @@ use nalgebra::{SMatrix, SVector};
 use super::{METERS_PER_DEGREE_LATITUDE, meters_per_degree_longitude};
 use crate::radar::GeoPosition;
 
-type Vector4 = SVector<f64, 4>;
-type Matrix4x4 = SMatrix<f64, 4, 4>;
+pub(super) type Vector4 = SVector<f64, 4>;
+pub(super) type Matrix4x4 = SMatrix<f64, 4, 4>;
 type Matrix2x2 = SMatrix<f64, 2, 2>;
 type Matrix4x2 = SMatrix<f64, 4, 2>;
 type Matrix2x4 = SMatrix<f64, 2, 4>;
@@ -218,7 +218,21 @@ impl KalmanFilter {
 
         // Kalman gain: K = P * HT * (H * P * HT + R)^-1
         let s = h * self.p * ht + self.r;
-        let s_inv = s.try_inverse().unwrap_or(Matrix2x2::identity());
+        let Some(s_inv) = s.try_inverse() else {
+            // S is the innovation covariance H·P·Hᵀ + R. With positive-
+            // definite P and R this should never be singular. If it is,
+            // something has gone wrong (NaN propagation, numerical drift)
+            // and substituting identity for s_inv silently corrupts the
+            // filter. Skip this update — keep state at the prediction and
+            // hope the next measurement gives a well-conditioned S.
+            log::error!(
+                "Kalman: singular innovation covariance, skipping update at t={}",
+                time
+            );
+            self.state = predicted_state;
+            self.last_time = time;
+            return self.get_motion();
+        };
         let k: Matrix4x2 = self.p * ht * s_inv;
 
         // Updated state: X = X + K * y
@@ -276,37 +290,38 @@ impl KalmanFilter {
         ((self.p[(2, 2)] + self.p[(3, 3)]) / 2.0).sqrt()
     }
 
-    /// Set process noise level (higher = more maneuverable targets)
-    #[allow(dead_code)]
-    pub fn set_process_noise(&mut self, noise: f64) {
-        self.q[(0, 0)] = noise;
-        self.q[(1, 1)] = noise;
+    /// Return the (state, covariance) pair for IMM mixing.
+    /// Callers must respect the filter's `ref_lat` / `ref_lon` — the
+    /// state vector is in local metres relative to that reference.
+    pub(super) fn state_and_covariance(&self) -> (Vector4, Matrix4x4) {
+        (self.state, self.p)
     }
 
-    /// Force position and velocity state (for maneuvering targets)
-    /// This bypasses the Kalman filtering when direct measurements are trusted more.
-    /// Based on radar_pi's forced position override for early tracking phases.
-    pub fn force_state(&mut self, position: GeoPosition, sog: f64, cog: f64, time: u64) {
-        // Convert position to local coordinates
-        let (lat_m, lon_m) = self.geo_to_local(&position);
+    /// Replace `(state, P)` for IMM mixing. Time and reference position
+    /// are unchanged. Used by `ImmMotionModel` to seed each filter with
+    /// its mixed initial state at the start of each measurement step.
+    pub(super) fn set_state_and_covariance(&mut self, state: Vector4, p: Matrix4x4) {
+        self.state = state;
+        self.p = p;
+    }
 
-        // Convert SOG/COG to velocity components
-        // COG is in radians, 0 = North, clockwise
-        let lat_vel = sog * cog.cos(); // North component
-        let lon_vel = sog * cog.sin(); // East component
+    /// Reference latitude used to convert geographic positions to the
+    /// filter's local-metres coordinate frame. Exposed for IMM mixing,
+    /// which must convert all filters to a common frame before averaging
+    /// their states.
+    pub(super) fn ref_lat(&self) -> f64 {
+        self.ref_lat
+    }
 
-        // Set state directly
-        self.state[0] = lat_m;
-        self.state[1] = lon_m;
-        self.state[2] = lat_vel;
-        self.state[3] = lon_vel;
+    /// Reference longitude — see `ref_lat`.
+    pub(super) fn ref_lon(&self) -> f64 {
+        self.ref_lon
+    }
 
-        self.last_time = time;
-
-        // Increase P to reflect uncertainty from forcing
-        // This allows future measurements to correct if needed
-        self.p[(2, 2)] = 4.0; // velocity variance
-        self.p[(3, 3)] = 4.0;
+    /// Set process noise level (higher = more maneuverable targets).
+    pub(super) fn set_process_noise(&mut self, noise: f64) {
+        self.q[(0, 0)] = noise;
+        self.q[(1, 1)] = noise;
     }
 }
 
@@ -431,6 +446,44 @@ mod tests {
             "Uncertainty should decrease: {} -> {}",
             initial_uncertainty,
             final_uncertainty
+        );
+    }
+
+    #[test]
+    fn test_update_skips_correction_on_singular_innovation_covariance() {
+        // When `S = H·P·Hᵀ + R` is non-invertible, update() must:
+        //   * not panic,
+        //   * keep the filter state at the prediction (no Kalman gain
+        //     applied against a fabricated identity inverse),
+        //   * advance last_time so subsequent updates still see fresh dt.
+        // Force singularity by zeroing both P and R; then S is the 2×2
+        // zero matrix, which nalgebra rejects deterministically.
+        let mut kf = KalmanFilter::new();
+        kf.init(GeoPosition::new(52.0, 4.0), 0);
+
+        // Drive the filter through one clean update so it has a non-
+        // zero state to predict from.
+        kf.update(GeoPosition::new(52.001, 4.0), 1_000);
+
+        // Zero out P and R so S = H·P·Hᵀ + R is the zero matrix and
+        // try_inverse() returns None.
+        kf.p.fill(0.0);
+        kf.r.fill(0.0);
+
+        let predicted = kf.predict(4_000);
+        let _ = kf.update(GeoPosition::new(52.5, 4.5), 4_000);
+
+        assert_eq!(kf.last_time, 4_000, "last_time must still advance");
+        let after = kf.get_position();
+        assert!(
+            (after.lat() - predicted.lat()).abs() < 1e-9
+                && (after.lon() - predicted.lon()).abs() < 1e-9,
+            "state must remain at the prediction, not jump to the measurement: \
+             predicted=({}, {}) got=({}, {})",
+            predicted.lat(),
+            predicted.lon(),
+            after.lat(),
+            after.lon()
         );
     }
 }
