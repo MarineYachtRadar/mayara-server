@@ -318,9 +318,8 @@ impl KalmanFilter {
         self.ref_lon
     }
 
-    /// Set process noise level (higher = more maneuverable targets)
-    #[allow(dead_code)]
-    pub fn set_process_noise(&mut self, noise: f64) {
+    /// Set process noise level (higher = more maneuverable targets).
+    pub(super) fn set_process_noise(&mut self, noise: f64) {
         self.q[(0, 0)] = noise;
         self.q[(1, 1)] = noise;
     }
