@@ -131,20 +131,25 @@ mod tests {
         flag: bool,
     }
 
-    /// Round-tripping through bincode's serde encode + decode_bin
-    /// verifies the helper accepts the legacy wire format and
-    /// reconstructs the original value exactly. Brand wire structs
-    /// use the same `T: Deserialize` path, so a generic shape here
-    /// is enough to pin the contract.
+    /// Decode a hand-written legacy-format byte string and check it
+    /// reconstructs the expected value. Using hardcoded wire bytes
+    /// (rather than round-tripping through bincode's own encoder)
+    /// guards against bincode silently regressing the legacy() config
+    /// AND against any change to decode_bin that picks up a different
+    /// endianness or int encoding. The brand wire parsers consume
+    /// bytes that arrive from the radar — so the test must too.
+    ///
+    /// Legacy layout for `WireSample { value: 0xDEADBEEF, flag: true }`:
+    ///   - u32 little-endian, fixed-int: EF BE AD DE
+    ///   - bool true:                    01
+    ///   - total: 5 bytes
     #[test]
     fn decode_bin_round_trips_legacy_wire_format() {
         let expected = WireSample {
             value: 0xDEADBEEF,
             flag: true,
         };
-        let encoded =
-            bincode::serde::encode_to_vec(&expected, bincode::config::legacy())
-                .expect("legacy serde encode must succeed");
+        let encoded: [u8; 5] = [0xEF, 0xBE, 0xAD, 0xDE, 0x01];
         let decoded: WireSample = decode_bin(&encoded).expect("decode_bin must succeed");
         assert_eq!(decoded, expected);
     }
