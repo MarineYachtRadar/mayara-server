@@ -1937,10 +1937,16 @@ mod tests {
         // Sanity: the two physical separations must straddle the merge
         // distance correctly — close enough at dedup time that the
         // distance gate alone wouldn't separate them, but each target's
-        // own match window mustn't reach the other.
-        let a = tracker.get_active_targets().find(|t| t.id == 1).unwrap();
-        let b = tracker.get_active_targets().find(|t| t.id == 2).unwrap();
-        let separation = calculate_distance(&a.position, &b.position);
+        // own match window mustn't reach the other. Compute the max
+        // pairwise separation across however many targets the tracker
+        // ended up with, so the test doesn't depend on the internal ID
+        // numbering or on which candidate became which id.
+        let positions: Vec<_> = tracker
+            .get_active_targets()
+            .map(|t| t.position)
+            .collect();
+        assert_eq!(positions.len(), 2, "expected 2 candidate targets pre-dedup");
+        let separation = calculate_distance(&positions[0], &positions[1]);
         assert!(
             separation < DUPLICATE_MERGE_DISTANCE_M,
             "test geometry must keep the targets inside the merge ring; \
