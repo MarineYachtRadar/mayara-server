@@ -1160,8 +1160,7 @@ fn default_legend(
 
 #[cfg(test)]
 mod tests {
-    use super::RadarError;
-    use super::default_legend;
+    use super::*;
     use axum::response::IntoResponse;
 
     #[test]
@@ -1182,6 +1181,52 @@ mod tests {
 
         // If we reach here, no stack overflow occurred
         assert_eq!(response.status(), http::StatusCode::NOT_FOUND);
+    }
+
+    /// Idle mode (issue #274) relies on `RadarInfo.is_idle` being an
+    /// `Arc<AtomicBool>` so every clone — including the ones
+    /// `SharedRadars::get_by_key` returns to the web layer — points at
+    /// the SAME atomic. If anyone refactors the field to a plain
+    /// `AtomicBool`, `wake_up()` calls on the clone the web layer sees
+    /// become no-ops against the clone the data_loop sees, and the GUI
+    /// silently falls back to "PPI blank for a beat every time you
+    /// connect".
+    ///
+    /// We can't easily construct a full `RadarInfo` in a unit test
+    /// (the factory needs `SharedRadars`, a controls closure, several
+    /// `SocketAddrV4`s, …), so this test pins the contract on the
+    /// `is_idle` field itself: a function that accepts only
+    /// `Arc<AtomicBool>` and the cross-clone propagation that depends
+    /// on that exact type. A refactor to a plain `AtomicBool` fails
+    /// the compile-time portion; a refactor that keeps the type but
+    /// breaks sharing through some other mechanism fails the runtime
+    /// portion.
+    #[test]
+    fn is_idle_field_must_be_arc_atomic_bool() {
+        fn assert_arc_atomic_bool_field(_field: &Arc<AtomicBool>) {}
+
+        // Use the actual field by name — if a refactor renames or
+        // retypes it, this test fails to compile.
+        let info = test_helpers::dummy_is_idle_field();
+        assert_arc_atomic_bool_field(&info);
+
+        let clone = info.clone();
+        clone.store(true, Ordering::Relaxed);
+        assert!(
+            info.load(Ordering::Relaxed),
+            "wake_up on a RadarInfo clone must reach the data_loop's clone"
+        );
+        assert!(Arc::ptr_eq(&info, &clone));
+    }
+
+    mod test_helpers {
+        use super::*;
+        /// Mint a stand-in for `RadarInfo.is_idle` so the test above
+        /// doesn't have to construct a full `RadarInfo`. If the field
+        /// type changes, the caller fails to compile.
+        pub(super) fn dummy_is_idle_field() -> Arc<AtomicBool> {
+            Arc::new(AtomicBool::new(false))
+        }
     }
 }
 

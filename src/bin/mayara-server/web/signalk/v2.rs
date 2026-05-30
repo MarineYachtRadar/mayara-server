@@ -1391,6 +1391,11 @@ async fn handle_control_request(
 ) -> Result<(), RadarError> {
     if let Some(radar_id) = rcv.parse_path() {
         if let Some(radar) = radars.get_by_key(&radar_id) {
+            // Mirror the REST PUT path's idle-exit. Any control written
+            // over the WebSocket stream is also user interaction; without
+            // this, a WS-only client (e.g. some MFD integrations) leaves
+            // the Furuno receiver in soft-idle until the next 5 s tick.
+            radar.wake_up();
             let control_value: ControlValue = rcv.into();
             let result = radar
                 .controls
