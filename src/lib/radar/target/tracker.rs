@@ -80,6 +80,11 @@ const MAX_TURN_ANGLE_DEG: f64 = 90.0;
 /// Speed threshold (m/s) above which turn rejection is applied
 const TURN_REJECTION_SPEED_MS: f64 = 5.0;
 
+/// Minimum number of updates before turn rejection can fire. Needs a
+/// previous COG to compare against, so the very first measurement
+/// after creation never triggers a rejection.
+const MIN_UPDATES_FOR_TURN_REJECTION: u32 = 2;
+
 /// Multiplier for per-radar target IDs.
 /// In per-radar mode, radar N gets IDs in range [N * RADAR_ID_MULTIPLIER, (N+1) * RADAR_ID_MULTIPLIER - 1].
 /// In merged mode, IDs range from 1 to RADAR_ID_MULTIPLIER - 1.
@@ -228,10 +233,11 @@ impl ActiveTarget {
         };
 
         // Turn rejection: reject implausible maneuvers for fast targets.
-        // Applies for the entire lifetime of a target (update_count >= 2,
-        // once a previous COG exists), so a mature track cannot silently
-        // accept a "teleport" from a false association — the case a
-        // navigator is most likely to be relying on.
+        // Applies for the entire lifetime of a target once a previous
+        // COG exists (see `MIN_UPDATES_FOR_TURN_REJECTION`), so a mature
+        // track cannot silently accept a "teleport" from a false
+        // association — the case a navigator is most likely to be
+        // relying on.
         //
         // SOG is read from the Kalman estimate rather than from the raw
         // measured displacement: a stationary target's blob centre wanders
@@ -239,7 +245,7 @@ impl ActiveTarget {
         // speeds of 8-10 m/s with random direction. The Kalman filter
         // correctly converges toward the true low speed and avoids
         // false rejections of stationary buoys.
-        if self.update_count >= 2 {
+        if self.update_count >= MIN_UPDATES_FOR_TURN_REJECTION {
             if let (Some(current_cog), Some(new_cog), Some(kalman_sog)) =
                 (self.cog, measured_cog, self.sog)
             {
