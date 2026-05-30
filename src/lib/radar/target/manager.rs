@@ -782,8 +782,16 @@ fn calculate_danger(
         return TargetDangerApi::unknown();
     };
 
-    let own_sog = crate::navdata::get_sog().unwrap_or(0.0);
-    let own_cog = crate::navdata::get_cog().unwrap_or(0.0);
+    // Missing own-ship SOG/COG must NOT be coerced to 0.0 — that would
+    // compute CPA/TCPA against a fictitious stationary own-ship and
+    // could silently flip is_dangerous. When navdata isn't reporting
+    // motion (boot, GPS loss), the right answer is "unknown."
+    let Some(own_sog) = crate::navdata::get_sog() else {
+        return TargetDangerApi::unknown();
+    };
+    let Some(own_cog) = crate::navdata::get_cog() else {
+        return TargetDangerApi::unknown();
+    };
     compute_danger(target, own_pos, own_sog, own_cog)
 }
 
