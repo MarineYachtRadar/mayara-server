@@ -288,6 +288,31 @@ mod tests {
     }
 
     #[test]
+    fn test_parallel_same_velocity_returns_none() {
+        // Two vessels on the same course at the same speed: relative
+        // velocity is zero, the inter-vessel distance is constant, and
+        // CPA is undefined. This is the same `None` case as both-
+        // stationary, but with both vessels actually moving — the
+        // contract change should not regress this geometry.
+        let own = OwnVessel {
+            position: GeoPosition::new(52.0, 4.0),
+            sog: 12.0,
+            cog: PI / 4.0, // NE
+        };
+        let target = TargetVessel {
+            position: GeoPosition::new(52.001, 4.001),
+            sog: 12.0,
+            cog: PI / 4.0, // same NE course
+        };
+
+        let result = calculate_cpa(&own, &target);
+        assert!(
+            result.is_none(),
+            "Zero relative velocity must return None even when both vessels move",
+        );
+    }
+
+    #[test]
     fn test_overtaking() {
         // Own vessel heading North at 15 m/s
         let own = OwnVessel {
