@@ -516,19 +516,29 @@ const OWN_SHIP_NAV_PROBE_TIMEOUT_MAX: Duration = Duration::from_secs(60);
 /// the next minute is picked up promptly.
 const RECONNECT_BACKOFF_MAX: Duration = Duration::from_secs(60);
 
+/// Largest shift amount used by `reconnect_backoff_for`. With `1 << 6 = 64`
+/// seconds (clamped to the 60 s `RECONNECT_BACKOFF_MAX`) we already saturate
+/// at the cap, so higher counter values can't push the backoff further. The
+/// shift would otherwise need to stay safely below 64 to avoid undefined
+/// behavior on the u64 shift.
+const RECONNECT_BACKOFF_SHIFT_CAP: u32 = 6;
+
+/// Largest shift amount used by `probe_timeout_for`. With `5 * 2^4 = 80`
+/// seconds (clamped to the 60 s `OWN_SHIP_NAV_PROBE_TIMEOUT_MAX`) the probe
+/// timeout already saturates at the cap; further counter growth has no
+/// effect. Smaller than `RECONNECT_BACKOFF_SHIFT_CAP` because the base
+/// (5 s) is larger.
+const OWN_SHIP_NAV_PROBE_SHIFT_CAP: u32 = 4;
+
 /// Backoff sleep to apply BEFORE the next `find_service` call when the
 /// previous receive loop returned without seeing own-ship nav. n=0 is
 /// the first failure — no wait; n=1 is the second consecutive failure
 /// — 2s wait; doubles each time up to `RECONNECT_BACKOFF_MAX`.
-///
-/// Capping `n` at 6 before the shift avoids u64 overflow even though we
-/// could clamp the result instead; the shift itself never gets close to
-/// the cap given the `.min(60)` on the final value.
 fn reconnect_backoff_for(consecutive_no_nav: u32) -> Duration {
     if consecutive_no_nav == 0 {
         return Duration::ZERO;
     }
-    let shift = consecutive_no_nav.min(6);
+    let shift = consecutive_no_nav.min(RECONNECT_BACKOFF_SHIFT_CAP);
     Duration::from_secs(1u64 << shift).min(RECONNECT_BACKOFF_MAX)
 }
 
@@ -540,7 +550,7 @@ fn probe_timeout_for(consecutive_no_nav: u32) -> Duration {
     if consecutive_no_nav == 0 {
         return OWN_SHIP_NAV_PROBE_TIMEOUT;
     }
-    let shift = consecutive_no_nav.min(4);
+    let shift = consecutive_no_nav.min(OWN_SHIP_NAV_PROBE_SHIFT_CAP);
     let scaled =
         OWN_SHIP_NAV_PROBE_TIMEOUT.saturating_mul(1u32 << shift);
     scaled.min(OWN_SHIP_NAV_PROBE_TIMEOUT_MAX)
@@ -692,7 +702,7 @@ impl NavigationData {
 
             // Brake A: sleep before the next find_service if we've already
             // been told there's no GPS. First failure is free; subsequent
-            // failures wait 1 s, 2 s, 4 s, ... up to RECONNECT_BACKOFF_MAX.
+            // failures wait 2 s, 4 s, 8 s, ... up to RECONNECT_BACKOFF_MAX.
             // Shutdown wins over the sleep so the subsystem can exit
             // promptly even from deep in steady-state backoff.
             let backoff = reconnect_backoff_for(consecutive_no_nav);
@@ -732,9 +742,15 @@ impl NavigationData {
                             .unwrap_or_else(|_| "<unknown>".to_string())
                     );
                     let result = self.receive_loop(stream, &subsys, probe_timeout).await;
-                    let saw_own_ship = own_ship_nav_seen();
-                    Self::update_signalk_silent_state(signalk_peer, &result);
-                    consecutive_no_nav = next_consecutive(consecutive_no_nav, saw_own_ship);
+                    // NMEA0183-over-TCP (signalk_peer is None) doesn't carry
+                    // own-ship-nav semantics — the probe never fires and the
+                    // counter has nothing to track. Only Signal K TCP
+                    // sessions feed the backoff.
+                    if signalk_peer.is_some() {
+                        let saw_own_ship = own_ship_nav_seen();
+                        Self::update_signalk_silent_state(signalk_peer, &result);
+                        consecutive_no_nav = next_consecutive(consecutive_no_nav, saw_own_ship);
+                    }
                     match result {
                         Err(RadarError::Shutdown) => {
                             log::debug!("{} receive_loop shutdown", self.what);
