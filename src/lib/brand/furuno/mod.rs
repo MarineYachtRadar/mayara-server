@@ -1,4 +1,3 @@
-use bincode::deserialize;
 use log::log_enabled;
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
@@ -7,7 +6,7 @@ use tokio_graceful_shutdown::{SubsystemBuilder, SubsystemHandle};
 
 use crate::locator::LocatorAddress;
 use crate::radar::{RadarInfo, SharedRadars};
-use crate::util::{PrintableSlice, c_string};
+use crate::util::{PrintableSlice, c_string, decode_bin};
 use crate::{Brand, Cli};
 
 use super::{LocatorId, RadarLocator};
@@ -204,7 +203,7 @@ impl FurunoLocator {
         from: &SocketAddrV4,
         nic_addr: &Ipv4Addr,
     ) -> Result<(), io::Error> {
-        match deserialize::<FurunoRadarReport>(report) {
+        match decode_bin::<FurunoRadarReport>(report) {
             Ok(data) => {
                 if data.length as usize + 8 != report.len() {
                     log::error!(
@@ -248,7 +247,7 @@ impl FurunoLocator {
         radars: &SharedRadars,
         subsys: &SubsystemHandle,
     ) -> Result<(), io::Error> {
-        match deserialize::<FurunoRadarModelReport>(report) {
+        match decode_bin::<FurunoRadarModelReport>(report) {
             Ok(data) => {
                 let model = c_string(&data.model);
                 let serial_no = c_string(&data.serial_no);

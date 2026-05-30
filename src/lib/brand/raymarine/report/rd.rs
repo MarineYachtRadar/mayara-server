@@ -7,6 +7,7 @@ use crate::radar::Power;
 use crate::radar::range::{Range, Ranges};
 use crate::radar::settings::ControlId;
 use crate::radar::spoke::GenericSpoke;
+use crate::util::decode_bin;
 
 use super::{RaymarineReportReceiver, ReceiverState};
 
@@ -76,7 +77,7 @@ pub(crate) fn process_frame(receiver: &mut RaymarineReportReceiver, data: &[u8])
 
     let header = &data[..FRAME_HEADER_LENGTH];
     log::trace!("{}: header1 {:?}", receiver.common.key, header);
-    let header: FrameHeader = match bincode::deserialize(header) {
+    let header: FrameHeader = match decode_bin(header) {
         Ok(h) => h,
         Err(e) => {
             log::error!(
@@ -121,7 +122,7 @@ pub(crate) fn process_frame(receiver: &mut RaymarineReportReceiver, data: &[u8])
         let spoke_header_1 = &data[next_offset..next_offset + SPOKE_HEADER_1_LENGTH];
         log::trace!("{}: header3 {:?}", receiver.common.key, spoke_header_1);
 
-        let spoke_header_1: SpokeHeader1 = match bincode::deserialize(spoke_header_1) {
+        let spoke_header_1: SpokeHeader1 = match decode_bin(spoke_header_1) {
             Ok(h) => h,
             Err(e) => {
                 log::error!(
@@ -169,7 +170,7 @@ pub(crate) fn process_frame(receiver: &mut RaymarineReportReceiver, data: &[u8])
         let header2 = &data[next_offset..next_offset + SPOKE_HEADER_2_LENGTH];
         log::trace!("{}: header2 {:?}", receiver.common.key, header2);
 
-        let header2: SpokeHeader2 = match bincode::deserialize(header2) {
+        let header2: SpokeHeader2 = match decode_bin(header2) {
             Ok(h) => h,
             Err(e) => {
                 log::error!(
@@ -189,7 +190,7 @@ pub(crate) fn process_frame(receiver: &mut RaymarineReportReceiver, data: &[u8])
         // Followed by the actual spoke data
         let header3 = &data[next_offset..next_offset + SPOKE_DATA_LENGTH];
         log::trace!("{}: SpokeData {:?}", receiver.common.key, header3);
-        let header3: SpokeHeader3 = match bincode::deserialize(header3) {
+        let header3: SpokeHeader3 = match decode_bin(header3) {
             Ok(h) => h,
             Err(e) => {
                 log::error!(
@@ -348,7 +349,7 @@ pub(super) fn process_status_report(receiver: &mut RaymarineReportReceiver, data
     }
     let report = &data[..STATUS_REPORT_LENGTH];
     log::info!("{}: status report {:02X?}", receiver.common.key, report);
-    let report: StatusReport = match bincode::deserialize(report) {
+    let report: StatusReport = match decode_bin(report) {
         Ok(h) => h,
         Err(e) => {
             log::error!(
@@ -517,7 +518,7 @@ pub(super) fn process_fixed_report(receiver: &mut RaymarineReportReceiver, data:
     );
     let report = &data[FIXED_REPORT_PREFIX..FIXED_REPORT_PREFIX + FIXED_REPORT_LENGTH];
     log::trace!("{}: fixed report {:02X?}", receiver.common.key, report);
-    let report: FixedReport = match bincode::deserialize(report) {
+    let report: FixedReport = match decode_bin(report) {
         Ok(h) => h,
         Err(e) => {
             log::error!(
