@@ -1140,12 +1140,12 @@ mod tests {
         assert!(drain_sk_deltas(rx).is_empty());
     }
 
-    /// After a noisy measurement, the Kalman filter's smoothed position is
-    /// significantly closer to the true track than the raw measurement.
-    /// `compute_danger` uses the smoothed position; this test confirms that
-    /// using `target.position` (the raw last sighting) would produce a
-    /// materially different CPA than the smoothed value the new code uses.
-    /// That difference is exactly the noise suppression #10 is fixing.
+    /// After a noisy measurement the Kalman filter's smoothed position
+    /// is significantly closer to the true track than the raw last
+    /// measurement. `compute_danger` uses the smoothed position; this
+    /// test confirms that feeding the raw `target.position` into the
+    /// same CPA math produces a materially different result, so the
+    /// noise suppression at the API boundary is real.
     #[test]
     fn compute_danger_uses_filtered_position_not_raw_measurement() {
         use super::super::tracker::{CandidateSource, TargetCandidate, TargetTracker};
