@@ -449,4 +449,42 @@ mod tests {
             final_uncertainty
         );
     }
+
+    #[test]
+    fn test_update_skips_correction_on_singular_innovation_covariance() {
+        // When `S = H·P·Hᵀ + R` is non-invertible, update() must:
+        //   * not panic,
+        //   * keep the filter state at the prediction (no Kalman gain
+        //     applied against a fabricated identity inverse),
+        //   * advance last_time so subsequent updates still see fresh dt.
+        // Force singularity by zeroing both P and R; then S is the 2×2
+        // zero matrix, which nalgebra rejects deterministically.
+        let mut kf = KalmanFilter::new();
+        kf.init(GeoPosition::new(52.0, 4.0), 0);
+
+        // Drive the filter through one clean update so it has a non-
+        // zero state to predict from.
+        kf.update(GeoPosition::new(52.001, 4.0), 1_000);
+
+        // Zero out P and R so S = H·P·Hᵀ + R is the zero matrix and
+        // try_inverse() returns None.
+        kf.p.fill(0.0);
+        kf.r.fill(0.0);
+
+        let predicted = kf.predict(4_000);
+        let _ = kf.update(GeoPosition::new(52.5, 4.5), 4_000);
+
+        assert_eq!(kf.last_time, 4_000, "last_time must still advance");
+        let after = kf.get_position();
+        assert!(
+            (after.lat() - predicted.lat()).abs() < 1e-9
+                && (after.lon() - predicted.lon()).abs() < 1e-9,
+            "state must remain at the prediction, not jump to the measurement: \
+             predicted=({}, {}) got=({}, {})",
+            predicted.lat(),
+            predicted.lon(),
+            after.lat(),
+            after.lon()
+        );
+    }
 }
