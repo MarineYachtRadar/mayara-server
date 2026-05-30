@@ -300,6 +300,17 @@ impl MotionModel for ImmMotionModel {
             return MotionEstimate { sog: 0.0, cog: 0.0 };
         }
 
+        // Reject stale or duplicate measurements before doing any work.
+        // KalmanFilter::update bails on `time <= last_time`, but the
+        // mixing step that runs first would still rewrite all three
+        // filter states for an out-of-order sample — corrupting future
+        // predictions and model probabilities even though no new
+        // measurement was actually accepted. Match the per-filter
+        // contract by returning the current motion estimate unchanged.
+        if time <= self.last_time {
+            return self.get_motion();
+        }
+
         // Step 1: Interaction/Mixing
         self.mix_states();
 
@@ -607,5 +618,46 @@ mod tests {
              other after 20 clean steady-state updates; got max spread {:.2}m",
             max_spread
         );
+    }
+
+    /// A duplicate or out-of-order timestamp must be a no-op from the
+    /// caller's perspective: same SOG/COG returned, no mutation of the
+    /// internal filters or model probabilities. Without the stale-time
+    /// guard, mix_states would rewrite all three filter states even
+    /// though no new measurement was accepted, drifting future
+    /// predictions for a replayed sample.
+    #[test]
+    fn imm_update_is_idempotent_on_stale_or_duplicate_timestamps() {
+        let mut model = ImmMotionModel::new();
+        model.init(GeoPosition::new(52.0, 4.0), 0);
+
+        let lat_step = 30.0 / super::super::METERS_PER_DEGREE_LATITUDE;
+        for i in 1..=5u64 {
+            model.update(
+                GeoPosition::new(52.0 + lat_step * i as f64, 4.0),
+                i * 3000,
+            );
+        }
+
+        let baseline_motion = model.get_motion();
+        let baseline_probs = model.model_probs;
+        let baseline_cv = model.cv_filter.state_and_covariance();
+        let baseline_ca = model.ca_filter.state_and_covariance();
+        let baseline_ct = model.ct_filter.state_and_covariance();
+
+        // Same timestamp as last update — must be a no-op.
+        let returned = model.update(GeoPosition::new(53.0, 5.0), 5 * 3000);
+        assert!((returned.sog - baseline_motion.sog).abs() < 1e-12);
+        assert!((returned.cog - baseline_motion.cog).abs() < 1e-12);
+        assert_eq!(model.model_probs, baseline_probs);
+        assert_eq!(model.cv_filter.state_and_covariance().0, baseline_cv.0);
+        assert_eq!(model.ca_filter.state_and_covariance().0, baseline_ca.0);
+        assert_eq!(model.ct_filter.state_and_covariance().0, baseline_ct.0);
+
+        // Strictly older timestamp — also a no-op.
+        let returned = model.update(GeoPosition::new(54.0, 6.0), 2 * 3000);
+        assert!((returned.sog - baseline_motion.sog).abs() < 1e-12);
+        assert_eq!(model.model_probs, baseline_probs);
+        assert_eq!(model.cv_filter.state_and_covariance().0, baseline_cv.0);
     }
 }
