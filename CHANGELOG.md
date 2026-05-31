@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **gui:** gray out AIS toggle when no heading source is available (#297) ([PR #297](https://github.com/MarineYachtRadar/mayara-server/pull/297))
+
 ### Fixed
 
 - **ci:** force-switch to main when committing the regenerated CHANGELOG (#280) ([PR #280](https://github.com/MarineYachtRadar/mayara-server/pull/280))
