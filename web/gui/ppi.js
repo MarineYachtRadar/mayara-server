@@ -1187,8 +1187,13 @@ class PPI {
 
   #drawTarget(ctx, id, target, pixelsPerMeter) {
     if (!target.position) return;
-    // Don't draw targets until we have heading data
-    if (this.trueHeading === null) return;
+    // Don't draw targets until we have a heading reference. Accept the
+    // radar-derived heading too, not just the SignalK true heading, so
+    // ARPA targets plot whenever the sweep rotates — mirroring the AIS
+    // overlay. (MARPA acquire still hard-requires trueHeading; that
+    // check lives in the click handler, not here.)
+    const heading = this.#effectiveHeadingRad();
+    if (heading === null) return;
 
     // Calculate screen position from bearing and distance
     // Target bearing is geographic (true bearing from radar to target) in radians
@@ -1201,7 +1206,6 @@ class PPI {
     // by subtracting heading. The formula: screenAngle = geographicBearing - heading + headingRotation
     // Simplifies to: screenAngle = geographicBearing - heading in HU mode
     //                screenAngle = geographicBearing in NU mode
-    const heading = this.trueHeading;
     const adjustedBearing = bearingRad - heading + this.headingRotation;
 
     // Convert polar to cartesian (bearing is clockwise from north)
