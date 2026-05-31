@@ -7,7 +7,7 @@ Mayara gives you a radar display in any web browser. It works with most marine y
 - A classic PPI (Plan Position Indicator) radar display in your browser
 - Full radar control: power on/off, range, gain, sea clutter, rain clutter, interference rejection, and more
 - ARPA target tracking with automatic CPA/TCPA calculation
-- AIS overlay when connected to an AIS receiver
+- AIS overlay when connected to an AIS receiver (needs a heading source — see Troubleshooting)
 - Dual-range display on radars that support it
 - Doppler/MotionScope on supported radars
 
@@ -124,6 +124,11 @@ For real radar use, you need `--net=host` so Mayara can see the multicast traffi
 - Verify Mayara is running and note the port in the console output.
 - If accessing from another device, use the computer's IP address instead of `localhost`.
 - Check that no firewall is blocking port 6502.
+
+**Radar sweep shows but no AIS or ARPA targets:**
+- AIS and ARPA targets are placed relative to your own ship, so the display needs a **heading reference** to draw them. Mayara uses the radar's own heading if the radar reports it, or a true heading from Signal K (`navigation.headingTrue`) otherwise.
+- When no heading is available from either source, the **AIS** toggle is grayed out — that is the signal that a heading is missing, not that AIS is off.
+- If you have a heading sensor, make sure it's feeding the radar or Signal K. The radar sweep itself does not need a heading, which is why it can show while targets stay hidden.
 
 ## Need help?
 
