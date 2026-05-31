@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **furuno:** skip spoke decode in idle mode to free ~1.5 cores at idle (#284) ([PR #284](https://github.com/MarineYachtRadar/mayara-server/pull/284))
 - **navdata:** exponential backoff on Signal K reconnect when no own-ship nav (#285) ([PR #285](https://github.com/MarineYachtRadar/mayara-server/pull/285))
 - **arpa:** tracker, IMM, CPA and dedup improvements per design plan (#275) ([PR #275](https://github.com/MarineYachtRadar/mayara-server/pull/275))
+- **gui:** plot AIS using radar heading when SignalK true heading absent (#296) ([PR #296](https://github.com/MarineYachtRadar/mayara-server/pull/296))
 
 ## [3.5.3] - 2026-05-29
 
