@@ -843,6 +843,7 @@ function onHeadingReceived() {
     toggleBtn.classList.remove("myr_heading_disabled");
     toggleBtn.title = "Click to toggle: Heading Up / North Up";
   }
+  updateAisLozenge();
 }
 
 // Called when the heading WebSocket closes — true loss of source.
@@ -864,6 +865,7 @@ function onHeadingLost() {
     toggleBtn.innerHTML = "H Up";
     toggleBtn.title = "Heading data required for North Up mode";
   }
+  updateAisLozenge();
 }
 
 // Create the power lozenge on the viewer
@@ -1004,9 +1006,13 @@ function createAisLozenge() {
   if (ppi) {
     ppi.setShowAis(showAis);
   }
+  updateAisLozenge();
 }
 
 function toggleAisOverlay() {
+  // Inert while no heading reference is available — vessels can't be
+  // placed, so toggling on would show nothing.
+  if (ppi && !ppi.hasHeading()) return;
   showAis = !showAis;
   try {
     localStorage.setItem("mayaraShowAis", String(showAis));
@@ -1029,6 +1035,12 @@ function updateAisLozenge() {
   if (!lozenge) return;
   lozenge.classList.remove("myr_ais_on", "myr_ais_off");
   lozenge.classList.add(showAis ? "myr_ais_on" : "myr_ais_off");
+
+  const noHeading = ppi ? !ppi.hasHeading() : false;
+  lozenge.classList.toggle("myr_ais_disabled", noHeading);
+  lozenge.title = noHeading
+    ? "AIS unavailable — no heading source to position targets"
+    : "Click to toggle AIS overlay";
 }
 
 // VRM/EBL lozenge - cycles through marker visibility states. Click steps

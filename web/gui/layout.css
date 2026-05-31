@@ -411,6 +411,17 @@ div.myr_ppi {
   stroke: #666;
 }
 
+/* No heading reference: AIS can't be placed, so the toggle is inert. */
+.myr_ais_lozenge.myr_ais_disabled {
+  opacity: 0.5;
+  border-color: #666666;
+}
+
+.myr_ais_lozenge.myr_ais_disabled .myr_ais_lozenge_button {
+  cursor: not-allowed;
+  background: rgba(50, 50, 50, 0.6);
+}
+
 /* ============================================
    VRM/EBL Lozenge - VRM/EBL marker toggle (bottom-left, above AIS)
    ============================================ */

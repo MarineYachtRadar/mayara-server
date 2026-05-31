@@ -312,6 +312,13 @@ class PPI {
     return null;
   }
 
+  // True when any heading reference is available — the SignalK true
+  // heading or the radar-derived heading. AIS placement needs one of
+  // these; the UI grays the AIS toggle when neither is present.
+  hasHeading() {
+    return this.trueHeading !== null || this.lastHeading !== null;
+  }
+
   getHeadingMode() {
     return this.headingMode;
   }
