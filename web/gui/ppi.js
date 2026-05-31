@@ -301,6 +301,17 @@ class PPI {
     return this.trueHeading;
   }
 
+  // Heading in radians for overlay placement, preferring the Signal K
+  // true heading and falling back to the radar-derived heading
+  // (`lastHeading`, stored in degrees). Mirrors the source preference the
+  // radar image already uses so AIS plots whenever the sweep can rotate.
+  // Returns null when no heading source is available.
+  #effectiveHeadingRad() {
+    if (this.trueHeading !== null) return this.trueHeading;
+    if (this.lastHeading !== null) return (this.lastHeading * Math.PI) / 180;
+    return null;
+  }
+
   getHeadingMode() {
     return this.headingMode;
   }
@@ -1327,8 +1338,12 @@ class PPI {
 
   #drawAisVessel(ctx, mmsi, vessel, pixelsPerMeter) {
     if (!vessel.position) return;
-    // Don't draw vessels until we have heading data
-    if (this.trueHeading === null) return;
+    // Don't draw vessels until we have a heading reference. Accept the
+    // radar-derived heading too, not just the Signal K true heading —
+    // otherwise AIS never plots in head-up mode without a SignalK
+    // heading subscription, even though the sweep rotates fine.
+    const heading = this.#effectiveHeadingRad();
+    if (heading === null) return;
 
     // Calculate screen position from lat/lon
     // We need own-ship position to calculate relative position
@@ -1373,8 +1388,7 @@ class PPI {
     // Don't draw if outside display range
     if (pixelDist > this.beam_length * 1.5) return;
 
-    // Apply heading rotation for display mode
-    const heading = this.trueHeading;
+    // Apply heading rotation for display mode (heading resolved above)
     const adjustedBearing = bearingRad - heading + this.headingRotation;
 
     // Convert polar to cartesian (bearing is clockwise from north)
