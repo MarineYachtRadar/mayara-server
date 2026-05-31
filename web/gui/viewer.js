@@ -26,7 +26,6 @@ import {
   acquireTargetAtPosition,
 } from "./control.js";
 import {
-  isStandaloneMode,
   detectMode,
   fetchRadarIds,
   apiBase,
@@ -69,6 +68,7 @@ var renderMethod = "webgpu"; // "webgpu" or "webgl"
 // Heading mode: "headingUp" or "northUp"
 var headingMode = "headingUp";
 var trueHeading = 0; // in radians
+var haveSignalKHeading = false; // true once a navigation.headingTrue delta lands
 var lastLoggedHeading = null; // last heading value logged to console
 var lastHeadingTime = 0; // Timestamp of last heading update
 
@@ -269,13 +269,13 @@ window.onload = async function () {
   });
 };
 
-// Subscribe to navigation.headingTrue via SignalK WebSocket
+// Subscribe to own-ship navigation.headingTrue and navigation.position via the
+// mayara stream. This runs in every mode: mayara serves `vessels.self` nav from
+// its upstream Signal K source regardless of whether the GUI is reached
+// directly (mode "standalone") or behind the Signal K proxy. Relying on it
+// instead of radar spokes means own-ship position and heading are available
+// even while the radar is in standby.
 function subscribeToHeading() {
-  if (isStandaloneMode()) {
-    console.log("Standalone mode: heading subscription disabled (no SignalK)");
-    return;
-  }
-
   const streamUrl = wsBase("/signalk/v1/stream?subscribe=none");
 
   headingSocket = new WebSocket(streamUrl);
@@ -309,6 +309,7 @@ function subscribeToHeading() {
             for (const value of update.values) {
               if (value.path === "navigation.headingTrue") {
                 trueHeading = value.value; // Already in radians
+                haveSignalKHeading = true;
                 if (
                   lastLoggedHeading === null ||
                   Math.abs(trueHeading - lastLoggedHeading) >
@@ -665,12 +666,27 @@ function updateHeadingDisplay(mode) {
   return mode || headingMode;
 }
 
+// Resolve the heading to show in the position box, in degrees. Prefer the
+// Signal K true heading once a real delta has arrived (haveSignalKHeading
+// guards against the 0-radian initial value); otherwise fall back to the
+// radar-derived heading (already smoothed). Returns null when neither exists.
+function positionBoxHeadingDeg() {
+  if (haveSignalKHeading && trueHeading != null && !Number.isNaN(trueHeading)) {
+    return (trueHeading * 180) / Math.PI;
+  }
+  if (lastRadarHeading != null && !Number.isNaN(lastRadarHeading)) {
+    return lastRadarHeading;
+  }
+  return null;
+}
+
 function refreshPositionBoxHeading() {
   const box = document.getElementById("myr_position_box");
   if (!box) return;
   const hdgEl = box.querySelector(".myr_pos_heading");
-  if (hdgEl && trueHeading != null && !Number.isNaN(trueHeading)) {
-    hdgEl.textContent = `HdgT: ${((trueHeading * 180) / Math.PI).toFixed(1)}°`;
+  const hdgDeg = positionBoxHeadingDeg();
+  if (hdgEl && hdgDeg != null) {
+    hdgEl.textContent = `HdgT: ${hdgDeg.toFixed(1)}°`;
   }
 }
 
@@ -784,12 +800,9 @@ function updatePositionBox(lat, lon, heading) {
     coords[1].textContent = formatCoord(lon, false);
   }
 
-  // Use the Signal K true heading (navigation.headingTrue) rather than the
-  // spoke-derived value. The radar's inline bearing field encodes heading
-  // in brand-specific units and is unreliable as a navigation display;
-  // Signal K's stream is the authoritative source.
-  if (hdgEl && trueHeading != null && !Number.isNaN(trueHeading)) {
-    hdgEl.textContent = `HdgT: ${((trueHeading * 180) / Math.PI).toFixed(1)}°`;
+  const hdgDeg = positionBoxHeadingDeg();
+  if (hdgEl && hdgDeg != null) {
+    hdgEl.textContent = `HdgT: ${hdgDeg.toFixed(1)}°`;
   }
 
   box.style.display = "block";
@@ -1430,6 +1443,20 @@ function radarLoaded(r) {
             if (heading >= 360) heading -= 360;
           }
           updatePositionBox(lastSpoke.lat, lastSpoke.lon, heading);
+        }
+        // When the upstream has no navigation.headingTrue, onHeadingReceived()
+        // never fires from the heading socket, but the radar-derived heading
+        // from spokes is still a valid reference. Enable the heading-dependent
+        // UI (H-Up toggle, AIS lozenge) the first time any heading appears.
+        // Gated on the toggle still being disabled so it runs once on
+        // transition, not every spoke; enable-only, so brief radar gaps don't
+        // flip the toggle back off.
+        const headingToggle = document.getElementById("myr_heading_toggle");
+        if (
+          ppi.hasHeading() &&
+          headingToggle?.classList.contains("myr_heading_disabled")
+        ) {
+          onHeadingReceived();
         }
       }
     } catch (err) {
