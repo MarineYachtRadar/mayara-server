@@ -279,7 +279,7 @@ impl FurunoReportReceiver {
                     // Each range has independent power/subscribers in dual-
                     // range mode so refresh both flags.
                     let was_idle_a = self.common.info.is_idle();
-                    refresh_idle_flag(&self.common);
+                    self.common.info.refresh_idle_flag();
                     // Encoding 3 reconstructs spokes from `prev_spoke[range_idx]`
                     // across frame boundaries. If we just entered idle, the
                     // next wake-up frame would decode against a stale buffer
@@ -291,7 +291,7 @@ impl FurunoReportReceiver {
                     }
                     if let Some(ref common_b) = self.common_b {
                         let was_idle_b = common_b.info.is_idle();
-                        refresh_idle_flag(common_b);
+                        common_b.info.refresh_idle_flag();
                         if !was_idle_b && common_b.info.is_idle() {
                             self.prev_spoke[1].clear();
                         }
@@ -2077,31 +2077,6 @@ async fn conditional_read(
     }
 }
 
-/// Decide whether a radar's data_loop should enter idle mode, where it
-/// drains the spoke socket but skips decoding. Idle is safe when both:
-/// the radar is in Standby (so the frames it emits are essentially noise)
-/// AND nobody is subscribed to the spoke broadcast (so no one downstream
-/// is observing the result). `power` is None when the Power control has
-/// not yet been reported by the radar — treated as non-idle so the very
-/// first frames after startup are always decoded.
-fn should_idle(power: Option<i32>, spoke_receiver_count: usize) -> bool {
-    let standby = power.map(|p| p == Power::Standby as i32).unwrap_or(false);
-    standby && spoke_receiver_count == 0
-}
-
-/// Recompute the idle flag for a single range from its live power state
-/// and broadcast subscriber count. Called from data_loop's 5 s tick.
-fn refresh_idle_flag(common: &CommonRadar) {
-    let power = common
-        .info
-        .controls
-        .get(&ControlId::Power)
-        .and_then(|c| c.value)
-        .map(|v| v as i32);
-    let receiver_count = common.info.message_tx.receiver_count();
-    common.info.set_idle(should_idle(power, receiver_count));
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2300,34 +2275,4 @@ mod tests {
         assert_eq!(same_range, 1000);
     }
 
-    // ----- idle-mode predicate (issue #274) -----
-
-    #[test]
-    fn should_idle_yes_when_standby_and_no_subscribers() {
-        assert!(should_idle(Some(Power::Standby as i32), 0));
-    }
-
-    #[test]
-    fn should_idle_no_when_transmitting_even_with_no_subscribers() {
-        // A transmitting radar drives downstream consumers we may not see
-        // directly (MFDs over multicast, recording, ARPA targets via the
-        // tracker channel). Never idle while it's broadcasting useful data.
-        assert!(!should_idle(Some(Power::Transmit as i32), 0));
-    }
-
-    #[test]
-    fn should_idle_no_when_standby_with_subscribers() {
-        // Some client is watching the spoke stream — keep the pipeline hot
-        // so the moment the radar transitions to Transmit, the first frame
-        // is decoded and rendered without a tick of blank PPI.
-        assert!(!should_idle(Some(Power::Standby as i32), 1));
-    }
-
-    #[test]
-    fn should_idle_no_when_power_is_unknown() {
-        // Before the radar has reported its first Status frame we don't
-        // know its state. Default to processing frames so we never blank
-        // the PPI for a viewer that connects very early in startup.
-        assert!(!should_idle(None, 0));
-    }
 }
