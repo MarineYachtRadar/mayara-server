@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **building:** update feature list to match Cargo.toml (#307) ([PR #307](https://github.com/MarineYachtRadar/mayara-server/pull/307))
 - **logging:** drop env_logger regex feature (#305) ([PR #305](https://github.com/MarineYachtRadar/mayara-server/pull/305))
 - fix incorrect GitHub URLs in ENDUSER and BUILDING (#306) ([PR #306](https://github.com/MarineYachtRadar/mayara-server/pull/306))
+- **radar:** make the idle-decode gate brand-agnostic (#321) ([PR #321](https://github.com/MarineYachtRadar/mayara-server/pull/321))
 
 ### Fixed
 
