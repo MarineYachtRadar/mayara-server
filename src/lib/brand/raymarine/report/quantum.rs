@@ -215,6 +215,11 @@ pub(super) fn process_status_report(receiver: &mut RaymarineReportReceiver, data
             Power::Standby // Default to Standby if unknown
         }
     };
+    // Resume decoding immediately on an external power-on rather than waiting
+    // for the next idle re-check.
+    if status != Power::Standby {
+        receiver.common.info.wake_up();
+    }
     receiver
         .common
         .set_value(&ControlId::Power, status as i32 as f64);

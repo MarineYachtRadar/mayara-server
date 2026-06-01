@@ -290,6 +290,12 @@ impl RaymarineReportReceiver {
         }
         log::trace!("{}: UDP report {:02X?}", self.common.key, data);
 
+        // Spokes and status share this socket, so refresh idle state here
+        // (reports arrive regularly) and gate only the spoke arms below —
+        // status reports must keep flowing so control state stays current.
+        self.common.info.refresh_idle_flag();
+        let idle = self.common.info.is_idle();
+
         let id = u32::from_le_bytes(data[0..4].try_into().unwrap());
         match id {
             // RD (magnetron) messages
@@ -299,8 +305,12 @@ impl RaymarineReportReceiver {
             0x010002 => {
                 rd::process_fixed_report(self, data);
             }
-            0x010003 => {
+            0x010003 if !idle => {
                 rd::process_frame(self, data);
+            }
+            0x010003 => {
+                // Idle: drain the RD spoke frame without decoding. The decoder
+                // is stateless per frame, so no buffer reset is needed on wake.
             }
             0x010006 => {
                 rd::process_info_report(self, data);
@@ -312,8 +322,11 @@ impl RaymarineReportReceiver {
             0x280002 => {
                 quantum::process_status_report(self, data);
             }
-            0x280003 => {
+            0x280003 if !idle => {
                 quantum::process_frame(self, data);
+            }
+            0x280003 => {
+                // Idle: drain the Quantum spoke frame without decoding.
             }
             0x288942 => {
                 // Database report — not spoke data. Ignore.
