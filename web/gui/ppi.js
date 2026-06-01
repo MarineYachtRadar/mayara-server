@@ -9,6 +9,17 @@ const RANGE_SCALE = 0.9;
 
 const NAUTICAL_MILE = 1852.0;
 
+// Exponential-smoothing factor for the radar-derived heading. The bearing
+// field on each spoke is quantized, so the per-spoke `bearing - angle` heading
+// wobbles by a fraction of a degree frame to frame even with a steady boat.
+// In head-up mode the AIS/ARPA overlay subtracts this heading to place
+// geographic targets bow-up (the spoke raster is drawn bow-up and does NOT
+// subtract it), so the wobble shows up as targets jumping. Smoothing the
+// heading on its unit vector (circular-mean safe across the 360->0 wrap) kills
+// the jitter while staying responsive: at typical spoke rates the time
+// constant is well under the timescale of a real turn.
+const HEADING_SMOOTH_ALPHA = 0.1;
+
 function divides_near(a, b) {
   let remainder = a % b;
   return remainder <= 1.0 || remainder >= b - 1;
@@ -101,6 +112,11 @@ class PPI {
     this.range = 0;
     this.spoke_range = 0;
     this.lastHeading = null;
+    // Smoothed unit vector of the radar-derived heading; null until the first
+    // spoke carries a bearing, so smoothing starts from a real value rather
+    // than pulling toward an arbitrary north.
+    this.headingSin = null;
+    this.headingCos = null;
     this.headingRotation = 0;
     this.headingMode = "headingUp";
     this.trueHeading = null;
@@ -679,9 +695,24 @@ class PPI {
       const heading =
         (spoke.bearing + this.spokesPerRevolution - spoke.angle) %
         this.spokesPerRevolution;
-      this.lastHeading = (heading * 360) / this.spokesPerRevolution;
+      const headingRad = (heading * 2 * Math.PI) / this.spokesPerRevolution;
+      const sin = Math.sin(headingRad);
+      const cos = Math.cos(headingRad);
+      if (this.headingSin === null) {
+        // First valid heading: seed the smoother so it converges from the
+        // real value, not from north.
+        this.headingSin = sin;
+        this.headingCos = cos;
+      } else {
+        this.headingSin += (sin - this.headingSin) * HEADING_SMOOTH_ALPHA;
+        this.headingCos += (cos - this.headingCos) * HEADING_SMOOTH_ALPHA;
+      }
+      const smoothed = Math.atan2(this.headingSin, this.headingCos);
+      this.lastHeading = ((smoothed * 180) / Math.PI + 360) % 360;
     } else {
       this.lastHeading = null;
+      this.headingSin = null;
+      this.headingCos = null;
     }
 
     // Don't draw spokes in standby mode
