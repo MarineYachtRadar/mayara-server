@@ -149,6 +149,13 @@ div.myr_ppi {
   white-space: nowrap;
 }
 
+/* Click affordance shown only when both true and magnetic headings exist, so
+   the operator can switch the readout between them. */
+.myr_position_box .myr_pos_heading.myr_pos_heading_toggleable {
+  cursor: pointer;
+  text-decoration: underline dotted;
+}
+
 /* ============================================
    Power Lozenge - Status indicator on viewer
    ============================================ */
