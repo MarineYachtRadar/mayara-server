@@ -29,6 +29,11 @@ use crate::{
 };
 
 static HEADING_TRUE: AtomicF64 = AtomicF64::new(f64::NAN);
+static HEADING_MAGNETIC: AtomicF64 = AtomicF64::new(f64::NAN);
+static MAGNETIC_VARIATION: AtomicF64 = AtomicF64::new(f64::NAN);
+/// Set once a real true-heading source delivers a value, after which derived
+/// magnetic+variation headings are ignored so a real true heading always wins.
+static TRUE_HEADING_AUTHORITATIVE: AtomicBool = AtomicBool::new(false);
 static POSITION_VALID: AtomicBool = AtomicBool::new(false);
 static POSITION_LAT: AtomicF64 = AtomicF64::new(f64::NAN);
 static POSITION_LON: AtomicF64 = AtomicF64::new(f64::NAN);
@@ -262,11 +267,26 @@ fn build_seed_updates(vessel: &Value) -> Option<Value> {
     Some(json!([{ "values": values }]))
 }
 
+/// Source label used when a true heading is derived from magnetic heading and
+/// variation. `set_heading_true` keys off this to decide whether the caller is
+/// a real (authoritative) true source or the derivation path.
+const DERIVED_SOURCE: &str = "magnetic+variation";
+
 ///
 /// Get the heading in radians [0..2*PI>
 ///
 pub fn get_heading_true() -> Option<f64> {
     let heading = HEADING_TRUE.load(Ordering::Acquire);
+    if !heading.is_nan() {
+        return Some(heading);
+    }
+    return None;
+}
+
+/// Get the magnetic heading in radians [0..2*PI>, if known. Forwarded to the
+/// GUI for the true/magnetic readout toggle; never used for radar geometry.
+pub fn get_heading_magnetic() -> Option<f64> {
+    let heading = HEADING_MAGNETIC.load(Ordering::Acquire);
     if !heading.is_nan() {
         return Some(heading);
     }
@@ -285,6 +305,12 @@ pub(crate) fn set_heading_true(heading: Option<f64>, source: &str) {
             "set_heading_true: heading {h} rad ({} deg) from '{source}' is out of range",
             h.to_degrees()
         );
+        // Any real true-heading source (SignalK headingTrue, NMEA0183 HDT,
+        // emulator, static config) takes permanent precedence over a value
+        // derived from magnetic heading + variation.
+        if source != DERIVED_SOURCE {
+            TRUE_HEADING_AUTHORITATIVE.store(true, Ordering::Release);
+        }
         let h = h.rem_euclid(TAU);
 
         let old = HEADING_TRUE.swap(h, Ordering::AcqRel);
@@ -294,6 +320,76 @@ pub(crate) fn set_heading_true(heading: Option<f64>, source: &str) {
         }
     } else {
         HEADING_TRUE.store(f64::NAN, Ordering::Release);
+    }
+}
+
+/// Derive a true heading from magnetic heading and variation, both in radians.
+/// Signal K convention: `true = magnetic + variation`. Returns `None` unless
+/// both inputs are present.
+pub(crate) fn derive_true_heading(magnetic: Option<f64>, variation: Option<f64>) -> Option<f64> {
+    match (magnetic, variation) {
+        (Some(m), Some(v)) => Some((m + v).rem_euclid(std::f64::consts::TAU)),
+        _ => None,
+    }
+}
+
+/// Whether the magnetic+variation derivation should run. It must not when a
+/// real true-heading source is authoritative.
+fn should_derive(true_authoritative: bool) -> bool {
+    !true_authoritative
+}
+
+/// Set the magnetic heading in radians. Broadcast to the GUI (for the readout
+/// toggle) and feed the magnetic→true derivation.
+pub(crate) fn set_heading_magnetic(heading: Option<f64>, source: &str) {
+    use std::f64::consts::TAU;
+
+    if let Some(h) = heading {
+        assert!(
+            h > -TAU && h < 2.0 * TAU,
+            "set_heading_magnetic: heading {h} rad ({} deg) from '{source}' is out of range",
+            h.to_degrees()
+        );
+        let h = h.rem_euclid(TAU);
+        let old = HEADING_MAGNETIC.swap(h, Ordering::AcqRel);
+        if (old - h).abs() > 0.001 || old.is_nan() {
+            broadcast_nav_update("navigation.headingMagnetic", h, source);
+        }
+    } else {
+        HEADING_MAGNETIC.store(f64::NAN, Ordering::Release);
+    }
+    recompute_derived_true();
+}
+
+/// Set the magnetic variation in radians and feed the magnetic→true derivation.
+/// Not displayed, so no GUI broadcast.
+pub(crate) fn set_magnetic_variation(variation: Option<f64>) {
+    match variation {
+        Some(v) => MAGNETIC_VARIATION.store(v, Ordering::Release),
+        None => MAGNETIC_VARIATION.store(f64::NAN, Ordering::Release),
+    }
+    recompute_derived_true();
+}
+
+/// Recompute the canonical true heading from magnetic heading + variation,
+/// unless a real true-heading source is already authoritative. Only arms the
+/// own-ship-nav probe when a true heading is actually produced, so a
+/// magnetic-only feed without variation does not falsely satisfy the probe.
+fn recompute_derived_true() {
+    if !should_derive(TRUE_HEADING_AUTHORITATIVE.load(Ordering::Acquire)) {
+        return;
+    }
+    let magnetic = {
+        let v = HEADING_MAGNETIC.load(Ordering::Acquire);
+        (!v.is_nan()).then_some(v)
+    };
+    let variation = {
+        let v = MAGNETIC_VARIATION.load(Ordering::Acquire);
+        (!v.is_nan()).then_some(v)
+    };
+    if let Some(t) = derive_true_heading(magnetic, variation) {
+        set_heading_true(Some(t), DERIVED_SOURCE);
+        mark_signalk_own_ship_nav_seen();
     }
 }
 
@@ -387,7 +483,7 @@ pub(crate) fn set_sog(sog: Option<f64>) {
 const NMEA0183_SERVICE_NAME: &str = "_nmea-0183._tcp.local.";
 
 /// Subscription for own-ship navigation data only
-const SUBSCRIBE_SELF: &'static str = "{\"context\":\"vessels.self\",\"subscribe\":[{\"path\":\"navigation.headingTrue\"},{\"path\":\"navigation.position\"},{\"path\":\"navigation.speedOverGround\"},{\"path\":\"navigation.courseOverGroundTrue\"}]}\r\n";
+const SUBSCRIBE_SELF: &'static str = "{\"context\":\"vessels.self\",\"subscribe\":[{\"path\":\"navigation.headingTrue\"},{\"path\":\"navigation.headingMagnetic\"},{\"path\":\"navigation.magneticVariation\"},{\"path\":\"navigation.position\"},{\"path\":\"navigation.speedOverGround\"},{\"path\":\"navigation.courseOverGroundTrue\"}]}\r\n";
 
 /// Additional subscription for all vessels (sent after own-ship context is known)
 const SUBSCRIBE_ALL: &'static str =
@@ -1390,6 +1486,14 @@ fn apply_signalk_value(values_entry: &Value, source: &str) {
                 mark_signalk_own_ship_nav_seen();
             }
         }
+        // Magnetic heading and variation are in radians (Signal K convention),
+        // unlike the NMEA0183 HDT path which converts from degrees.
+        "navigation.headingMagnetic" => {
+            set_heading_magnetic(value.as_f64(), source);
+        }
+        "navigation.magneticVariation" => {
+            set_magnetic_variation(value.as_f64());
+        }
         "navigation.speedOverGround" => {
             set_sog(value.as_f64());
         }
@@ -1533,5 +1637,50 @@ mod tests {
         // already-capped backoff or probe timeout.
         assert_eq!(next_consecutive(u32::MAX, false), u32::MAX);
         assert_eq!(next_consecutive(u32::MAX - 1, false), u32::MAX);
+    }
+
+    // ----- magnetic -> true heading derivation -----
+
+    use std::f64::consts::TAU;
+
+    #[test]
+    fn derive_true_adds_magnetic_and_variation() {
+        // Signal K convention: true = magnetic + variation (radians).
+        let t = derive_true_heading(Some(1.0), Some(0.1)).unwrap();
+        assert!((t - 1.1).abs() < 1e-9);
+    }
+
+    #[test]
+    fn derive_true_wraps_modulo_tau() {
+        // Magnetic near a full turn plus easterly variation wraps into [0, TAU).
+        let t = derive_true_heading(Some(TAU - 0.05), Some(0.2)).unwrap();
+        assert!((0.0..TAU).contains(&t));
+        assert!((t - 0.15).abs() < 1e-9);
+    }
+
+    #[test]
+    fn derive_true_westerly_variation_reduces_true() {
+        // Westerly variation is negative, so true < magnetic.
+        let t = derive_true_heading(Some(1.0), Some(-0.2)).unwrap();
+        assert!((t - 0.8).abs() < 1e-9);
+    }
+
+    #[test]
+    fn derive_true_requires_variation() {
+        // Magnetic alone is not enough — without variation there is no usable
+        // true heading for plotting.
+        assert_eq!(derive_true_heading(Some(1.0), None), None);
+    }
+
+    #[test]
+    fn derive_true_requires_magnetic() {
+        assert_eq!(derive_true_heading(None, Some(0.1)), None);
+    }
+
+    #[test]
+    fn should_derive_blocks_when_true_is_authoritative() {
+        // A real true-heading source must win over derived values.
+        assert!(!should_derive(true));
+        assert!(should_derive(false));
     }
 }

@@ -126,9 +126,13 @@ For real radar use, you need `--net=host` so Mayara can see the multicast traffi
 - Check that no firewall is blocking port 6502.
 
 **Radar sweep shows but no AIS or ARPA targets:**
-- AIS and ARPA targets are placed relative to your own ship, so the display needs a **heading reference** to draw them. Mayara uses the radar's own heading if the radar reports it, or a true heading from Signal K (`navigation.headingTrue`) otherwise.
-- When no heading is available from either source, the **AIS** toggle is grayed out — that is the signal that a heading is missing, not that AIS is off.
+- AIS and ARPA targets are placed relative to your own ship, so the display needs a **heading reference** to draw them. Mayara uses the radar's own heading if the radar reports it, or a heading from Signal K otherwise.
+- Signal K can supply true heading (`navigation.headingTrue`) or magnetic heading (`navigation.headingMagnetic`). If only magnetic heading is published, Mayara converts it to true using the magnetic variation (`navigation.magneticVariation`) so targets are placed correctly — so a magnetic compass needs a variation source for the overlays to work.
+- When no usable heading is available from any source, the **AIS** toggle is grayed out — that is the signal that a heading is missing, not that AIS is off.
 - If you have a heading sensor, make sure it's feeding the radar or Signal K. The radar sweep itself does not need a heading, which is why it can show while targets stay hidden.
+
+**Heading readout (true vs magnetic):**
+- The position box shows the current heading as `HdgT` (true) or `HdgM` (magnetic). When both are available, click the heading line to switch which one is displayed; the choice is remembered in your browser. This only changes the readout — targets are always placed using true heading.
 
 ## Need help?
 

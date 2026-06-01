@@ -69,6 +69,8 @@ var renderMethod = "webgpu"; // "webgpu" or "webgl"
 var headingMode = "headingUp";
 var trueHeading = 0; // in radians
 var haveSignalKHeading = false; // true once a navigation.headingTrue delta lands
+var magneticHeading = 0; // in radians, for the readout toggle only
+var haveMagneticHeading = false; // true once a navigation.headingMagnetic delta lands
 var lastLoggedHeading = null; // last heading value logged to console
 var lastHeadingTime = 0; // Timestamp of last heading update
 
@@ -84,6 +86,16 @@ var showAis = (() => {
     return localStorage.getItem("mayaraShowAis") !== "false";
   } catch {
     return true;
+  }
+})();
+
+// Heading readout preference: show magnetic instead of true when both exist.
+// Display-only — never affects plotting, which always uses the true heading.
+var preferMagneticHeading = (() => {
+  try {
+    return localStorage.getItem("mayaraPreferMagnetic") === "true";
+  } catch {
+    return false;
   }
 })();
 
@@ -290,6 +302,10 @@ function subscribeToHeading() {
       context: "vessels.self",
       subscribe: [
         { path: "navigation.headingTrue", period: 200 },
+        // Magnetic heading drives only the readout toggle; plotting uses the
+        // true heading (which mayara derives from magnetic + variation when no
+        // true heading is published).
+        { path: "navigation.headingMagnetic", period: 200 },
         // Position drives AIS overlay placement — without this the
         // overlay falls back to spoke metadata, which is only updated
         // when the radar is transmitting and can disagree with the
@@ -322,6 +338,16 @@ function subscribeToHeading() {
                 }
                 onHeadingReceived();
                 updateHeadingDisplay();
+              } else if (
+                value.path === "navigation.headingMagnetic" &&
+                value.value != null
+              ) {
+                // Display-only: feeds the HdgT/HdgM readout toggle. Plotting
+                // never uses this — it stays on the canonical true heading.
+                magneticHeading = value.value; // Already in radians
+                haveMagneticHeading = true;
+                refreshPositionBoxHeading();
+                updateHeadingDisplayToggle();
               } else if (
                 value.path === "navigation.position" &&
                 value.value?.latitude != null &&
@@ -666,16 +692,26 @@ function updateHeadingDisplay(mode) {
   return mode || headingMode;
 }
 
-// Resolve the heading to show in the position box, in degrees. Prefer the
-// Signal K true heading once a real delta has arrived (haveSignalKHeading
-// guards against the 0-radian initial value); otherwise fall back to the
-// radar-derived heading (already smoothed). Returns null when neither exists.
+// Resolve the heading to show in the position box as { deg, label }. With both
+// true and magnetic available, honor the readout preference; with only one,
+// show it; otherwise fall back to the radar-derived true heading (smoothed).
+// The haveSignalKHeading / haveMagneticHeading guards reject the 0-radian
+// initial values. Returns null when no heading exists.
 function positionBoxHeadingDeg() {
-  if (haveSignalKHeading && trueHeading != null && !Number.isNaN(trueHeading)) {
-    return (trueHeading * 180) / Math.PI;
+  const haveTrue =
+    haveSignalKHeading && trueHeading != null && !Number.isNaN(trueHeading);
+  const haveMag =
+    haveMagneticHeading &&
+    magneticHeading != null &&
+    !Number.isNaN(magneticHeading);
+  if (haveMag && (preferMagneticHeading || !haveTrue)) {
+    return { deg: (magneticHeading * 180) / Math.PI, label: "HdgM" };
+  }
+  if (haveTrue) {
+    return { deg: (trueHeading * 180) / Math.PI, label: "HdgT" };
   }
   if (lastRadarHeading != null && !Number.isNaN(lastRadarHeading)) {
-    return lastRadarHeading;
+    return { deg: lastRadarHeading, label: "HdgT" };
   }
   return null;
 }
@@ -684,9 +720,9 @@ function refreshPositionBoxHeading() {
   const box = document.getElementById("myr_position_box");
   if (!box) return;
   const hdgEl = box.querySelector(".myr_pos_heading");
-  const hdgDeg = positionBoxHeadingDeg();
-  if (hdgEl && hdgDeg != null) {
-    hdgEl.textContent = `HdgT: ${hdgDeg.toFixed(1)}°`;
+  const hdg = positionBoxHeadingDeg();
+  if (hdgEl && hdg != null) {
+    hdgEl.textContent = `${hdg.label}: ${hdg.deg.toFixed(1)}°`;
   }
 }
 
@@ -710,6 +746,15 @@ function createPositionBox() {
     <div class="myr_pos_heading">HdgT: ---°</div>
   `;
   box.addEventListener("click", cycleCoordFormat);
+  // Clicking the heading line toggles the true/magnetic readout (when both
+  // exist) without also cycling the coordinate format.
+  const hdgEl = box.querySelector(".myr_pos_heading");
+  if (hdgEl) {
+    hdgEl.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleHeadingDisplay();
+    });
+  }
   container.appendChild(box);
 }
 
@@ -720,6 +765,38 @@ function cycleCoordFormat() {
   if (lastRadarLat !== null && lastRadarLon !== null) {
     updatePositionBox(lastRadarLat, lastRadarLon, lastRadarHeading);
   }
+}
+
+// Toggle the heading readout between true and magnetic. Inert unless both are
+// available (nothing to switch to otherwise). Display-only: never touches the
+// heading used for plotting. Persists the choice per browser.
+function toggleHeadingDisplay() {
+  const haveTrue = haveSignalKHeading && !Number.isNaN(trueHeading);
+  const haveMag = haveMagneticHeading && !Number.isNaN(magneticHeading);
+  if (!(haveTrue && haveMag)) return;
+  preferMagneticHeading = !preferMagneticHeading;
+  try {
+    localStorage.setItem("mayaraPreferMagnetic", String(preferMagneticHeading));
+  } catch {
+    // localStorage unavailable (private mode) — preference is session-only.
+  }
+  refreshPositionBoxHeading();
+  updateHeadingDisplayToggle();
+}
+
+// Show the click affordance on the heading line only when both true and
+// magnetic headings exist, i.e. when switching is actually possible.
+function updateHeadingDisplayToggle() {
+  const box = document.getElementById("myr_position_box");
+  if (!box) return;
+  const hdgEl = box.querySelector(".myr_pos_heading");
+  if (!hdgEl) return;
+  const canToggle =
+    haveSignalKHeading &&
+    !Number.isNaN(trueHeading) &&
+    haveMagneticHeading &&
+    !Number.isNaN(magneticHeading);
+  hdgEl.classList.toggle("myr_pos_heading_toggleable", canToggle);
 }
 
 // Format degrees to degrees, minutes, seconds (DMS)
@@ -800,9 +877,9 @@ function updatePositionBox(lat, lon, heading) {
     coords[1].textContent = formatCoord(lon, false);
   }
 
-  const hdgDeg = positionBoxHeadingDeg();
-  if (hdgEl && hdgDeg != null) {
-    hdgEl.textContent = `HdgT: ${hdgDeg.toFixed(1)}°`;
+  const hdg = positionBoxHeadingDeg();
+  if (hdgEl && hdg != null) {
+    hdgEl.textContent = `${hdg.label}: ${hdg.deg.toFixed(1)}°`;
   }
 
   box.style.display = "block";
@@ -857,6 +934,7 @@ function onHeadingReceived() {
     toggleBtn.title = "Click to toggle: Heading Up / North Up";
   }
   updateAisLozenge();
+  updateHeadingDisplayToggle();
 }
 
 // Called when the heading WebSocket closes — true loss of source.
