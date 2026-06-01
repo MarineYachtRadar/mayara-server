@@ -90,19 +90,26 @@ cargo run --release -- --emulator -vv
 mayara-server supports optional features that can be enabled at build time:
 
 ```bash
-# Build with all default features
+# Build with the default feature set (all radar brands + emulator)
 cargo build --release
 
 # Build with specific radar brands only
 cargo build --release --no-default-features --features navico,garmin
+
+# Enable PCAP replay (not in the default set)
+cargo build --release --features pcap-replay
 ```
 
 Available features:
-- `navico` - Navico radar support (BR24, 3G, 4G, Halo)
-- `furuno` - Furuno radar support
-- `garmin` - Garmin radar support (HD, xHD)
-- `raymarine` - Raymarine radar support
-- `emulator` - Built-in radar emulator
+- `navico` - Navico radar support (BR24, 3G, 4G, HALO)
+- `furuno` - Furuno radar support (DRS, FAR series)
+- `garmin` - Garmin radar support (HD, xHD, xHD2, xHD3, Fantom, Fantom Pro)
+- `koden` - Koden radar support (MDS-xxR series)
+- `raymarine` - Raymarine radar support (Quantum, RD, HD, Magnum, Cyclone)
+- `emulator` - Built-in radar emulator (useful for testing without hardware)
+- `pcap-replay` - PCAP capture replay support (pulls in `flate2`)
+
+See [README.md](README.md) for which models are fully supported versus implemented but awaiting hardware validation.
 
 ## Running Tests
 
