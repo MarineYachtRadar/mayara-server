@@ -52,7 +52,7 @@ rustup update
 ### Clone the Repository
 
 ```bash
-git clone https://github.com/your-repo/mayara-server.git
+git clone https://github.com/MarineYachtRadar/mayara-server.git
 cd mayara-server
 ```
 

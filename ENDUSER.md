@@ -25,7 +25,7 @@ A common setup is to run Mayara on a small wired device (like a Raspberry Pi) co
 
 ## Download
 
-Pre-built binaries are available on the [GitHub releases page](https://github.com/mayara-server/mayara-server/releases).
+Pre-built binaries are available on the [GitHub releases page](https://github.com/MarineYachtRadar/mayara-server/releases).
 
 Choose the right file for your platform:
 
