@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **gui:** plot AIS using radar heading when SignalK true heading absent (#296) ([PR #296](https://github.com/MarineYachtRadar/mayara-server/pull/296))
 - **gui:** plot ARPA targets using radar heading when true heading absent (#298) ([PR #298](https://github.com/MarineYachtRadar/mayara-server/pull/298))
 - **gui:** show own-ship nav and heading UI without a heading subscription (#313) ([PR #313](https://github.com/MarineYachtRadar/mayara-server/pull/313))
+- **gui:** hide ON-TIME/TX-TIME when the radar does not report them (#316) ([PR #316](https://github.com/MarineYachtRadar/mayara-server/pull/316))
 
 ## [3.5.3] - 2026-05-29
 
