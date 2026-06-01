@@ -133,6 +133,59 @@ pub fn get_ais_store() -> Option<&'static std::sync::Arc<AisVesselStore>> {
     AIS_STORE.get()
 }
 
+/// Health of mayara's upstream navigation source, surfaced on `/signalk` so a
+/// GUI can tell the operator why own-ship position / AIS may be missing
+/// (most often: an unapproved Signal K device token, so the authenticated
+/// AIS REST seed never runs and the overlay stays empty).
+#[derive(serde::Serialize)]
+pub struct NavStatus {
+    /// Configured upstream transport: `mdns`, `tcp`, `udp`, `ws`, `wss`,
+    /// `nmea0183`, or `static`. Mirrors how the navigation address is parsed.
+    pub transport: &'static str,
+    /// A Signal K bearer token is configured (so the AIS REST snapshot can be
+    /// fetched). Only meaningful for `ws`/`wss`/`mdns` transports.
+    pub token_present: bool,
+    /// Own-ship position has been received from the upstream — the clearest
+    /// signal that navigation deltas are actually flowing.
+    pub have_position: bool,
+    /// Number of AIS targets currently held in the store.
+    pub ais_count: usize,
+}
+
+/// Assemble the current navigation status from process-wide state. Lives in
+/// the library so it can read the crate-private token accessor; the binary
+/// only serializes the result.
+pub fn nav_status(args: &Cli) -> NavStatus {
+    let transport = if args.nmea0183 {
+        "nmea0183"
+    } else if args.static_position.is_some() {
+        "static"
+    } else {
+        match &args.navigation_address {
+            None => "mdns",
+            Some(addr) => match addr.split_once(':') {
+                // Same scheme set ConnectionType::parse accepts; an interface
+                // name (no scheme) restricts mDNS, so it's still discovery.
+                Some(("tcp", _)) => "tcp",
+                Some(("udp", _)) => "udp",
+                Some(("ws", _)) => "ws",
+                Some(("wss", _)) => "wss",
+                _ => "mdns",
+            },
+        }
+    };
+
+    let (lat, lon) = get_position();
+    NavStatus {
+        transport,
+        token_present: crate::signalk::get_signalk_token().is_some(),
+        have_position: lat.is_some() && lon.is_some(),
+        ais_count: get_ais_store()
+            .map(|s| s.get_all_active().len())
+            .unwrap_or(0),
+    }
+}
+
 /// Update AIS vessel data from Signal K message
 fn update_ais_vessel(context: &str, updates: &Value) {
     if let Some(store) = AIS_STORE.get() {
@@ -1563,6 +1616,52 @@ fn signalk_connection_to_stream(conn: crate::signalk::Connection) -> Stream {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
+
+    fn cli(args: &[&str]) -> Cli {
+        let mut full = vec!["mayara-server"];
+        full.extend_from_slice(args);
+        Cli::parse_from(full)
+    }
+
+    // ----- nav_status transport derivation -----
+
+    #[test]
+    fn nav_transport_defaults_to_mdns() {
+        assert_eq!(nav_status(&cli(&[])).transport, "mdns");
+    }
+
+    #[test]
+    fn nav_transport_reads_scheme_from_navigation_address() {
+        assert_eq!(
+            nav_status(&cli(&["-n", "tcp:127.0.0.1:8375"])).transport,
+            "tcp"
+        );
+        assert_eq!(nav_status(&cli(&["-n", "ws:127.0.0.1:80"])).transport, "ws");
+        assert_eq!(
+            nav_status(&cli(&["-n", "wss:127.0.0.1:443"])).transport,
+            "wss"
+        );
+        assert_eq!(
+            nav_status(&cli(&["-n", "udp:0.0.0.0:2000"])).transport,
+            "udp"
+        );
+    }
+
+    #[test]
+    fn nav_transport_interface_name_is_discovery() {
+        // A bare interface name (no scheme) restricts mDNS, so it's discovery.
+        assert_eq!(nav_status(&cli(&["-n", "eth0"])).transport, "mdns");
+    }
+
+    #[test]
+    fn nav_transport_nmea0183_and_static() {
+        assert_eq!(nav_status(&cli(&["--nmea0183"])).transport, "nmea0183");
+        assert_eq!(
+            nav_status(&cli(&["--static-position", "52.3", "4.9", "45.0"])).transport,
+            "static"
+        );
+    }
 
     // ----- reconnect backoff (issue #274 companion to PR #284) -----
 
