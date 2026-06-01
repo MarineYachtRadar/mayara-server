@@ -43,7 +43,7 @@ clap-verbosity-flag = "3.0.4"
 crossbeam = "0.8.4"
 directories = "6.0.0"
 enum-primitive-derive = "0.3.0"
-env_logger = "0.11.10"
+env_logger = { version = "0.11", default-features = false, features = ["humantime", "auto-color"] }
 flate2 = { version = "1", optional = true }
 futures = "0.3.32"
 futures-util = "0.3.32"
