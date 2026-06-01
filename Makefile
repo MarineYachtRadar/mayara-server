@@ -1,8 +1,5 @@
 # Mayara Build System
 #
-# GUI is downloaded from npm (@marineyachtradar/mayara-gui) during build.
-# For GUI development, clone mayara-gui repo as sibling and use 'make dev'.
-#
 # Usage:
 #   make          - Build release with docs (recommended)
 #   make release  - Build release with docs
