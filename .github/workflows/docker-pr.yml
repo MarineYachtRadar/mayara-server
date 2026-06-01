@@ -8,7 +8,7 @@ name: Docker PR test image
 
 on:
   pull_request:
-    types: [labeled, synchronize, reopened]
+    types: [labeled, synchronize, reopened, closed]
 
 concurrency:
   group: docker-pr-${{ github.event.pull_request.number }}
@@ -17,12 +17,13 @@ concurrency:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  PACKAGE: mayara-server
   LABEL: build-image
 
 jobs:
   build:
     name: Build ${{ matrix.platform }}
-    if: contains(github.event.pull_request.labels.*.name, 'build-image')
+    if: github.event.action != 'closed' && contains(github.event.pull_request.labels.*.name, 'build-image')
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -152,3 +153,82 @@ jobs:
               body,
             });
           }
+
+  cleanup:
+    name: Delete PR test image
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      pull-requests: write
+
+    steps:
+    - name: Delete pr<N> image versions
+      uses: actions/github-script@v8
+      with:
+        script: |
+          const pr = context.payload.pull_request.number;
+          const pkg = process.env.PACKAGE;
+          // Match only this PR's tags: exactly `pr<N>` or `pr<N>-<sha>`.
+          // A prefix/substring test would let pr2 match pr267, so use exact + `-` boundary.
+          const exact = `pr${pr}`;
+          const prefix = `pr${pr}-`;
+          const isOurs = (tag) => tag === exact || tag.startsWith(prefix);
+
+          const versions = await github.paginate(
+            github.rest.packages.getAllPackageVersionsForPackageOwnedByOrg,
+            {
+              org: context.repo.owner,
+              package_type: 'container',
+              package_name: pkg,
+              per_page: 100,
+            },
+          ).catch((err) => {
+            // Package may not exist if this PR never had the build-image label.
+            if (err.status === 404) return [];
+            throw err;
+          });
+
+          const toDelete = versions.filter((v) =>
+            (v.metadata?.container?.tags || []).some(isOurs),
+          );
+
+          if (toDelete.length === 0) {
+            core.info(`No image versions tagged pr${pr} found — nothing to clean up.`);
+            return;
+          }
+
+          for (const v of toDelete) {
+            core.info(`Deleting version ${v.id} (tags: ${v.metadata.container.tags.join(', ')})`);
+            await github.rest.packages.deletePackageVersionForOrg({
+              org: context.repo.owner,
+              package_type: 'container',
+              package_name: pkg,
+              package_version_id: v.id,
+            });
+          }
+          core.info(`Deleted ${toDelete.length} image version(s) for pr${pr}.`);
+
+    - name: Update PR comment
+      uses: actions/github-script@v8
+      with:
+        script: |
+          const pr = context.payload.pull_request.number;
+          const marker = '<!-- docker-pr-test-image -->';
+          const { data: comments } = await github.rest.issues.listComments({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: pr,
+          });
+          const existing = comments.find((c) => c.body && c.body.includes(marker));
+          if (!existing) return;
+          const body = [
+            marker,
+            `🧹 Docker test image for this PR (\`pr${pr}\`) was deleted on close.`,
+          ].join('\n');
+          await github.rest.issues.updateComment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            comment_id: existing.id,
+            body,
+          });
