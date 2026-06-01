@@ -1663,6 +1663,31 @@ mod tests {
         );
     }
 
+    #[test]
+    fn nav_transport_stays_in_sync_with_connection_type() {
+        // nav_status derives its transport string independently of
+        // ConnectionType::parse (deliberately — parse() panics on an unknown
+        // scheme, which a status endpoint must not do). This guard pins the
+        // two scheme sets together so adding a scheme to one without the other
+        // fails here. ConnectionType variant -> expected nav_status string.
+        let addr = "127.0.0.1:80";
+        for (scheme, expected) in [("tcp", "tcp"), ("udp", "udp"), ("ws", "ws"), ("wss", "wss")] {
+            let arg = format!("{scheme}:{addr}");
+            // parse() must accept the scheme (it would panic otherwise)...
+            let parsed = ConnectionType::parse(&Some(arg.clone()));
+            let parsed_ok = matches!(
+                (scheme, &parsed),
+                ("tcp", ConnectionType::Tcp(_))
+                    | ("udp", ConnectionType::Udp(_))
+                    | ("ws", ConnectionType::Ws(_, false))
+                    | ("wss", ConnectionType::Ws(_, true))
+            );
+            assert!(parsed_ok, "ConnectionType::parse changed for {scheme}");
+            // ...and nav_status must map it to the matching string.
+            assert_eq!(nav_status(&cli(&["-n", &arg])).transport, expected);
+        }
+    }
+
     // ----- reconnect backoff (issue #274 companion to PR #284) -----
 
     #[test]
