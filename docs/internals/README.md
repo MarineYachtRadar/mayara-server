@@ -170,3 +170,4 @@ Integration tests in `tests/replay_*.rs` replay brand-specific pcap fixtures and
 
 - [Adding a New Radar Brand](new_radar_brand.md) — full guide with checklist
 - [ARPA Target Tracking](arpa.md) — IMM filtering and blob detection
+- [Mayara Server for radar_pi Developers](radar_pi_comparison.md) — concept map for developers coming from the radar_pi OpenCPN plugin

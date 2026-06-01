@@ -6,7 +6,7 @@ This document is for developers familiar with the `radar_pi` OpenCPN plugin (C++
 
 The overall architecture is remarkably similar. Both systems follow the same pipeline:
 
-```
+```text
 Network packets -> Receive thread -> Spoke processing -> Blob detection -> Target tracking -> Output
 ```
 
@@ -45,7 +45,7 @@ Network packets -> Receive thread -> Spoke processing -> Blob detection -> Targe
 
 ### File layout comparison
 
-```
+```text
 radar_pi/                               mayara-server/
   include/                                src/lib/
     radar_pi.h                              mod.rs (server setup)
@@ -81,9 +81,9 @@ Blob detection is split across `GuardZone.cpp` and `Arpa.cpp`. Raw spokes are st
 
 The `Pix(angle, radius)` helper reads a pixel from this history buffer. The Doppler-aware version interprets the bit flags based on the target's Doppler classification (ANY, APPROACHING, RECEDING, ANY_DOPPLER, etc.).
 
-**Guard zone search**: `GuardZone::SearchTargets()` (line 159) is multi-radar aware. It iterates over all transmitting radars, converts the guard zone's range/bearing to spoke/pixel coordinates for each radar, and scans every 2nd spoke within the zone's angular/radial window. When it finds a strong pixel, it calls `MultiPix()` to validate the blob.
+**Guard zone search**: `GuardZone::SearchTargets()` is multi-radar aware. It iterates over all transmitting radars, converts the guard zone's range/bearing to spoke/pixel coordinates for each radar, and scans every 2nd spoke within the zone's angular/radial window. When it finds a strong pixel, it calls `MultiPix()` to validate the blob.
 
-**MultiPix()** (`Arpa.cpp:1168`) uses **Moore boundary tracing** (contour following). Starting from a pixel on the blob edge, it walks clockwise around the contour using a 4-directional lookup table:
+**MultiPix()** uses **Moore boundary tracing** (contour following). Starting from a pixel on the blob edge, it walks clockwise around the contour using a 4-directional lookup table:
 
 ```cpp
 Polar transl[4] = {{0,1}, {1,0}, {0,-1}, {-1,0}};  // right, down, left, up
@@ -91,16 +91,16 @@ Polar transl[4] = {{0,1}, {1,0}, {0,-1}, {-1,0}};  // right, down, left, up
 
 It counts the perimeter length and returns `true` only if the contour is long enough (`m_min_contour_length`). If the blob is too small, it clears the pixels (`line[r] &= 63`) to prevent re-detection. This is a per-pixel, per-target operation: you start from one strong pixel and trace its blob boundary.
 
-**GetContour()** (`Arpa.cpp:229`) is the full contour extraction. It stores all contour pixels in `m_contour[]` (up to 400) and computes the blob centroid as the midpoint of the angular and radial bounds:
+**GetContour()** is the full contour extraction. It stores all contour pixels in `m_contour[]` (up to 400) and computes the blob centroid as the midpoint of the angular and radial bounds:
 
 ```cpp
 pol->angle = (m_max_angle.angle + m_min_angle.angle) / 2;
 pol->r = (m_max_r.r + m_min_r.r) / 2;
 ```
 
-**FindContourFromInside()** (`Arpa.cpp:192`) and **FindNearestContour()** (`Arpa.cpp:863`) are the two ways to locate a blob when refreshing a tracked target: either the predicted position is inside the blob and you walk outward to find an edge, or it is outside and you search in an expanding square pattern.
+**FindContourFromInside()** and **FindNearestContour()** are the two ways to locate a blob when refreshing a tracked target: either the predicted position is inside the blob and you walk outward to find an edge, or it is outside and you search in an expanding square pattern.
 
-**Doppler target search**: `SearchDopplerTargets()` (`Arpa.cpp:1539`) scans the full rotation for pixels with ANY_DOPPLER that are not already part of a known target.
+**Doppler target search**: `SearchDopplerTargets()` scans the full rotation for pixels with ANY_DOPPLER that are not already part of a known target.
 
 Key characteristics:
 - Operates in polar coordinates (angle, radius in pixels).
@@ -113,7 +113,7 @@ Key characteristics:
 
 Blob detection lives entirely in `src/lib/radar/target/blob.rs`, in the `BlobDetector` struct.
 
-**Entry point**: `BlobDetector::process_spoke()` (line 447). Unlike radar_pi which searches for blobs on demand from the history buffer, this method is called for every incoming spoke and detects all blobs as a streaming operation. There is no history buffer to look back at; blobs are assembled incrementally as spokes arrive.
+**Entry point**: `BlobDetector::process_spoke()`. Unlike radar_pi which searches for blobs on demand from the history buffer, this method is called for every incoming spoke and detects all blobs as a streaming operation. There is no history buffer to look back at; blobs are assembled incrementally as spokes arrive.
 
 The algorithm uses **union-find with a spatial index**:
 
@@ -162,36 +162,36 @@ In radar_pi this is "ARPA/MARPA tracking". In Mayara it is simply "target tracki
 
 Target tracking is implemented in the `Arpa` class (manager) and `ArpaTarget` class (single target), both in `Arpa.cpp`.
 
-**Refresh cycle**: `Arpa::RefreshAllArpaTargets()` (line 1447) is called every 500ms from `radar_pi::TimedUpdate()`. It runs a **three-pass strategy** over all targets, sorted by status (highest first):
+**Refresh cycle**: `Arpa::RefreshAllArpaTargets()` is called every 500ms from `radar_pi::TimedUpdate()`. It runs a **three-pass strategy** over all targets, sorted by status (highest first):
 
 - **Pass 0**: Moving targets only (speed >= 2.5 knots), search speed = target_speed / 4
 - **Pass 1**: All targets, search speed = target_speed / 3
 - **Pass 2** (LAST_PASS): All targets, full search speed (20 m/s)
 
-Each pass calls `ArpaTarget::RefreshTarget(speed, pass)` (line 449), which runs this cycle:
+Each pass calls `ArpaTarget::RefreshTarget(speed, pass)`, which runs this cycle:
 
-1. **Timing check** (line 359): Has the antenna beam swept past this target's position since the last update? Uses `m_history[angle].time` to verify the beam has passed.
-2. **Best radar selection**: `CheckBestRadar()` (line 427) picks the transmitting radar with the smallest range that still covers the target. This is a `dualoverlay` feature: targets can migrate between radars.
+1. **Timing check**: Has the antenna beam swept past this target's position since the last update? Uses `m_history[angle].time` to verify the beam has passed.
+2. **Best radar selection**: `CheckBestRadar()` picks the transmitting radar with the smallest range that still covers the target. This is a `dualoverlay` feature: targets can migrate between radars.
 3. **Predict**: `m_kalman.Predict(&predicted_local, delta_t)` projects position forward. Delta time accounts for missed sweeps: `rotation_period * (m_lost_count + 1)`.
-4. **Search**: `GetTarget()` (line 897) looks for a blob near the predicted position. Search radius is computed as `speed * rotation_period * pixels_per_meter / 1000`, and varies by pass. If the predicted position is inside a blob, it uses `FindContourFromInside()`. Otherwise it uses `FindNearestContour()` with an expanding square search.
+4. **Search**: `GetTarget()` looks for a blob near the predicted position. Search radius is computed as `speed * rotation_period * pixels_per_meter / 1000`, and varies by pass. If the predicted position is inside a blob, it uses `FindContourFromInside()`. Otherwise it uses `FindNearestContour()` with an expanding square search.
 5. **Validate contour**: Rejects blobs that are too large (>= 400 pixels, likely land), and rejects blobs whose contour length changed by more than 3x compared to the running average (likely a different object or interference).
 6. **Kalman update**: `m_kalman.SetMeasurement()` feeds the measured polar position to the filter.
-7. **Fast target bypass** (line 613): For small, fast targets in early acquisition (status == 2), if the target moved more than its own size, the Kalman is overridden with a direct position measurement (decaying with a factor of 0.8 per status level).
-8. **Compute speed/course** (line 663): From Kalman velocity state `dlat_dt`, `dlon_dt`. Speed is validated against MAX_DETECTION_SPEED * 1.5 (30 m/s). Turn rejection kicks in for targets with speed > 5 m/s and turn > 130 degrees when status < 5.
-9. **Report**: `PassTTMtoOCPN()` (line 950) sends a `$RATTM` NMEA sentence. Optionally, `EncodeAIVDM()` (line 1043) sends a synthetic AIS Type 1 message.
+7. **Fast target bypass**: For small, fast targets in early acquisition (status == 2), if the target moved more than its own size, the Kalman is overridden with a direct position measurement (decaying with a factor of 0.8 per status level).
+8. **Compute speed/course**: From Kalman velocity state `dlat_dt`, `dlon_dt`. Speed is validated against MAX_DETECTION_SPEED * 1.5 (30 m/s). Turn rejection kicks in for targets with speed > 5 m/s and turn > 130 degrees when status < 5.
+9. **Report**: `PassTTMtoOCPN()` sends a `$RATTM` NMEA sentence. Optionally, `EncodeAIVDM()` sends a synthetic AIS Type 1 message.
 
 **State machine** uses numeric status codes:
 
-```
+```text
 ACQUIRE0 (0) -> ACQUIRE1 (1) -> ACQUIRE2 (2) -> ACQUIRE3 (3) -> Q_NUM (4) -> ... -> STATUS_TO_OCPN (6) -> T_NUM (8) -> ...
 LOST (-1)
 ```
 
 A target needs 4+ successful updates to become active. Targets are reported to OpenCPN when status reaches `STATUS_TO_OCPN` (6): as "Q" (acquiring) when status < T_NUM (8), and "T" (tracked) from T_NUM onwards. Lost targets are marked after `MAX_LOST_COUNT` (12) missed scans.
 
-**Pixel clearing**: After each successful target refresh, `ResetPixels()` (line 1126) clears the blob's pixels from the history buffer to prevent other targets from detecting the same blob. For large targets near the radar (contour >= 80 pixels, range < 3km), it also clears a "shadow" region behind the target.
+**Pixel clearing**: After each successful target refresh, `ResetPixels()` clears the blob's pixels from the history buffer to prevent other targets from detecting the same blob. For large targets near the radar (contour >= 80 pixels, range < 3km), it also clears a "shadow" region behind the target.
 
-**Doppler state transitions**: `StateTransition()` (line 804) counts Doppler pixels within the contour using `PixelCounter()` (line 759) and transitions the target's Doppler classification if > 85% of pixels are approaching or receding (or back to ANY if < 80%).
+**Doppler state transitions**: `StateTransition()` counts Doppler pixels within the contour using `PixelCounter()` and transitions the target's Doppler classification if > 85% of pixels are approaching or receding (or back to ANY if < 80%).
 
 **Kalman filter** (`Kalman.cpp`): A single 4-state EKF per target with state `[lat, lon, dlat/dt, dlon/dt]` in meters from own ship. The measurement model is nonlinear (polar angle and radius from Cartesian position), requiring a Jacobian `H` computed from the partial derivatives of the polar-to-Cartesian conversion. Process noise `NOISE = 0.015` and measurement noise `R = diag(100, 25)` are fixed constants.
 
@@ -210,14 +210,14 @@ Target tracking is spread across several files in `src/lib/radar/target/`:
 
 **TargetTracker** (`tracker.rs`) is the core state machine. Instead of the timer-driven three-pass sweep model, it processes candidates as they arrive from the blob detector:
 
-`process_candidate()` (line 549):
-1. Calls `match_active_target()` (line 613) to find the best existing target for this candidate.
+`process_candidate()`:
+1. Calls `match_active_target()` to find the best existing target for this candidate.
 2. **Matching** uses physics-based distance: the maximum matching distance is `max(50m, max_target_speed * delta_time * 1.5)`. This replaces the pixel-radius search of radar_pi with a speed-aware geographic distance check.
 3. If matched, the target's motion model is updated. If not matched and the candidate comes from a guard zone or Doppler, a new target is created.
 
 `check_revolution()` runs once per full antenna rotation and handles:
 - **Timeouts**: Targets not seen for 3 revolutions become Lost (10 for stationary targets).
-- **Deduplication**: `deduplicate_targets()` (line 425) merges young targets (< 4 updates) within 100m of each other. Large vessels often produce multiple blobs per revolution; this prevents tracking the same ship as two targets.
+- **Deduplication**: `deduplicate_targets()` merges young targets (< 4 updates) within 100m of each other. Large vessels often produce multiple blobs per revolution; this prevents tracking the same ship as two targets.
 
 **State machine** uses a clean enum instead of numeric codes:
 
@@ -231,7 +231,7 @@ enum TargetStatus {
 
 Promotion from `Acquiring` to `Tracking` happens after 4 updates (same as radar_pi's `ACQUIRE3 -> active` transition).
 
-**Turn rejection** (lines 194-233 in `tracker.rs`) mirrors radar_pi: during early tracking (updates 2-4), if a candidate would imply a course change of more than 130 degrees and the target is moving faster than 5 m/s, the match is rejected.
+**Turn rejection** mirrors radar_pi: during early tracking (updates 2-4), if a candidate would imply a course change of more than 130 degrees and the target is moving faster than 5 m/s, the match is rejected.
 
 **IMM motion model** (`motion.rs`): Instead of a single Kalman filter, each target runs three filters in parallel through `ImmMotionModel`:
 
@@ -245,7 +245,7 @@ After each measurement, a Bayesian probability update determines which model bes
 
 The transition probability matrix governs how likely each model is to switch to another:
 
-```
+```text
 From\To     CV    CA    CT
 CV        [0.90, 0.05, 0.05]
 CA        [0.10, 0.80, 0.10]
