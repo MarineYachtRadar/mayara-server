@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **gui:** gray out AIS toggle when no heading source is available (#297) ([PR #297](https://github.com/MarineYachtRadar/mayara-server/pull/297))
+- **gui:** support magnetic heading with true/magnetic readout toggle (#315) ([PR #315](https://github.com/MarineYachtRadar/mayara-server/pull/315))
 
 ### Changed
 
