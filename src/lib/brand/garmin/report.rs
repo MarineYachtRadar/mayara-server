@@ -418,6 +418,15 @@ impl GarminReportReceiver {
             bail!("Report too short: {} bytes", data.len());
         }
 
+        // Reports arrive regularly, so refresh idle state here rather than on a
+        // separate timer. The web layer wakes us on spoke subscribe, so a late
+        // entry into idle only wastes a little CPU briefly — never blanks a
+        // viewer.
+        self.common.info.refresh_idle_flag();
+        if let Some(ref cb) = self.common_b {
+            cb.info.refresh_idle_flag();
+        }
+
         let packet_type = u32::from_le_bytes(data[0..4].try_into().unwrap());
         let len = u32::from_le_bytes(data[4..8].try_into().unwrap());
 
@@ -614,9 +623,28 @@ impl GarminReportReceiver {
         Ok(())
     }
 
+    /// True when every range is idle (Standby + no spoke subscribers), so the
+    /// data loop can drain the socket without decoding. An active Range B keeps
+    /// the radar non-idle even if Range A is idle.
+    fn both_ranges_idle(&self) -> bool {
+        self.common.info.is_idle()
+            && self
+                .common_b
+                .as_ref()
+                .map(|cb| cb.info.is_idle())
+                .unwrap_or(true)
+    }
+
     fn process_data(&mut self, data: &[u8]) -> Result<(), Error> {
         if data.len() < SPOKE_HEADER_SIZE {
             bail!("Data too short: {} bytes", data.len());
+        }
+
+        // Drain the socket but skip decoding while every range is idle. The
+        // Garmin spoke decoder is stateless per frame, so no delta-buffer
+        // reset is needed on wake-up.
+        if self.both_ranges_idle() {
+            return Ok(());
         }
 
         // In dual-range mode, the range indicator at data[24] selects
@@ -639,6 +667,11 @@ impl GarminReportReceiver {
     }
 
     fn process_hd_spoke(&mut self, data: &[u8]) -> Result<(), Error> {
+        // HD radars carry spokes on the report port, so this is gated here
+        // rather than in process_data. Skip decoding while idle.
+        if self.both_ranges_idle() {
+            return Ok(());
+        }
         if data.len() < HD_SPOKE_HEADER_SIZE + 4 {
             bail!("HD spoke packet too short: {} bytes", data.len());
         }
@@ -815,6 +848,9 @@ impl GarminReportReceiver {
             HD_STATE_SPINNING_UP => Power::Preparing,
             _ => Power::Off,
         };
+        if power != Power::Standby {
+            self.common.info.wake_up();
+        }
         self.common
             .set_value(&ControlId::Power, power as i32 as f64);
 
@@ -863,6 +899,9 @@ impl GarminReportReceiver {
         } else {
             Power::Standby
         };
+        if power != Power::Standby {
+            self.common.info.wake_up();
+        }
         self.common
             .set_value(&ControlId::Power, power as i32 as f64);
         Ok(())
