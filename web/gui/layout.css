@@ -133,6 +133,30 @@ div.myr_ppi {
   text-align: center;
 }
 
+/* Non-blocking banner across the top of the PPI, shown when mayara reports
+   its upstream SignalK nav/AIS is unavailable (e.g. an unapproved device
+   token). Auto-clears once the condition resolves. Amber so it reads as a
+   notice, not a hard error, over the green radar aesthetic. */
+.myr_status_banner {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 90%;
+  padding: 8px 14px;
+  background: rgba(60, 40, 0, 0.85);
+  color: #ffcc44;
+  border: 1px solid #ffcc44;
+  border-radius: 6px;
+  font-family: Verdana, Geneva, sans-serif;
+  font-size: 12px;
+  font-weight: bold;
+  line-height: 1.4;
+  text-align: center;
+  z-index: 150;
+  pointer-events: none;
+}
+
 .myr_position_box .myr_pos_label {
   color: #88ff88;
   font-size: 10px;
