@@ -457,6 +457,20 @@ impl RadarInfo {
         self.is_idle.store(idle, Ordering::Relaxed);
     }
 
+    /// Recompute the idle flag from this radar's live power state and spoke
+    /// broadcast subscriber count. Brand data loops call this on their periodic
+    /// tick; see [`should_idle`] for the entry condition. Brand-agnostic — it
+    /// reads only the shared `Power` control and `message_tx.receiver_count()`.
+    pub(crate) fn refresh_idle_flag(&self) {
+        let power = self
+            .controls
+            .get(&ControlId::Power)
+            .and_then(|c| c.value)
+            .map(|v| v as i32);
+        let receiver_count = self.message_tx.receiver_count();
+        self.set_idle(should_idle(power, receiver_count));
+    }
+
     pub fn replay(&self) -> bool {
         self.replay
     }
@@ -945,6 +959,22 @@ impl Power {
     }
 }
 
+/// Decide whether a radar's data loop should enter idle mode, where it drains
+/// the spoke socket but skips decoding. Idle is safe when both: the radar is in
+/// Standby (so the frames it emits are essentially noise) AND nobody is
+/// subscribed to the spoke broadcast (so no one downstream observes the result).
+/// `power` is None when the Power control has not yet been reported by the radar
+/// — treated as non-idle so the first frames after startup are always decoded.
+///
+/// Brand-agnostic: any brand whose radar keeps emitting spokes in Standby can
+/// gate its decode on [`RadarInfo::is_idle`] and refresh it via
+/// [`RadarInfo::refresh_idle_flag`]. If a radar simply stops emitting in
+/// Standby, the gate never triggers and is a harmless no-op.
+pub(crate) fn should_idle(power: Option<i32>, spoke_receiver_count: usize) -> bool {
+    let standby = power.map(|p| p == Power::Standby as i32).unwrap_or(false);
+    standby && spoke_receiver_count == 0
+}
+
 // The actual values are not arbitrary: these are the exact values as reported
 // by HALO radars, simplifying the navico::report code.
 #[derive(Copy, Clone, Debug, Primitive, PartialEq)]
@@ -1217,6 +1247,37 @@ mod tests {
             "wake_up on a RadarInfo clone must reach the data_loop's clone"
         );
         assert!(Arc::ptr_eq(&info, &clone));
+    }
+
+    // ----- idle-mode predicate (issue #274) -----
+
+    #[test]
+    fn should_idle_yes_when_standby_and_no_subscribers() {
+        assert!(should_idle(Some(Power::Standby as i32), 0));
+    }
+
+    #[test]
+    fn should_idle_no_when_transmitting_even_with_no_subscribers() {
+        // A transmitting radar drives downstream consumers we may not see
+        // directly (MFDs over multicast, recording, ARPA targets via the
+        // tracker channel). Never idle while it's broadcasting useful data.
+        assert!(!should_idle(Some(Power::Transmit as i32), 0));
+    }
+
+    #[test]
+    fn should_idle_no_when_standby_with_subscribers() {
+        // Some client is watching the spoke stream — keep the pipeline hot
+        // so the moment the radar transitions to Transmit, the first frame
+        // is decoded and rendered without a tick of blank PPI.
+        assert!(!should_idle(Some(Power::Standby as i32), 1));
+    }
+
+    #[test]
+    fn should_idle_no_when_power_is_unknown() {
+        // Before the radar has reported its first Status frame we don't
+        // know its state. Default to processing frames so we never blank
+        // the PPI for a viewer that connects very early in startup.
+        assert!(!should_idle(None, 0));
     }
 
     mod test_helpers {
