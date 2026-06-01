@@ -1915,18 +1915,22 @@ function convertTimeToSeconds(value, units) {
 }
 
 function getOperatingTime() {
-  const onTimeUnits = getControl("operatingTime")?.units || "s";
-  const txTimeUnits = getControl("transmitTime")?.units || "s";
+  const onTimeControl = getControl("operatingTime");
+  const txTimeControl = getControl("transmitTime");
 
   return {
-    onTime: convertTimeToSeconds(
-      myr_control_values.operatingTime?.value || 0,
-      onTimeUnits
-    ),
-    txTime: convertTimeToSeconds(
-      myr_control_values.transmitTime?.value || 0,
-      txTimeUnits
-    ),
+    onTime: onTimeControl
+      ? convertTimeToSeconds(
+          myr_control_values.operatingTime?.value || 0,
+          onTimeControl.units || "s"
+        )
+      : null,
+    txTime: txTimeControl
+      ? convertTimeToSeconds(
+          myr_control_values.transmitTime?.value || 0,
+          txTimeControl.units || "s"
+        )
+      : null,
   };
 }
 

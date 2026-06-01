@@ -140,8 +140,8 @@ class PPI {
 
     // Power mode state
     this.powerMode = "off";
-    this.onTimeSeconds = 0;
-    this.txTimeSeconds = 0;
+    this.onTimeSeconds = null;
+    this.txTimeSeconds = null;
 
     // Guard zones and no-transmit sectors
     this.guardZones = [null, null];
@@ -356,8 +356,8 @@ class PPI {
     const isStandby = powerMode !== "transmit";
     const wasStandby = this.powerMode !== "transmit";
     this.powerMode = powerMode;
-    this.onTimeSeconds = onTimeSeconds || 0;
-    this.txTimeSeconds = txTimeSeconds || 0;
+    this.onTimeSeconds = onTimeSeconds ?? null;
+    this.txTimeSeconds = txTimeSeconds ?? null;
 
     if (isStandby && !wasStandby) {
       this.clearRadarDisplay();
@@ -950,7 +950,10 @@ class PPI {
       return;
     }
 
-    const showTimes = this.powerMode === "standby";
+    const hasOnTime = this.onTimeSeconds !== null;
+    const hasTxTime = this.txTimeSeconds !== null;
+    const showTimes =
+      this.powerMode === "standby" && (hasOnTime || hasTxTime);
     const standbyY = showTimes ? this.center_y - 40 : this.center_y;
 
     ctx.fillText(this.powerMode.toUpperCase(), this.center_x, standbyY);
@@ -959,12 +962,16 @@ class PPI {
       ctx.font = "bold 20px/1 Verdana, Geneva, sans-serif";
       let yOffset = this.center_y + 10;
 
-      const onTimeStr = this.#formatSecondsAsTimeZero(this.onTimeSeconds);
-      ctx.fillText("ON-TIME: " + onTimeStr, this.center_x, yOffset);
-      yOffset += 30;
+      if (hasOnTime) {
+        const onTimeStr = this.#formatSecondsAsTimeZero(this.onTimeSeconds);
+        ctx.fillText("ON-TIME: " + onTimeStr, this.center_x, yOffset);
+        yOffset += 30;
+      }
 
-      const txTimeStr = this.#formatSecondsAsTimeZero(this.txTimeSeconds);
-      ctx.fillText("TX-TIME: " + txTimeStr, this.center_x, yOffset);
+      if (hasTxTime) {
+        const txTimeStr = this.#formatSecondsAsTimeZero(this.txTimeSeconds);
+        ctx.fillText("TX-TIME: " + txTimeStr, this.center_x, yOffset);
+      }
     }
 
     ctx.restore();
