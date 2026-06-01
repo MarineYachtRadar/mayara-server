@@ -578,6 +578,8 @@ impl NavicoReportReceiver {
                         // This enables Doppler returns from the HALO radars.
                         self.send_info_packets().await?;
                     }
+                    // Re-evaluate idle mode (Standby + no spoke subscribers).
+                    self.common.info.refresh_idle_flag();
                 },
 
                 r = self.report_socket.as_mut().unwrap().recv_buf_from(&mut self.report_buf)  => {
@@ -611,7 +613,13 @@ impl NavicoReportReceiver {
                 r = self.data_socket.as_mut().unwrap().recv_buf_from(&mut self.data_buf)  => {
                     match r {
                         Ok(_) => {
-                            self.process_frame();
+                            // Drain the socket but skip decoding while idle
+                            // (Standby + no spoke subscribers). The Navico
+                            // spoke decoder is stateless per frame, so no
+                            // delta-buffer reset is needed on wake-up.
+                            if !self.common.info.is_idle() {
+                                self.process_frame();
+                            }
                             self.data_buf.clear();
                         },
                         Err(e) => {
@@ -860,6 +868,12 @@ impl NavicoReportReceiver {
                 bail!("{}: Unknown radar status {}", self.common.key, status);
             }
         };
+        // An external power-on (another MFD, the radar's own button) must
+        // resume decoding on the next frame rather than waiting for the
+        // periodic idle re-check.
+        if status != Power::Standby {
+            self.common.info.wake_up();
+        }
         self.common
             .set_value(&ControlId::Power, status as i32 as f64);
         Ok(())
