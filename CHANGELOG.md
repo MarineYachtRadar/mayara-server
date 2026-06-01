@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **enduser:** explain heading requirement for AIS/ARPA overlays (#302) ([PR #302](https://github.com/MarineYachtRadar/mayara-server/pull/302))
 - **internals:** add radar_pi comparison guide for C++ developers (#266) ([PR #266](https://github.com/MarineYachtRadar/mayara-server/pull/266))
+- **building:** update feature list to match Cargo.toml (#307) ([PR #307](https://github.com/MarineYachtRadar/mayara-server/pull/307))
 
 ### Fixed
 
