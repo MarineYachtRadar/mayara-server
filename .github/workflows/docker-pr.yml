@@ -1,0 +1,154 @@
+name: Docker PR test image
+
+# Builds an opt-in Docker test image for a single pull request, tagged `pr<NUMBER>`
+# (e.g. `pr123`). Maintainers enable it by adding the `build-image` label to a PR;
+# while the label is present, the image is rebuilt on every push to the PR. Removing
+# the label stops further builds. Because adding labels is restricted to maintainers,
+# this also gates the build on pull requests from forks.
+
+on:
+  pull_request:
+    types: [labeled, synchronize, reopened]
+
+concurrency:
+  group: docker-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  LABEL: build-image
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}
+    if: contains(github.event.pull_request.labels.*.name, 'build-image')
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - platform: linux/amd64
+            target: x86_64-unknown-linux-musl
+          - platform: linux/arm64
+            target: aarch64-unknown-linux-musl
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v6
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Install Cross
+      run: cargo install cross
+
+    - name: Build binary
+      run: cross build --release --target ${{ matrix.target }}
+
+    - name: Upload binary
+      uses: actions/upload-artifact@v7
+      with:
+        name: docker-pr-${{ matrix.target }}
+        path: target/${{ matrix.target }}/release/mayara-server
+        overwrite: true
+
+  push:
+    name: Build and push Docker image
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      pull-requests: write
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v6
+
+    - name: Download amd64 binary
+      uses: actions/download-artifact@v8
+      with:
+        name: docker-pr-x86_64-unknown-linux-musl
+        path: build/linux/amd64
+
+    - name: Download arm64 binary
+      uses: actions/download-artifact@v8
+      with:
+        name: docker-pr-aarch64-unknown-linux-musl
+        path: build/linux/arm64
+
+    - name: Make binaries executable
+      run: chmod +x build/linux/*/mayara-server
+
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v4
+
+    - name: Log in to GitHub Container Registry
+      uses: docker/login-action@v4
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v6
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        tags: |
+          type=raw,value=pr${{ github.event.pull_request.number }}
+          type=raw,value=pr${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+
+    - name: Build and push
+      uses: docker/build-push-action@v7
+      with:
+        context: .
+        file: docker/Dockerfile.ci
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+
+    - name: Comment image reference on PR
+      uses: actions/github-script@v8
+      with:
+        script: |
+          const ref = `${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}`.toLowerCase();
+          const pr = context.payload.pull_request.number;
+          const sha = context.payload.pull_request.head.sha.slice(0, 7);
+          const marker = '<!-- docker-pr-test-image -->';
+          const body = [
+            marker,
+            `🐳 **Docker test image built** for this PR (commit \`${sha}\`):`,
+            '',
+            '```',
+            `docker pull ${ref}:pr${pr}`,
+            '```',
+            '',
+            `Multi-arch (linux/amd64, linux/arm64). Remove the \`${{ env.LABEL }}\` label to stop rebuilding.`,
+          ].join('\n');
+
+          const { data: comments } = await github.rest.issues.listComments({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: pr,
+          });
+          const existing = comments.find((c) => c.body && c.body.includes(marker));
+          if (existing) {
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: existing.id,
+              body,
+            });
+          } else {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr,
+              body,
+            });
+          }
