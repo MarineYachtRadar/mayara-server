@@ -338,14 +338,18 @@ function subscribeToHeading() {
                 }
                 onHeadingReceived();
                 updateHeadingDisplay();
-              } else if (
-                value.path === "navigation.headingMagnetic" &&
-                value.value != null
-              ) {
+              } else if (value.path === "navigation.headingMagnetic") {
                 // Display-only: feeds the HdgT/HdgM readout toggle. Plotting
-                // never uses this — it stays on the canonical true heading.
-                magneticHeading = value.value; // Already in radians
-                haveMagneticHeading = true;
+                // never uses this — it stays on the canonical true heading. A
+                // null value means the magnetic source dropped out, so clear
+                // the state to remove the HdgM option and toggle affordance.
+                if (value.value != null) {
+                  magneticHeading = value.value; // Already in radians
+                  haveMagneticHeading = true;
+                } else {
+                  magneticHeading = 0;
+                  haveMagneticHeading = false;
+                }
                 refreshPositionBoxHeading();
                 updateHeadingDisplayToggle();
               } else if (
