@@ -24,5 +24,13 @@ RUN apk add --no-cache tini \
 COPY --from=builder /usr/src/mayara-server/target/release/mayara-server /usr/local/bin/mayara-server
 USER mayara
 EXPOSE 6502
+# Probe the always-served, unauthenticated discovery doc so the container
+# reports healthy once mayara's HTTP server is up. Deliberately checks only
+# mayara itself, not the upstream Signal K connection — a boat offline from
+# Signal K still runs a healthy radar server. Uses BusyBox wget (already in
+# the Alpine base; no curl). The in-container port is always 6502 regardless
+# of how Signal K proxies it externally.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD wget -q -O /dev/null http://127.0.0.1:6502/signalk || exit 1
 ENTRYPOINT ["tini", "--"]
 CMD ["mayara-server"]
