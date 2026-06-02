@@ -113,8 +113,11 @@ jobs:
         platforms: linux/amd64,linux/arm64
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
-        # Force Docker (non-OCI) media types so the image config keeps the
+        # Keep Docker (non-OCI) media types so the image config retains the
         # Dockerfile HEALTHCHECK — the OCI image spec has no healthcheck field,
-        # and buildx defaults multi-platform builds to OCI, which silently
-        # drops it. (Replaces the `push: true` shorthand.)
+        # and buildx defaults multi-platform builds to OCI, dropping it.
+        # `oci-mediatypes=false` sets the manifest format; `provenance: false`
+        # is also required because a provenance attestation forces an OCI image
+        # index regardless, which re-OCIs the whole push. (Replaces `push: true`.)
         outputs: type=image,oci-mediatypes=false,push=true
+        provenance: false
