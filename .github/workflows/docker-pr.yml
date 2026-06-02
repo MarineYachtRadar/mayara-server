@@ -109,9 +109,13 @@ jobs:
         context: .
         file: docker/Dockerfile.ci
         platforms: linux/amd64,linux/arm64
-        push: true
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
+        # Force Docker (non-OCI) media types so the image config keeps the
+        # Dockerfile HEALTHCHECK — the OCI image spec has no healthcheck field,
+        # and buildx defaults multi-platform builds to OCI, which silently
+        # drops it. (Replaces the `push: true` shorthand.)
+        outputs: type=image,oci-mediatypes=false,push=true
 
     - name: Comment image reference on PR
       uses: actions/github-script@v8
