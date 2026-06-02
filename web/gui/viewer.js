@@ -452,6 +452,14 @@ function navStatusMessage(nav) {
     nav.transport === "tcp";
   if (!skTransport) return null;
 
+  // Upstream nav was once flowing but has gone stale (no fresh deltas) — the
+  // connection dropped or the device token was revoked. mayara clears the
+  // frozen value, so have_position is false; nav_age_seconds being set (not
+  // null) is what distinguishes "we had it and lost it" from "never had it".
+  if (!nav.nav_live && nav.token_present && nav.nav_age_seconds != null) {
+    return "SignalK navigation lost — connection dropped or token revoked. Re-approve in Security → Access Requests.";
+  }
+
   if (!nav.have_position) {
     return "No SignalK navigation yet — own-ship position & AIS unavailable.";
   }

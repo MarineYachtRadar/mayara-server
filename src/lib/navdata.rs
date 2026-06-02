@@ -43,6 +43,29 @@ static SOG: AtomicF64 = AtomicF64::new(f64::NAN);
 /// Broadcast sender for navigation updates to GUI clients
 static NAV_BROADCAST_TX: OnceLock<tokio::sync::broadcast::Sender<SignalKDelta>> = OnceLock::new();
 
+/// Wall-clock-ish timestamp (a process `Instant`) of the last own-ship
+/// navigation update (heading or position) received from the upstream. Used
+/// to report freshness on `/signalk` so a GUI can tell a live heading from a
+/// frozen last-known value left behind when the upstream connection dropped
+/// (e.g. a revoked token). `None` until the first own-ship nav arrives.
+static LAST_OWN_SHIP_NAV: OnceLock<std::sync::Mutex<Option<std::time::Instant>>> = OnceLock::new();
+
+fn mark_own_ship_nav_fresh() {
+    let lock = LAST_OWN_SHIP_NAV.get_or_init(|| std::sync::Mutex::new(None));
+    if let Ok(mut guard) = lock.lock() {
+        *guard = Some(std::time::Instant::now());
+    }
+}
+
+/// Seconds since the last own-ship nav update, or `None` if none has ever
+/// arrived. A large value means the upstream stopped delivering (frozen nav).
+pub fn own_ship_nav_age_secs() -> Option<u64> {
+    LAST_OWN_SHIP_NAV
+        .get()
+        .and_then(|lock| lock.lock().ok())
+        .and_then(|guard| guard.map(|t| t.elapsed().as_secs()))
+}
+
 /// Initialize the navigation broadcast sender (called once at startup)
 pub fn init_nav_broadcast(tx: tokio::sync::broadcast::Sender<SignalKDelta>) {
     let _ = NAV_BROADCAST_TX.set(tx);
@@ -145,12 +168,24 @@ pub struct NavStatus {
     /// A Signal K bearer token is configured (so the AIS REST snapshot can be
     /// fetched). Only meaningful for `ws`/`wss`/`mdns` transports.
     pub token_present: bool,
-    /// Own-ship position has been received from the upstream — the clearest
-    /// signal that navigation deltas are actually flowing.
+    /// Own-ship position is currently known. Cleared when the upstream
+    /// disconnects, so this reflects live state, not "ever seen".
     pub have_position: bool,
+    /// Seconds since the last own-ship nav update, or `null` if none has
+    /// arrived (or it was cleared on disconnect). A large value paired with
+    /// `have_position: false` is the signature of a dropped/revoked upstream.
+    pub nav_age_seconds: Option<u64>,
+    /// Whether own-ship nav is considered live (fresh within
+    /// `NAV_STALE_AFTER_SECS`). `false` means the GUI is showing — or has
+    /// dropped — a frozen value because the upstream stopped delivering.
+    pub nav_live: bool,
     /// Number of AIS targets currently held in the store.
     pub ais_count: usize,
 }
+
+/// Own-ship nav older than this is considered stale. Upstream nav normally
+/// arrives every 0.2–1 s; a multi-second gap means the source stopped.
+const NAV_STALE_AFTER_SECS: u64 = 10;
 
 /// Assemble the current navigation status from process-wide state. Lives in
 /// the library so it can read the crate-private token accessor; the binary
@@ -176,10 +211,13 @@ pub fn nav_status(args: &Cli) -> NavStatus {
     };
 
     let (lat, lon) = get_position();
+    let nav_age_seconds = own_ship_nav_age_secs();
     NavStatus {
         transport,
         token_present: crate::signalk::get_signalk_token().is_some(),
         have_position: lat.is_some() && lon.is_some(),
+        nav_age_seconds,
+        nav_live: nav_age_seconds.is_some_and(|age| age < NAV_STALE_AFTER_SECS),
         ais_count: get_ais_store()
             .map(|s| s.get_all_active().len())
             .unwrap_or(0),
@@ -366,6 +404,7 @@ pub(crate) fn set_heading_true(heading: Option<f64>, source: &str) {
         }
         let h = h.rem_euclid(TAU);
 
+        mark_own_ship_nav_fresh();
         let old = HEADING_TRUE.swap(h, Ordering::AcqRel);
         // Only broadcast if value changed significantly (> 0.001 rad ~ 0.06 deg)
         if (old - h).abs() > 0.001 || old.is_nan() {
@@ -476,6 +515,7 @@ pub fn get_position() -> (Option<f64>, Option<f64>) {
 pub(crate) fn set_position(lat: Option<f64>, lon: Option<f64>, source: &str) {
     if let (Some(lat), Some(lon)) = (lat, lon) {
         log::trace!("navdata::set_position(lat={}, lon={})", lat, lon);
+        mark_own_ship_nav_fresh();
         let old_lat = POSITION_LAT.swap(lat, Ordering::AcqRel);
         let old_lon = POSITION_LON.swap(lon, Ordering::AcqRel);
         let was_valid = POSITION_VALID.swap(true, Ordering::AcqRel);
@@ -491,6 +531,28 @@ pub(crate) fn set_position(lat: Option<f64>, lon: Option<f64>, source: &str) {
     } else {
         POSITION_VALID.store(false, Ordering::Release);
         return;
+    }
+}
+
+/// Drop the last-known own-ship heading and position when the upstream
+/// navigation source disconnects, so the GUI shows "no data" rather than a
+/// frozen value that silently drifts from reality (e.g. after a revoked
+/// token kills the WS). Only own-ship nav is cleared; AIS targets age out on
+/// their own timeout. Resets the freshness clock too. Skips the clear when no
+/// own-ship nav was ever received, so a transport that never carried nav
+/// (e.g. anonymous tcp on a hidden-vessels server) doesn't churn broadcasts.
+pub(crate) fn clear_own_ship_nav() {
+    if own_ship_nav_age_secs().is_none() {
+        return;
+    }
+    set_heading_true(None, "disconnect");
+    set_position(None, None, "disconnect");
+    set_cog(None);
+    set_sog(None);
+    if let Some(lock) = LAST_OWN_SHIP_NAV.get() {
+        if let Ok(mut guard) = lock.lock() {
+            *guard = None;
+        }
     }
 }
 
@@ -776,6 +838,11 @@ impl NavigationData {
         if matches!(result, Err(RadarError::Shutdown)) {
             return;
         }
+        // The upstream dropped (network drop, server restart, or a revoked
+        // token rejected on reconnect). Drop the last-known own-ship heading
+        // and position so the GUI shows "no data" instead of a frozen value
+        // that keeps drifting from reality until the connection comes back.
+        clear_own_ship_nav();
         let delivered = SIGNALK_DELIVERED_DATA.swap(false, std::sync::atomic::Ordering::SeqCst);
         let own_ship = SIGNALK_OWN_SHIP_NAV_SEEN.swap(false, std::sync::atomic::Ordering::SeqCst);
         if own_ship {
@@ -1685,6 +1752,41 @@ mod tests {
             assert!(parsed_ok, "ConnectionType::parse changed for {scheme}");
             // ...and nav_status must map it to the matching string.
             assert_eq!(nav_status(&cli(&["-n", &arg])).transport, expected);
+        }
+    }
+
+    // ----- nav freshness / staleness (revoked-token / dropped upstream) -----
+
+    // These exercise process-global nav state. nav_status reads shared atomics
+    // that other tests also write, so assertions are kept to facts that hold
+    // regardless of parallel writers (freshness is monotonic right after a set;
+    // a clear drops the freshness clock) rather than global absence.
+
+    #[test]
+    fn marking_nav_fresh_makes_it_live() {
+        // Receiving own-ship nav stamps the freshness clock: age is small and
+        // nav_live is true. (Safe under parallelism: a set can only make nav
+        // *fresher*, never staler, between the set and the read.)
+        set_heading_true(Some(1.0), "test");
+        let age = own_ship_nav_age_secs();
+        assert!(
+            age.is_some_and(|a| a < NAV_STALE_AFTER_SECS),
+            "age should be fresh right after a set, got {age:?}"
+        );
+        assert!(
+            nav_status(&cli(&["-n", "ws:127.0.0.1:80"])).nav_live,
+            "nav should be live right after an update"
+        );
+    }
+
+    #[test]
+    fn nav_status_includes_freshness_fields() {
+        // The /signalk contract: nav_age_seconds + nav_live are always present.
+        // nav_live must be false whenever age is unknown or beyond the cutoff.
+        let s = nav_status(&cli(&["-n", "tcp:127.0.0.1:8375"]));
+        match s.nav_age_seconds {
+            None => assert!(!s.nav_live, "no age must mean not live"),
+            Some(age) => assert_eq!(s.nav_live, age < NAV_STALE_AFTER_SECS),
         }
     }
 
