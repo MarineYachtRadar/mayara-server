@@ -410,7 +410,6 @@ function subscribeToHeading() {
 // that auto-clears once the condition resolves.
 // ---------------------------------------------------------------------------
 
-let statusPollAttempts = 0;
 const STATUS_POLL_OK_MS = 30000; // healthy: re-check occasionally
 const STATUS_POLL_WAIT_MS = 5000; // a banner is showing: re-check sooner
 
@@ -422,6 +421,9 @@ function ensureStatusBanner() {
     banner = document.createElement("div");
     banner.id = "myr_status_banner";
     banner.className = "myr_status_banner";
+    // Announce the message to screen readers when it appears/changes.
+    banner.setAttribute("role", "status");
+    banner.setAttribute("aria-live", "polite");
     banner.style.display = "none";
     container.appendChild(banner);
   }
@@ -473,30 +475,32 @@ function navStatusMessage(nav) {
 }
 
 async function pollUpstreamStatus() {
+  let reachable = false;
   let message = null;
   try {
     const res = await fetch(apiBase("/signalk"), {
       headers: { Accept: "application/json" },
     });
     if (res.ok) {
+      reachable = true;
       const data = await res.json();
       message = navStatusMessage(data?.nav);
     }
   } catch {
-    // Network blip — leave the banner as-is and retry on the next tick.
+    // Network blip — often the same trouble the banner is reporting. Leave
+    // any existing banner as-is rather than clearing it on a failed fetch.
   }
 
-  if (message) {
-    showStatusBanner(message);
-    statusPollAttempts += 1;
-  } else {
-    hideStatusBanner();
-    statusPollAttempts = 0;
+  // Only mutate the banner when we actually heard back from mayara, so a
+  // transient fetch failure doesn't drop an active warning.
+  if (reachable) {
+    if (message) showStatusBanner(message);
+    else hideStatusBanner();
   }
 
-  // Re-check sooner while something is wrong so the banner clears promptly
-  // once the operator approves the request; back off when all is well.
-  const delay = message ? STATUS_POLL_WAIT_MS : STATUS_POLL_OK_MS;
+  // Re-check sooner while something is wrong (or unreachable) so the banner
+  // clears promptly once resolved; back off only when all is well.
+  const delay = message || !reachable ? STATUS_POLL_WAIT_MS : STATUS_POLL_OK_MS;
   setTimeout(pollUpstreamStatus, delay);
 }
 
