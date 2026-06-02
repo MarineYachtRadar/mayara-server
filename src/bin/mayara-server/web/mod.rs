@@ -264,6 +264,11 @@ impl Web {
 struct Endpoints {
     endpoints: HashMap<String, Endpoint>,
     server: Server,
+    /// mayara-specific upstream-navigation health, so a GUI can surface why
+    /// own-ship position / AIS may be missing. Not part of the Signal K spec;
+    /// ignored by standard clients.
+    #[schema(value_type = Object)]
+    nav: mayara::navdata::NavStatus,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -544,6 +549,7 @@ async fn endpoints(State(state): State<Web>, headers: hyper::header::HeaderMap) 
             version: VERSION,
             id: PACKAGE,
         },
+        nav: mayara::navdata::nav_status(&state.args),
     };
     endpoints.endpoints.insert(
         "v2".to_string(),

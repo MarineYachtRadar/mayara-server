@@ -228,6 +228,10 @@ window.onload = async function () {
   // Subscribe to SignalK heading delta (only in SignalK mode)
   subscribeToHeading();
 
+  // Poll mayara's upstream-nav status and surface a banner when own-ship
+  // position / AIS are unavailable (most often an unapproved SignalK token).
+  pollUpstreamStatus();
+
   // Create hamburger menu button and setup controls toggle
   createHamburgerMenu();
 
@@ -392,6 +396,112 @@ function subscribeToHeading() {
     );
     setTimeout(subscribeToHeading, delay);
   };
+}
+
+// ---------------------------------------------------------------------------
+// Upstream-navigation status banner
+//
+// Own-ship position and AIS reach the GUI through mayara's own `/signalk`
+// stream, which mayara relays from its upstream Signal K `-n` connection.
+// When that upstream needs an unapproved device token, mayara runs anonymous
+// (`tcp:`) — nav still flows but the authenticated AIS REST seed is skipped,
+// so the overlay stays empty with no on-screen explanation. We poll the
+// `nav` block mayara reports on `/signalk` and surface a non-blocking banner
+// that auto-clears once the condition resolves.
+// ---------------------------------------------------------------------------
+
+const STATUS_POLL_OK_MS = 30000; // healthy: re-check occasionally
+const STATUS_POLL_WAIT_MS = 5000; // a banner is showing: re-check sooner
+
+function ensureStatusBanner() {
+  let banner = document.getElementById("myr_status_banner");
+  if (!banner) {
+    const container = document.querySelector(".myr_ppi");
+    if (!container) return null;
+    banner = document.createElement("div");
+    banner.id = "myr_status_banner";
+    banner.className = "myr_status_banner";
+    // Announce the message to screen readers when it appears/changes.
+    banner.setAttribute("role", "status");
+    banner.setAttribute("aria-live", "polite");
+    banner.style.display = "none";
+    container.appendChild(banner);
+  }
+  return banner;
+}
+
+function showStatusBanner(message) {
+  const banner = ensureStatusBanner();
+  if (!banner) return;
+  banner.textContent = `⚠ ${message}`;
+  banner.style.display = "block";
+}
+
+function hideStatusBanner() {
+  const banner = document.getElementById("myr_status_banner");
+  if (banner) banner.style.display = "none";
+}
+
+// Map mayara's reported `nav` block to a banner message, or null when nothing
+// needs surfacing. `transport` of `static`/`nmea0183`/`udp` is a deliberate
+// non-Signal-K nav source, so we never nag about a missing token/AIS there.
+function navStatusMessage(nav) {
+  if (!nav) return null;
+  const skTransport =
+    nav.transport === "ws" ||
+    nav.transport === "wss" ||
+    nav.transport === "mdns" ||
+    nav.transport === "tcp";
+  if (!skTransport) return null;
+
+  // Upstream nav was once flowing but has gone stale (no fresh deltas) — the
+  // connection dropped or the device token was revoked. mayara clears the
+  // frozen value, so have_position is false; nav_age_seconds being set (not
+  // null) is what distinguishes "we had it and lost it" from "never had it".
+  if (!nav.nav_live && nav.token_present && nav.nav_age_seconds != null) {
+    return "SignalK navigation lost — connection dropped or token revoked. Re-approve in Security → Access Requests.";
+  }
+
+  if (!nav.have_position) {
+    return "No SignalK navigation yet — own-ship position & AIS unavailable.";
+  }
+  // Position is flowing but the authenticated AIS seed needs a token. `tcp:`
+  // can't carry one, and ws/wss without a token means the request is still
+  // pending or was denied.
+  if (!nav.token_present && nav.ais_count === 0) {
+    return "Waiting for SignalK token approval — open Security → Access Requests to enable AIS.";
+  }
+  return null;
+}
+
+async function pollUpstreamStatus() {
+  let reachable = false;
+  let message = null;
+  try {
+    const res = await fetch(apiBase("/signalk"), {
+      headers: { Accept: "application/json" },
+    });
+    if (res.ok) {
+      reachable = true;
+      const data = await res.json();
+      message = navStatusMessage(data?.nav);
+    }
+  } catch {
+    // Network blip — often the same trouble the banner is reporting. Leave
+    // any existing banner as-is rather than clearing it on a failed fetch.
+  }
+
+  // Only mutate the banner when we actually heard back from mayara, so a
+  // transient fetch failure doesn't drop an active warning.
+  if (reachable) {
+    if (message) showStatusBanner(message);
+    else hideStatusBanner();
+  }
+
+  // Re-check sooner while something is wrong (or unreachable) so the banner
+  // clears promptly once resolved; back off only when all is well.
+  const delay = message || !reachable ? STATUS_POLL_WAIT_MS : STATUS_POLL_OK_MS;
+  setTimeout(pollUpstreamStatus, delay);
 }
 
 // Subscribe to vessels.* on Signal K and aggregate per-MMSI updates into the
