@@ -269,6 +269,23 @@ struct Endpoints {
     /// ignored by standard clients.
     #[schema(value_type = Object)]
     nav: mayara::navdata::NavStatus,
+    /// mayara-specific per-radar health, so a GUI can surface a radar that was
+    /// discovered but announced no data stream (e.g. a Quantum behind a WiFi
+    /// access point). Not part of the Signal K spec; ignored by standard
+    /// clients.
+    radars: Vec<RadarHealth>,
+}
+
+/// Health summary for a single discovered radar, surfaced on the `/signalk`
+/// endpoint alongside `nav` for the GUI status banner.
+#[derive(Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+struct RadarHealth {
+    /// Radar id (e.g. `ray0000`).
+    id: String,
+    /// False when the radar announced no usable spoke/report address, so no
+    /// radar image can appear until the network path is fixed.
+    data_stream_missing: bool,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -543,6 +560,19 @@ async fn endpoints(State(state): State<Web>, headers: hyper::header::HeaderMap) 
     let (host, http_scheme, ws_scheme) =
         derive_public_base(&headers, state.tls, state.args.port);
 
+    // Surface only radars that need attention; a healthy fleet sends an empty
+    // list so the GUI shows nothing.
+    let radars = state
+        .radars
+        .get_all()
+        .iter()
+        .filter(|info| !info.has_data_stream())
+        .map(|info| RadarHealth {
+            id: info.key(),
+            data_stream_missing: true,
+        })
+        .collect();
+
     let mut endpoints = Endpoints {
         endpoints: HashMap::new(),
         server: Server {
@@ -550,6 +580,7 @@ async fn endpoints(State(state): State<Web>, headers: hyper::header::HeaderMap) 
             id: PACKAGE,
         },
         nav: mayara::navdata::nav_status(&state.args),
+        radars,
     };
     endpoints.endpoints.insert(
         "v2".to_string(),

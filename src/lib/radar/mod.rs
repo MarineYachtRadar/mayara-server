@@ -425,6 +425,16 @@ impl RadarInfo {
         info
     }
 
+    /// Whether the radar advertised a usable address to receive spoke/report
+    /// data on. Some radars (observed: a Quantum reachable only through a
+    /// Raymarine MFD acting as a WiFi access point) announce an unspecified
+    /// `report_addr` of `0.0.0.0`, so there is no multicast group to join and
+    /// no spokes ever arrive. Callers use this to surface the condition rather
+    /// than silently failing to bind the report socket.
+    pub fn has_data_stream(&self) -> bool {
+        !self.report_addr.ip().is_unspecified()
+    }
+
     pub fn new_client_subscription(&self) -> tokio::sync::broadcast::Receiver<ControlValue> {
         self.controls.new_client_subscription()
     }
@@ -767,6 +777,15 @@ impl SharedRadars {
             .filter(|i| i.ranges.len() > 0)
             .count()
             > 0
+    }
+
+    /// All discovered radars, including ones not yet "active" (no ranges yet).
+    /// Unlike `get_active`, this includes a radar that was found but is not
+    /// streaming — e.g. one that announced no data stream — so its health can
+    /// be surfaced to the operator.
+    pub fn get_all(&self) -> Vec<RadarInfo> {
+        let radars = self.radars.read().unwrap();
+        radars.info.values().cloned().collect()
     }
 
     #[allow(dead_code)]

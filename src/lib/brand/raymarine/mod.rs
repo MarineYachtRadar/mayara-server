@@ -1,6 +1,6 @@
 use anyhow::{Error, bail};
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::{fmt, io};
 use tokio_graceful_shutdown::{SubsystemBuilder, SubsystemHandle};
@@ -209,6 +209,9 @@ struct RadarState {
 struct RaymarineLocator {
     args: Cli,
     ids: HashMap<LinkId, RadarState>,
+    // Radars already warned about announcing no data stream (report 0.0.0.0),
+    // so the once-per-second beacons don't repeat the warning every tick.
+    warned_no_data_stream: HashSet<LinkId>,
 }
 
 impl RaymarineLocator {
@@ -216,6 +219,7 @@ impl RaymarineLocator {
         RaymarineLocator {
             args,
             ids: HashMap::new(),
+            warned_no_data_stream: HashSet::new(),
         }
     }
 
@@ -301,6 +305,26 @@ impl RaymarineLocator {
 
                     let radar_addr: SocketAddrV4 = data.report.into();
                     let radar_send: SocketAddrV4 = data.command.into();
+
+                    // A healthy Quantum advertises a 232.x.x.x multicast group
+                    // here; an unspecified report address means there is no
+                    // stream to join (observed when the radar is reachable only
+                    // through a Raymarine MFD acting as a WiFi access point).
+                    // The radar is still listed so the operator can see it, but
+                    // no spokes will arrive — warn once with a remedy instead of
+                    // silently failing to bind the report socket.
+                    if radar_addr.ip().is_unspecified()
+                        && self.warned_no_data_stream.insert(link_id)
+                    {
+                        log::warn!(
+                            "{}: Quantum {} announced no data stream (report 0.0.0.0). \
+                             It is listed but no radar image will appear. Connect the \
+                             radar via wired Ethernet on mayara's network so it \
+                             advertises a data stream.",
+                            from,
+                            radar_send,
+                        );
+                    }
 
                     let location_info: RadarInfo = RadarInfo::new(
                         radars,
@@ -771,6 +795,57 @@ mod tests {
             r.report_addr,
             SocketAddrV4::new(Ipv4Addr::new(224, 29, 69, 231), 2566)
         );
+    }
+
+    /// A Quantum reachable only through a Raymarine MFD acting as a WiFi access
+    /// point announces an unspecified report address (0.0.0.0) — there is no
+    /// multicast group to join. The radar is still created (so it can be
+    /// listed) but `has_data_stream()` must report false so the GUI can warn.
+    /// Captured from a real Quantum2 (link_id 0xD681C8C3) behind an Axiom.
+    #[test]
+    fn decode_quantum_with_no_data_stream() {
+        let args = Cli::parse_from(["my_program"]);
+        const VIA: Ipv4Addr = Ipv4Addr::new(192, 168, 138, 50);
+
+        // 56-byte identity beacon: subtype 0x66, link_id D681C8C3, "QuantumRadar".
+        const DATA_56: [u8; 56] = [
+            0x01, 0x00, 0x00, 0x00, 0x66, 0x00, 0x00, 0x00, 0xC3, 0xC8, 0x81, 0xD6, 0x03, 0x01,
+            0x00, 0x00, 0x54, 0x8A, 0xA8, 0xC0, 0x51, 0x75, 0x61, 0x6E, 0x74, 0x75, 0x6D, 0x52,
+            0x61, 0x64, 0x61, 0x72, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+        ];
+        // 36-byte address beacon: report = 0.0.0.0:0, command = 192.168.138.84:2575.
+        const DATA_36: [u8; 36] = [
+            0x00, 0x00, 0x00, 0x00, 0xC3, 0xC8, 0x81, 0xD6, 0x28, 0x00, 0x00, 0x00, 0x03, 0x00,
+            0x64, 0x00, 0x06, 0x08, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x11, 0x00,
+            0x54, 0x8A, 0xA8, 0xC0, 0x0F, 0x0A, 0x37, 0x00,
+        ];
+
+        let radars = &SharedRadars::new();
+        let mut state = RaymarineLocator::new(args.clone());
+        // First 36 before identity is registered: nothing yet.
+        assert!(
+            state
+                .process_beacon_36_report(&DATA_36, &VIA, radars)
+                .unwrap()
+                .is_none()
+        );
+        state.process_beacon_56_report(&DATA_56, &VIA).unwrap();
+
+        let (info, model) = state
+            .process_beacon_36_report(&DATA_36, &VIA, radars)
+            .unwrap()
+            .expect("radar should be created even with no data stream");
+
+        assert_eq!(model, BaseModel::Quantum);
+        // The radar is created and reachable for commands...
+        assert_eq!(
+            info.send_command_addr,
+            SocketAddrV4::new(Ipv4Addr::new(192, 168, 138, 84), 2575)
+        );
+        // ...but it has no spoke/report stream.
+        assert!(info.report_addr.ip().is_unspecified());
+        assert!(!info.has_data_stream());
     }
 
     /// Parse fixture lines: `timestamp src_ip dst_ip:port payload_hex`

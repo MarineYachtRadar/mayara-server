@@ -474,6 +474,18 @@ function navStatusMessage(nav) {
   return null;
 }
 
+// Map mayara's reported `radars` health list to a banner message, or null.
+// A radar that was discovered but announced no data stream (e.g. a Quantum
+// reachable only through a Raymarine MFD acting as a WiFi access point) shows
+// nothing on screen with no explanation otherwise.
+function radarStatusMessage(radars) {
+  if (!Array.isArray(radars)) return null;
+  if (radars.some((r) => r.dataStreamMissing)) {
+    return "Radar found but it isn't sending data — connect the radar via wired Ethernet (it can't stream over the WiFi access point it's behind).";
+  }
+  return null;
+}
+
 async function pollUpstreamStatus() {
   let reachable = false;
   let message = null;
@@ -484,7 +496,9 @@ async function pollUpstreamStatus() {
     if (res.ok) {
       reachable = true;
       const data = await res.json();
-      message = navStatusMessage(data?.nav);
+      // Nav/connectivity issues take precedence; a missing radar data stream
+      // is surfaced when navigation itself is fine.
+      message = navStatusMessage(data?.nav) ?? radarStatusMessage(data?.radars);
     }
   } catch {
     // Network blip — often the same trouble the banner is reporting. Leave
