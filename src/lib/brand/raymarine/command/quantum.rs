@@ -62,9 +62,9 @@ pub async fn set_control(
             if auto == 0 {
                 command.send(&cmd).await?;
                 cmd.clear();
-                // Gain value is SetGainValue_t, lead 0x02 0x03 (firmware-verified
-                // against the Axiom MFD). Earlier code used 0x02 0x83, a radar_pi
-                // heritage value that is not a recognised message id.
+                // SetGainValue_t lead is 0x02 0x03 (value in wire byte 5).
+                // Axiom v4.09.167 libSystemFunctions SetThresholdValue@0x1cb4bdc
+                // sends id 02 03 28 00; radar_pi's 0x02 0x83 is not a valid id.
                 one_byte_command(&mut cmd, &[0x02, 0x03], v);
             }
         }
@@ -97,9 +97,10 @@ pub async fn set_control(
         }
         ControlId::InterferenceRejection => {
             // SetInterferenceRejection_t has no channel byte: the level is wire
-            // byte 4, not byte 5. `two_byte_command` writes the value little-endian
-            // so it lands in byte 4 (`one_byte_command` would put it in byte 5,
-            // leaving byte 4 = 0, i.e. always "off").
+            // byte 4. Axiom v4.09.167 libSystemFunctions SetInterferenceRejection
+            // @0x1cb50ac stores it at msg+12 (byte 4); IsValid@0x1cbbe10 bounds
+            // byte 4 < 6. two_byte_command writes the value LE into byte 4
+            // (one_byte_command would leave byte 4 = 0, i.e. always "off").
             two_byte_command(&mut cmd, &[0x11, 0x03], v as u16);
         }
         ControlId::Mode => {
