@@ -62,7 +62,10 @@ pub async fn set_control(
             if auto == 0 {
                 command.send(&cmd).await?;
                 cmd.clear();
-                one_byte_command(&mut cmd, &[0x02, 0x83], v);
+                // Gain value is SetGainValue_t, lead 0x02 0x03 (firmware-verified
+                // against the Axiom MFD). Earlier code used 0x02 0x83, a radar_pi
+                // heritage value that is not a recognised message id.
+                one_byte_command(&mut cmd, &[0x02, 0x03], v);
             }
         }
         ControlId::ColorGain => {
@@ -93,7 +96,11 @@ pub async fn set_control(
             one_byte_command(&mut cmd, &[0x0f, 0x03], v);
         }
         ControlId::InterferenceRejection => {
-            one_byte_command(&mut cmd, &[0x11, 0x03], v);
+            // SetInterferenceRejection_t has no channel byte: the level is wire
+            // byte 4, not byte 5. `two_byte_command` writes the value little-endian
+            // so it lands in byte 4 (`one_byte_command` would put it in byte 5,
+            // leaving byte 4 = 0, i.e. always "off").
+            two_byte_command(&mut cmd, &[0x11, 0x03], v as u16);
         }
         ControlId::Mode => {
             one_byte_command(&mut cmd, &[0x14, 0x03], v);
@@ -168,4 +175,28 @@ async fn send_no_transmit_cmd(
     cmd.extend_from_slice(&[sector]);
 
     Ok(cmd)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{one_byte_command, two_byte_command};
+
+    // Channel commands (gain, sea, rain, range, ...) carry channel in wire byte 4
+    // and the value in byte 5. `one_byte_command` must therefore place the value
+    // in byte 5 (byte 4 = 0).
+    #[test]
+    fn one_byte_command_puts_value_in_byte5() {
+        let mut cmd = Vec::new();
+        one_byte_command(&mut cmd, &[0x05, 0x03], 0x42);
+        assert_eq!(cmd, vec![0x05, 0x03, 0x28, 0x00, 0x00, 0x42, 0x00, 0x00]);
+    }
+
+    // SetInterferenceRejection_t has no channel byte: the level is wire byte 4.
+    // `two_byte_command` writes the value little-endian so it lands in byte 4.
+    #[test]
+    fn two_byte_command_puts_value_in_byte4() {
+        let mut cmd = Vec::new();
+        two_byte_command(&mut cmd, &[0x11, 0x03], 0x05);
+        assert_eq!(cmd, vec![0x11, 0x03, 0x28, 0x00, 0x05, 0x00, 0x00, 0x00]);
+    }
 }

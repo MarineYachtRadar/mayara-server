@@ -394,7 +394,8 @@ pub(super) fn process_info_report(receiver: &mut RaymarineReportReceiver, data: 
 }
 
 pub(super) fn process_doppler_report(receiver: &mut RaymarineReportReceiver, data: &[u8]) {
-    if data.len() < 1 {
+    // The doppler status byte is at offset 4, so we need at least 5 bytes.
+    if data.len() < 5 {
         log::warn!(
             "{}: Invalid data length for quantum doppler report: {}",
             receiver.common.key,
