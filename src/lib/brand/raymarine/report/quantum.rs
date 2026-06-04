@@ -193,6 +193,37 @@ impl StatusReport {
     }
 }
 
+// Status byte values in the Quantum 0x280002 status report.
+const STATUS_STANDBY: u8 = 0x00;
+const STATUS_TRANSMIT: u8 = 0x01;
+const STATUS_PREPARING: u8 = 0x02;
+const STATUS_OFF: u8 = 0x03;
+const STATUS_FAULT_SELF_TEST: u8 = 0x0a;
+
+/// Map a Quantum status-report byte to a `Power` state, logging anything
+/// outside the normal set. The self-test fault is surfaced distinctly rather
+/// than masked as "unknown" (observed on a faulty unit asked to transmit),
+/// though it still maps to Standby since the Power control has no fault state.
+/// `key` is only used for the log line.
+fn status_to_power(status: u8, key: &str) -> Power {
+    match status {
+        STATUS_STANDBY => Power::Standby,
+        STATUS_TRANSMIT => Power::Transmit,
+        STATUS_PREPARING => Power::Preparing,
+        STATUS_OFF => Power::Off,
+        STATUS_FAULT_SELF_TEST => {
+            log::warn!(
+                "{key}: radar reported FAULT status {STATUS_FAULT_SELF_TEST:#x} (self-test failure); no image will appear until it clears"
+            );
+            Power::Standby
+        }
+        other => {
+            log::warn!("{key}: unknown status 0x{other:02x}");
+            Power::Standby
+        }
+    }
+}
+
 pub(super) fn process_status_report(receiver: &mut RaymarineReportReceiver, data: &[u8]) {
     if receiver.model.is_none() {
         return;
@@ -205,16 +236,7 @@ pub(super) fn process_status_report(receiver: &mut RaymarineReportReceiver, data
     log::debug!("{}: Quantum report {:?}", receiver.common.key, report);
 
     // Update controls based on the report
-    let status = match report.status {
-        0x00 => Power::Standby,
-        0x01 => Power::Transmit,
-        0x02 => Power::Preparing,
-        0x03 => Power::Off,
-        _ => {
-            log::warn!("{}: Unknown status {}", receiver.common.key, report.status);
-            Power::Standby // Default to Standby if unknown
-        }
-    };
+    let status = status_to_power(report.status, &receiver.common.key);
     receiver
         .common
         .set_value(&ControlId::Power, status as i32 as f64);
@@ -394,4 +416,27 @@ pub(super) fn process_doppler_report(receiver: &mut RaymarineReportReceiver, dat
     receiver
         .common
         .set_value(&ControlId::Doppler, doppler as f64);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::status_to_power;
+    use crate::radar::Power;
+
+    #[test]
+    fn known_power_states() {
+        assert_eq!(status_to_power(0x00, "k"), Power::Standby);
+        assert_eq!(status_to_power(0x01, "k"), Power::Transmit);
+        assert_eq!(status_to_power(0x02, "k"), Power::Preparing);
+        assert_eq!(status_to_power(0x03, "k"), Power::Off);
+    }
+
+    #[test]
+    fn fault_and_unknown_fall_back_to_standby() {
+        // 0x0a is the self-test fault; other out-of-range values are unknown.
+        // Both map to Standby (the Power control has no fault state) but are
+        // logged distinctly.
+        assert_eq!(status_to_power(0x0a, "k"), Power::Standby);
+        assert_eq!(status_to_power(0xff, "k"), Power::Standby);
+    }
 }
