@@ -425,14 +425,14 @@ impl RadarInfo {
         info
     }
 
-    /// Whether the radar advertised a usable address to receive spoke/report
-    /// data on. Some radars (observed: a Quantum reachable only through a
-    /// Raymarine MFD acting as a WiFi access point) announce an unspecified
-    /// `report_addr` of `0.0.0.0`, so there is no multicast group to join and
-    /// no spokes ever arrive. Callers use this to surface the condition rather
-    /// than silently failing to bind the report socket.
+    /// Whether the radar advertised a usable address to receive spoke data on.
+    /// Some radars (observed: a Quantum reachable only through a Raymarine MFD
+    /// acting as a WiFi access point) announce an unspecified `0.0.0.0` spoke
+    /// address, so there is no multicast group to join and no spokes ever
+    /// arrive. Callers use this to surface the condition rather than silently
+    /// failing to bind the spoke socket.
     pub fn has_data_stream(&self) -> bool {
-        !self.report_addr.ip().is_unspecified()
+        !self.spoke_data_addr.ip().is_unspecified() && self.spoke_data_addr.port() != 0
     }
 
     pub fn new_client_subscription(&self) -> tokio::sync::broadcast::Receiver<ControlValue> {

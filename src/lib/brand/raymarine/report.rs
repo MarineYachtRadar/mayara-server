@@ -265,6 +265,18 @@ impl RaymarineReportReceiver {
     }
 
     pub(super) async fn run(mut self, subsys: &mut SubsystemHandle) -> Result<(), RadarError> {
+        // A radar that announced no data stream (report 0.0.0.0) can never bind
+        // a report socket; don't spin retrying forever. Exit so this subsystem
+        // ends — when the radar later advertises a real stream the locator
+        // re-registers it and starts a fresh receiver (see RaymarineLocator).
+        if self.common.info.report_addr.ip().is_unspecified() {
+            log::debug!(
+                "{}: no data stream (report 0.0.0.0); report receiver idle",
+                self.common.key
+            );
+            return Ok(());
+        }
+
         self.start_report_socket().await?;
         loop {
             if self.report_socket.is_some() {
