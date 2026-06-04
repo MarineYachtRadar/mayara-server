@@ -62,7 +62,10 @@ pub async fn set_control(
             if auto == 0 {
                 command.send(&cmd).await?;
                 cmd.clear();
-                one_byte_command(&mut cmd, &[0x02, 0x83], v);
+                // SetGainValue_t lead is 0x02 0x03 (value in wire byte 5).
+                // Axiom v4.09.167 libSystemFunctions SetThresholdValue@0x1cb4bdc
+                // sends id 02 03 28 00; radar_pi's 0x02 0x83 is not a valid id.
+                one_byte_command(&mut cmd, &[0x02, 0x03], v);
             }
         }
         ControlId::ColorGain => {
@@ -93,7 +96,12 @@ pub async fn set_control(
             one_byte_command(&mut cmd, &[0x0f, 0x03], v);
         }
         ControlId::InterferenceRejection => {
-            one_byte_command(&mut cmd, &[0x11, 0x03], v);
+            // SetInterferenceRejection_t has no channel byte: the level is wire
+            // byte 4. Axiom v4.09.167 libSystemFunctions SetInterferenceRejection
+            // @0x1cb50ac stores it at msg+12 (byte 4); IsValid@0x1cbbe10 bounds
+            // byte 4 < 6. two_byte_command writes the value LE into byte 4
+            // (one_byte_command would leave byte 4 = 0, i.e. always "off").
+            two_byte_command(&mut cmd, &[0x11, 0x03], v as u16);
         }
         ControlId::Mode => {
             one_byte_command(&mut cmd, &[0x14, 0x03], v);
@@ -168,4 +176,28 @@ async fn send_no_transmit_cmd(
     cmd.extend_from_slice(&[sector]);
 
     Ok(cmd)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{one_byte_command, two_byte_command};
+
+    // Channel commands (gain, sea, rain, range, ...) carry channel in wire byte 4
+    // and the value in byte 5. `one_byte_command` must therefore place the value
+    // in byte 5 (byte 4 = 0).
+    #[test]
+    fn one_byte_command_puts_value_in_byte5() {
+        let mut cmd = Vec::new();
+        one_byte_command(&mut cmd, &[0x05, 0x03], 0x42);
+        assert_eq!(cmd, vec![0x05, 0x03, 0x28, 0x00, 0x00, 0x42, 0x00, 0x00]);
+    }
+
+    // SetInterferenceRejection_t has no channel byte: the level is wire byte 4.
+    // `two_byte_command` writes the value little-endian so it lands in byte 4.
+    #[test]
+    fn two_byte_command_puts_value_in_byte4() {
+        let mut cmd = Vec::new();
+        two_byte_command(&mut cmd, &[0x11, 0x03], 0x05);
+        assert_eq!(cmd, vec![0x11, 0x03, 0x28, 0x00, 0x05, 0x00, 0x00, 0x00]);
+    }
 }
