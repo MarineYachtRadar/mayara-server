@@ -1,0 +1,5 @@
+# Force LF line endings on checkout regardless of the host's core.autocrlf
+# setting. Keeps diffs clean across platforms and the web/ assets byte-stable
+# — the GUI is compiled into the binary via rust-embed, so a CRLF checkout on
+# Windows would embed CRLF bytes into the served files.
+* text=auto eol=lf
