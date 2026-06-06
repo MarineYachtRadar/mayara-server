@@ -1,6 +1,7 @@
 use anyhow::{Error, bail};
 use std::collections::HashMap;
 use std::io;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::{Instant, sleep, sleep_until};
 use tokio_graceful_shutdown::SubsystemHandle;
@@ -13,7 +14,7 @@ use crate::radar::range::Ranges;
 use crate::radar::{BYTE_LOOKUP_LENGTH, CommonRadar, Legend, RadarError, RadarInfo, SharedRadars};
 
 // use super::command::Command;
-use super::BaseModel;
+use super::{BaseModel, ExternalControllerWitness};
 use super::command::Command;
 
 mod quantum;
@@ -23,6 +24,21 @@ mod rd;
 // Send the 1-second keep-alive every second, and the 5-second extended
 // keep-alive every 5th cycle.
 const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(1000);
+
+// WiFi wake nudge (`10 00 28 00 00 00 00 00`, == Power::Standby) — see
+// research/raymarine/radar-wakeup-analysis.md path A. Sent unicast to the
+// radar's command socket while we have a Quantum discovered but no status
+// report has arrived yet, on WAKE_INTERVAL cadence. Three gates keep us
+// from fighting another controller: base_model == Quantum (only family that
+// uses this id), state == Initial (closes the instant the first status
+// report arrives, so we never push a transmitting radar to standby), and
+// external_seen quiet for EXTERNAL_QUIET_WINDOW (closes the instant an MFD
+// / another mayara announces itself on the beacon group). The initial
+// OBSERVATION_WINDOW delay gives external controllers a chance to be heard
+// before our first nudge.
+const WAKE_INTERVAL: Duration = Duration::from_secs(3);
+const OBSERVATION_WINDOW: Duration = Duration::from_secs(5);
+const EXTERNAL_QUIET_WINDOW: Duration = Duration::from_secs(60);
 
 // The LookupSpokeEnum is an index into an array, really
 enum LookupDoppler {
@@ -102,9 +118,12 @@ pub(crate) struct RaymarineReportReceiver {
     report_socket: Option<RadarSocket>,
     state: ReceiverState,
     model: Option<RaymarineModel>,
+    base_model: BaseModel,
     command_sender: Option<Command>,
     heartbeat_deadline: Instant,
     heartbeat_counter: u32,
+    wake_deadline: Instant,
+    external_seen: Arc<ExternalControllerWitness>,
     reported_unknown: HashMap<u32, bool>,
     features: FeatureFlags,
     features_seen: bool,
@@ -120,6 +139,7 @@ impl RaymarineReportReceiver {
         info: RadarInfo, // Quick access to our own RadarInfo
         radars: SharedRadars,
         base_model: BaseModel,
+        external_seen: Arc<ExternalControllerWitness>,
     ) -> RaymarineReportReceiver {
         let key = info.key();
 
@@ -163,9 +183,12 @@ impl RaymarineReportReceiver {
             report_socket: None,
             state: ReceiverState::Initial,
             model: None, // We don't know this yet, it will be set when we receive the first info report
+            base_model,
             command_sender,
             heartbeat_deadline: now + HEARTBEAT_INTERVAL,
             heartbeat_counter: 0,
+            wake_deadline: now + OBSERVATION_WINDOW,
+            external_seen,
             reported_unknown: HashMap::new(),
             features: FeatureFlags::default(),
             features_seen: false,
@@ -211,6 +234,7 @@ impl RaymarineReportReceiver {
 
         loop {
             let heartbeat_deadline = self.heartbeat_deadline;
+            let wake_deadline = self.wake_deadline;
             tokio::select! {
                 _ = subsys.on_shutdown_requested() => {
                     log::debug!("{}: shutdown", self.common.key);
@@ -218,6 +242,9 @@ impl RaymarineReportReceiver {
                 },
                 _ = sleep_until(heartbeat_deadline) => {
                     self.send_heartbeat().await?;
+                },
+                _ = sleep_until(wake_deadline) => {
+                    self.maybe_send_wake_nudge().await?;
                 },
 
                 r = self.report_socket.as_mut().unwrap().recv_buf_from(&mut buf)  => {
@@ -247,6 +274,35 @@ impl RaymarineReportReceiver {
                 }
             }
         }
+    }
+
+    /// Fire of the wake-nudge timer. Sends the WiFi wake (`10 00 28 00 00…`)
+    /// unicast to the radar's command socket only if:
+    ///   - this is a Quantum (the RD family does not use this command id),
+    ///   - no status report has ever been received (state == Initial),
+    ///   - no external Raymarine controller has been observed within
+    ///     EXTERNAL_QUIET_WINDOW — see [`ExternalControllerWitness`].
+    /// Both base_model and the receiver state are monotonic, so once either
+    /// disqualifies us we silence the arm for the receiver's lifetime; the
+    /// witness gate can re-open and stays on the WAKE_INTERVAL cadence.
+    async fn maybe_send_wake_nudge(&mut self) -> Result<(), RadarError> {
+        if self.base_model != BaseModel::Quantum || self.state != ReceiverState::Initial {
+            self.wake_deadline = Instant::now() + Duration::from_secs(3600);
+            return Ok(());
+        }
+        self.wake_deadline += WAKE_INTERVAL;
+        if !self.external_seen.quiet_for(EXTERNAL_QUIET_WINDOW) {
+            log::debug!(
+                "{}: WiFi wake nudge suppressed — external controller seen recently",
+                self.common.key
+            );
+            return Ok(());
+        }
+        if let Some(ref mut cs) = self.command_sender {
+            log::info!("{}: sending WiFi wake nudge", self.common.key);
+            cs.send(&super::protocol::WAKE_WIFI).await?;
+        }
+        Ok(())
     }
 
     async fn send_heartbeat(&mut self) -> Result<(), RadarError> {

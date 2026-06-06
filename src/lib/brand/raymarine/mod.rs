@@ -2,6 +2,8 @@ use anyhow::{Error, bail};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use std::{fmt, io};
 use tokio_graceful_shutdown::{SubsystemBuilder, SubsystemHandle};
 
@@ -205,10 +207,33 @@ struct RadarState {
     model: BaseModel,
 }
 
+/// Witness for "another controller is on the beacon group right now".
+/// Cloned (Arc-shared) into the locator and every Quantum report receiver
+/// so the WiFi wake nudge can stay silent when an MFD (or another mayara)
+/// is already managing the radar. See radar-wakeup-analysis.md path A.
+#[derive(Debug, Default)]
+pub(crate) struct ExternalControllerWitness {
+    last_seen: Mutex<Option<Instant>>,
+}
+
+impl ExternalControllerWitness {
+    pub(crate) fn mark(&self) {
+        *self.last_seen.lock().unwrap() = Some(Instant::now());
+    }
+
+    pub(crate) fn quiet_for(&self, window: Duration) -> bool {
+        match *self.last_seen.lock().unwrap() {
+            None => true,
+            Some(t) => t.elapsed() >= window,
+        }
+    }
+}
+
 #[derive(Clone)]
 struct RaymarineLocator {
     args: Cli,
     ids: HashMap<LinkId, RadarState>,
+    external_seen: Arc<ExternalControllerWitness>,
 }
 
 impl RaymarineLocator {
@@ -216,6 +241,7 @@ impl RaymarineLocator {
         RaymarineLocator {
             args,
             ids: HashMap::new(),
+            external_seen: Arc::new(ExternalControllerWitness::default()),
         }
     }
 
@@ -490,8 +516,13 @@ impl RaymarineLocator {
                 },
             ));
 
-            let report_receiver =
-                report::RaymarineReportReceiver::new(&self.args, info, radars.clone(), base_model);
+            let report_receiver = report::RaymarineReportReceiver::new(
+                &self.args,
+                info,
+                radars.clone(),
+                base_model,
+                self.external_seen.clone(),
+            );
 
             subsys.start(SubsystemBuilder::new(
                 report_name,
@@ -521,6 +552,15 @@ impl RadarLocator for RaymarineLocator {
             report.len()
         );
         log::trace!("{}: printable:     {}", from, PrintableSlice::new(report));
+
+        if from.ip() != nic_addr && is_external_controller_signal(report) {
+            log::debug!(
+                "{}: external Raymarine controller observed (len {})",
+                from,
+                report.len()
+            );
+            self.external_seen.mark();
+        }
 
         match report.len() {
             protocol::beacon36::LEN => {
@@ -555,6 +595,24 @@ impl RadarLocator for RaymarineLocator {
 
     fn clone(&self) -> Box<dyn RadarLocator> {
         Box::new(Clone::clone(self))
+    }
+}
+
+/// True if `report` looks like a packet another Raymarine controller (MFD or
+/// another mayara) would emit on the beacon group: the 16-byte `ABCDEFGHIJKLMNOP`
+/// wake literal, the 102-byte WOL signature, or a 56-byte beacon with the
+/// MFD subtype. Caller is responsible for the "not us" filter on source IP.
+fn is_external_controller_signal(report: &[u8]) -> bool {
+    match report.len() {
+        16 => report == RAYMARINE_WAKE_RADAR,
+        102 => report == RAYMARINE_WOL_RADAR,
+        protocol::beacon56::LEN => {
+            // beacon_type at 0, subtype at 4 (both u32 LE)
+            let beacon_type = u32::from_le_bytes(report[0..4].try_into().unwrap());
+            let subtype = u32::from_le_bytes(report[4..8].try_into().unwrap());
+            beacon_type == 1 && subtype == protocol::beacon56::MFD
+        }
+        _ => false,
     }
 }
 
@@ -858,6 +916,53 @@ mod tests {
             }
         }
         panic!("No radar was created from the pelagia fixture beacons");
+    }
+
+    #[test]
+    fn wake_signals_recognized() {
+        use super::{
+            RAYMARINE_MFD_BEACON, RAYMARINE_WAKE_RADAR, RAYMARINE_WOL_RADAR,
+            is_external_controller_signal,
+        };
+
+        assert!(
+            is_external_controller_signal(&RAYMARINE_WAKE_RADAR),
+            "ABCDEFGHIJKLMNOP should be flagged as an external-controller signal"
+        );
+        assert!(
+            is_external_controller_signal(&RAYMARINE_WOL_RADAR),
+            "WOL signature should be flagged as an external-controller signal"
+        );
+        assert!(
+            is_external_controller_signal(&RAYMARINE_MFD_BEACON),
+            "MFD announcement beacon should be flagged"
+        );
+    }
+
+    #[test]
+    fn radar_beacon_is_not_a_controller_signal() {
+        use super::is_external_controller_signal;
+
+        // A Quantum radar identity beacon (subtype 0x66) must not be confused
+        // with an MFD announcement — only the MFD subtype should mark.
+        let mut radar_beacon = [0u8; protocol::beacon56::LEN];
+        radar_beacon[0..4].copy_from_slice(&1u32.to_le_bytes());
+        radar_beacon[4..8].copy_from_slice(&(protocol::beacon56::QUANTUM).to_le_bytes());
+        assert!(!is_external_controller_signal(&radar_beacon));
+    }
+
+    #[test]
+    fn witness_quiet_until_marked() {
+        use super::ExternalControllerWitness;
+        use std::time::Duration;
+
+        let witness = ExternalControllerWitness::default();
+        assert!(witness.quiet_for(Duration::from_secs(60)));
+        witness.mark();
+        // Just after marking it should not be quiet for any non-zero window.
+        assert!(!witness.quiet_for(Duration::from_secs(60)));
+        // A zero-window query treats "just marked" as already-elapsed and quiet.
+        assert!(witness.quiet_for(Duration::from_secs(0)));
     }
 
     #[test]
