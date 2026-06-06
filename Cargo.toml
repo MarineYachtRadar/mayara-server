@@ -36,8 +36,8 @@ axum-core = "0.5.6"
 axum-embed = "0.1.0"
 base64 = "0.22.1"
 bincode = { version = "2.0.1", features = ["serde"] }
-bitflags = "2.11.1"
-chrono = { version = "0.4.44", features = ["serde"] }
+bitflags = "2.13.0"
+chrono = { version = "0.4.45", features = ["serde"] }
 clap = { version = "4.6.1", features = ["derive"] }
 clap-verbosity-flag = "3.0.4"
 crossbeam = "0.8.4"
@@ -54,7 +54,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "logg
 rustls-pemfile = "2"
 hyper-util = "0.1.20"
 libc = "0.2.186"
-log = "0.4.30"
+log = "0.4.32"
 mdns-sd = "0"
 miette = { version = "7.6.0", features = ["fancy"] }
 nalgebra = { version = "0.34.2", features = ["std", "macros", "convert-mint", "rand"] }
@@ -70,7 +70,7 @@ rust-embed = { version = "8.11.0", features = ["axum","interpolate-folder-path"]
 serde = { version = "1.0.228", features = ["derive", "serde_derive"] }
 serde_json = "1.0.150"
 serde_repr = "0.1.20"
-serde_with = { version = "3.20.0", features = ["macros"] }
+serde_with = { version = "3.21.0", features = ["macros"] }
 sha1 = "0.11.0"
 # `features = ["all"]` is socket2's single feature flag — it gates the
 # platform-conditional APIs (e.g. TCP_KEEPIDLE/TCP_KEEPINTVL/TCP_KEEPCNT
