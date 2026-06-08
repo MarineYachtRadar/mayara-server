@@ -266,6 +266,56 @@ div.myr_ppi {
   stroke: #ff4d4d;
 }
 
+.myr_power_lozenge.myr_power_fault .myr_power_lozenge_button {
+  background: #5a1a1a;
+}
+
+.myr_power_lozenge.myr_power_fault .myr_power_icon {
+  stroke: #ff8800;
+}
+
+/* Notification banner (radar errors, guard-zone alarms) */
+.myr_notification_banner {
+  position: absolute;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  z-index: 100;
+  max-width: 60%;
+  pointer-events: none;
+}
+
+.myr_notification {
+  background: rgba(0, 0, 0, 0.8);
+  border: 2px solid #886;
+  border-radius: 8px;
+  padding: 4px 12px;
+  font-family: Verdana, Geneva, sans-serif;
+  font-size: 13px;
+  font-weight: bold;
+  color: #fff;
+  text-align: center;
+}
+
+.myr_notification_alert {
+  border-color: #ffff4d;
+  color: #ffff99;
+}
+
+.myr_notification_warn {
+  border-color: #ffaa33;
+  color: #ffcc66;
+}
+
+.myr_notification_alarm,
+.myr_notification_emergency {
+  border-color: #ff4d4d;
+  color: #ff8888;
+}
+
 /* User name display */
 .myr_power_lozenge_name {
   display: flex;
