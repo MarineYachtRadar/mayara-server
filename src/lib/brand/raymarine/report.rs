@@ -236,7 +236,7 @@ impl RaymarineReportReceiver {
         match network::create_udp_listen(
             &self.common.info.report_addr,
             &self.common.info.nic_addr,
-            network::SocketType::Multicast,
+            network::SocketType::Any,
         ) {
             Ok(socket) => {
                 self.report_socket = Some(socket);

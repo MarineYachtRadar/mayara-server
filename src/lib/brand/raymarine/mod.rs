@@ -360,8 +360,19 @@ impl RaymarineLocator {
                         ),
                     };
 
-                    let radar_addr: SocketAddrV4 = data.report.into();
                     let radar_send: SocketAddrV4 = data.command.into();
+
+                    // Behind an MFD acting as WiFi AP, the Quantum advertises an
+                    // unspecified report address (0.0.0.0:0) and instead streams
+                    // reports and spokes unicast back to whoever sends it commands.
+                    // The command socket sends from the NIC on the command port,
+                    // so the radar replies to that port: listen unicast there.
+                    let beacon_report: SocketAddrV4 = data.report.into();
+                    let radar_addr: SocketAddrV4 = if beacon_report.ip().is_unspecified() {
+                        SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, radar_send.port())
+                    } else {
+                        beacon_report
+                    };
 
                     let location_info: RadarInfo = RadarInfo::new(
                         radars,
@@ -998,6 +1009,53 @@ mod tests {
         assert!(!witness.quiet_for(Duration::from_secs(60)));
         // A zero-window query treats "just marked" as already-elapsed and quiet.
         assert!(witness.quiet_for(Duration::from_secs(0)));
+    }
+
+    #[test]
+    fn quantum_behind_mfd_ap_uses_unicast_report_stream() {
+        // A Quantum behind an Axiom MFD acting as WiFi AP advertises an
+        // unspecified report address (0.0.0.0:0) in its 36-byte beacon and
+        // streams reports/spokes unicast back to the controller instead.
+        // Real beacons from research capture Q2_with_Axiom_as_wifi_AP
+        // (link_id 0xD681C8C3, "QuantumRadar", radar at 192.168.143.84).
+        let args = Cli::parse_from(["mayara-server"]);
+        let mut locator = RaymarineLocator::new(args);
+        let radars = &SharedRadars::new();
+        const SRC: Ipv4Addr = Ipv4Addr::new(192, 168, 143, 84);
+
+        // 56-byte identity beacon: subtype 0x66, model "QuantumRadar".
+        const BEACON_56: [u8; 56] = [
+            0x01, 0x00, 0x00, 0x00, 0x66, 0x00, 0x00, 0x00, 0xC3, 0xC8, 0x81, 0xD6, 0x03, 0x01,
+            0x00, 0x00, 0x54, 0x8F, 0xA8, 0xC0, 0x51, 0x75, 0x61, 0x6E, 0x74, 0x75, 0x6D, 0x52,
+            0x61, 0x64, 0x61, 0x72, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+        ];
+        // 36-byte address beacon: report=0.0.0.0:0, command=192.168.143.84:2575.
+        const BEACON_36: [u8; 36] = [
+            0x00, 0x00, 0x00, 0x00, 0xC3, 0xC8, 0x81, 0xD6, 0x28, 0x00, 0x00, 0x00, 0x03, 0x00,
+            0x64, 0x00, 0x06, 0x08, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x11, 0x00,
+            0x54, 0x8F, 0xA8, 0xC0, 0x0F, 0x0A, 0x37, 0x00,
+        ];
+
+        locator.process_beacon_56_report(&BEACON_56, &SRC).unwrap();
+        let (info, model) = locator
+            .process_beacon_36_report(&BEACON_36, &SRC, radars)
+            .unwrap()
+            .expect("radar should be created");
+
+        assert_eq!(model, BaseModel::Quantum);
+        assert_eq!(
+            info.send_command_addr,
+            SocketAddrV4::new(Ipv4Addr::new(192, 168, 143, 84), 2575),
+        );
+        // The null report address falls back to a unicast listen on the
+        // command port, so the report receiver binds a real socket.
+        assert_eq!(
+            info.report_addr,
+            SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 2575),
+            "unspecified beacon report should fall back to unicast on the command port"
+        );
+        assert_eq!(info.spoke_data_addr, info.report_addr);
     }
 
     #[test]
