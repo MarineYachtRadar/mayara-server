@@ -150,7 +150,7 @@ impl EmulatorReportReceiver {
                             self.common
                                 .set_value(&ControlId::Power, Power::Off as i32 as f64);
                         }
-                        Ok(Power::Preparing) | Err(_) => {}
+                        Ok(Power::Preparing | Power::Fault) | Err(_) => {}
                     }
                 }
             }

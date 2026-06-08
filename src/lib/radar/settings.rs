@@ -758,7 +758,7 @@ impl SharedControls {
         // All radars must have the same Status control
         new_list(
             ControlId::Power,
-            &["Off", "Standby", "Transmit", "Preparing"],
+            &["Off", "Standby", "Transmit", "Preparing", "Fault"],
         )
         //.send_always()
         .set_valid_values([1, 2].to_vec())
@@ -1151,6 +1151,49 @@ impl SharedControls {
                     cnt
                 );
             }
+        }
+    }
+
+    /// Emit a Signal K `notifications.radar.<id>.error.<code>` alarm for a
+    /// radar-reported error. `active` raises it (Alarm); otherwise it clears
+    /// the prior notification (Normal). `name` is the human-readable error
+    /// name when the code is recognised.
+    pub(crate) fn send_radar_error_notification(
+        &self,
+        code: u32,
+        name: Option<&str>,
+        active: bool,
+    ) {
+        use crate::stream::{NotificationMethod, NotificationState, NotificationValue};
+
+        let locked = self.controls.read().unwrap();
+        let path = format!("notifications.radar.{}.error.{:#x}", locked.radar_id, code);
+        let (state, method, message) = if active {
+            let message = match name {
+                Some(name) => format!("Radar error: {}", name),
+                None => format!("Radar error code {:#x}", code),
+            };
+            (
+                NotificationState::Alarm,
+                vec![NotificationMethod::Visual, NotificationMethod::Sound],
+                message,
+            )
+        } else {
+            (
+                NotificationState::Normal,
+                Vec::new(),
+                format!("Radar error {:#x} cleared", code),
+            )
+        };
+        let value = NotificationValue {
+            state,
+            method,
+            message,
+        };
+        let mut delta = SignalKDelta::new();
+        delta.add_notification_update(&path, value, "mayara");
+        if let Err(e) = locked.sk_client_tx.send(delta) {
+            log::trace!("Failed to broadcast radar error notification: {}", e);
         }
     }
 
