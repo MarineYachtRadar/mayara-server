@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::net::UdpSocket;
 use tokio::time::{Instant, sleep, sleep_until};
 use tokio_graceful_shutdown::SubsystemHandle;
 
@@ -143,6 +144,11 @@ impl FeatureFlags {
 pub(crate) struct RaymarineReportReceiver {
     common: CommonRadar,
     report_socket: Option<RadarSocket>,
+    // When the radar streams unicast back to the command source port (MFD
+    // acting as WiFi AP, report address unspecified), this is the single
+    // connected socket shared with the command sender. The report loop
+    // listens on it; `None` for the normal multicast topology.
+    unicast_socket: Option<Arc<UdpSocket>>,
     state: ReceiverState,
     model: Option<RaymarineModel>,
     base_model: BaseModel,
@@ -190,6 +196,30 @@ impl RaymarineReportReceiver {
             args
         );
 
+        // When the radar advertised no report multicast group, the locator
+        // set report_addr to an unspecified unicast address (MFD-as-WiFi-AP
+        // topology). The radar streams reports/spokes unicast back to the
+        // command source port, so a single connected socket must both send
+        // commands and receive replies — otherwise a separate connected
+        // command socket wins delivery of the replies and starves the listen
+        // socket (same host:port). Build that shared socket here so the
+        // command sender uses it instead of opening its own.
+        let unicast_socket = if !replay && !info.report_addr.ip().is_multicast() {
+            match network::create_connected_unicast(
+                &info.nic_addr,
+                info.report_addr.port(),
+                &info.send_command_addr,
+            ) {
+                Ok(sock) => Some(Arc::new(sock)),
+                Err(e) => {
+                    log::warn!("{}: unicast report socket failed: {}", key, e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         // Quantum wired radars (and some RD variants) won't send the
         // 0x280001 info-report until they have received a host keep-alive
         // first — see issue #228. Create the command_sender now with the
@@ -197,7 +227,11 @@ impl RaymarineReportReceiver {
         // starts priming the radar immediately. process_info_report() will
         // not overwrite this once the radar replies.
         let command_sender = if !replay {
-            Some(Command::new(info.clone(), base_model))
+            let cmd = Command::new(info.clone(), base_model);
+            Some(match &unicast_socket {
+                Some(sock) => cmd.with_shared_socket(sock.clone()),
+                None => cmd,
+            })
         } else {
             None
         };
@@ -213,6 +247,7 @@ impl RaymarineReportReceiver {
         RaymarineReportReceiver {
             common,
             report_socket: None,
+            unicast_socket,
             state: ReceiverState::Initial,
             model: None, // We don't know this yet, it will be set when we receive the first info report
             base_model,
@@ -233,6 +268,19 @@ impl RaymarineReportReceiver {
     }
 
     async fn start_report_socket(&mut self) -> io::Result<()> {
+        // Unicast topology: listen on the shared connected socket so the
+        // report loop receives the replies the command sender's heartbeats
+        // elicit. Falls through to the normal listener otherwise.
+        if let Some(sock) = &self.unicast_socket {
+            self.report_socket = Some(RadarSocket::Udp(sock.clone()));
+            log::debug!(
+                "{}: {} via {}: listening for unicast reports",
+                self.common.key,
+                &self.common.info.report_addr,
+                &self.common.info.nic_addr
+            );
+            return Ok(());
+        }
         match network::create_udp_listen(
             &self.common.info.report_addr,
             &self.common.info.nic_addr,

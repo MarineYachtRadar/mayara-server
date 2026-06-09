@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use std::sync::Arc;
 use tokio::net::UdpSocket;
 
 use super::BaseModel;
@@ -15,7 +16,7 @@ pub(crate) struct Command {
     key: String,
     info: RadarInfo,
     model: BaseModel,
-    sock: Option<UdpSocket>,
+    sock: Option<Arc<UdpSocket>>,
 }
 
 impl Command {
@@ -26,6 +27,14 @@ impl Command {
             model,
             sock: None,
         }
+    }
+
+    /// Use a caller-provided, already-connected socket for sending instead
+    /// of opening our own. Used by the unicast-stream topology so commands
+    /// and the radar's replies share one socket (and one source port).
+    pub(crate) fn with_shared_socket(mut self, sock: Arc<UdpSocket>) -> Self {
+        self.sock = Some(sock);
+        self
     }
 
     pub(crate) fn set_ranges(&mut self, ranges: Ranges) {
@@ -41,7 +50,7 @@ impl Command {
                     &self.info.send_command_addr,
                     &self.info.nic_addr
                 );
-                self.sock = Some(sock);
+                self.sock = Some(Arc::new(sock));
 
                 Ok(())
             }

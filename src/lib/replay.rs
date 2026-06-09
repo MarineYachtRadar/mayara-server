@@ -18,8 +18,9 @@ use std::io;
 use std::net::{SocketAddr, SocketAddrV4};
 #[cfg(feature = "pcap-replay")]
 use std::path::Path;
+use std::sync::Arc;
 #[cfg(feature = "pcap-replay")]
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock};
 #[cfg(feature = "pcap-replay")]
 use std::time::Duration;
 use tokio::net::UdpSocket;
@@ -35,8 +36,10 @@ use crate::pcap::{self, PcapPacket};
 /// socket or from the pcap replay dispatcher. Receivers use this
 /// instead of `tokio::net::UdpSocket` directly.
 pub(crate) enum RadarSocket {
-    /// Real network UDP socket.
-    Udp(UdpSocket),
+    /// Real network UDP socket. `Arc` so a connected unicast socket can be
+    /// shared with a command sender (Raymarine MFD-as-AP topology); the
+    /// multicast/broadcast listen path simply holds the sole reference.
+    Udp(Arc<UdpSocket>),
     /// Pcap replay channel.
     Replay(ReplayReceiver),
 }
