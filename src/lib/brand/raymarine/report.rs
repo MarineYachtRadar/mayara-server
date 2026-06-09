@@ -202,23 +202,9 @@ impl RaymarineReportReceiver {
         // command source port, so a single connected socket must both send
         // commands and receive replies — otherwise a separate connected
         // command socket wins delivery of the replies and starves the listen
-        // socket (same host:port). Build that shared socket here so the
-        // command sender uses it instead of opening its own.
-        let unicast_socket = if !replay && !info.report_addr.ip().is_multicast() {
-            match network::create_connected_unicast(
-                &info.nic_addr,
-                info.report_addr.port(),
-                &info.send_command_addr,
-            ) {
-                Ok(sock) => Some(Arc::new(sock)),
-                Err(e) => {
-                    log::warn!("{}: unicast report socket failed: {}", key, e);
-                    None
-                }
-            }
-        } else {
-            None
-        };
+        // socket (same host:port). start_report_socket() creates that shared
+        // socket (with retry) and hands it to the command sender.
+        let needs_unicast = !replay && !info.report_addr.ip().is_multicast();
 
         // Quantum wired radars (and some RD variants) won't send the
         // 0x280001 info-report until they have received a host keep-alive
@@ -226,12 +212,17 @@ impl RaymarineReportReceiver {
         // base model the locator already determined, so the heartbeat loop
         // starts priming the radar immediately. process_info_report() will
         // not overwrite this once the radar replies.
+        //
+        // In the unicast topology the command sender must never open its own
+        // socket (that is the collision this fixes); it stays socketless until
+        // start_report_socket() supplies the shared one. The normal multicast
+        // topology lets it open its own socket as usual.
         let command_sender = if !replay {
-            let cmd = Command::new(info.clone(), base_model);
-            Some(match &unicast_socket {
-                Some(sock) => cmd.with_shared_socket(sock.clone()),
-                None => cmd,
-            })
+            let mut cmd = Command::new(info.clone(), base_model);
+            if needs_unicast {
+                cmd.disable_own_socket();
+            }
+            Some(cmd)
         } else {
             None
         };
@@ -247,7 +238,7 @@ impl RaymarineReportReceiver {
         RaymarineReportReceiver {
             common,
             report_socket: None,
-            unicast_socket,
+            unicast_socket: None,
             state: ReceiverState::Initial,
             model: None, // We don't know this yet, it will be set when we receive the first info report
             base_model,
@@ -268,11 +259,43 @@ impl RaymarineReportReceiver {
     }
 
     async fn start_report_socket(&mut self) -> io::Result<()> {
-        // Unicast topology: listen on the shared connected socket so the
-        // report loop receives the replies the command sender's heartbeats
-        // elicit. Falls through to the normal listener otherwise.
-        if let Some(sock) = &self.unicast_socket {
-            self.report_socket = Some(RadarSocket::Udp(sock.clone()));
+        // Unicast topology (report address non-multicast): the report loop and
+        // the command sender share one connected socket. Create it on demand
+        // here — this is the receiver's retry point — and hand a clone to the
+        // command sender so it stops dropping commands.
+        let needs_unicast =
+            !self.common.replay && !self.common.info.report_addr.ip().is_multicast();
+        if needs_unicast {
+            if self.unicast_socket.is_none() {
+                match network::create_connected_unicast(
+                    &self.common.info.nic_addr,
+                    self.common.info.report_addr.port(),
+                    &self.common.info.send_command_addr,
+                ) {
+                    Ok(sock) => {
+                        let sock = Arc::new(sock);
+                        if let Some(cs) = &mut self.command_sender {
+                            cs.set_shared_socket(sock.clone());
+                        }
+                        self.unicast_socket = Some(sock);
+                    }
+                    Err(e) => {
+                        // Leave report_socket None so run() retries; never
+                        // fall back to a separate command socket (collision).
+                        sleep(Duration::from_millis(1000)).await;
+                        log::debug!(
+                            "{}: {} via {}: unicast report socket failed: {}",
+                            self.common.key,
+                            &self.common.info.report_addr,
+                            &self.common.info.nic_addr,
+                            e
+                        );
+                        return Ok(());
+                    }
+                }
+            }
+            let sock = self.unicast_socket.as_ref().unwrap().clone();
+            self.report_socket = Some(RadarSocket::Udp(sock));
             log::debug!(
                 "{}: {} via {}: listening for unicast reports",
                 self.common.key,
