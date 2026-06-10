@@ -291,7 +291,7 @@ pub(crate) fn create_connected_unicast(
     let bind_addr = SocketAddr::new(IpAddr::V4(*nic_addr), port);
     socket.bind(&socket2::SockAddr::from(bind_addr))?;
     socket.connect(&socket2::SockAddr::from(SocketAddr::V4(*peer)))?;
-    log::trace!(
+    log::debug!(
         "Binding unicast socket to {} connected to {}",
         bind_addr,
         peer

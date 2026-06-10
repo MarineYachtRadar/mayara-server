@@ -350,7 +350,16 @@ impl RaymarineReportReceiver {
                     return Err(RadarError::Shutdown);
                 },
                 _ = sleep_until(heartbeat_deadline) => {
-                    self.send_heartbeat().await?;
+                    // A heartbeat send failure must not tear down the report
+                    // loop. With the unicast (MFD-as-AP) topology the command
+                    // socket is connected to the radar, so a send can fail with
+                    // a routing error (e.g. the radar briefly unreachable);
+                    // killing the loop here would drop the report socket and
+                    // busy-respin once per second, never recovering. Log and
+                    // keep listening; the next heartbeat retries.
+                    if let Err(e) = self.send_heartbeat().await {
+                        log::debug!("{}: heartbeat send failed: {}", self.common.key, e);
+                    }
                 },
                 _ = sleep_until(wake_deadline) => {
                     self.maybe_send_wake_nudge().await?;
@@ -416,6 +425,10 @@ impl RaymarineReportReceiver {
     }
 
     async fn send_heartbeat(&mut self) -> Result<(), RadarError> {
+        // Advance the deadline first so a send failure below can't leave it in
+        // the past — otherwise the caller's sleep_until fires immediately and
+        // busy-loops. The next tick retries the heartbeat a second later.
+        self.heartbeat_deadline += HEARTBEAT_INTERVAL;
         if let Some(ref mut cs) = self.command_sender {
             cs.send_heartbeat().await?;
 
@@ -426,7 +439,6 @@ impl RaymarineReportReceiver {
                 cs.send_heartbeat_5s().await?;
             }
         }
-        self.heartbeat_deadline += HEARTBEAT_INTERVAL;
         Ok(())
     }
 
