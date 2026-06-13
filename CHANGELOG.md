@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **raymarine:** send WiFi wake nudge to idle Quantum radars (#341) ([PR #341](https://github.com/MarineYachtRadar/mayara-server/pull/341))
+
 ### Fixed
 
 - **raymarine:** decode Quantum self-test fault status (#335) ([PR #335](https://github.com/MarineYachtRadar/mayara-server/pull/335))
