@@ -201,6 +201,14 @@ pub(crate) const HEARTBEAT_QUANTUM_5S: [u8; 36] = [
     0x00, 0x00, 0x00, 0x00,
 ];
 
+/// WiFi-path wake nudge: unicast `10 00 28 00 00 00 00 00` to the radar's
+/// command socket. Derived from `CLNetQuantumRadarSource::SetRadarMode(0)` in
+/// the Axiom MFD firmware (path A in research/raymarine/radar-wakeup-analysis.md).
+/// Byte-identical to `ControlId::Power` → Standby — sending it to a discovered
+/// but idle radar nudges it from sleep into standby without disturbing a radar
+/// that's already in standby. Must NOT be sent to a transmitting radar.
+pub(crate) const WAKE_WIFI: [u8; 8] = [0x10, 0x00, 0x28, 0x00, 0x00, 0x00, 0x00, 0x00];
+
 /// 1-second keep-alive for RD/E120 (12 bytes, contains "RADAR").
 pub(crate) const HEARTBEAT_RD_1S: [u8; 12] = [
     0x00, 0x80, 0x01, 0x00, 0x52, 0x41, 0x44, 0x41, 0x52, 0x00, 0x00, 0x00,
