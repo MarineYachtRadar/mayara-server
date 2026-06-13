@@ -121,7 +121,7 @@ jobs:
         provenance: false
 
     - name: Comment image reference on PR
-      uses: actions/github-script@v8
+      uses: actions/github-script@v9
       with:
         script: |
           const ref = `${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}`.toLowerCase();
@@ -171,7 +171,7 @@ jobs:
 
     steps:
     - name: Delete pr<N> image versions
-      uses: actions/github-script@v8
+      uses: actions/github-script@v9
       with:
         script: |
           const pr = context.payload.pull_request.number;
@@ -221,7 +221,7 @@ jobs:
           core.info(`Deleted ${toDelete.length} image version(s) for pr${pr}.`);
 
     - name: Update PR comment
-      uses: actions/github-script@v8
+      uses: actions/github-script@v9
       with:
         script: |
           const pr = context.payload.pull_request.number;
