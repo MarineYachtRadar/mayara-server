@@ -57,7 +57,7 @@ libc = "0.2.186"
 log = "0.4.30"
 mdns-sd = "0"
 miette = { version = "7.6.0", features = ["fancy"] }
-nalgebra = { version = "0.34.2", features = ["std", "macros", "convert-mint", "rand"] }
+nalgebra = { version = "0.35.0", features = ["std", "macros", "convert-mint", "rand"] }
 ndarray = "0.17.2"
 network-interface = "2.0.5"
 nix = { version = "0.31.3", features = ["net", "socket"] }
