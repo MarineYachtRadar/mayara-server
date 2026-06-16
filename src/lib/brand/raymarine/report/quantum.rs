@@ -16,7 +16,7 @@ use super::{RaymarineReportReceiver, ReceiverState};
 const QUANTUM_RADAR_RANGES: usize = 20;
 
 #[derive(Deserialize, Debug, Clone, Copy)]
-#[repr(packed)]
+#[repr(C, packed)]
 struct FrameHeader {
     _type: u32, // 0x00280003
     _seq_num: u16,
@@ -125,7 +125,7 @@ fn process_spoke(
 }
 
 #[derive(Deserialize, Debug, Copy, Clone)]
-#[repr(packed)]
+#[repr(C, packed)]
 struct ControlsPerMode {
     gain_auto: u8,       // @ 0
     gain: u8,            // @ 1
@@ -138,7 +138,7 @@ struct ControlsPerMode {
 }
 
 #[derive(Deserialize, Debug, Copy, Clone)]
-#[repr(packed)]
+#[repr(C, packed)]
 struct StatusReport {
     _id: [u8; 4],                        // @0 0x280002
     status: u8,                          // @4 0 - standby ; 1 - transmitting

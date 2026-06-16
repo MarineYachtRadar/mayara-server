@@ -468,7 +468,7 @@ mod tests {
     // switch to dynamic parsing.
 
     #[derive(TestDeserialize, Debug, Copy, Clone)]
-    #[repr(packed)]
+    #[repr(C, packed)]
     struct NavicoBeaconHeader {
         _id: u16,
         _serial_no: [u8; 16],
@@ -484,7 +484,7 @@ mod tests {
     }
 
     #[derive(TestDeserialize, Debug, Copy, Clone)]
-    #[repr(packed)]
+    #[repr(C, packed)]
     struct NavicoBeaconRadar {
         _filler1: [u8; 10],
         data: NetworkSocketAddrV4,
@@ -495,7 +495,7 @@ mod tests {
     }
 
     #[derive(TestDeserialize, Debug, Copy, Clone)]
-    #[repr(packed)]
+    #[repr(C, packed)]
     struct NavicoBeaconDual {
         _header: NavicoBeaconHeader,
         a: NavicoBeaconRadar,

@@ -151,7 +151,7 @@ pub(crate) const LOGIN_EXPECTED_HEADER: [u8; 8] = [0x9, 0x1, 0x0, 0xc, 0x1, 0x0,
 
 /// 32-byte beacon report — radar serial/name identification.
 #[derive(Deserialize, Debug, Copy, Clone)]
-#[repr(packed)]
+#[repr(C, packed)]
 pub(crate) struct FurunoRadarReport {
     pub _header: [u8; 11],
     pub length: u8,
@@ -161,7 +161,7 @@ pub(crate) struct FurunoRadarReport {
 
 /// 170-byte model report — radar model name, firmware versions, serial number.
 #[derive(Deserialize, Debug, Copy, Clone)]
-#[repr(packed)]
+#[repr(C, packed)]
 pub(crate) struct FurunoRadarModelReport {
     pub _filler1: [u8; 24],
     pub model: [u8; 32],

@@ -60,7 +60,7 @@ fn extract_heading_value(x: u16) -> Option<u16> {
 }
 
 #[derive(Deserialize, Debug, Clone, Copy)]
-#[repr(packed)]
+#[repr(C, packed)]
 struct GenBr24Header {
     header_len: u8,        // 1 bytes
     status: u8,            // 1 bytes
@@ -75,7 +75,7 @@ struct GenBr24Header {
 } /* total size = 24 */
 
 #[derive(Deserialize, Debug, Clone, Copy)]
-#[repr(packed)]
+#[repr(C, packed)]
 struct Gen3PlusHeader {
     header_len: u8,        // 1 bytes
     status: u8,            // 1 bytes
@@ -91,18 +91,18 @@ struct Gen3PlusHeader {
 } /* total size = 24 */
 
 #[derive(Debug, Clone, Copy)]
-#[repr(packed)]
+#[repr(C, packed)]
 struct RadarLine {
     _header: Gen3PlusHeader, // or GenBr24Header
     _data: [u8; SPOKE_DATA_LENGTH],
 }
 
-#[repr(packed)]
+#[repr(C, packed)]
 struct FrameHeader {
     _frame_hdr: [u8; 8],
 }
 
-#[repr(packed)]
+#[repr(C, packed)]
 struct RadarFramePkt {
     _header: FrameHeader,
     _line: [RadarLine; SPOKES_PER_FRAME], //  scan lines, or spokes
@@ -207,7 +207,7 @@ const INFO_BY_OTHERS_TIMEOUT: Duration = Duration::from_secs(10);
 const INFO_BY_US_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Debug)]
-#[repr(packed)]
+#[repr(C, packed)]
 struct StateMode {
     // 0xC401
     _sub_opcode: u8,
@@ -228,7 +228,7 @@ impl StateMode {
 }
 
 #[derive(Debug)]
-#[repr(packed)]
+#[repr(C, packed)]
 struct StateSetup {
     // 0xC402
     _sub_opcode: u8,
@@ -265,7 +265,7 @@ impl StateSetup {
 }
 
 #[derive(Debug)]
-#[repr(packed)]
+#[repr(C, packed)]
 struct StateProperties {
     // 0xC403 — fixed 129 bytes
     _sub_opcode: u8,                 //   0  0x03
@@ -302,7 +302,7 @@ impl StateProperties {
 }
 
 #[derive(Debug)]
-#[repr(packed)]
+#[repr(C, packed)]
 struct StateConfig {
     // 0xC404
     _sub_opcode: u8,
@@ -333,7 +333,7 @@ impl StateConfig {
 }
 
 #[derive(Debug, Copy, Clone)]
-#[repr(packed)]
+#[repr(C, packed)]
 struct SectorBlankingReport {
     enabled: u8,
     start_angle: [u8; 2],

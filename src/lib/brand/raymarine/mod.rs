@@ -187,7 +187,7 @@ We put them in a map for now, but probably we only need to store the last one.
  */
 
 #[derive(Deserialize, Debug, Copy, Clone)]
-#[repr(packed)]
+#[repr(C, packed)]
 struct RaymarineBeacon36 {
     beacon_type: [u8; 4],              // 0: always 0
     link_id: [u8; 4],                  // 4
@@ -201,7 +201,7 @@ struct RaymarineBeacon36 {
 }
 
 #[derive(Deserialize, Debug, Copy, Clone)]
-#[repr(packed)]
+#[repr(C, packed)]
 struct RaymarineBeacon56 {
     beacon_type: [u8; 4], // 0: always 1
     subtype: [u8; 4],     // 4

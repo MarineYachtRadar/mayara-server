@@ -23,7 +23,7 @@ const U01_DEFAULT: [u8; 26] = [
 const HEADING_U07_DEFAULT: [u8; 5] = [0xff, 0x7f, 0x79, 0xf8, 0xfc];
 
 #[derive(Debug)]
-#[repr(packed)]
+#[repr(C, packed)]
 #[allow(dead_code)]
 pub(crate) struct HaloHeadingPacket {
     marker: [u8; 4],      //  0..4   "NKOE"
@@ -50,7 +50,7 @@ impl HaloHeadingPacket {
 }
 
 #[derive(Debug)]
-#[repr(packed)]
+#[repr(C, packed)]
 #[allow(dead_code)]
 pub(crate) struct HaloNavigationPacket {
     marker: [u8; 4],   //  0..4   "NKOE"
@@ -79,7 +79,7 @@ impl HaloNavigationPacket {
 }
 
 #[derive(Debug)]
-#[repr(packed)]
+#[repr(C, packed)]
 #[allow(dead_code)]
 pub(crate) struct HaloSpeedPacket {
     marker: [u8; 6],  //  0..6   01 d3 01 00 00 00
