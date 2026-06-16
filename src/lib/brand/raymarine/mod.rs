@@ -367,9 +367,17 @@ impl RaymarineLocator {
                     // reports and spokes unicast back to whoever sends it commands.
                     // The command socket sends from the NIC on the command port,
                     // so the radar replies to that port: listen unicast there.
+                    //
+                    // In that topology the radar streams reports and spokes back
+                    // on the same connected socket we send commands on — there
+                    // is no separate listen address or multicast group. All four
+                    // addresses on RadarInfo collapse onto the radar's command
+                    // address; the report.rs code only reads report_addr.port()
+                    // (with nic_addr) to bind our local end of the connected
+                    // socket.
                     let beacon_report: SocketAddrV4 = data.report.into();
                     let radar_addr: SocketAddrV4 = if beacon_report.ip().is_unspecified() {
-                        SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, radar_send.port())
+                        radar_send
                     } else {
                         beacon_report
                     };
@@ -1043,19 +1051,18 @@ mod tests {
             .unwrap()
             .expect("radar should be created");
 
+        // In the unicast topology all four addresses on RadarInfo collapse
+        // onto the radar's command address — there is no separate listen
+        // address or multicast group.
+        let radar = SocketAddrV4::new(Ipv4Addr::new(192, 168, 143, 84), 2575);
         assert_eq!(model, BaseModel::Quantum);
+        assert_eq!(info.addr, radar);
+        assert_eq!(info.send_command_addr, radar);
         assert_eq!(
-            info.send_command_addr,
-            SocketAddrV4::new(Ipv4Addr::new(192, 168, 143, 84), 2575),
+            info.report_addr, radar,
+            "unicast topology: report_addr collapses onto the radar's command address"
         );
-        // The null report address falls back to a unicast listen on the
-        // command port, so the report receiver binds a real socket.
-        assert_eq!(
-            info.report_addr,
-            SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 2575),
-            "unspecified beacon report should fall back to unicast on the command port"
-        );
-        assert_eq!(info.spoke_data_addr, info.report_addr);
+        assert_eq!(info.spoke_data_addr, radar);
     }
 
     #[test]
