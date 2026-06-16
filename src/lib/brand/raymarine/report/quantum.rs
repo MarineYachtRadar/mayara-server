@@ -95,6 +95,12 @@ pub(crate) fn process_frame(receiver: &mut RaymarineReportReceiver, data: &[u8])
     }
     let spoke = &data[next_offset..next_offset + data_len];
 
+    let doppler_row = if receiver.doppler {
+        LookupDoppler::Doppler
+    } else {
+        LookupDoppler::Normal
+    } as usize;
+
     receiver.common.add_spoke(
         receiver.range_meters * returns_per_line / returns_per_range,
         azimuth,
@@ -102,7 +108,7 @@ pub(crate) fn process_frame(receiver: &mut RaymarineReportReceiver, data: &[u8])
         process_spoke(
             returns_per_line as usize,
             spoke,
-            LookupDoppler::Doppler as usize,
+            doppler_row,
             &receiver.wire_to_legend,
         ),
     );
@@ -439,6 +445,7 @@ pub(super) fn process_doppler_report(receiver: &mut RaymarineReportReceiver, dat
     };
 
     log::trace!("{}: Doppler {} -> {doppler}", receiver.common.key, data[4]);
+    receiver.doppler = doppler != 0;
     receiver
         .common
         .set_value(&ControlId::Doppler, doppler as f64);
@@ -520,5 +527,34 @@ mod tests {
             /*returns_per_line=*/ 32, &spoke, /*doppler=*/ 1, &lookup,
         );
         assert_eq!(out, vec![0x12, 0x34]);
+    }
+
+    #[test]
+    fn process_spoke_normal_row_skips_doppler_substitution() {
+        // Build a table where Normal is identity but Doppler remaps
+        // 0xFE/0xFF to sentinel marker values. With the Normal row
+        // selected, 0xFE/0xFF must come out unchanged — exercising the
+        // row-selection branch that was previously hard-coded to
+        // Doppler regardless of the radar's actual mode.
+        let mut lookup: WireToLegendTable = [[0u8; BYTE_LOOKUP_LENGTH]; LOOKUP_DOPPLER_LENGTH];
+        for row in lookup.iter_mut() {
+            for (j, slot) in row.iter_mut().enumerate() {
+                *slot = j as u8;
+            }
+        }
+        lookup[1][0xFE] = 0xAA;
+        lookup[1][0xFF] = 0xBB;
+
+        let spoke = [0xFEu8, 0xFF, 0x42];
+
+        let normal = process_spoke(
+            /*returns_per_line=*/ 32, &spoke, /*doppler=*/ 0, &lookup,
+        );
+        assert_eq!(normal, vec![0xFE, 0xFF, 0x42]);
+
+        let doppler = process_spoke(
+            /*returns_per_line=*/ 32, &spoke, /*doppler=*/ 1, &lookup,
+        );
+        assert_eq!(doppler, vec![0xAA, 0xBB, 0x42]);
     }
 }

@@ -40,12 +40,10 @@ const WAKE_INTERVAL: Duration = Duration::from_secs(3);
 const OBSERVATION_WINDOW: Duration = Duration::from_secs(5);
 const EXTERNAL_QUIET_WINDOW: Duration = Duration::from_secs(60);
 
-// The LookupSpokeEnum is an index into an array, really.
-// `Normal` is unused at the moment — the runtime always picks the
-// Doppler row (see quantum::process_frame); the variant is kept so
-// the enum continues to document the table's layout.
-#[allow(dead_code)]
-enum LookupDoppler {
+// The LookupSpokeEnum is an index into an array, really. `process_frame`
+// picks the row based on whether the radar currently reports Doppler on
+// (see `process_doppler_report`).
+pub(super) enum LookupDoppler {
     Normal = 0,
     Doppler = 1,
 }
@@ -160,6 +158,10 @@ pub(crate) struct RaymarineReportReceiver {
     // For data (spokes)
     range_meters: u32,
     wire_to_legend: WireToLegendTable,
+    // Tracks the radar's current Doppler state, fed by `process_doppler_report`.
+    // Selects the row in `wire_to_legend`: when off, byte 0xFE/0xFF stay raw;
+    // when on, they are remapped to the doppler-receding / -approaching markers.
+    doppler: bool,
 }
 
 impl RaymarineReportReceiver {
@@ -215,6 +217,7 @@ impl RaymarineReportReceiver {
             features_seen: false,
             range_meters: 0,
             wire_to_legend,
+            doppler: false,
         }
     }
 
