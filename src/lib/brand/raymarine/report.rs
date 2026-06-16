@@ -143,6 +143,7 @@ impl FeatureFlags {
 
 pub(crate) struct RaymarineReportReceiver {
     common: CommonRadar,
+    unicast_mode: bool,
     report_socket: Option<RadarSocket>,
     // When the radar streams unicast back to the command source port (MFD
     // acting as WiFi AP, report address unspecified), this is the single
@@ -196,6 +197,7 @@ impl RaymarineReportReceiver {
             args
         );
 
+        // Quantum WiFi:
         // When the radar advertised no report multicast group, the locator
         // set report_addr to an unspecified unicast address (MFD-as-WiFi-AP
         // topology). The radar streams reports/spokes unicast back to the
@@ -204,7 +206,7 @@ impl RaymarineReportReceiver {
         // command socket wins delivery of the replies and starves the listen
         // socket (same host:port). start_report_socket() creates that shared
         // socket (with retry) and hands it to the command sender.
-        let needs_unicast = !replay && !info.report_addr.ip().is_multicast();
+        let unicast_mode = !replay && !info.report_addr.ip().is_multicast();
 
         // Quantum wired radars (and some RD variants) won't send the
         // 0x280001 info-report until they have received a host keep-alive
@@ -218,11 +220,7 @@ impl RaymarineReportReceiver {
         // start_report_socket() supplies the shared one. The normal multicast
         // topology lets it open its own socket as usual.
         let command_sender = if !replay {
-            let mut cmd = Command::new(info.clone(), base_model);
-            if needs_unicast {
-                cmd.disable_own_socket();
-            }
-            Some(cmd)
+            Some(Command::new(info.clone(), base_model, unicast_mode))
         } else {
             None
         };
@@ -237,6 +235,7 @@ impl RaymarineReportReceiver {
         let now = Instant::now();
         RaymarineReportReceiver {
             common,
+            unicast_mode,
             report_socket: None,
             unicast_socket: None,
             state: ReceiverState::Initial,
@@ -263,9 +262,7 @@ impl RaymarineReportReceiver {
         // the command sender share one connected socket. Create it on demand
         // here — this is the receiver's retry point — and hand a clone to the
         // command sender so it stops dropping commands.
-        let needs_unicast =
-            !self.common.replay && !self.common.info.report_addr.ip().is_multicast();
-        if needs_unicast {
+        if self.unicast_mode {
             if self.unicast_socket.is_none() {
                 match network::create_connected_unicast(
                     &self.common.info.nic_addr,
