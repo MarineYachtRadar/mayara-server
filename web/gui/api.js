@@ -9,6 +9,8 @@
 const SIGNALK_RADARS_API = "/signalk/v2/api/vessels/self/radars";
 const STANDALONE_INTERFACES_API =
   "/signalk/v2/api/vessels/self/radars/interfaces";
+const DIAGNOSTICS_API =
+  "/signalk/v2/api/vessels/self/radars/diagnostics";
 const ENDPOINT_API = "/signalk";
 
 // Mount prefix to prepend to every API/WS path.
@@ -98,6 +100,14 @@ export function getRadarsPath() {
  */
 export function getInterfacesUrl() {
   return apiBase(STANDALONE_INTERFACES_API);
+}
+
+/**
+ * Get the network-diagnostics download URL (gzipped JSON).
+ * @returns {string} API URL
+ */
+export function getDiagnosticsUrl() {
+  return apiBase(DIAGNOSTICS_API);
 }
 
 /**

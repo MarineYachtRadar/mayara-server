@@ -2,6 +2,7 @@ import van from "./vendor/van-1.5.2.debug.js";
 import {
   fetchRadars,
   fetchInterfaces,
+  getDiagnosticsUrl,
   isStandaloneMode,
   detectMode,
 } from "./api.js";
@@ -759,19 +760,15 @@ function hideInterfacesPopup() {
 }
 
 function showActionButtons() {
-  if (!isStandaloneMode()) {
-    return;
-  }
-
   const container = document.getElementById("action_buttons");
   if (!container) {
     return;
   }
 
-  van.add(
-    container,
-    div(
-      { class: "myr_action_buttons" },
+  const buttons = [];
+
+  if (isStandaloneMode()) {
+    buttons.push(
       button(
         {
           class: "myr_radar_link myr_radar_link_secondary",
@@ -786,8 +783,28 @@ function showActionButtons() {
         },
         "Recordings"
       )
+    );
+  }
+
+  buttons.push(
+    a(
+      {
+        href: getDiagnosticsUrl(),
+        class: "myr_radar_link myr_radar_link_secondary",
+        // The server sets Content-Disposition: attachment with a timestamped
+        // filename, so the empty `download` attribute just nudges browsers
+        // that ignore it in cross-origin / proxied setups to still treat
+        // the response as a download instead of navigating to it.
+        download: "",
+        title:
+          "Download a gzipped JSON report of the network state. " +
+          "Attach this to a GitHub issue when reporting that a radar is not detected.",
+      },
+      "Network Diagnostics"
     )
   );
+
+  van.add(container, div({ class: "myr_action_buttons" }, ...buttons));
 }
 
 async function loadRadars() {
