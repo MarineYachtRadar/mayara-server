@@ -611,7 +611,7 @@ pub async fn start_session(
     let locator = Locator::new(args.clone(), radars.clone());
 
     let (tx_ip_change, _rx_ip_change) = broadcast::channel(1);
-    let mut navdata = navdata::NavigationData::new(args);
+    let mut navdata = navdata::NavigationData::new(args.clone());
 
     let rx_ip_change_clone = tx_ip_change.subscribe();
     subsystem.start(SubsystemBuilder::new(
