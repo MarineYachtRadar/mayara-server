@@ -2060,7 +2060,7 @@ impl RadarControlValue {
         // because the caller in the Signal K stream handler then looked the
         // radar up by the control name and silently dropped the request.
         let (radar_id, control_name) = path.rsplit_once(".controls.")?;
-        self.control_id = ControlId::try_from(control_name).ok();
+        self.control_id = ControlId::from_str(control_name).ok();
         if self.control_id.is_some() {
             self.radar_id = Some(radar_id.to_string());
             return Some(radar_id);
