@@ -262,7 +262,7 @@ async fn get_interfaces(State(state): State<Web>, headers: hyper::header::Header
     log::debug!("Interface state request for host '{}'", host);
 
     let (tx, mut rx) = mpsc::channel(1);
-    if let Err(_) = state.tx_interface_request.send(Some(tx)) {
+    if state.tx_interface_request.send(Some(tx)).is_err() {
         return Json(InterfaceApi::default()).into_response();
     }
     match rx.recv().await {
@@ -1382,7 +1382,7 @@ async fn handle_client_request(
                 log::debug!("stream error {}", str_message);
                 let ws_message = Message::Text(str_message.into());
 
-                let _ = socket.send(ws_message);
+                let _ = socket.send(ws_message).await;
             }
         }
     }

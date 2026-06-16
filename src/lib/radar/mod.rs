@@ -1675,7 +1675,6 @@ impl CommonRadar {
             // dropping this feed is invisible to single-radar displays.
 
             // Always broadcast spoke to clients
-            let mut spoke = spoke;
             self.trails
                 .update_trails(&mut spoke, &self.info.legend, &self.info.controls);
             message.spokes.push(spoke);
