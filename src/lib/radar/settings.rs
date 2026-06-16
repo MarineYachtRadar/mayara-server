@@ -872,12 +872,15 @@ impl SharedControls {
                     return Ok(Value::Number(n));
                 }
 
+                // Use `find` and return the HashMap key, not `position` —
+                // `position` returns the iteration index, which for a
+                // HashMap is nondeterministic and unrelated to the
+                // control's numeric value.
                 if let Some(descriptions) = &control.item.descriptions
-                    && let Some(idx) = descriptions
-                        .iter()
-                        .position(|(_, d)| d.eq_ignore_ascii_case(s))
+                    && let Some((&key, _)) =
+                        descriptions.iter().find(|(_, d)| d.eq_ignore_ascii_case(s))
                 {
-                    return Ok(Value::Number(Number::from(idx)));
+                    return Ok(Value::Number(Number::from(key)));
                 }
 
                 // 3. If no match, keep the string as it is.
@@ -3537,6 +3540,46 @@ mod test {
         assert_eq!(radar_id, "foo.bar");
         assert_eq!(rcv.radar_id.as_deref(), Some("foo.bar"));
         assert_eq!(rcv.control_id, Some(ControlId::Gain));
+    }
+
+    #[test]
+    fn normalize_value_label_resolves_to_map_key_not_iteration_index() {
+        // Sparse i32 keys so the HashMap iteration index differs from the
+        // key for every entry — that way any HashMap order picks a wrong
+        // answer if `position` is used.
+        let mut descriptions = HashMap::new();
+        descriptions.insert(0, "Off".to_string());
+        descriptions.insert(5, "Medium".to_string());
+        descriptions.insert(10, "Fast".to_string());
+
+        let (_id, control) = new_map(ControlId::Gain, descriptions).take();
+
+        let result =
+            SharedControls::normalize_value(&Value::String("Medium".to_string()), &control)
+                .expect("normalize_value should succeed");
+        assert_eq!(result, Value::Number(Number::from(5)));
+
+        let result = SharedControls::normalize_value(&Value::String("Fast".to_string()), &control)
+            .expect("normalize_value should succeed");
+        assert_eq!(result, Value::Number(Number::from(10)));
+
+        let result = SharedControls::normalize_value(&Value::String("Off".to_string()), &control)
+            .expect("normalize_value should succeed");
+        assert_eq!(result, Value::Number(Number::from(0)));
+    }
+
+    #[test]
+    fn normalize_value_label_is_case_insensitive() {
+        let mut descriptions = HashMap::new();
+        descriptions.insert(0, "Off".to_string());
+        descriptions.insert(7, "Medium".to_string());
+
+        let (_id, control) = new_map(ControlId::Gain, descriptions).take();
+
+        let result =
+            SharedControls::normalize_value(&Value::String("medium".to_string()), &control)
+                .expect("normalize_value should succeed");
+        assert_eq!(result, Value::Number(Number::from(7)));
     }
 
     #[test]
