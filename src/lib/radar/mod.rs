@@ -892,7 +892,7 @@ impl SharedRadars {
                 log::info!("Requesting transmit mode for radar '{}'", key);
                 let control_value = ControlValue::new(
                     ControlId::Power,
-                    serde_json::Value::Number(serde_json::Number::from(2)), // 2 = Transmit
+                    serde_json::Value::Number(serde_json::Number::from(Power::Transmit as i32)),
                 );
                 // Create a dummy reply channel - we don't need the response
                 let (reply_tx, _reply_rx) = tokio::sync::mpsc::channel(1);
