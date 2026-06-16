@@ -277,8 +277,9 @@ impl RaymarineReportReceiver {
                     }
                     Err(e) => {
                         // Leave report_socket None so run() retries (it
-                        // owns the back-off); never fall back to a separate
-                        // command socket (collision).
+                        // owns the back-off and observes shutdown while
+                        // sleeping); never fall back to a separate command
+                        // socket (collision).
                         log::debug!(
                             "{}: {} via {}: unicast report socket failed: {}",
                             self.common.key,

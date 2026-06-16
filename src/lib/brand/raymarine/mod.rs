@@ -362,7 +362,8 @@ impl RaymarineLocator {
 
                     let radar_send: SocketAddrV4 = data.command.into();
 
-                    // Behind an MFD acting as WiFi AP, the Quantum advertises an
+                    // Quantum WiFi radars connect to a well-known SSID and password,
+                    // and the Quantum advertises an
                     // unspecified report address (0.0.0.0:0) and instead streams
                     // reports and spokes unicast back to whoever sends it commands.
                     // The command socket sends from the NIC on the command port,
