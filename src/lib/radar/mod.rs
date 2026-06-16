@@ -1862,7 +1862,7 @@ impl CommonRadar {
     where
         f64: From<T>,
     {
-        self.set(control_id, value.into(), None, None)
+        self.set(control_id, value, None, None)
     }
 
     pub(crate) fn set_value_auto<T>(&mut self, control_id: &ControlId, value: T, auto: u8)

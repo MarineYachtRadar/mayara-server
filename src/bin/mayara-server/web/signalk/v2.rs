@@ -1225,7 +1225,7 @@ async fn ws_signalk_delta(
                     Some(message) => {
                         if let Err(e) = send_message(socket, &message).await {
                             log::error!("send to websocket client: {e}");
-                            break Err(e.into());
+                            break Err(e);
                         }
 
                     },
