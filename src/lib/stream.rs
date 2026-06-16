@@ -211,7 +211,7 @@ impl SignalKDelta {
         if self.updates.len() > 0 {
             return Some(self);
         }
-        return None;
+        None
     }
 }
 
@@ -359,7 +359,7 @@ impl DeltaUpdate {
             values,
         };
 
-        return delta_update;
+        delta_update
     }
 }
 
@@ -693,7 +693,7 @@ impl ActiveSubscriptions {
             panic!("Invalid use of is_subscribed(), can only be done on internal RCV");
         }
 
-        return false;
+        false
     }
 
     pub fn is_subscribed_path(&mut self, path: &str, full: bool) -> bool {
@@ -773,7 +773,7 @@ impl ActiveSubscriptions {
             }
         }
 
-        return false;
+        false
     }
 
     /// Check if subscribed to a navigation path

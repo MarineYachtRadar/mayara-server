@@ -111,7 +111,7 @@ impl Range {
     }
 
     fn near(a: i32, b: i32) -> bool {
-        return a % b == 0 || a % b == 1 || a % b == b - 1;
+        a % b == 0 || a % b == 1 || a % b == b - 1
     }
 
     /// Check if a distance value (in meters) looks like a metric (km-based) range

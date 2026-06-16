@@ -885,12 +885,10 @@ impl SharedControls {
             }
 
             // For arrays we recurse into each element
-            Value::Array(_) | Value::Object(_) => {
-                return Err(RadarError::CannotSetControlIdValue(
-                    control.item.control_id,
-                    value.clone(),
-                ));
-            }
+            Value::Array(_) | Value::Object(_) => Err(RadarError::CannotSetControlIdValue(
+                control.item.control_id,
+                value.clone(),
+            )),
         }
     }
 
@@ -1560,7 +1558,7 @@ impl SharedControls {
                 return descriptions.get(&value).cloned();
             }
         }
-        return None;
+        None
     }
 
     pub fn set_user_name(&self, name: String) {

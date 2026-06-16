@@ -366,7 +366,7 @@ pub fn get_heading_true() -> Option<f64> {
     if !heading.is_nan() {
         return Some(heading);
     }
-    return None;
+    None
 }
 
 /// Get the magnetic heading in radians [0..2*PI>, if known. Forwarded to the
@@ -376,7 +376,7 @@ pub fn get_heading_magnetic() -> Option<f64> {
     if !heading.is_nan() {
         return Some(heading);
     }
-    return None;
+    None
 }
 
 ///
@@ -494,7 +494,7 @@ pub fn get_radar_position() -> Option<GeoPosition> {
         let lon = POSITION_LON.load(Ordering::Acquire);
         return Some(GeoPosition::new(lat, lon));
     }
-    return None;
+    None
 }
 
 pub fn get_position() -> (Option<f64>, Option<f64>) {
@@ -504,7 +504,7 @@ pub fn get_position() -> (Option<f64>, Option<f64>) {
         log::trace!("navdata::get_position() -> lat={}, lon={}", lat, lon);
         return (Some(lat), Some(lon));
     }
-    return (None, None);
+    (None, None)
 }
 
 pub(crate) fn set_position(lat: Option<f64>, lon: Option<f64>, source: &str) {
@@ -523,7 +523,6 @@ pub(crate) fn set_position(lat: Option<f64>, lon: Option<f64>, source: &str) {
         }
     } else {
         POSITION_VALID.store(false, Ordering::Release);
-        return;
     }
 }
 
@@ -554,7 +553,7 @@ pub(crate) fn get_cog() -> Option<f64> {
     if !cog.is_nan() {
         return Some(cog);
     }
-    return None;
+    None
 }
 
 pub(crate) fn set_cog(cog: Option<f64>) {
@@ -577,7 +576,7 @@ pub(crate) fn get_sog() -> Option<f64> {
     if !sog.is_nan() {
         return Some(sog);
     }
-    return None;
+    None
 }
 
 pub(crate) fn set_sog(sog: Option<f64>) {

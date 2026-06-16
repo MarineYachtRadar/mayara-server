@@ -29,7 +29,7 @@ pub fn list() -> Vec<ArpEntry> {
     }
     #[cfg(target_os = "macos")]
     {
-        return unix_arp::list();
+        unix_arp::list()
     }
     #[cfg(target_os = "windows")]
     {

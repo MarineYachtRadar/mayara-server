@@ -1299,7 +1299,7 @@ fn map_axum_error(e: axum::Error) -> Result<(), RadarError> {
         // careless in closing websocket
         return Ok(());
     }
-    return Err(e.into());
+    Err(e.into())
 }
 
 async fn send_message<T>(socket: &mut WebSocket, message: T) -> Result<(), RadarError>

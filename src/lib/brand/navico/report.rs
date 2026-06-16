@@ -1310,7 +1310,7 @@ impl NavicoReportReceiver {
                 }
                 Err(e) => {
                     log::warn!("Illegible spoke: {} header {:02X?}", e, &header_slice);
-                    return None;
+                    None
                 }
             },
             _ => match decode_bin::<Gen3PlusHeader>(&header_slice) {
@@ -1321,7 +1321,7 @@ impl NavicoReportReceiver {
                 }
                 Err(e) => {
                     log::warn!("Illegible spoke: {} header {:02X?}", e, &header_slice);
-                    return None;
+                    None
                 }
             },
         }

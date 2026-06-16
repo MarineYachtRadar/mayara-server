@@ -210,10 +210,9 @@ impl Persistence {
         match self.saver() {
             Err(e) => {
                 warn!("cannot store config '{}': {}", &self.path.display(), e);
-                return;
             }
             Ok(_) => {}
-        };
+        }
     }
 
     pub(crate) fn store(&mut self, radar_info: &RadarInfo) {
