@@ -562,8 +562,7 @@ impl BlobDetector {
             let size = self.calculate_size(&blob, &spoke_arc);
             let pixel_count = blob.pixels.len();
             let valid = pixel_count >= MIN_TARGET_PIXELS
-                && size >= MIN_TARGET_SIZE_M
-                && size <= MAX_TARGET_SIZE_M;
+                && (MIN_TARGET_SIZE_M..=MAX_TARGET_SIZE_M).contains(&size);
             log::debug!(
                 "BlobDetector: completed blob with {} pixels, size {:.1}m (valid: {})",
                 pixel_count,

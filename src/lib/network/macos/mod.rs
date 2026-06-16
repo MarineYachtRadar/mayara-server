@@ -30,8 +30,8 @@ fn wait_for_ip_addr_change(
         .expect("Failed to create SCDynamicStore session for IP change monitor");
 
     // Define the key to monitor for changes (IPv4 addresses)
-    let watched_keys = &CFArray::from_CFTypes(&vec![CFString::new("State:/Network/Global/IPv4")]);
-    let patterns = &CFArray::from_CFTypes(&vec![CFString::new("State:/Network/Interface/.*/IPv4")]);
+    let watched_keys = &CFArray::from_CFTypes(&[CFString::new("State:/Network/Global/IPv4")]);
+    let patterns = &CFArray::from_CFTypes(&[CFString::new("State:/Network/Interface/.*/IPv4")]);
 
     // Set the notification keys
     if !store.set_notification_keys(watched_keys, patterns) {

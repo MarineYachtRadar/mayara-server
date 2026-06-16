@@ -109,9 +109,7 @@ impl KodenReportReceiver {
                     match r {
                         Err(_) => {},
                         Ok(cv) => {
-                            if let Err(e) = self.common.process_control_update(cv, &mut self.command_sender).await {
-                                return Err(e);
-                            }
+                            self.common.process_control_update(cv, &mut self.command_sender).await?
                         },
                     }
                 }

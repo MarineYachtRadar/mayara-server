@@ -182,7 +182,7 @@ impl ExclusionMask {
                     let s = (ax * ray_dy - ay * ray_dx) / denom;
 
                     // Check if intersection is within edge bounds and ray is positive
-                    if t > 0.0 && s >= 0.0 && s <= 1.0 {
+                    if t > 0.0 && (0.0..=1.0).contains(&s) {
                         intersections.push(t);
                     }
                 }

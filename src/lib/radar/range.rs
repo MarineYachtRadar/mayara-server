@@ -179,26 +179,24 @@ impl Display for Range {
                 } else {
                     write!(f, "{} m", v)
                 }
-            } else {
-                if v >= NAUTICAL_MILE - 1 {
-                    if Self::near(v, NAUTICAL_MILE) {
-                        write!(f, "{} nm", (v + 1) / NAUTICAL_MILE)
-                    } else {
-                        write!(f, "{} nm", v as f64 / NAUTICAL_MILE_F64)
-                    }
-                } else if Self::near(v, NAUTICAL_MILE / 2) {
-                    write!(f, "{}/2 nm", (v + 1) / (NAUTICAL_MILE / 2))
-                } else if Self::near(v, NAUTICAL_MILE / 4) {
-                    write!(f, "{}/4 nm", (v + 1) / (NAUTICAL_MILE / 4))
-                } else if Self::near(v, NAUTICAL_MILE / 8) {
-                    write!(f, "{}/8 nm", (v + 1) / (NAUTICAL_MILE / 8))
-                } else if Self::near(v, NAUTICAL_MILE / 16) {
-                    write!(f, "{}/16 nm", (v + 1) / (NAUTICAL_MILE / 16))
-                } else if Self::near(v, NAUTICAL_MILE / 32) {
-                    write!(f, "{}/32 nm", (v + 1) / (NAUTICAL_MILE / 32))
+            } else if v >= NAUTICAL_MILE - 1 {
+                if Self::near(v, NAUTICAL_MILE) {
+                    write!(f, "{} nm", (v + 1) / NAUTICAL_MILE)
                 } else {
                     write!(f, "{} nm", v as f64 / NAUTICAL_MILE_F64)
                 }
+            } else if Self::near(v, NAUTICAL_MILE / 2) {
+                write!(f, "{}/2 nm", (v + 1) / (NAUTICAL_MILE / 2))
+            } else if Self::near(v, NAUTICAL_MILE / 4) {
+                write!(f, "{}/4 nm", (v + 1) / (NAUTICAL_MILE / 4))
+            } else if Self::near(v, NAUTICAL_MILE / 8) {
+                write!(f, "{}/8 nm", (v + 1) / (NAUTICAL_MILE / 8))
+            } else if Self::near(v, NAUTICAL_MILE / 16) {
+                write!(f, "{}/16 nm", (v + 1) / (NAUTICAL_MILE / 16))
+            } else if Self::near(v, NAUTICAL_MILE / 32) {
+                write!(f, "{}/32 nm", (v + 1) / (NAUTICAL_MILE / 32))
+            } else {
+                write!(f, "{} nm", v as f64 / NAUTICAL_MILE_F64)
             }
         }
     }

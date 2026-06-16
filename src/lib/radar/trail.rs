@@ -289,7 +289,7 @@ impl TrailBuffer {
             // zoom trails
             let zoom_factor = pixels_per_meter / self.pixels_per_meter;
 
-            if zoom_factor < 0.25 || zoom_factor > 4.00 {
+            if !(0.25..=4.00).contains(&zoom_factor) {
                 self.clear();
                 return;
             }

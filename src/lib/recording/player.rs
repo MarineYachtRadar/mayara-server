@@ -309,8 +309,7 @@ pub async fn load_recording(
 
     if let Some(mut info) = radars.add(info) {
         // Set ranges so the radar appears as active in the GUI
-        let ranges =
-            crate::radar::range::Ranges::new_by_distance(&vec![header.max_spoke_len as i32]);
+        let ranges = crate::radar::range::Ranges::new_by_distance(&[header.max_spoke_len as i32]);
         info.set_ranges(ranges);
 
         // Set power to transmit so GUI shows radar as active

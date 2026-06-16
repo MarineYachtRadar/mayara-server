@@ -745,8 +745,7 @@ impl SharedRadars {
         let radars = self.radars.read().unwrap();
         radars
             .info
-            .iter()
-            .map(|(_k, v)| v)
+            .values()
             .filter(|i| !i.ranges.is_empty())
             .map(|v| v.clone())
             .collect()
@@ -756,8 +755,7 @@ impl SharedRadars {
         let radars = self.radars.read().unwrap();
         radars
             .info
-            .iter()
-            .map(|(_k, v)| v)
+            .values()
             .filter(|i| !i.ranges.is_empty())
             .count()
             > 0

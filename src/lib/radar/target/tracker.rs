@@ -732,7 +732,7 @@ impl TargetTracker {
 
             if distance < threshold {
                 // Track only the closest match
-                if best_match.map_or(true, |(_, best_dist)| distance < best_dist) {
+                if best_match.is_none_or(|(_, best_dist)| distance < best_dist) {
                     best_match = Some((*id, distance));
                 }
             }

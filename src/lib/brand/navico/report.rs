@@ -761,10 +761,8 @@ impl NavicoReportReceiver {
                                 report
                             );
                         }
-                    } else {
-                        if let Ok(report) = HaloHeadingPacket::transmute(&self.info_buf) {
-                            log::trace!("{}: Halo heading report {:?}", self.common.key, report);
-                        }
+                    } else if let Ok(report) = HaloHeadingPacket::transmute(&self.info_buf) {
+                        log::trace!("{}: Halo heading report {:?}", self.common.key, report);
                     }
                 }
             }

@@ -670,7 +670,7 @@ const RAYMARINE_WOL_RADAR: [u8; 102] = [
     0xc7, 0xd, 0xef, 0xa0,
 ];
 
-const BEACONS: [&'static [u8]; 3] = [
+const BEACONS: [&[u8]; 3] = [
     &RAYMARINE_MFD_BEACON,
     &RAYMARINE_WAKE_RADAR,
     &RAYMARINE_WOL_RADAR,

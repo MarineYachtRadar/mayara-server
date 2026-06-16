@@ -112,7 +112,7 @@ impl Model {
     /// Returns true for all HALO variants (dome and open array).
     pub(crate) fn is_halo(&self) -> bool {
         let v = *self as u32;
-        v >= 14 && v <= 23
+        (14..=23).contains(&v)
     }
 }
 

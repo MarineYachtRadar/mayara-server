@@ -102,7 +102,7 @@ impl MrrHeader {
         let mut buf = [0u8; HEADER_SIZE];
         reader.read_exact(&mut buf)?;
 
-        if &buf[0..4] != &MRR_MAGIC {
+        if buf[0..4] != MRR_MAGIC {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "Invalid MRR file: bad magic bytes",
@@ -176,7 +176,7 @@ impl MrrFooter {
         let mut buf = [0u8; FOOTER_SIZE];
         reader.read_exact(&mut buf)?;
 
-        if &buf[0..4] != &MRR_FOOTER_MAGIC {
+        if buf[0..4] != MRR_FOOTER_MAGIC {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "Invalid MRR footer: bad magic bytes",

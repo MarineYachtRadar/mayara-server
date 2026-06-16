@@ -590,11 +590,10 @@ pub(crate) fn set_sog(sog: Option<f64>) {
 const NMEA0183_SERVICE_NAME: &str = "_nmea-0183._tcp.local.";
 
 /// Subscription for own-ship navigation data only
-const SUBSCRIBE_SELF: &'static str = "{\"context\":\"vessels.self\",\"subscribe\":[{\"path\":\"navigation.headingTrue\"},{\"path\":\"navigation.headingMagnetic\"},{\"path\":\"navigation.magneticVariation\"},{\"path\":\"navigation.position\"},{\"path\":\"navigation.speedOverGround\"},{\"path\":\"navigation.courseOverGroundTrue\"}]}\r\n";
+const SUBSCRIBE_SELF: &str = "{\"context\":\"vessels.self\",\"subscribe\":[{\"path\":\"navigation.headingTrue\"},{\"path\":\"navigation.headingMagnetic\"},{\"path\":\"navigation.magneticVariation\"},{\"path\":\"navigation.position\"},{\"path\":\"navigation.speedOverGround\"},{\"path\":\"navigation.courseOverGroundTrue\"}]}\r\n";
 
 /// Additional subscription for all vessels (sent after own-ship context is known)
-const SUBSCRIBE_ALL: &'static str =
-    "{\"context\":\"vessels.*\",\"subscribe\":[{\"path\":\"*\"}]}\r\n";
+const SUBSCRIBE_ALL: &str = "{\"context\":\"vessels.*\",\"subscribe\":[{\"path\":\"*\"}]}\r\n";
 
 /// A Signal K subscription the transport layer should send in response to an
 /// incoming message. Both TCP and WebSocket receive loops share this decision

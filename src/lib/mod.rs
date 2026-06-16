@@ -214,10 +214,10 @@ impl Cli {
     /// Resolve the upstream Signal K bearer token by precedence:
     /// `--signalk-token` > `--signalk-token-file` > env `MAYARA_SIGNALK_TOKEN`
     /// > none. The file is read once; outer whitespace is trimmed. An
-    /// empty/whitespace-only value resolves to `None` so misconfigured
-    /// deployments don't silently send blank tokens. Embedded control
-    /// characters (including `\r`/`\n`) cause an `InvalidData` error so a
-    /// token can never inject extra HTTP headers downstream.
+    /// > empty/whitespace-only value resolves to `None` so misconfigured
+    /// > deployments don't silently send blank tokens. Embedded control
+    /// > characters (including `\r`/`\n`) cause an `InvalidData` error so a
+    /// > token can never inject extra HTTP headers downstream.
     pub fn resolved_signalk_token(&self) -> std::io::Result<Option<String>> {
         self.resolved_signalk_token_with_env(|k| std::env::var(k).ok())
     }

@@ -332,9 +332,7 @@ impl FurunoReportReceiver {
                             if let Some(ref mut cs) = self.command_sender {
                                 cs.dual_range_id = 0;
                             }
-                            if let Err(e) = self.common.process_control_update( cv, &mut self.command_sender).await {
-                                return Err(e);
-                            }
+                            self.common.process_control_update( cv, &mut self.command_sender).await?
                         },
                     }
                 },
@@ -427,10 +425,8 @@ impl FurunoReportReceiver {
                 log::warn!("{}: Failed to login to radar: {}", self.common.key, e);
             } else if let Err(e) = self.start_command_stream().await {
                 log::warn!("{}: Failed to start command stream: {}", self.common.key, e);
-            } else {
-                if let Err(RadarError::Shutdown) = self.data_loop(subsys).await {
-                    return Ok(());
-                }
+            } else if let Err(RadarError::Shutdown) = self.data_loop(subsys).await {
+                return Ok(());
             }
 
             tokio::select! {

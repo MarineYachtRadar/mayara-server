@@ -1210,7 +1210,7 @@ impl SharedControls {
     pub fn get_control_keys(&self) -> Vec<&'static str> {
         let locked = self.controls.read().unwrap();
 
-        locked.controls.iter().map(|(k, _)| k.into()).collect()
+        locked.controls.keys().map(|k| k.into()).collect()
     }
 
     pub fn contains_key(&self, control_id: &ControlId) -> bool {
@@ -3127,7 +3127,7 @@ impl Control {
 
     pub fn set_string(&mut self, value: String) -> Option<()> {
         let value = Some(value);
-        if &self.description != &value {
+        if self.description != value {
             self.description = value;
             self.needs_refresh = false;
             self.timestamp = Some(Utc::now());
