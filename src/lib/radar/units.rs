@@ -76,6 +76,11 @@ impl Units {
         (units, value * factor)
     }
 
+    // `from_*` usually names a constructor (no `self`); here it instead
+    // names "convert FROM SI, given this unit". The name is established
+    // at the call site (`wire_units.from_si(value)`) — rename would just
+    // be churn.
+    #[allow(clippy::wrong_self_convention)]
     pub(crate) fn from_si(self, value: f64) -> f64 {
         // Kelvin→Celsius is an affine transform (offset, not just scale).
         if self == Units::Celsius {

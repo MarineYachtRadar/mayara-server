@@ -556,15 +556,13 @@ impl TrailBuffer {
                 let trail = &self.relative_trails
                     [spoke * self.max_spoke_len..(spoke + 1) * self.max_spoke_len];
 
-                for j in 0..self.max_spoke_len {
+                for (j, &t) in trail.iter().enumerate() {
                     let index_new = (j as f64 * zoom_factor) as usize;
                     if index_new >= self.max_spoke_len {
                         break;
                     }
-                    if trail[j] != 0 {
-                        for k in index_prev..=index_new {
-                            new_trail[k] = trail[j];
-                        }
+                    if t != 0 {
+                        new_trail[index_prev..=index_new].fill(t);
                     }
                     index_prev = index_new + 1;
                 }

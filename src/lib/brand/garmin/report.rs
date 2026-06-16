@@ -36,9 +36,9 @@ fn wire_to_legend(legend: &Legend, is_xhd: bool, doppler: bool) -> WireToLegendT
             //   0xF8–0xFF (248–255) → receding, 4 legend indices
             let (appr_start, appr_count) = legend.doppler_approaching.unwrap_or((0, 0));
             let (recv_start, recv_count) = legend.doppler_receding.unwrap_or((0, 0));
-            for j in 0..BYTE_LOOKUP_LENGTH {
+            for (j, slot) in lookup.iter_mut().enumerate() {
                 let jb = j as u8;
-                lookup[j] = if jb >= DOPPLER_RECEDING_START {
+                *slot = if jb >= DOPPLER_RECEDING_START {
                     // Receding band: map 8 wire sub-levels to `recv_count`
                     // legend entries via integer division.
                     let sub = jb - DOPPLER_RECEDING_START;
@@ -64,14 +64,14 @@ fn wire_to_legend(legend: &Legend, is_xhd: bool, doppler: bool) -> WireToLegendT
             }
         } else {
             // without Doppler: divide by 2 to make room for legend values
-            for j in 0..BYTE_LOOKUP_LENGTH {
-                lookup[j] = (j / 2) as u8;
+            for (j, slot) in lookup.iter_mut().enumerate() {
+                *slot = (j / 2) as u8;
             }
         }
     } else {
         // HD: binary data, no transformation needed
-        for j in 0..BYTE_LOOKUP_LENGTH {
-            lookup[j] = j as u8;
+        for (j, slot) in lookup.iter_mut().enumerate() {
+            *slot = j as u8;
         }
     }
 

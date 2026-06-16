@@ -1731,9 +1731,9 @@ impl FurunoReportReceiver {
             return src[..dst_len].to_vec();
         }
         let mut out = vec![0u8; dst_len];
-        for i in 0..dst_len {
+        for (i, slot) in out.iter_mut().enumerate() {
             let j = (i * effective) / dst_len;
-            out[i] = src[j];
+            *slot = src[j];
         }
         out
     }

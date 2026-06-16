@@ -478,11 +478,10 @@ impl TargetTracker {
             if self.active_targets[&a].update_count >= 4 {
                 continue;
             }
-            for j in 0..ids.len() {
+            for (j, &b) in ids.iter().enumerate() {
                 if i == j {
                     continue;
                 }
-                let b = ids[j];
                 if to_remove.contains(&b) {
                     continue;
                 }

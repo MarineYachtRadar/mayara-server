@@ -394,8 +394,8 @@ pub(super) fn process_status_report(receiver: &mut RaymarineReportReceiver, data
         let mut ranges = Ranges::empty();
         let report_ranges = report.ranges; // copy for alignment
 
-        for i in 0..report_ranges.len() {
-            let meters = (report_ranges[i] as f64 * 1.852f64) as i32; // Convert to nautical miles
+        for (i, &raw) in report_ranges.iter().enumerate() {
+            let meters = (raw as f64 * 1.852f64) as i32; // Convert to nautical miles
 
             ranges.push(Range::new(meters, i));
         }

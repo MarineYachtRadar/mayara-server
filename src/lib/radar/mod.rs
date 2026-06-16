@@ -1605,15 +1605,15 @@ impl CommonRadar {
             if log::log_enabled!(log::Level::Trace) {
                 // Verify spoke contains legal values
                 let max_value = self.info.legend.pixels.len() as u8;
-                for i in 0..generic_spoke.len() {
-                    if generic_spoke[i] >= max_value {
+                for pixel in generic_spoke.iter_mut() {
+                    if *pixel >= max_value {
                         log::error!(
                             "{}: Spoke contains value {} which is >= {}",
                             self.key,
-                            generic_spoke[i],
+                            *pixel,
                             max_value
                         );
-                        generic_spoke[i] = 0;
+                        *pixel = 0;
                     }
                 }
             }
