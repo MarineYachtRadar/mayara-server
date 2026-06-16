@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **settings:** parse_path: split on `.controls.`, route to the right radar (#367) ([PR #367](https://github.com/MarineYachtRadar/mayara-server/pull/367))
 - **raymarine:** bound-check Quantum frame and RLE markers (#369) ([PR #369](https://github.com/MarineYachtRadar/mayara-server/pull/369))
 - **settings:** resolve enum labels by HashMap key, not iteration index (#371) ([PR #371](https://github.com/MarineYachtRadar/mayara-server/pull/371))
+- **stream:** keep throttle deadline when dropping a too-soon update (#375) ([PR #375](https://github.com/MarineYachtRadar/mayara-server/pull/375))
 
 ## [3.5.4] - 2026-06-02
 
