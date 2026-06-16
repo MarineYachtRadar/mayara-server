@@ -176,15 +176,7 @@ impl GarminReportReceiver {
             false,
         );
 
-        let common = CommonRadar::new(
-            args,
-            key,
-            info,
-            radars.clone(),
-            control_update_rx,
-            replay,
-            blob_tx,
-        );
+        let common = CommonRadar::new(args, key, info, radars, control_update_rx, replay, blob_tx);
 
         let capabilities = match radar_type {
             GarminRadarType::HD => GarminCapabilities::for_legacy_hd(),

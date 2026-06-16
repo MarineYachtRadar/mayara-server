@@ -137,8 +137,8 @@ impl FurunoReportReceiver {
         let common = CommonRadar::new(
             args,
             key,
-            info.clone(),
-            radars.clone(),
+            info,
+            radars,
             control_update_rx,
             args.is_replay(),
             blob_tx,

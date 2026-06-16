@@ -1021,7 +1021,7 @@ mod tests {
         let mut tracker = super::super::tracker::TargetTracker::new_merged(2048);
 
         // Process 4 times to promote (requires 4 updates)
-        tracker.process_candidate(candidate.clone());
+        tracker.process_candidate(candidate);
         for i in 1..4u64 {
             let c = TargetCandidate {
                 time: 1000 + i * 3000,

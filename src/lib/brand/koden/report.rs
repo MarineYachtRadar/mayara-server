@@ -34,7 +34,7 @@ impl KodenReportReceiver {
             args,
             key,
             info,
-            radars.clone(),
+            radars,
             control_update_rx,
             args.is_replay(),
             blob_tx,

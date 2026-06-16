@@ -836,7 +836,7 @@ mod tests {
             SocketAddrV4::new(Ipv4Addr::new(232, 1, 167, 1), 2574)
         );
 
-        let mut state = RaymarineLocator::new(args.clone());
+        let mut state = RaymarineLocator::new(args);
         let r = state.process_beacon_36_report(&DATA3_36, &VIA, radars);
         assert!(r.is_ok());
         let r = r.unwrap();

@@ -189,15 +189,7 @@ impl RaymarineReportReceiver {
 
         let wire_to_legend = wire_to_legend(&info.get_legend());
 
-        let common = CommonRadar::new(
-            args,
-            key,
-            info,
-            radars.clone(),
-            control_update_rx,
-            replay,
-            blob_tx,
-        );
+        let common = CommonRadar::new(args, key, info, radars, control_update_rx, replay, blob_tx);
 
         let now = Instant::now();
         RaymarineReportReceiver {

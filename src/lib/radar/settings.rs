@@ -1116,7 +1116,7 @@ impl SharedControls {
         }
         let control_value = ControlValue::from(control, None);
         let locked = self.controls.read().unwrap();
-        match locked.all_clients_tx.send(control_value.clone()) {
+        match locked.all_clients_tx.send(control_value) {
             Err(_e) => {}
             Ok(cnt) => {
                 log::trace!(
@@ -1407,7 +1407,7 @@ impl SharedControls {
 
         if let Some(control) = control {
             self.send_to_all_clients(&control);
-            Ok(control.description.clone())
+            Ok(control.description)
         } else {
             Ok(None)
         }
@@ -1447,7 +1447,7 @@ impl SharedControls {
         if let Some(control) = control {
             self.send_to_all_clients(&control);
 
-            Ok(control.description.clone())
+            Ok(control.description)
         } else {
             Ok(None)
         }
@@ -1640,7 +1640,7 @@ impl SharedControls {
     pub fn set_model_name(&self, name: String) {
         let mut locked = self.controls.write().unwrap();
         let control = locked.controls.get_mut(&ControlId::ModelName).unwrap();
-        control.set_string(name.clone());
+        control.set_string(name);
     }
 
     pub fn model_name(&self) -> Option<String> {

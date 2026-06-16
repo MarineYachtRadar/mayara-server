@@ -374,14 +374,14 @@ pub async fn load_recording(
             speed: speed.clone(),
             loop_playback: loop_playback.clone(),
             filename: filename.to_string(),
-            radar_key: radar_key.clone(),
+            radar_key: radar_key,
             duration_ms: footer.duration_ms,
             frame_count: footer.frame_count,
             state: state.clone(),
             seek_target: seek_target.clone(),
         };
 
-        let path_clone = path.clone();
+        let path_clone = path;
         tokio::spawn(async move {
             playback_task(
                 path_clone,

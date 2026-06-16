@@ -225,7 +225,7 @@ async fn get_radars(State(state): State<Web>, headers: hyper::header::HeaderMap)
 
     log::debug!("Radar state request, target host = '{}'", host);
     let mut api: HashMap<String, RadarApiV3> = HashMap::new();
-    for info in state.radars.get_active().clone() {
+    for info in state.radars.get_active() {
         let spoke_data_uri = SPOKES_URI.replace("{id}", &info.key());
         let v = RadarApiV3 {
             name: info.controls.user_name(),
@@ -1128,7 +1128,7 @@ async fn control_stream_handler(
     };
 
     let radars = state.radars.clone();
-    let shutdown_tx = state.shutdown_tx.clone();
+    let shutdown_tx = state.shutdown_tx;
 
     // finalize the upgrade process by returning upgrade callback.
     // we can customize the callback by sending additional info such as address.

@@ -1052,13 +1052,7 @@ impl NavigationData {
 
         if interface.is_some() {
             let _ = mdns.disable_interface(IfKind::All);
-            let navigation_address = self
-                .args
-                .navigation_address
-                .as_ref()
-                .unwrap()
-                .to_string()
-                .clone();
+            let navigation_address = self.args.navigation_address.as_ref().unwrap().to_string();
             let _ = mdns.enable_interface(IfKind::Name(navigation_address));
         }
 

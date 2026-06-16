@@ -212,12 +212,12 @@ impl Cli {
     }
 
     /// Resolve the upstream Signal K bearer token by precedence:
-    /// `--signalk-token` > `--signalk-token-file` > env `MAYARA_SIGNALK_TOKEN`
-    /// > none. The file is read once; outer whitespace is trimmed. An
-    /// > empty/whitespace-only value resolves to `None` so misconfigured
-    /// > deployments don't silently send blank tokens. Embedded control
-    /// > characters (including `\r`/`\n`) cause an `InvalidData` error so a
-    /// > token can never inject extra HTTP headers downstream.
+    /// `--signalk-token` > `--signalk-token-file` > env `MAYARA_SIGNALK_TOKEN` > none.
+    /// The file is read once; outer whitespace is trimmed. An
+    /// empty/whitespace-only value resolves to `None` so misconfigured
+    /// deployments don't silently send blank tokens. Embedded control
+    /// characters (including `\r`/`\n`) cause an `InvalidData` error so a
+    /// token can never inject extra HTTP headers downstream.
     pub fn resolved_signalk_token(&self) -> std::io::Result<Option<String>> {
         self.resolved_signalk_token_with_env(|k| std::env::var(k).ok())
     }
@@ -611,7 +611,7 @@ pub async fn start_session(
     let locator = Locator::new(args.clone(), radars.clone());
 
     let (tx_ip_change, _rx_ip_change) = broadcast::channel(1);
-    let mut navdata = navdata::NavigationData::new(args.clone());
+    let mut navdata = navdata::NavigationData::new(args);
 
     let rx_ip_change_clone = tx_ip_change.subscribe();
     subsystem.start(SubsystemBuilder::new(

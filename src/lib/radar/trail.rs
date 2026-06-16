@@ -97,7 +97,7 @@ impl TrailBuffer {
             }
             ControlId::DopplerTrailsOnly => {
                 let v = cv.as_value()?;
-                let r = controls.set_value(&cv.id, v.clone());
+                let r = controls.set_value(&cv.id, v);
                 if r.is_ok() {
                     let value = controls.get(&cv.id).unwrap().as_u16().unwrap_or(0) > 0;
                     self.set_doppler_trail_only(value);
@@ -106,7 +106,7 @@ impl TrailBuffer {
             }
             ControlId::TargetTrails => {
                 let v = cv.as_value()?;
-                let r = controls.set_value(&cv.id, v.clone());
+                let r = controls.set_value(&cv.id, v);
                 if r.is_ok() {
                     let value = controls.get(&cv.id).unwrap().as_u16().unwrap_or(0);
                     self.set_relative_trails_length(value);

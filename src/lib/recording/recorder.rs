@@ -185,7 +185,7 @@ pub async fn start_recording(
     let active = ActiveRecording {
         stop_flag: stop_flag.clone(),
         radar_id: radar_key.to_string(),
-        filename: filename.clone(),
+        filename: filename,
         subdirectory: subdirectory.map(String::from),
         frame_count: frame_count.clone(),
         duration_ms: duration_ms.clone(),
@@ -195,7 +195,7 @@ pub async fn start_recording(
 
     let message_rx = radar_info.message_tx.subscribe();
 
-    let path_clone = path.clone();
+    let path_clone = path;
     tokio::spawn(async move {
         recording_task(
             mrr_writer,
