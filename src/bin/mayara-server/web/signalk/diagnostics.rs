@@ -245,6 +245,29 @@ fn gzip_json(body: &Value) -> std::io::Result<Vec<u8>> {
     encoder.finish()
 }
 
+#[utoipa::path(
+    get,
+    path = "/signalk/v2/api/vessels/self/radars/diagnostics",
+    summary = "Download a network diagnostics snapshot (gzipped JSON)",
+    description = "Returns a gzipped JSON document describing how mayara sees the network. \
+                   Intended to be attached to a GitHub issue when reporting that a radar is \
+                   not being detected. The payload includes: server build metadata, sanitized \
+                   CLI config, host network interfaces, per-interface locator/listener status \
+                   with skip reasons, and the list of detected radars. For each interface where \
+                   at least one radar locator is actively listening, the response also lists \
+                   devices observed on that subnet — sourced from the host ARP cache, a \
+                   short scoped mDNS browse, and a passive multicast snoop on mDNS/SSDP/LLMNR. \
+                   No request body or query parameters. Response is `application/gzip` with a \
+                   `Content-Disposition: attachment` header; the wall-clock latency is bounded \
+                   by the passive snoop window (~5 s) when any interface qualifies, or returns \
+                   immediately otherwise.",
+    responses(
+        (status = 200, description = "Gzipped JSON diagnostics snapshot",
+         content_type = "application/gzip"),
+        (status = 500, description = "Failed to compress the diagnostics payload")
+    ),
+    tag = "Configuration"
+)]
 pub(crate) async fn get_diagnostics(State(state): State<Web>) -> Response {
     let locator = fetch_interface_api(&state).await;
     let devices_by_nic = devices::collect_per_interface(&locator).await;

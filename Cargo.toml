@@ -10,7 +10,7 @@ keywords = ["radar", "marine", "server", "websocket", "rest-api"]
 categories = ["network-programming", "web-programming::http-server"]
 
 [package.metadata]
-api-version = "3.2.0"
+api-version = "3.3.0"
 
 [lib]
 name = "mayara"

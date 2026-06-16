@@ -69,6 +69,7 @@ const RADAR_TARGET_URI: &str = "/signalk/v2/api/vessels/self/radars/{radar_id}/t
     paths(
         get_radars,
         get_interfaces,
+        diagnostics::get_diagnostics,
         get_radar,
         get_control_values,
         get_control_value,
