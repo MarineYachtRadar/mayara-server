@@ -79,6 +79,20 @@ pub(crate) fn process_frame(receiver: &mut RaymarineReportReceiver, data: &[u8])
 
     let data_len = header.data_len as usize;
 
+    // Defend the slice against truncated/malformed UDP payloads — both
+    // `data_len` and the packet length are wire-supplied. A short packet
+    // (or a packet with a wire-inflated `data_len`) would otherwise panic
+    // the receiver task.
+    let payload_remaining = data.len().saturating_sub(next_offset);
+    if data_len > payload_remaining {
+        log::warn!(
+            "{}: Quantum frame data_len {} exceeds remaining payload {}; dropped",
+            receiver.common.key,
+            data_len,
+            payload_remaining
+        );
+        return;
+    }
     let spoke = &data[next_offset..next_offset + data_len];
 
     receiver.common.add_spoke(
@@ -110,6 +124,17 @@ fn process_spoke(
             unpacked_data.push(wire_to_legend[doppler][pixel]);
             src_offset += 1;
         } else {
+            // RLE marker is a 3-byte tuple `(0x5c, count, pixel)`. Bail
+            // out cleanly on a truncated marker instead of panicking —
+            // the spoke buffer comes straight from a UDP payload.
+            if src_offset + 3 > spoke.len() {
+                log::warn!(
+                    "truncated Quantum RLE marker at offset {} (spoke len {}); spoke dropped",
+                    src_offset,
+                    spoke.len()
+                );
+                break;
+            }
             let count = spoke[src_offset + 1] as usize; // number to be filled
             let pixel = spoke[src_offset + 2] as usize; // data to be filled
             let value = wire_to_legend[doppler][pixel];
@@ -421,8 +446,10 @@ pub(super) fn process_doppler_report(receiver: &mut RaymarineReportReceiver, dat
 
 #[cfg(test)]
 mod tests {
-    use super::status_to_power;
-    use crate::radar::Power;
+    use super::{process_spoke, status_to_power};
+    use crate::radar::{BYTE_LOOKUP_LENGTH, Power};
+
+    use crate::brand::raymarine::report::{LOOKUP_DOPPLER_LENGTH, WireToLegendTable};
 
     #[test]
     fn known_power_states() {
@@ -439,5 +466,59 @@ mod tests {
         // logged distinctly.
         assert_eq!(status_to_power(0x0a, "k"), Power::Standby);
         assert_eq!(status_to_power(0xff, "k"), Power::Standby);
+    }
+
+    /// Identity legend so the unpacked bytes equal the wire bytes — keeps the
+    /// process_spoke assertions readable.
+    fn identity_lookup() -> WireToLegendTable {
+        let mut lookup: WireToLegendTable = [[0u8; BYTE_LOOKUP_LENGTH]; LOOKUP_DOPPLER_LENGTH];
+        for row in lookup.iter_mut() {
+            for (j, slot) in row.iter_mut().enumerate() {
+                *slot = j as u8;
+            }
+        }
+        lookup
+    }
+
+    #[test]
+    fn process_spoke_well_formed_rle_expands_correctly() {
+        // `0x5c 0x05 0x42` is "fill 5 with pixel 0x42" — followed by one
+        // plain pixel `0x11` for good measure.
+        let lookup = identity_lookup();
+        let spoke = [0x5c, 0x05, 0x42, 0x11];
+
+        let out = process_spoke(
+            /*returns_per_line=*/ 32, &spoke, /*doppler=*/ 1, &lookup,
+        );
+
+        assert_eq!(out, vec![0x42, 0x42, 0x42, 0x42, 0x42, 0x11]);
+    }
+
+    #[test]
+    fn process_spoke_truncated_rle_does_not_panic() {
+        // RLE marker `0x5c` followed by only the count byte — the value
+        // byte is missing. Before the fix this panicked at `spoke[src+2]`.
+        let lookup = identity_lookup();
+        let spoke = [0x55, 0x5c, 0x03];
+
+        // Should return what it already decoded (the leading `0x55`) and
+        // log a warning about the truncated marker.
+        let out = process_spoke(
+            /*returns_per_line=*/ 32, &spoke, /*doppler=*/ 1, &lookup,
+        );
+        assert_eq!(out, vec![0x55]);
+    }
+
+    #[test]
+    fn process_spoke_marker_at_very_end_does_not_panic() {
+        // The marker itself is the last byte — `src_offset + 1` would
+        // already be out of bounds before reading the count.
+        let lookup = identity_lookup();
+        let spoke = [0x12, 0x34, 0x5c];
+
+        let out = process_spoke(
+            /*returns_per_line=*/ 32, &spoke, /*doppler=*/ 1, &lookup,
+        );
+        assert_eq!(out, vec![0x12, 0x34]);
     }
 }
