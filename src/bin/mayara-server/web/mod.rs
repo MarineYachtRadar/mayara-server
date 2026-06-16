@@ -588,7 +588,6 @@ async fn spokes_handler(
 }
 
 /// Actual websocket statemachine (one will be spawned per connection)
-
 async fn spokes_stream(
     mut socket: WebSocket,
     mut radar_message_rx: tokio::sync::broadcast::Receiver<Vec<u8>>,
