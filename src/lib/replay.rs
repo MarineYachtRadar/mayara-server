@@ -36,10 +36,16 @@ use crate::pcap::{self, PcapPacket};
 /// socket or from the pcap replay dispatcher. Receivers use this
 /// instead of `tokio::net::UdpSocket` directly.
 pub(crate) enum RadarSocket {
-    /// Real network UDP socket. `Arc` so a connected unicast socket can be
-    /// shared with a command sender (Raymarine MFD-as-AP topology); the
-    /// multicast/broadcast listen path simply holds the sole reference.
-    Udp(Arc<UdpSocket>),
+    /// Real network UDP socket — sole owner of its file descriptor. This
+    /// is the normal multicast / broadcast / unicast listen path used by
+    /// every brand.
+    Udp(UdpSocket),
+    /// Real network UDP socket shared with another sender (currently only
+    /// the Raymarine MFD-as-WiFi-AP unicast topology, where the command
+    /// sender and the report receiver have to hold the same connected
+    /// socket so the radar's replies don't get stolen by a separate
+    /// command socket bound to the same host:port).
+    SharedUdp(Arc<UdpSocket>),
     /// Pcap replay channel.
     Replay(ReplayReceiver),
 }
@@ -49,6 +55,7 @@ impl RadarSocket {
     pub async fn recv_buf_from(&mut self, buf: &mut Vec<u8>) -> io::Result<(usize, SocketAddr)> {
         match self {
             RadarSocket::Udp(sock) => sock.recv_buf_from(buf).await,
+            RadarSocket::SharedUdp(sock) => sock.recv_buf_from(buf).await,
             RadarSocket::Replay(rx) => rx.recv_buf_from(buf).await,
         }
     }

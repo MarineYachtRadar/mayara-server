@@ -270,7 +270,7 @@ pub(crate) fn create_udp_listen(
     }
 
     let socket = UdpSocket::from_std(socket.into())?;
-    Ok(crate::replay::RadarSocket::Udp(std::sync::Arc::new(socket)))
+    Ok(crate::replay::RadarSocket::Udp(socket))
 }
 
 /// Create a unicast UDP socket bound to `nic_addr` on `port` and connected to

@@ -292,7 +292,7 @@ impl RaymarineReportReceiver {
                 }
             }
             let sock = self.unicast_socket.as_ref().unwrap().clone();
-            self.report_socket = Some(RadarSocket::Udp(sock));
+            self.report_socket = Some(RadarSocket::SharedUdp(sock));
             log::debug!(
                 "{}: {} via {}: listening for unicast reports",
                 self.common.key,
@@ -318,7 +318,7 @@ impl RaymarineReportReceiver {
                 Err(e) => {
                     // Back-off and shutdown observation live in run().
                     log::debug!(
-                        "{}: {} via {}: create multicast failed: {}",
+                        "{}: {} via {}: create UDP listen socket failed: {}",
                         self.common.key,
                         &self.common.info.report_addr,
                         &self.common.info.nic_addr,
