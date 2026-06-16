@@ -95,7 +95,7 @@ impl ExclusionMask {
         range_meters: u32,
     ) -> Self {
         // Each byte stores 8 pixels (1 bit each)
-        let bytes_per_spoke = (pixels + 7) / 8;
+        let bytes_per_spoke = pixels.div_ceil(8);
         let mut mask = vec![vec![0u8; bytes_per_spoke]; spokes as usize];
 
         // Build the mask for all sector zones

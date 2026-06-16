@@ -250,7 +250,7 @@ async fn recording_task(
 
                 frames += 1;
 
-                if frames % 10 == 0 {
+                if frames.is_multiple_of(10) {
                     frame_count.store(frames, Ordering::Relaxed);
                     duration_ms.store(timestamp_ms, Ordering::Relaxed);
                     size_bytes.store(approx_size, Ordering::Relaxed);

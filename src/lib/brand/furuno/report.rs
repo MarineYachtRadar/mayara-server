@@ -561,7 +561,7 @@ impl FurunoReportReceiver {
 
         let cmd_str = values_iter
             .next()
-            .ok_or(io::Error::new(io::ErrorKind::Other, "No command ID"))?;
+            .ok_or(io::Error::other("No command ID"))?;
         let cmd = u8::from_str_radix(cmd_str, 16)?;
 
         let command_id = match CommandId::from_u8(cmd) {

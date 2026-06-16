@@ -34,6 +34,12 @@ pub struct SignalKDelta {
     updates: Vec<DeltaUpdate>,
 }
 
+impl Default for SignalKDelta {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SignalKDelta {
     pub fn new() -> SignalKDelta {
         Self {
@@ -352,14 +358,12 @@ impl DeltaUpdate {
             values.push(DeltaValue::Control { path, value });
         }
 
-        let delta_update = DeltaUpdate {
+        DeltaUpdate {
             timestamp: None,
             source: Some(PACKAGE.to_string()),
             meta: Vec::new(),
             values,
-        };
-
-        delta_update
+        }
     }
 }
 

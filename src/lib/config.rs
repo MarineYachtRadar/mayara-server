@@ -198,7 +198,7 @@ impl Persistence {
         let mut writer = BufWriter::new(&file);
 
         serde_json::to_writer_pretty(writer.by_ref(), &self.config)?;
-        write!(writer, "\n")?;
+        writeln!(writer)?;
         writer.flush()?;
 
         info!("Written config file '{}'", &self.path.display());
@@ -218,11 +218,7 @@ impl Persistence {
         }
         let mut modified = false;
 
-        let radar = self
-            .config
-            .radars
-            .entry(radar_info.key())
-            .or_insert(Radar::default());
+        let radar = self.config.radars.entry(radar_info.key()).or_default();
 
         let user_name = radar_info.controls.user_name();
         if radar.user_name != user_name {

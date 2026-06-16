@@ -398,7 +398,7 @@ impl RadarInfo {
             spoke_data_addr,
             report_addr,
             send_command_addr,
-            legend: legend,
+            legend,
             message_tx,
             ranges: Ranges::empty(),
             controls,
@@ -680,6 +680,12 @@ pub struct SharedRadars {
     radars: Arc<RwLock<Radars>>,
 }
 
+impl Default for SharedRadars {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SharedRadars {
     pub fn new() -> Self {
         let (sk_client_tx, _) = tokio::sync::broadcast::channel(SK_CLIENT_CHANNEL_CAPACITY);
@@ -747,7 +753,7 @@ impl SharedRadars {
             .info
             .values()
             .filter(|i| !i.ranges.is_empty())
-            .map(|v| v.clone())
+            .cloned()
             .collect()
     }
 

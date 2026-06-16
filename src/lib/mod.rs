@@ -294,9 +294,9 @@ impl Brand {
     }
 }
 
-impl Into<Brand> for &str {
-    fn into(self) -> Brand {
-        match self.to_ascii_lowercase().as_str() {
+impl From<&str> for Brand {
+    fn from(val: &str) -> Self {
+        match val.to_ascii_lowercase().as_str() {
             "furuno" => Brand::Furuno,
             "garmin" => Brand::Garmin,
             "koden" => Brand::Koden,
@@ -404,6 +404,7 @@ struct InterfaceId {
         }
     }
 }))]
+#[derive(Default)]
 pub struct InterfaceApi {
     /// Set of radar brands that have been compiled into this server
     #[schema(example = json!(["Navico", "Furuno"]))]
@@ -411,15 +412,6 @@ pub struct InterfaceApi {
     /// Map of network interface name to its radar listener information
     #[schema(value_type = HashMap<String, RadarInterfaceApi>)]
     interfaces: HashMap<InterfaceId, RadarInterfaceApi>,
-}
-
-impl Default for InterfaceApi {
-    fn default() -> Self {
-        InterfaceApi {
-            brands: HashSet::new(),
-            interfaces: HashMap::new(),
-        }
-    }
 }
 
 impl RadarInterfaceApi {

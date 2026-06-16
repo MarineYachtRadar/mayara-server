@@ -101,7 +101,7 @@ pub(crate) fn create_emulator_radar(args: &Cli, radars: &SharedRadars, subsys: &
 
         // Set the ranges
         let ranges = crate::radar::range::Ranges::new_by_distance(
-            &EMULATOR_RANGES.iter().map(|&r| r).collect::<Vec<_>>(),
+            &EMULATOR_RANGES.iter().copied().collect::<Vec<_>>(),
         );
         info.set_ranges(ranges);
 

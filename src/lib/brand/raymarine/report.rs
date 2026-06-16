@@ -337,7 +337,7 @@ impl RaymarineReportReceiver {
             // Every 5th heartbeat (every 5 seconds), also send the
             // extended keep-alive with MARPA/AIS option data.
             self.heartbeat_counter += 1;
-            if self.heartbeat_counter % 5 == 0 {
+            if self.heartbeat_counter.is_multiple_of(5) {
                 cs.send_heartbeat_5s().await?;
             }
         }

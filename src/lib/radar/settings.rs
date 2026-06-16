@@ -34,7 +34,7 @@ pub enum ApiVersion {
 }
 
 thread_local! {
-    static API_VERSION: RefCell<ApiVersion> = RefCell::new(ApiVersion::V3);
+    static API_VERSION: RefCell<ApiVersion> = const { RefCell::new(ApiVersion::V3) };
 }
 
 pub fn set_api_version(version: ApiVersion) {
@@ -1751,10 +1751,7 @@ impl SharedControls {
     pub(crate) fn get_status(&self) -> Option<Power> {
         let locked = self.controls.read().unwrap();
         if let Some(control) = locked.controls.get(&ControlId::Power) {
-            return control
-                .value()
-                .map(|v| Power::from_value(&v).ok())
-                .flatten();
+            return control.value().and_then(|v| Power::from_value(&v).ok());
         }
 
         None
@@ -2050,7 +2047,7 @@ impl RadarControlValue {
         if path.starts_with("radars.") {
             path = &path["radars.".len()..];
         }
-        if let Some(r) = path.split('.').last() {
+        if let Some(r) = path.split('.').next_back() {
             self.control_id = ControlId::try_from(r).ok();
             if self.control_id.is_some() {
                 self.radar_id = Some(r.to_string());
@@ -2410,7 +2407,7 @@ pub(crate) fn new_list(control_id: ControlId, descriptions: &[&str]) -> ControlB
         None,
         Some(
             descriptions
-                .into_iter()
+                .iter()
                 .enumerate()
                 .map(|(i, n)| (i as i32, n.to_string()))
                 .collect(),

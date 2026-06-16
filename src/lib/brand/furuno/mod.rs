@@ -39,10 +39,7 @@ fn login_to_radar(radar_addr: SocketAddrV4) -> Result<u16, io::Error> {
     stream.read_exact(&mut buf)?;
 
     if buf != LOGIN_EXPECTED_HEADER {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("Unexpected reply {:?}", buf),
-        ));
+        return Err(io::Error::other(format!("Unexpected reply {:?}", buf)));
     }
     stream.read_exact(&mut buf[0..4])?;
 

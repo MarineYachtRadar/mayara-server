@@ -127,10 +127,7 @@ fn parse_content_disposition_filename(value: &str) -> Option<String> {
 }
 
 fn sanitize_for_header(filename: &str) -> String {
-    filename
-        .replace('"', "_")
-        .replace('\n', "_")
-        .replace('\r', "_")
+    filename.replace(['"', '\n', '\r'], "_")
 }
 
 pub fn routes(router: axum::Router<Web>) -> axum::Router<Web> {

@@ -591,8 +591,7 @@ pub(super) fn process_info_report(receiver: &mut RaymarineReportReceiver, data: 
         Some(model) => model,
         None => {
             if model_serial.parse::<u64>().is_ok() {
-                let model = RaymarineModel::new_eseries();
-                model
+                RaymarineModel::new_eseries()
             } else {
                 log::error!(
                     "{}: Unknown model serial: {}",

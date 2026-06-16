@@ -243,7 +243,7 @@ fn test_ais_delta_passes_with_subscription() {
     let built = delta.build();
     assert!(built.is_some(), "Delta should not be empty");
 
-    let json = serde_json::to_value(&built.unwrap()).unwrap();
+    let json = serde_json::to_value(built.unwrap()).unwrap();
     let updates = json["updates"].as_array().unwrap();
     assert!(!updates.is_empty(), "Updates should not be empty");
 
@@ -327,7 +327,7 @@ fn test_multiple_ais_vessels_subscription() {
     let built = delta.build();
     assert!(built.is_some(), "Delta should not be empty");
 
-    let json = serde_json::to_value(&built.unwrap()).unwrap();
+    let json = serde_json::to_value(built.unwrap()).unwrap();
     let updates = json["updates"].as_array().unwrap();
 
     let mut vessel_count = 0;
@@ -398,7 +398,7 @@ fn test_subscribe_all_mode_passes_ais() {
     let built = delta.build();
     assert!(built.is_some(), "Delta should not be empty in All mode");
 
-    let json = serde_json::to_value(&built.unwrap()).unwrap();
+    let json = serde_json::to_value(built.unwrap()).unwrap();
     let updates = json["updates"].as_array().unwrap();
 
     let mut found_vessel = false;
@@ -472,7 +472,7 @@ fn test_specific_mmsi_subscription() {
     let built = delta.build();
     assert!(built.is_some(), "Delta should not be empty");
 
-    let json = serde_json::to_value(&built.unwrap()).unwrap();
+    let json = serde_json::to_value(built.unwrap()).unwrap();
     let updates = json["updates"].as_array().unwrap();
 
     let mut found_subscribed = false;
