@@ -134,12 +134,29 @@ fn config_summary(args: &mayara::Cli) -> Value {
     Value::Object(obj)
 }
 
+/// Upper bound on how long we wait for the locator subsystem to reply
+/// with its `InterfaceApi` snapshot. The reply is normally back in a few
+/// milliseconds; if the locator is wedged (e.g. mid-shutdown or stuck
+/// in `reply_with_interface_state`) we'd rather return a partial dump
+/// than hang the HTTP request indefinitely.
+const INTERFACE_API_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
 async fn fetch_interface_api(state: &Web) -> InterfaceApi {
     let (tx, mut rx) = mpsc::channel(1);
     if state.tx_interface_request.send(Some(tx)).is_err() {
         return InterfaceApi::default();
     }
-    rx.recv().await.unwrap_or_default()
+    match tokio::time::timeout(INTERFACE_API_FETCH_TIMEOUT, rx.recv()).await {
+        Ok(Some(api)) => api,
+        Ok(None) => InterfaceApi::default(),
+        Err(_) => {
+            log::warn!(
+                "diagnostics: locator did not reply with InterfaceApi within {:?}",
+                INTERFACE_API_FETCH_TIMEOUT
+            );
+            InterfaceApi::default()
+        }
+    }
 }
 
 fn radars_summary(state: &Web) -> Vec<Value> {
