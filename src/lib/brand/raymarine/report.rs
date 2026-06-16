@@ -307,6 +307,7 @@ impl RaymarineReportReceiver {
     ///   - no status report has ever been received (state == Initial),
     ///   - no external Raymarine controller has been observed within
     ///     EXTERNAL_QUIET_WINDOW — see [`ExternalControllerWitness`].
+    ///
     /// Both base_model and the receiver state are monotonic, so once either
     /// disqualifies us we silence the arm for the receiver's lifetime; the
     /// witness gate can re-open and stays on the WAKE_INTERVAL cadence.

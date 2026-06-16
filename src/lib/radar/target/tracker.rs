@@ -549,9 +549,11 @@ impl TargetTracker {
 
     /// Check for timed out targets.
     /// Returns (deleted_ids, newly_lost_ids) - both as target IDs.
+    ///
     /// Marks targets as Lost if not seen for N revolutions:
     /// - Normal targets: 3 revolutions
     /// - Stationary targets: 10 revolutions (extended to handle temporary merging)
+    ///
     /// Deletes targets N revolutions after being marked lost:
     /// - Normal targets: 4 revolutions after lost
     /// - Stationary targets: 10 revolutions after lost

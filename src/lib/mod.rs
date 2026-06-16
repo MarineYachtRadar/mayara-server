@@ -86,8 +86,8 @@ pub struct Cli {
     /// - `udp:` — UDP listener for NMEA 0183 broadcasts
     /// - `ws:`  — WebSocket via Signal K discovery; supports `--signalk-token`
     /// - `wss:` — WebSocket Secure via Signal K discovery; supports
-    ///            `--signalk-token`; requires `--accept-invalid-certs` for
-    ///            self-signed certificates
+    ///   `--signalk-token`; requires `--accept-invalid-certs` for
+    ///   self-signed certificates
     ///
     /// Authenticated Signal K servers can only be reached via `ws:` or `wss:`.
     /// The plain `tcp:` transport is strictly for anonymous setups.
