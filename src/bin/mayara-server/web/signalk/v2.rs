@@ -568,12 +568,12 @@ async fn set_control_value(
 #[derive(Deserialize, Debug, ToSchema)]
 #[serde(rename_all = "camelCase")]
 #[schema(example = json!({
-    "bearing": 0.7854,
+    "bearing": 1.0,
     "distance": 1852.0
 }))]
 struct AcquireTargetRequest {
-    /// Target bearing in radians true [0, 2π)
-    #[schema(example = 0.7854)]
+    /// Target bearing in radians true [0, 2π).
+    #[schema(example = 1.0)]
     bearing: Option<f64>,
     /// Target distance in meters
     #[schema(example = 1852.0)]
