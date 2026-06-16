@@ -440,7 +440,7 @@ impl Locator {
                             }
                         }
                         if self.args.interface.is_some()
-                            && interface_state.active_nic_addresses.len() == 0
+                            && interface_state.active_nic_addresses.is_empty()
                         {
                             return Err(RadarError::InterfaceNoV4(
                                 self.args.interface.clone().unwrap(),
@@ -478,7 +478,7 @@ impl Locator {
                 }
                 interface_state.first_loop = false;
 
-                if self.args.interface.is_some() && interface_state.active_nic_addresses.len() == 0
+                if self.args.interface.is_some() && interface_state.active_nic_addresses.is_empty()
                 {
                     return Err(RadarError::InterfaceNotFound(
                         self.args.interface.clone().unwrap(),

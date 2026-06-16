@@ -609,7 +609,7 @@ impl FurunoReportReceiver {
 
             CommandId::Status => {
                 // Response format: $N69,{status},{drid},{wman},{w_send},{w_stop},0
-                if numbers.len() < 1 {
+                if numbers.is_empty() {
                     bail!("No arguments for Status command");
                 }
                 let generic_state = match numbers[0] {
@@ -708,7 +708,7 @@ impl FurunoReportReceiver {
             CommandId::ScanSpeed => {
                 // Response format: $N89,{mode},0
                 // mode: 0=24RPM, 2=Auto
-                if numbers.len() < 1 {
+                if numbers.is_empty() {
                     bail!(
                         "Insufficient ({}) arguments for ScanSpeed command",
                         numbers.len()
@@ -808,7 +808,7 @@ impl FurunoReportReceiver {
             CommandId::MainBangSize => {
                 // Response format: $N83,{value},0
                 // value: 0-255 (raw value, needs conversion to 0-100%)
-                if numbers.len() < 1 {
+                if numbers.is_empty() {
                     bail!(
                         "Insufficient ({}) arguments for MainBangSize command",
                         numbers.len()
@@ -864,7 +864,7 @@ impl FurunoReportReceiver {
             CommandId::RezBoost => {
                 // Response format: $NEE,{level},{screen}
                 // level: 0=OFF, 1=Low, 2=Medium, 3=High
-                if numbers.len() < 1 {
+                if numbers.is_empty() {
                     bail!(
                         "Insufficient ({}) arguments for RezBoost command",
                         numbers.len()
@@ -876,7 +876,7 @@ impl FurunoReportReceiver {
             CommandId::BirdMode => {
                 // Response format: $NED,{level},{screen}
                 // level: 0=OFF, 1=Low, 2=Medium, 3=High
-                if numbers.len() < 1 {
+                if numbers.is_empty() {
                     bail!(
                         "Insufficient ({}) arguments for BirdMode command",
                         numbers.len()

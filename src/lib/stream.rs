@@ -208,7 +208,7 @@ impl SignalKDelta {
     }
 
     pub fn build(self) -> Option<Self> {
-        if self.updates.len() > 0 {
+        if !self.updates.is_empty() {
             return Some(self);
         }
         None
@@ -390,7 +390,7 @@ fn get_meta_delta(radars: &SharedRadars, meta_sent: &mut HashSet<String>) -> Opt
         }
     }
 
-    if meta.len() == 0 {
+    if meta.is_empty() {
         return None;
     }
     let delta_update = DeltaUpdate {

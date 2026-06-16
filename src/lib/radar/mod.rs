@@ -747,7 +747,7 @@ impl SharedRadars {
             .info
             .iter()
             .map(|(_k, v)| v)
-            .filter(|i| i.ranges.len() > 0)
+            .filter(|i| !i.ranges.is_empty())
             .map(|v| v.clone())
             .collect()
     }
@@ -758,7 +758,7 @@ impl SharedRadars {
             .info
             .iter()
             .map(|(_k, v)| v)
-            .filter(|i| i.ranges.len() > 0)
+            .filter(|i| !i.ranges.is_empty())
             .count()
             > 0
     }

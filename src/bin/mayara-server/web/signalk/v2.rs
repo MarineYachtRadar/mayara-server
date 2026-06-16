@@ -1497,7 +1497,7 @@ async fn send_all_subscribed(
         rcvs.retain(|x| subscriptions.is_subscribed(x, true));
     }
     log::debug!("Sending {} subscribed controls", rcvs.len());
-    if rcvs.len() > 0 {
+    if !rcvs.is_empty() {
         let mut delta: SignalKDelta = SignalKDelta::new();
         delta.add_updates(rcvs);
         send_message(socket, delta.build().unwrap()).await?;

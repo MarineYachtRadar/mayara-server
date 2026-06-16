@@ -367,7 +367,7 @@ impl Persistence {
             info.controls.set_spoke_processing(p.spoke_processing);
             info.controls.set_range_units(p.range_units);
             if let Some(ranges) = &p.ranges
-                && ranges.len() > 0
+                && !ranges.is_empty()
             {
                 info.set_ranges(Ranges::new_by_distance(ranges));
             }
