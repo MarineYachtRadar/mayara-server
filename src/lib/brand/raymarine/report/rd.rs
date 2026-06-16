@@ -210,7 +210,7 @@ pub(crate) fn process_frame(receiver: &mut RaymarineReportReceiver, data: &[u8])
             );
             break;
         }
-        next_offset = next_offset + SPOKE_DATA_LENGTH;
+        next_offset += SPOKE_DATA_LENGTH;
 
         let mut data_len = header3.data_len as usize;
         if next_offset + data_len > data.len() {

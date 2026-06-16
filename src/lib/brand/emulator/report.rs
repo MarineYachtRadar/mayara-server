@@ -118,11 +118,8 @@ impl EmulatorReportReceiver {
                 }
 
                 r = self.common.control_update_rx.recv() => {
-                    match r {
-                        Ok(cu) => {
-                            self.handle_control_update(cu).await;
-                        }
-                        Err(_) => {}
+                    if let Ok(cu) = r {
+                        self.handle_control_update(cu).await;
                     }
                 }
             }

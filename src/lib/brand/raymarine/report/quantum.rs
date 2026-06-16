@@ -108,7 +108,7 @@ fn process_spoke(
         if spoke[src_offset] != 0x5c {
             let pixel = spoke[src_offset] as usize;
             unpacked_data.push(wire_to_legend[doppler][pixel]);
-            src_offset = src_offset + 1;
+            src_offset += 1;
         } else {
             let count = spoke[src_offset + 1] as usize; // number to be filled
             let pixel = spoke[src_offset + 2] as usize; // data to be filled
@@ -116,7 +116,7 @@ fn process_spoke(
             for _ in 0..count {
                 unpacked_data.push(value);
             }
-            src_offset = src_offset + 3; // Marker byte, count, value
+            src_offset += 3; // Marker byte, count, value
         }
     }
     unpacked_data.truncate(returns_per_line);

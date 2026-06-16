@@ -1838,7 +1838,7 @@ impl CommonRadar {
             .set_value_auto_enabled(control_id, value, auto, enabled)
         {
             Err(e) => {
-                log::error!("{}: {}", self.key, e.to_string());
+                log::error!("{}: {}", self.key, e);
             }
             Ok(Some(())) => {
                 if log::log_enabled!(log::Level::Debug) {
@@ -1882,7 +1882,7 @@ impl CommonRadar {
     pub(crate) fn set_string(&mut self, control: &ControlId, value: String) {
         match self.info.controls.set_string(control, value) {
             Err(e) => {
-                log::error!("{}: {}", self.key, e.to_string());
+                log::error!("{}: {}", self.key, e);
             }
             Ok(Some(v)) => {
                 log::debug!("{}: Control '{}' new value '{}'", self.key, control, v);
@@ -1898,7 +1898,7 @@ impl CommonRadar {
             .set_wire_range(control_id, min as f64, max as f64)
         {
             Err(e) => {
-                log::error!("{}: {}", self.key, e.to_string());
+                log::error!("{}: {}", self.key, e);
             }
             Ok(Some(())) => {
                 if log::log_enabled!(log::Level::Debug) {
@@ -1932,7 +1932,7 @@ impl CommonRadar {
             .set_value_with_many_auto(control_id, value, auto_value)
         {
             Err(e) => {
-                log::error!("{}: {}", self.key, e.to_string());
+                log::error!("{}: {}", self.key, e);
             }
             Ok(Some(())) => {
                 if log::log_enabled!(log::Level::Debug) {
@@ -1966,7 +1966,7 @@ impl CommonRadar {
             .set_sector(control_id, start.into(), end.into(), enabled)
         {
             Err(e) => {
-                log::error!("{}: {}", self.key, e.to_string());
+                log::error!("{}: {}", self.key, e);
             }
             Ok(Some(())) => {
                 if log::log_enabled!(log::Level::Debug) {

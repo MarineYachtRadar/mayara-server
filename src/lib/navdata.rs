@@ -1449,15 +1449,12 @@ impl NavigationData {
     fn process_udp_buf(&mut self, buf: &[u8]) {
         if let Ok(data) = String::from_utf8(buf.to_vec()) {
             for line in data.lines() {
-                match if self.nmea0183_mode {
+                if let Err(e) = if self.nmea0183_mode {
                     self.parse_nmea0183(line)
                 } else {
                     parse_signalk(line)
                 } {
-                    Err(e) => {
-                        log::warn!("{}", e)
-                    }
-                    Ok(_) => {}
+                    log::warn!("{}", e)
                 }
             }
         }

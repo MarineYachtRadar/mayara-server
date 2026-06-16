@@ -621,10 +621,7 @@ impl NavicoReportReceiver {
                 },
 
                 r = self.common.control_update_rx.recv() => {
-                    match r {
-                        Ok(cu) => {let _ = self.common.process_control_update(cu, &mut self.command_sender).await;},
-                        Err(_) => {},
-                    }
+                    if let Ok(cu) = r {let _ = self.common.process_control_update(cu, &mut self.command_sender).await;}
                 }
 
 

@@ -207,11 +207,8 @@ impl Persistence {
     }
 
     fn save(&mut self) {
-        match self.saver() {
-            Err(e) => {
-                warn!("cannot store config '{}': {}", &self.path.display(), e);
-            }
-            Ok(_) => {}
+        if let Err(e) = self.saver() {
+            warn!("cannot store config '{}': {}", &self.path.display(), e);
         }
     }
 

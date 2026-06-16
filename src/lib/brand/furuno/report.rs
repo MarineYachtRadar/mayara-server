@@ -428,9 +428,8 @@ impl FurunoReportReceiver {
             } else if let Err(e) = self.start_command_stream().await {
                 log::warn!("{}: Failed to start command stream: {}", self.common.key, e);
             } else {
-                match self.data_loop(subsys).await {
-                    Err(RadarError::Shutdown) => return Ok(()),
-                    _ => {}
+                if let Err(RadarError::Shutdown) = self.data_loop(subsys).await {
+                    return Ok(());
                 }
             }
 

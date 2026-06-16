@@ -2834,7 +2834,7 @@ impl Control {
                 value,
                 wire_scale_factor
             );
-            value = value / wire_scale_factor;
+            value /= wire_scale_factor;
 
             auto_value = auto_value.map(|v| v / wire_scale_factor);
             log::debug!("{} map value to scaled {}", self.item.control_id, value);
@@ -2953,8 +2953,8 @@ impl Control {
 
         // Apply wire scale factor
         if let Some(wire_scale_factor) = self.item.wire_scale_factor {
-            start = start / wire_scale_factor;
-            end = end / wire_scale_factor;
+            start /= wire_scale_factor;
+            end /= wire_scale_factor;
         }
 
         // Convert to SI units
