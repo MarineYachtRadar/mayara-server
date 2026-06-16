@@ -242,13 +242,8 @@ impl TrailBuffer {
 
                 let trail = *trail;
                 if self.motion_true && data[radius] == 0 && trail > 0 && trail < max_trail_value {
-                    let mut index: u8 = trail * BLOB_HISTORY_COLORS / max_trail_value;
-                    if index >= BLOB_HISTORY_COLORS {
-                        index = BLOB_HISTORY_COLORS;
-                    }
-                    if index < 1 {
-                        index = 1;
-                    }
+                    let index: u8 = (trail * BLOB_HISTORY_COLORS / max_trail_value)
+                        .clamp(1, BLOB_HISTORY_COLORS);
 
                     data[radius] = self.legend.history_start + index - 1;
                 }
@@ -534,14 +529,8 @@ impl TrailBuffer {
                 && trail[radius] > 0
                 && trail[radius] < max_trail_value
             {
-                let mut index =
-                    (trail[radius] * BLOB_HISTORY_COLORS as u16 / max_trail_value) as u8;
-                if index >= BLOB_HISTORY_COLORS {
-                    index = BLOB_HISTORY_COLORS;
-                }
-                if index < 1 {
-                    index = 1;
-                }
+                let index = ((trail[radius] * BLOB_HISTORY_COLORS as u16 / max_trail_value) as u8)
+                    .clamp(1, BLOB_HISTORY_COLORS);
 
                 data[radius] = self.legend.history_start + index - 1;
             }

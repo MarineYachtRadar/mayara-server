@@ -81,12 +81,7 @@ impl Command {
 
     fn scale_100_to_byte(a: f64) -> u8 {
         // Map range 0..100 to 0..255
-        let mut r = a * 255.0 / 100.0;
-        if r > 255.0 {
-            r = 255.0;
-        } else if r < 0.0 {
-            r = 0.0;
-        }
+        let r = (a * 255.0 / 100.0).clamp(0.0, 255.0);
         r.round() as u8
     }
 
@@ -368,7 +363,7 @@ impl CommandSender for Command {
             }
             ControlId::DopplerSpeedThreshold => {
                 let value = f64::round(value * 100.0) as u16;
-                let value = max(0, min(1594, value));
+                let value = value.clamp(0, 1594);
                 cmd.extend_from_slice(&[CMD_DOPPLER_SPEED_THRESHOLD, CATEGORY_CONTROL]);
                 cmd.extend_from_slice(&value.to_le_bytes());
             }
