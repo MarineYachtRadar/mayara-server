@@ -36,6 +36,26 @@ body:
       description: Drag and drop a PCAP capture file here (optional but very helpful for bugs related to issues with interpreting the radar picture and controls that do not work or have an incorrect value.)
 
   - type: textarea
+    id: network_diagnostics
+    attributes:
+      label: Network diagnostics
+      description: |
+        Drag and drop a network diagnostics file here. Strongly recommended if
+        your radar is not being detected, or for any other network / discovery
+        bug.
+
+        To generate the file: open the Mayara web GUI (the page where detected
+        radars are listed) and click the **Network Diagnostics** button. Your
+        browser will download a `mayara-network-diagnostics-…json.gz` file —
+        attach it here.
+
+        The file contains a snapshot of how Mayara sees the network: host
+        interfaces, per-interface locator status (including any skip reasons),
+        detected radars, and a per-subnet list of other devices observed via
+        ARP, mDNS and a passive multicast snoop. It does **not** contain any
+        radar data, control values, or credentials.
+
+  - type: textarea
     id: media
     attributes:
       label: Screenshot or video
