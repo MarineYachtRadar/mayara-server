@@ -16,7 +16,7 @@ use strum::{EnumCount, EnumIter, EnumString, IntoStaticStr};
 use thiserror::Error;
 use utoipa::ToSchema;
 
-use super::NAUTICAL_MILE;
+use super::NM;
 use super::range::Range;
 use super::units::Units;
 use crate::Cli;
@@ -636,7 +636,7 @@ impl Controls {
         }
 
         // Note: valid range values are set per-model in update_when_model_known()
-        let max_value = 120. * NAUTICAL_MILE as f64;
+        let max_value = 120. * NM as f64;
         new_numeric(ControlId::Range, 0., max_value)
             .wire_units(Units::Meters)
             .build(&mut controls);

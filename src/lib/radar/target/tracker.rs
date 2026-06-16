@@ -834,9 +834,10 @@ mod tests {
     use std::f64::consts::PI;
 
     use super::*;
+    use crate::radar::KN_TO_MS;
 
     /// Default max speed for tests (50 knots)
-    const TEST_MAX_SPEED_MS: f64 = 50.0 * 0.5144;
+    const TEST_MAX_SPEED_MS: f64 = 50.0 * KN_TO_MS;
 
     fn make_candidate(lat: f64, lon: f64, time: u64) -> TargetCandidate {
         make_candidate_with_source(lat, lon, time, CandidateSource::GuardZone(1))
@@ -1232,7 +1233,7 @@ mod tests {
         // Circle parameters (matching emulator world.rs)
         let radius_m = 250.0;
         let speed_knots = 15.0;
-        let speed_ms = speed_knots * 1852.0 / 3600.0; // ~7.72 m/s
+        let speed_ms = speed_knots * KN_TO_MS; // ~7.72 m/s
         let angular_velocity = speed_ms / radius_m; // ~0.031 rad/s
 
         // Time for one full circle = 2π / angular_velocity ≈ 203 seconds
@@ -1351,7 +1352,7 @@ mod tests {
         // Circle parameters (matching emulator world.rs)
         let radius_m = 250.0;
         let speed_knots = 15.0;
-        let speed_ms = speed_knots * 1852.0 / 3600.0; // ~7.72 m/s
+        let speed_ms = speed_knots * KN_TO_MS; // ~7.72 m/s
         let angular_velocity = speed_ms / radius_m; // ~0.031 rad/s
 
         // Time for one full circle = 2π / angular_velocity ≈ 203 seconds
@@ -1465,7 +1466,7 @@ mod tests {
         // Circle parameters (matching emulator world.rs)
         let radius_m = 250.0;
         let speed_knots = 15.0;
-        let speed_ms = speed_knots * 1852.0 / 3600.0; // ~7.72 m/s
+        let speed_ms = speed_knots * KN_TO_MS; // ~7.72 m/s
         let angular_velocity = speed_ms / radius_m; // ~0.031 rad/s
 
         let circle_time_s = TAU / angular_velocity;
@@ -1579,7 +1580,7 @@ mod tests {
         // Circle parameters (matching emulator world.rs)
         let radius_m = 250.0;
         let speed_knots = 15.0;
-        let speed_ms = speed_knots * 1852.0 / 3600.0; // ~7.72 m/s
+        let speed_ms = speed_knots * KN_TO_MS; // ~7.72 m/s
         let angular_velocity = speed_ms / radius_m; // ~0.031 rad/s
 
         let circle_time_s = TAU / angular_velocity;
@@ -1722,7 +1723,6 @@ mod tests {
         // reaches established tracking (update_count > 2), the normal speed max_dist becomes
         // limiting and the target is lost.
 
-        const KN_TO_MS: f64 = 0.5144;
         const NORMAL_SPEED_MS: f64 = 25.0 * KN_TO_MS; // ~12.9 m/s
         const MEDIUM_SPEED_MS: f64 = 40.0 * KN_TO_MS; // ~20.6 m/s
         const FAST_SPEED_MS: f64 = 50.0 * KN_TO_MS; // ~25.7 m/s

@@ -2,6 +2,8 @@ use serde_string_enum::{DeserializeLabeledStringEnum, SerializeLabeledStringEnum
 use std::f64::consts::{PI, TAU};
 use utoipa::ToSchema;
 
+use crate::radar::{KN_TO_MS, MS_TO_KN, NM_F64};
+
 #[derive(
     Copy,
     PartialEq,
@@ -62,10 +64,10 @@ impl Units {
             Units::Kelvin => (Units::Kelvin, 1.),
             Units::Minutes => (Units::Seconds, 60.),
             Units::KiloMeters => (Units::Meters, 1000.),
-            Units::Knots => (Units::MetersPerSecond, 1852. / 3600.),
+            Units::Knots => (Units::MetersPerSecond, KN_TO_MS),
             Units::Meters => (Units::Meters, 1.),
             Units::MetersPerSecond => (Units::MetersPerSecond, 1.),
-            Units::NauticalMiles => (Units::Meters, 1852.),
+            Units::NauticalMiles => (Units::Meters, NM_F64),
             Units::None => unreachable!("Units::None"),
             Units::Radians => (Units::Radians, 1.),
             Units::RadiansPerSecond => (Units::RadiansPerSecond, 1.),
@@ -94,10 +96,10 @@ impl Units {
             Units::Kelvin => 1.,
             Units::Minutes => 1. / 60.,
             Units::KiloMeters => 0.001,
-            Units::Knots => 3600. / 1852.,
+            Units::Knots => MS_TO_KN,
             Units::Meters => 1.,
             Units::MetersPerSecond => 1.,
-            Units::NauticalMiles => 1. / 1852.,
+            Units::NauticalMiles => 1. / NM_F64,
             Units::None => unreachable!("Units::None"),
             Units::Radians => 1.,
             Units::RadiansPerSecond => 1.,

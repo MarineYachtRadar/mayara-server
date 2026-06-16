@@ -22,8 +22,7 @@ mod settings;
 use capabilities::GarminCapabilities;
 use protocol::*;
 
-// 1 nautical mile in meters
-const NM: i32 = 1852;
+use crate::radar::{FRAC_NM_2, FRAC_NM_4, NM};
 
 // Garmin HD metric ranges (meters)
 const GARMIN_HD_RANGES_METRIC: &[i32] = &[
@@ -34,8 +33,8 @@ const GARMIN_HD_RANGES_METRIC: &[i32] = &[
 // Garmin HD nautical ranges (meters, based on NM fractions)
 const GARMIN_HD_RANGES_NAUTICAL: &[i32] = &[
     232,        // ~1/8 NM
-    NM / 4,     // 463
-    NM / 2,     // 926
+    FRAC_NM_4,  // 463
+    FRAC_NM_2,  // 926
     NM * 3 / 4, // 1389
     NM,         // 1852
     NM * 3 / 2, // 2778

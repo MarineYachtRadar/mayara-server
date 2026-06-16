@@ -11,7 +11,7 @@ use crate::Cli;
 use crate::radar::settings::{ControlId, ControlUpdate};
 use crate::radar::spoke::GenericSpoke;
 use crate::radar::{
-    CommonRadar, GeoPosition, NAUTICAL_MILE, Power, RadarError, RadarInfo, SharedRadars,
+    CommonRadar, FRAC_NM_2, GeoPosition, KN_TO_MS, Power, RadarError, RadarInfo, SharedRadars,
 };
 
 // Rotation speed: ~24 RPM = 2.5 seconds per rotation
@@ -19,7 +19,6 @@ const ROTATION_TIME_MS: u64 = 2500;
 const SPOKES_PER_BATCH: usize = 32; // Like Navico
 
 // Conversion constants
-const KNOTS_TO_MS: f64 = 1852.0 / 3600.0;
 const DEG_TO_RAD: f64 = PI / 180.0;
 
 pub(crate) struct EmulatorReportReceiver {
@@ -72,7 +71,7 @@ impl EmulatorReportReceiver {
             boat_position: initial_pos,
             boat_heading: heading,
             boat_speed: speed,
-            current_range: (NAUTICAL_MILE / 2) as u32, // Default 1/2 nm
+            current_range: FRAC_NM_2 as u32, // Default 1/2 nm
             transmitting: false,
             boat_turn: None,
             initial_lon: initial_pos.lon(),
@@ -182,7 +181,7 @@ impl EmulatorReportReceiver {
         let elapsed_secs = elapsed.as_secs_f64();
 
         if let Some(mut turn) = self.boat_turn.take() {
-            let speed_ms = self.boat_speed * KNOTS_TO_MS;
+            let speed_ms = self.boat_speed * KN_TO_MS;
             let angular_velocity = speed_ms / turn.radius;
             turn.turned += angular_velocity * elapsed_secs;
 
@@ -220,7 +219,7 @@ impl EmulatorReportReceiver {
             }
         } else if self.boat_speed != 0.0 {
             // Straight-line movement
-            let distance = self.boat_speed * KNOTS_TO_MS * elapsed_secs;
+            let distance = self.boat_speed * KN_TO_MS * elapsed_secs;
             let heading_rad = self.boat_heading * DEG_TO_RAD;
             self.boat_position = self
                 .boat_position
@@ -297,7 +296,7 @@ impl EmulatorReportReceiver {
             "emulator",
         );
         crate::navdata::set_heading_true(Some(self.boat_heading * DEG_TO_RAD), "emulator");
-        crate::navdata::set_sog(Some(self.boat_speed * KNOTS_TO_MS));
+        crate::navdata::set_sog(Some(self.boat_speed * KN_TO_MS));
         crate::navdata::set_cog(Some(self.boat_heading * DEG_TO_RAD));
     }
 

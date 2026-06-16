@@ -12,11 +12,8 @@ use tokio::sync::{broadcast, mpsc};
 use super::blob::CompletedBlob;
 use super::tracker::{CandidateSource, ProcessResult, TargetCandidate, TargetTracker};
 use super::{ArpaTargetApi, TargetDangerApi, TargetMotionApi, TargetPositionApi};
-use crate::radar::GeoPosition;
+use crate::radar::{GeoPosition, KN_TO_MS};
 use crate::stream::SignalKDelta;
-
-/// Knots to m/s conversion
-const KN_TO_MS: f64 = 1852.0 / 3600.0;
 
 /// Context from the spoke that produced a blob
 #[derive(Clone, Debug)]
