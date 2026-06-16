@@ -404,6 +404,7 @@ pub async fn load_recording(
     }
 }
 
+#[allow(clippy::too_many_arguments)] // playback config + 3 shared flags + 3 channels — bundling adds indirection without reuse
 async fn playback_task(
     path: PathBuf,
     message_tx: broadcast::Sender<Vec<u8>>,

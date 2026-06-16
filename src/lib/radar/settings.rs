@@ -1516,6 +1516,7 @@ impl SharedControls {
     }
 
     /// Set a rectangular exclusion zone with corner-based coordinates
+    #[allow(clippy::too_many_arguments)] // 4 corner coords + zone id + label + ack channel — flat is clearer than a struct
     pub fn set_rect(
         &self,
         control_id: &ControlId,
@@ -3282,6 +3283,7 @@ fn is_false(v: &bool) -> bool {
 }
 
 impl ControlDefinition {
+    #[allow(clippy::too_many_arguments)] // every field of ControlDefinition surfaces here; macro builders below depend on the shape
     fn new(
         control_id: ControlId,
         data_type: ControlDataType,

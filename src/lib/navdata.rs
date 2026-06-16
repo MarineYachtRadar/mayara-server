@@ -655,6 +655,7 @@ impl ConnectionType {
 
 use crate::signalk::WsStream;
 
+#[allow(clippy::large_enum_variant)] // WS stream legitimately carries more state than TCP/UDP; never stored in arrays — only one live at a time per receiver
 enum Stream {
     /// Plain TCP. For Signal K connections `peer` carries the upstream we
     /// resolved so the cooldown logic can mark the server silent on close.
@@ -1620,6 +1621,8 @@ where
     // Box<> places this on the heap, not stack.
     // Pin<> makes sure it doesn't move or get invalid as an object.
     // Vec<> so we can store a list of these.
+    #[allow(clippy::type_complexity)]
+    // single-use; the comment block above already explains each layer
     let futures: Vec<Pin<Box<dyn Future<Output = Result<TcpStream, RadarError>> + Send>>> =
         addresses
             .into_iter()

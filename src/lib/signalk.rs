@@ -128,6 +128,7 @@ pub(crate) type WsStream =
 /// Result of a successful Signal K connection. The `SocketAddr` is the
 /// concrete upstream we resolved and connected to — surfaced so the receive
 /// loop can mark the server silent if it never delivers any deltas.
+#[allow(clippy::large_enum_variant)] // returned by value, never stored in a collection; WS variant is intrinsically heavier
 pub(crate) enum Connection {
     Tcp(TcpStream, SocketAddr),
     WebSocket(WsStream, String, SocketAddr),

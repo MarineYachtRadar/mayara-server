@@ -1316,6 +1316,7 @@ where
 
 #[derive(Deserialize, Debug)]
 #[serde(untagged)]
+#[allow(clippy::large_enum_variant)] // one-shot deserialization sink; `RadarControlValue` carries the full control payload, but this enum value never lives past the match in handle_client_request
 enum StreamRequest {
     RadarControlValue(RadarControlValue),
     Subscription(Subscription),

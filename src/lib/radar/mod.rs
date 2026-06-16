@@ -341,6 +341,7 @@ pub struct RadarInfo {
 }
 
 impl RadarInfo {
+    #[allow(clippy::too_many_arguments)] // every radar field comes flat from per-brand discovery; the brands are the only callers
     pub fn new<F>(
         radars: &SharedRadars,
         args: &Cli,

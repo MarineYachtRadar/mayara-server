@@ -52,6 +52,7 @@ const GARMIN_HD_RANGES_NAUTICAL: &[i32] = &[
 ];
 
 /// Supported Garmin radar types
+#[allow(clippy::upper_case_acronyms)] // HD / XHD are Garmin's published product-line names
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(dead_code)]
 pub(crate) enum GarminRadarType {
@@ -506,6 +507,7 @@ impl GarminLocator {
 
     /// Build a `RadarInfo` for the given radar and hand it off to the
     /// shared registry.
+    #[allow(clippy::too_many_arguments)] // discovery params arrive flat from the locator; bundling has no real reuse
     fn register(
         &mut self,
         detected_type: GarminRadarType,
