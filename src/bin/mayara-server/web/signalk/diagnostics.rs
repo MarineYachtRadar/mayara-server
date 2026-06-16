@@ -15,11 +15,15 @@ use axum::{
 use chrono::Utc;
 use flate2::Compression;
 use flate2::write::GzEncoder;
+use mayara::network::devices::{self, Device};
 use mayara::{InterfaceApi, PACKAGE, VERSION};
 use network_interface::{Addr, NetworkInterface, NetworkInterfaceConfig};
 use serde::Serialize;
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::io::Write;
+use std::net::Ipv4Addr;
+use std::str::FromStr;
 use tokio::sync::mpsc;
 
 use super::super::Web;
@@ -158,7 +162,15 @@ fn radars_summary(state: &Web) -> Vec<Value> {
         .collect()
 }
 
-fn build_diagnostics(state: &Web, locator: InterfaceApi) -> Value {
+fn build_diagnostics(
+    state: &Web,
+    locator: InterfaceApi,
+    devices_by_nic: HashMap<Ipv4Addr, Vec<Device>>,
+) -> Value {
+    let mut locator_value =
+        serde_json::to_value(&locator).expect("InterfaceApi is always serializable");
+    inject_devices(&mut locator_value, &devices_by_nic);
+
     json!({
         "schema": "mayara-network-diagnostics-v1",
         "generated_at": Utc::now().to_rfc3339(),
@@ -175,9 +187,35 @@ fn build_diagnostics(state: &Web, locator: InterfaceApi) -> Value {
         "host": {
             "interfaces": enumerate_host_interfaces(),
         },
-        "locator": locator,
+        "locator": locator_value,
         "radars": radars_summary(state),
     })
+}
+
+/// Walk `locator.interfaces` (serialized as a map keyed by `"name (ip)"`)
+/// and, for any entry whose `ip` field matches a key in `devices_by_nic`,
+/// inject a `devices` array next to the existing `listeners` block.
+fn inject_devices(locator: &mut Value, devices_by_nic: &HashMap<Ipv4Addr, Vec<Device>>) {
+    let Some(interfaces) = locator.get_mut("interfaces").and_then(Value::as_object_mut) else {
+        return;
+    };
+    for entry in interfaces.values_mut() {
+        let Some(obj) = entry.as_object_mut() else {
+            continue;
+        };
+        let ip = obj
+            .get("ip")
+            .and_then(Value::as_str)
+            .and_then(|s| Ipv4Addr::from_str(s).ok());
+        let Some(ip) = ip else { continue };
+        let Some(devices) = devices_by_nic.get(&ip) else {
+            continue;
+        };
+        obj.insert(
+            "devices".into(),
+            serde_json::to_value(devices).expect("Device is always serializable"),
+        );
+    }
 }
 
 fn gzip_json(body: &Value) -> std::io::Result<Vec<u8>> {
@@ -189,7 +227,8 @@ fn gzip_json(body: &Value) -> std::io::Result<Vec<u8>> {
 
 pub(crate) async fn get_diagnostics(State(state): State<Web>) -> Response {
     let locator = fetch_interface_api(&state).await;
-    let body = build_diagnostics(&state, locator);
+    let devices_by_nic = devices::collect_per_interface(&locator).await;
+    let body = build_diagnostics(&state, locator, devices_by_nic);
 
     let gz = match gzip_json(&body) {
         Ok(bytes) => bytes,
