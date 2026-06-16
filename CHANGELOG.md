@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **raymarine:** decode Quantum self-test fault status (#335) ([PR #335](https://github.com/MarineYachtRadar/mayara-server/pull/335))
 - **raymarine:** correct Quantum interference-rejection byte and gain-value id (#337) ([PR #337](https://github.com/MarineYachtRadar/mayara-server/pull/337))
+- **clippy:** make  warning-clean and gate it in CI + pre-commit (#358) ([PR #358](https://github.com/MarineYachtRadar/mayara-server/pull/358))
 
 ## [3.5.4] - 2026-06-02
 
