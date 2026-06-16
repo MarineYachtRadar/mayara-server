@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **agents:** require user-facing description first in issues and PRs (#373) ([PR #373](https://github.com/MarineYachtRadar/mayara-server/pull/373))
+- drop magic numbers when sending Power control values (#377) ([PR #377](https://github.com/MarineYachtRadar/mayara-server/pull/377))
 
 ### Fixed
 
