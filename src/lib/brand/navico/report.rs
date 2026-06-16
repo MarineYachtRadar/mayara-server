@@ -408,7 +408,7 @@ impl NavicoReportReceiver {
         let wire_to_legend = wire_to_legend(&info.get_legend());
 
         let common = CommonRadar::new(
-            &args,
+            args,
             key,
             info,
             radars.clone(),
@@ -444,7 +444,7 @@ impl NavicoReportReceiver {
     pub(super) async fn run(mut self, subsys: &mut SubsystemHandle) -> Result<(), RadarError> {
         self.start_report_socket()?;
         loop {
-            match self.socket_loop(&subsys).await {
+            match self.socket_loop(subsys).await {
                 Ok(()) => {
                     break Ok(());
                 }
@@ -1302,7 +1302,7 @@ impl NavicoReportReceiver {
         scanline: usize,
     ) -> Option<(u32, SpokeBearing, Option<u16>)> {
         match self.model {
-            Model::BR24 | Model::Gen3 => match decode_bin::<GenBr24Header>(&header_slice) {
+            Model::BR24 | Model::Gen3 => match decode_bin::<GenBr24Header>(header_slice) {
                 Ok(header) => {
                     log::trace!("Received {:04} header {:?}", scanline, header);
 
@@ -1313,7 +1313,7 @@ impl NavicoReportReceiver {
                     None
                 }
             },
-            _ => match decode_bin::<Gen3PlusHeader>(&header_slice) {
+            _ => match decode_bin::<Gen3PlusHeader>(header_slice) {
                 Ok(header) => {
                     log::trace!("Received {:04} header {:?}", scanline, header);
 

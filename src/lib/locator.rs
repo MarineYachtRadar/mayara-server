@@ -95,7 +95,7 @@ impl Locator {
         #[cfg(feature = "emulator")]
         if self.args.emulator {
             log::info!("Emulator mode: creating emulator radar directly");
-            crate::brand::emulator::create_emulator_radar(&self.args, &radars, &subsys);
+            crate::brand::emulator::create_emulator_radar(&self.args, radars, subsys);
 
             // Keep the locator running until shutdown — there is no other
             // event we could observe here, so just await the shutdown
@@ -197,8 +197,8 @@ impl Locator {
                                     &buf,
                                     &addr,
                                     &locator_socket.nic_addr,
-                                    &radars,
-                                    &subsys,
+                                    radars,
+                                    subsys,
                                 );
                                 if self.args.multiple_radar || !radars.have_active() {
                                     // Respawn this task

@@ -428,7 +428,7 @@ impl FurunoReportReceiver {
             } else if let Err(e) = self.start_command_stream().await {
                 log::warn!("{}: Failed to start command stream: {}", self.common.key, e);
             } else {
-                match self.data_loop(&subsys).await {
+                match self.data_loop(subsys).await {
                     Err(RadarError::Shutdown) => return Ok(()),
                     _ => {}
                 }
@@ -1282,7 +1282,7 @@ impl FurunoReportReceiver {
             return;
         }
 
-        let metadata: FurunoSpokeMetadata = self.parse_metadata_header(&data);
+        let metadata: FurunoSpokeMetadata = self.parse_metadata_header(data);
 
         let sweep_count = metadata.sweep_count;
         let sweep_len = metadata.sweep_len as usize;

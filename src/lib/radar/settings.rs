@@ -875,7 +875,7 @@ impl SharedControls {
                 if let Some(descriptions) = &control.item.descriptions
                     && let Some(idx) = descriptions
                         .iter()
-                        .position(|(_, d)| d.eq_ignore_ascii_case(&s))
+                        .position(|(_, d)| d.eq_ignore_ascii_case(s))
                 {
                     return Ok(Value::Number(Number::from(idx)));
                 }
@@ -1137,7 +1137,7 @@ impl SharedControls {
                 .controls
                 .get(&ControlId::Range)
                 .expect("Range should always be set");
-            sk_delta.add_meta_for_control(&locked.radar_id, &range_control);
+            sk_delta.add_meta_for_control(&locked.radar_id, range_control);
             log::debug!("meta: {:?}", sk_delta);
         }
         sk_delta.add_updates(vec![radar_control_value]);
@@ -3473,7 +3473,7 @@ mod test {
         // Check with optional fields and V3 ID
         let json = r#"{"id":"gain","value":"49","auto":true,"enabled":false}"#;
 
-        match serde_json::from_str::<ControlValue>(&json) {
+        match serde_json::from_str::<ControlValue>(json) {
             Ok(cv) => {
                 assert_eq!(cv.id, ControlId::Gain);
                 assert_eq!(cv.value, Some(Value::String("49".to_string())));
@@ -3488,7 +3488,7 @@ mod test {
         // Check without optional fields and with v1 ID
         let json = r#"{"id":"4","value":49}"#;
 
-        match serde_json::from_str::<ControlValue>(&json) {
+        match serde_json::from_str::<ControlValue>(json) {
             Ok(cv) => {
                 assert_eq!(cv.id, ControlId::Gain);
                 assert_eq!(
@@ -3506,7 +3506,7 @@ mod test {
         // Check with illegal negative v1 ID
         let json = r#"{"id":"-1","value":"49"}"#;
 
-        assert!(serde_json::from_str::<ControlValue>(&json).is_err());
+        assert!(serde_json::from_str::<ControlValue>(json).is_err());
     }
 
     #[test]

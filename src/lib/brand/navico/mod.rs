@@ -386,7 +386,7 @@ impl NavicoLocator {
 
             let report_name = info.key() + " reports";
 
-            info.start_forwarding_radar_messages_to_stdout(&subsys);
+            info.start_forwarding_radar_messages_to_stdout(subsys);
 
             let report_receiver =
                 report::NavicoReportReceiver::new(&self.args, info, radars.clone());

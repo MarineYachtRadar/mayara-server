@@ -101,7 +101,7 @@ pub(crate) fn update_when_model_known(
 
     if let Some(serial_number) = radar_info.serial_no.as_ref() {
         controls
-            .set_string(&&ControlId::SerialNumber, serial_number.to_string())
+            .set_string(&ControlId::SerialNumber, serial_number.to_string())
             .unwrap();
     }
     // Update the UserName; it had to be present at start so it could be loaded from
@@ -116,7 +116,7 @@ pub(crate) fn update_when_model_known(
         }
         if radar_info.dual.is_some() {
             user_name.push(' ');
-            user_name.push_str(&radar_info.dual.as_ref().unwrap());
+            user_name.push_str(radar_info.dual.as_ref().unwrap());
         }
         controls.set_user_name(user_name);
     }

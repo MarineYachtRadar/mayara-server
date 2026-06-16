@@ -936,7 +936,7 @@ impl NavigationData {
             let probe_timeout = probe_timeout_for(consecutive_no_nav);
 
             match self
-                .find_service(&subsys, &mut rx_ip_change, &navigation_address)
+                .find_service(subsys, &mut rx_ip_change, &navigation_address)
                 .await
             {
                 Ok(Stream::Tcp(stream, signalk_peer)) => {
@@ -948,7 +948,7 @@ impl NavigationData {
                             .map(|a| a.to_string())
                             .unwrap_or_else(|_| "<unknown>".to_string())
                     );
-                    let result = self.receive_loop(stream, &subsys, probe_timeout).await;
+                    let result = self.receive_loop(stream, subsys, probe_timeout).await;
                     // NMEA0183-over-TCP (signalk_peer is None) doesn't carry
                     // own-ship-nav semantics — the probe never fires and the
                     // counter has nothing to track. Only Signal K TCP
@@ -980,7 +980,7 @@ impl NavigationData {
                     // NMEA0183-over-UDP has no Signal K own-ship probe so
                     // it's outside the backoff path: success or failure
                     // here doesn't update consecutive_no_nav.
-                    match self.receive_udp_loop(socket, &subsys).await {
+                    match self.receive_udp_loop(socket, subsys).await {
                         Err(RadarError::Shutdown) => {
                             log::debug!("{} receive_loop shutdown", self.what);
                             return Ok(());
@@ -992,7 +992,7 @@ impl NavigationData {
                 }
                 Ok(Stream::WebSocket(ws, url, signalk_peer)) => {
                     log::info!("Listening to {} data via WebSocket from {}", self.what, url);
-                    let result = self.receive_ws_loop(ws, &subsys, probe_timeout).await;
+                    let result = self.receive_ws_loop(ws, subsys, probe_timeout).await;
                     let saw_own_ship = own_ship_nav_seen();
                     Self::update_signalk_silent_state(Some(signalk_peer), &result);
                     consecutive_no_nav = next_consecutive(consecutive_no_nav, saw_own_ship);
@@ -1452,7 +1452,7 @@ impl NavigationData {
                 match if self.nmea0183_mode {
                     self.parse_nmea0183(line)
                 } else {
-                    parse_signalk(&line)
+                    parse_signalk(line)
                 } {
                     Err(e) => {
                         log::warn!("{}", e)

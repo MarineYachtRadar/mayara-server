@@ -620,7 +620,7 @@ impl ActiveSubscriptions {
                     }
                 }
             } else {
-                match ControlId::from_str(&control_id) {
+                match ControlId::from_str(control_id) {
                     Ok(id) => {
                         paths.remove(&id);
                     }
@@ -943,7 +943,7 @@ where
     match opt {
         Some(s) => Policy::from_str(&s.to_ascii_lowercase())
             .map(Some)
-            .map_err(|_| serde::de::Error::unknown_variant(&s, &Policy::VARIANTS)),
+            .map_err(|_| serde::de::Error::unknown_variant(&s, Policy::VARIANTS)),
         None => Ok(None), // field missing → None
     }
 }

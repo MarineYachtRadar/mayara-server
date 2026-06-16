@@ -1163,7 +1163,7 @@ async fn ws_signalk_delta_shim(
 /// radars using a single websocket
 ///
 async fn ws_signalk_delta(
-    mut socket: &mut WebSocket,
+    socket: &mut WebSocket,
     subscribe: Subscribe,
     send_cached_values: bool,
     radars: SharedRadars,
@@ -1179,7 +1179,7 @@ async fn ws_signalk_delta(
         send_cached_values
     );
 
-    send_hello(&mut socket).await?;
+    send_hello(socket).await?;
 
     let mut subscriptions = ActiveSubscriptions::new(subscribe);
 
@@ -1261,7 +1261,7 @@ async fn ws_signalk_delta(
                     Some(Ok(message)) => {
                         match message {
                             Message::Text(message) => {
-                                handle_client_request(&mut socket, message.as_str(), &mut subscriptions, &radars, reply_tx.clone()).await;
+                                handle_client_request(socket, message.as_str(), &mut subscriptions, &radars, reply_tx.clone()).await;
                             },
                             _ => {
                                 log::debug!("Dropping unexpected message {:?}", message);
@@ -1281,7 +1281,7 @@ async fn ws_signalk_delta(
             }
 
             _ = tokio::time::sleep(subscriptions.get_timeout()) => {
-                if let Err(e) = send_all_subscribed(&mut socket, &radars, &mut subscriptions).await
+                if let Err(e) = send_all_subscribed(socket, &radars, &mut subscriptions).await
                 {
                     log::warn!("Cannot send subscribed data to websocket");
                     break Err(e);
@@ -1395,7 +1395,7 @@ async fn handle_control_request(
     mut rcv: RadarControlValue,
 ) -> Result<(), RadarError> {
     if let Some(radar_id) = rcv.parse_path() {
-        if let Some(radar) = radars.get_by_key(&radar_id) {
+        if let Some(radar) = radars.get_by_key(radar_id) {
             // Mirror the REST PUT path's idle-exit. Any control written
             // over the WebSocket stream is also user interaction; without
             // this, a WS-only client (e.g. some MFD integrations) leaves

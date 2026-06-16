@@ -118,7 +118,7 @@ impl FurunoLocator {
 
             let report_name = info.key();
 
-            info.start_forwarding_radar_messages_to_stdout(&subsys);
+            info.start_forwarding_radar_messages_to_stdout(subsys);
 
             // In replay mode, detect model from the original beacon string
             // (not from controls which persistence may have overwritten).
@@ -144,7 +144,7 @@ impl FurunoLocator {
             if let Some(ref mut ib) = info_b {
                 ib.send_command_addr.set_port(port);
                 ib.report_addr.set_port(port);
-                ib.start_forwarding_radar_messages_to_stdout(&subsys);
+                ib.start_forwarding_radar_messages_to_stdout(subsys);
                 if let Some(model) = replay_model.filter(|m| *m != RadarModel::Unknown) {
                     settings::update_when_model_known(ib, model, REPLAY_FIRMWARE_VERSION);
                     radars.update(ib);
@@ -339,7 +339,7 @@ impl FurunoLocator {
                     None
                 };
 
-                self.found(radar_info, info_b, radars, subsys, &model);
+                self.found(radar_info, info_b, radars, subsys, model);
             }
             Err(e) => {
                 log::error!(

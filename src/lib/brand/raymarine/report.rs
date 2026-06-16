@@ -349,7 +349,7 @@ impl RaymarineReportReceiver {
         self.start_report_socket().await?;
         loop {
             if self.report_socket.is_some() {
-                match self.socket_loop(&subsys).await {
+                match self.socket_loop(subsys).await {
                     Err(RadarError::Shutdown) => {
                         return Ok(());
                     }

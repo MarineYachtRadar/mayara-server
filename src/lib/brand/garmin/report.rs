@@ -399,7 +399,7 @@ impl GarminReportReceiver {
                 continue;
             }
 
-            match self.socket_loop(&subsys).await {
+            match self.socket_loop(subsys).await {
                 Err(RadarError::Shutdown) => {
                     return Ok(());
                 }

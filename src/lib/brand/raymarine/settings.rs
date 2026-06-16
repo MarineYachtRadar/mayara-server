@@ -135,7 +135,7 @@ pub(crate) fn update_when_model_known(
         }
         if radar_info.dual.is_some() {
             user_name.push(' ');
-            user_name.push_str(&radar_info.dual.as_ref().unwrap());
+            user_name.push_str(radar_info.dual.as_ref().unwrap());
         }
         controls.set_user_name(user_name);
     }
