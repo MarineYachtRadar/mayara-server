@@ -97,15 +97,14 @@ impl Locator {
             log::info!("Emulator mode: creating emulator radar directly");
             crate::brand::emulator::create_emulator_radar(&self.args, &radars, &subsys);
 
-            // Keep the locator running to handle interface requests
-            loop {
-                tokio::select! {
-                    _ = subsys.on_shutdown_requested() => {
-                        log::debug!("Emulator locator shutdown");
-                        return Ok(());
-                    }
-                }
-            }
+            // Keep the locator running until shutdown — there is no other
+            // event we could observe here, so just await the shutdown
+            // signal directly instead of a single-arm select! inside a
+            // loop (which clippy correctly flags as a loop that never
+            // actually loops).
+            subsys.on_shutdown_requested().await;
+            log::debug!("Emulator locator shutdown");
+            return Ok(());
         }
 
         log::debug!("Entering loop, listening for radars");
