@@ -217,10 +217,9 @@ impl TrailBuffer {
 
         while radius < data.len() - 1 {
             //  len - 1 : no trails on range circle
-            let mut point = self
+            let mut point = *self
                 .cartesian_lookup
-                .get_point_int(bearing as usize, radius)
-                .clone();
+                .get_point_int(bearing as usize, radius);
 
             point.x += self.trail_size / 2 + self.true_trails_offset.x;
             point.y += self.trail_size / 2 + self.true_trails_offset.y;

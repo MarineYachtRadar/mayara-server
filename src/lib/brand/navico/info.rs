@@ -128,7 +128,7 @@ impl Information {
     pub(crate) fn new(key: String, info: &RadarInfo) -> Self {
         Information {
             key,
-            nic_addr: info.nic_addr.clone(),
+            nic_addr: info.nic_addr,
             sock: [None, None, None],
             counter: 0,
             last_heading: None,

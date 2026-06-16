@@ -1181,7 +1181,7 @@ async fn ws_signalk_delta(
 
     send_hello(&mut socket).await?;
 
-    let mut subscriptions = ActiveSubscriptions::new(subscribe.clone());
+    let mut subscriptions = ActiveSubscriptions::new(subscribe);
 
     let mut sk_delta = SignalKDelta::new();
     sk_delta.add_meta_updates(&radars, &mut meta_radar_data_sent);

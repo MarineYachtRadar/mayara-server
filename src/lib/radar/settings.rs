@@ -43,7 +43,7 @@ pub fn set_api_version(version: ApiVersion) {
     });
 }
 pub fn get_api_version() -> ApiVersion {
-    API_VERSION.with(|v| v.borrow().clone())
+    API_VERSION.with(|v| *v.borrow())
 }
 
 #[derive(
@@ -1397,7 +1397,7 @@ impl SharedControls {
                 } else {
                     let i = value
                         .parse::<i32>()
-                        .map_err(|_| ControlError::Invalid(control_id.clone(), value))?;
+                        .map_err(|_| ControlError::Invalid(*control_id, value))?;
                     Ok(control
                         .set(i as f64, None, None, None)?
                         .map(|_| control.clone()))
@@ -1431,16 +1431,13 @@ impl SharedControls {
                 } else {
                     let n = match value.clone() {
                         Value::String(s) => s.parse::<i32>().map(|i| i as f64).map_err(|_| {
-                            ControlError::Invalid(control_id.clone(), format!("{:?}", value))
+                            ControlError::Invalid(*control_id, format!("{:?}", value))
                         }),
                         Value::Bool(b) => Ok(b as i32 as f64),
                         Value::Number(n) => n.as_f64().ok_or_else(|| {
-                            ControlError::Invalid(control_id.clone(), format!("{:?}", value))
+                            ControlError::Invalid(*control_id, format!("{:?}", value))
                         }),
-                        _ => Err(ControlError::Invalid(
-                            control_id.clone(),
-                            format!("{:?}", value),
-                        )),
+                        _ => Err(ControlError::Invalid(*control_id, format!("{:?}", value))),
                     }?;
                     Ok(control.set(n, None, None, None)?.map(|_| control.clone()))
                 }
@@ -1862,7 +1859,7 @@ impl ControlValue {
         ControlValue {
             id: control.item().control_id,
             value: control.value(),
-            units: control.item().units.clone(),
+            units: control.item().units,
             auto: control.auto,
             auto_value: control.auto_value(),
             end_value: control.end_value(),
@@ -2032,7 +2029,7 @@ impl RadarControlValue {
             radar_id: Some(radar.to_string()),
             control_id: Some(control.item().control_id),
             value: control.value(),
-            units: control.item().units.clone(),
+            units: control.item().units,
             auto: control.auto,
             auto_value: control.auto_value(),
             end_value: control.end_value(),
@@ -2645,7 +2642,7 @@ pub struct Control {
 
 impl Control {
     fn new(item: ControlDefinition) -> Self {
-        let value = item.default_value.clone();
+        let value = item.default_value;
         let timestamp = if value.is_some() {
             Some(Utc::now())
         } else {

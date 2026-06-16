@@ -219,7 +219,7 @@ impl FurunoLocator {
                     return Ok(());
                 }
                 if let Some(name) = c_string(&data.name) {
-                    let radar_addr: SocketAddrV4 = from.clone();
+                    let radar_addr: SocketAddrV4 = *from;
 
                     log::debug!(
                         "Furuno radar '{name}' seen at '{radar_addr} but looking for other report"
@@ -272,7 +272,7 @@ impl FurunoLocator {
                 let spoke_data_addr = SPOKE_DATA_MULTICAST_ADDRESS;
 
                 let report_addr: SocketAddrV4 = SocketAddrV4::new(*from.ip(), 0); // Port is set in login_to_radar
-                let send_command_addr: SocketAddrV4 = report_addr.clone();
+                let send_command_addr: SocketAddrV4 = report_addr;
 
                 // NXT models support dual range
                 let is_dual_range = model.contains("NXT");
@@ -289,7 +289,7 @@ impl FurunoLocator {
                     SPOKES,
                     SPOKE_LEN,
                     *from,
-                    nic_addr.clone(),
+                    *nic_addr,
                     spoke_data_addr,
                     report_addr,
                     send_command_addr,
@@ -319,7 +319,7 @@ impl FurunoLocator {
                         SPOKES,
                         SPOKE_LEN,
                         *from,
-                        nic_addr.clone(),
+                        *nic_addr,
                         spoke_data_addr,
                         report_addr,
                         send_command_addr,

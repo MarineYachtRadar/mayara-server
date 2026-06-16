@@ -373,7 +373,7 @@ impl RaymarineLocator {
                         spokes_per_revolution,
                         max_spoke_len,
                         radar_addr.into(),
-                        from.clone(),
+                        *from,
                         radar_addr.into(),
                         radar_addr.into(),
                         radar_send.into(),

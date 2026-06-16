@@ -46,7 +46,7 @@ impl LocatorAddress {
     ) -> LocatorAddress {
         LocatorAddress {
             id,
-            address: address.clone(),
+            address: *address,
             brand,
             beacon_request_packets,
             locator,
@@ -362,7 +362,7 @@ impl Locator {
                                                 &nic_ip,
                                             );
                                         }
-                                        interface_state.active_nic_addresses.push(nic_ip.clone());
+                                        interface_state.active_nic_addresses.push(nic_ip);
                                         interface_state.lost_nic_names.remove(&itf.name);
                                     }
 
@@ -379,7 +379,7 @@ impl Locator {
                                                 && only_interface.is_none()
                                             {
                                                 listeners.insert(
-                                                    radar_listen_address.brand.clone(),
+                                                    radar_listen_address.brand,
                                                     format!("No match for {}", listen_addr.ip()),
                                                 );
                                                 continue;
@@ -395,7 +395,7 @@ impl Locator {
                                                 Ok(socket) => {
                                                     sockets.push(LocatorSocket {
                                                         sock: socket,
-                                                        nic_addr: nic_ip.clone(),
+                                                        nic_addr: nic_ip,
                                                         state: radar_listen_address.locator.clone(),
                                                     });
                                                     log::debug!(
@@ -417,8 +417,7 @@ impl Locator {
                                                     e.to_string()
                                                 }
                                             };
-                                            listeners
-                                                .insert(radar_listen_address.brand.clone(), status);
+                                            listeners.insert(radar_listen_address.brand, status);
                                         } else {
                                             log::trace!(
                                                 "Ignoring IPv6 address {:?}",

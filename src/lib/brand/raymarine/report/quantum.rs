@@ -377,10 +377,8 @@ pub(super) fn process_info_report(receiver: &mut RaymarineReportReceiver, data: 
             // keep the existing sender rather than recreating it.
             if receiver.command_sender.is_none() && !receiver.common.replay {
                 log::debug!("{}: Starting command sender", receiver.common.key);
-                receiver.command_sender = Some(Command::new(
-                    receiver.common.info.clone(),
-                    model.model.clone(),
-                ));
+                receiver.command_sender =
+                    Some(Command::new(receiver.common.info.clone(), model.model));
             }
             receiver.model = Some(model);
             receiver.state = ReceiverState::InfoRequestReceived;

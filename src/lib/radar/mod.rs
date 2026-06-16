@@ -364,8 +364,7 @@ impl RadarInfo {
     {
         let (message_tx, _message_rx) = tokio::sync::broadcast::channel(32);
 
-        let (targets, replay, output) =
-            { (args.targets.clone(), args.is_replay(), args.output.clone()) };
+        let (targets, replay, output) = { (args.targets.clone(), args.is_replay(), args.output) };
         let doppler_levels = if doppler { 1 } else { 0 };
         let has_rain_class = false;
         let legend = default_legend(&targets, doppler_levels, has_rain_class, pixel_values);

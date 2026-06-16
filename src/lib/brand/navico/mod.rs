@@ -349,7 +349,7 @@ impl NavicoLocator {
                 SPOKES_PER_REVOLUTION,
                 SPOKE_PIXEL_LEN,
                 (*from).into(),
-                via.clone(),
+                *via,
                 scanner.data.into(),
                 scanner.report.into(),
                 scanner.send.into(),
