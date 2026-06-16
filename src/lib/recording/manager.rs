@@ -114,7 +114,7 @@ impl RecordingManager {
             }
         }
 
-        recordings.sort_by(|a, b| b.modified_ms.cmp(&a.modified_ms));
+        recordings.sort_by_key(|r| std::cmp::Reverse(r.modified_ms));
         recordings
     }
 

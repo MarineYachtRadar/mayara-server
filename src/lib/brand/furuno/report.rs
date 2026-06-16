@@ -649,11 +649,11 @@ impl FurunoReportReceiver {
 
                 // Coupled transmit: on DRS models both ranges share TX state.
                 // Propagate power to the other range.
-                if self.common_b.is_some() {
+                if let Some(common_b) = self.common_b.as_mut() {
                     let other = if drid == 1 {
                         &mut self.common
                     } else {
-                        self.common_b.as_mut().unwrap()
+                        common_b
                     };
                     other.set_value(&ControlId::Power, power_value);
                     if !is_standby {
@@ -1140,17 +1140,17 @@ impl FurunoReportReceiver {
             self.common.update();
 
             // Also update Range B if present
-            if self.common_b.is_some() {
-                let legend_b = {
-                    let cb = self.common_b.as_mut().unwrap();
-                    settings::update_when_model_known(&mut cb.info, model, version);
-                    if !cb.info.controls.contains_key(&ControlId::Doppler) {
-                        self.target_analyzer_known[1] = true;
-                    }
-                    let legend = cb.info.get_legend();
-                    cb.update();
-                    legend
-                };
+            let legend_b = self.common_b.as_mut().map(|cb| {
+                settings::update_when_model_known(&mut cb.info, model, version);
+                let has_doppler = cb.info.controls.contains_key(&ControlId::Doppler);
+                let legend = cb.info.get_legend();
+                cb.update();
+                (legend, has_doppler)
+            });
+            if let Some((legend_b, has_doppler)) = legend_b {
+                if !has_doppler {
+                    self.target_analyzer_known[1] = true;
+                }
                 let mode_b = self.doppler_wire_mode_for(1);
                 self.wire_to_legend[1] = Self::wire_to_legend(&legend_b, mode_b, low_power);
             }

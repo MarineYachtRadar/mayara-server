@@ -40,7 +40,11 @@ const WAKE_INTERVAL: Duration = Duration::from_secs(3);
 const OBSERVATION_WINDOW: Duration = Duration::from_secs(5);
 const EXTERNAL_QUIET_WINDOW: Duration = Duration::from_secs(60);
 
-// The LookupSpokeEnum is an index into an array, really
+// The LookupSpokeEnum is an index into an array, really.
+// `Normal` is unused at the moment — the runtime always picks the
+// Doppler row (see quantum::process_frame); the variant is kept so
+// the enum continues to document the table's layout.
+#[allow(dead_code)]
 enum LookupDoppler {
     Normal = 0,
     Doppler = 1,
@@ -56,19 +60,22 @@ pub(super) fn wire_to_legend(legend: &Legend) -> WireToLegendTable {
     let doppler_approaching = legend.doppler_approaching.map(|(s, _)| s).unwrap_or(0);
     let doppler_receding = legend.doppler_receding.map(|(s, _)| s).unwrap_or(0);
 
+    // `LOOKUP_DOPPLER_LENGTH == 2`, so the array splits cleanly into the
+    // two parallel sub-tables (Normal | Doppler) we want to populate.
+    let [normal, doppler] = &mut lookup;
     if legend.pixel_colors >= 128 {
-        for j in 0..BYTE_LOOKUP_LENGTH {
-            lookup[LookupDoppler::Normal as usize][j] = j as u8 / 2;
-            lookup[LookupDoppler::Doppler as usize][j] = match j {
+        for (j, (n, d)) in normal.iter_mut().zip(doppler.iter_mut()).enumerate() {
+            *n = j as u8 / 2;
+            *d = match j {
                 0xff => doppler_approaching,
                 0xfe => doppler_receding,
                 _ => j as u8 / 2,
             };
         }
     } else {
-        for j in 0..BYTE_LOOKUP_LENGTH {
-            lookup[LookupDoppler::Normal as usize][j] = j as u8;
-            lookup[LookupDoppler::Doppler as usize][j] = match j {
+        for (j, (n, d)) in normal.iter_mut().zip(doppler.iter_mut()).enumerate() {
+            *n = j as u8;
+            *d = match j {
                 0xff => doppler_approaching,
                 0xfe => doppler_receding,
                 _ => j as u8,

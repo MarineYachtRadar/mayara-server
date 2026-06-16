@@ -352,9 +352,8 @@ impl Persistence {
 
     pub(crate) fn update_info_from_persistence(&self, info: &mut RadarInfo) {
         if let Some(p) = self.config.radars.get(&info.key()) {
-            if p.model_name.is_some() {
-                info.controls
-                    .set_model_name(p.model_name.as_ref().unwrap().clone());
+            if let Some(model_name) = p.model_name.as_ref() {
+                info.controls.set_model_name(model_name.clone());
             }
             info.controls.set_user_name(p.user_name.clone());
             info.controls.set_spoke_processing(p.spoke_processing);

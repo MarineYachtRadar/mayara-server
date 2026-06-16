@@ -25,7 +25,7 @@ pub struct ArpEntry {
 pub fn list() -> Vec<ArpEntry> {
     #[cfg(target_os = "linux")]
     {
-        return linux::list();
+        linux::list()
     }
     #[cfg(target_os = "macos")]
     {
@@ -33,7 +33,7 @@ pub fn list() -> Vec<ArpEntry> {
     }
     #[cfg(target_os = "windows")]
     {
-        return windows_arp::list();
+        windows_arp::list()
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
