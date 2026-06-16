@@ -6,7 +6,9 @@ use crate::{
         ControlId, HAS_AUTO_NOT_ADJUSTABLE, SharedControls, new_auto, new_list, new_numeric,
         new_sector, new_string,
     },
-    radar::{RadarInfo, range::Ranges, units::Units},
+    radar::{
+        FRAC_NM_2, FRAC_NM_4, FRAC_NM_8, FRAC_NM_16, NM, RadarInfo, range::Ranges, units::Units,
+    },
     stream::SignalKDelta,
 };
 
@@ -406,49 +408,49 @@ pub(crate) fn update_when_model_known(info: &mut RadarInfo, model: RadarModel, v
 /// Range table for DRS-NXT series (in meters)
 /// Ranges: 1/16, 1/8, 1/4, 1/2, 3/4, 1, 1.5, 2, 3, 4, 6, 8, 12, 16, 24, 32, 36, 48 NM
 static RANGE_TABLE_DRS_NXT: &[i32] = &[
-    116,   // 1/16 NM
-    231,   // 1/8 NM
-    463,   // 1/4 NM
-    926,   // 1/2 NM
-    1389,  // 3/4 NM
-    1852,  // 1 NM
-    2778,  // 1.5 NM
-    3704,  // 2 NM
-    5556,  // 3 NM
-    7408,  // 4 NM
-    11112, // 6 NM
-    14816, // 8 NM
-    22224, // 12 NM
-    29632, // 16 NM
-    44448, // 24 NM
-    59264, // 32 NM
-    66672, // 36 NM
-    88896, // 48 NM
+    FRAC_NM_16, // 1/16 NM
+    FRAC_NM_8,  // 1/8 NM
+    FRAC_NM_4,  // 1/4 NM
+    FRAC_NM_2,  // 1/2 NM
+    NM * 3 / 4, // 3/4 NM
+    NM,         // 1 NM
+    NM * 3 / 2, // 1.5 NM
+    NM * 2,     // 2 NM
+    NM * 3,     // 3 NM
+    NM * 4,     // 4 NM
+    NM * 6,     // 6 NM
+    NM * 8,     // 8 NM
+    NM * 12,    // 12 NM
+    NM * 16,    // 16 NM
+    NM * 24,    // 24 NM
+    NM * 32,    // 32 NM
+    NM * 36,    // 36 NM
+    NM * 48,    // 48 NM
 ];
 
 /// Extended range table for DRS12A/DRS25A-NXT (adds 64, 72, 96 NM)
 static RANGE_TABLE_DRS_NXT_EXTENDED: &[i32] = &[
-    116,    // 1/16 NM
-    231,    // 1/8 NM
-    463,    // 1/4 NM
-    926,    // 1/2 NM
-    1389,   // 3/4 NM
-    1852,   // 1 NM
-    2778,   // 1.5 NM
-    3704,   // 2 NM
-    5556,   // 3 NM
-    7408,   // 4 NM
-    11112,  // 6 NM
-    14816,  // 8 NM
-    22224,  // 12 NM
-    29632,  // 16 NM
-    44448,  // 24 NM
-    59264,  // 32 NM
-    66672,  // 36 NM
-    88896,  // 48 NM
-    118528, // 64 NM
-    133344, // 72 NM
-    177792, // 96 NM
+    FRAC_NM_16, // 1/16 NM
+    FRAC_NM_8,  // 1/8 NM
+    FRAC_NM_4,  // 1/4 NM
+    FRAC_NM_2,  // 1/2 NM
+    NM * 3 / 4, // 3/4 NM
+    NM,         // 1 NM
+    NM * 3 / 2, // 1.5 NM
+    NM * 2,     // 2 NM
+    NM * 3,     // 3 NM
+    NM * 4,     // 4 NM
+    NM * 6,     // 6 NM
+    NM * 8,     // 8 NM
+    NM * 12,    // 12 NM
+    NM * 16,    // 16 NM
+    NM * 24,    // 24 NM
+    NM * 32,    // 32 NM
+    NM * 36,    // 36 NM
+    NM * 48,    // 48 NM
+    NM * 64,    // 64 NM
+    NM * 72,    // 72 NM
+    NM * 96,    // 96 NM
 ];
 
 /// Range table for DRS-NXT series in km mode (in meters)
@@ -550,20 +552,20 @@ static RANGE_TABLE_FAR_KM: &[i32] = &[
 /// Wire index 21 (1/16 NM) is not supported on DRS4W; 32/36 NM are
 /// out of reach for this 4 kW WiFi radar.
 static RANGE_TABLE_DRS4W: &[i32] = &[
-    231,   // 1/8 NM
-    463,   // 1/4 NM
-    926,   // 1/2 NM
-    1389,  // 3/4 NM
-    1852,  // 1 NM
-    2778,  // 1.5 NM
-    3704,  // 2 NM
-    5556,  // 3 NM
-    7408,  // 4 NM
-    11112, // 6 NM
-    14816, // 8 NM
-    22224, // 12 NM
-    29632, // 16 NM
-    44448, // 24 NM
+    FRAC_NM_8,  // 1/8 NM
+    FRAC_NM_4,  // 1/4 NM
+    FRAC_NM_2,  // 1/2 NM
+    NM * 3 / 4, // 3/4 NM
+    NM,         // 1 NM
+    NM * 3 / 2, // 1.5 NM
+    NM * 2,     // 2 NM
+    NM * 3,     // 3 NM
+    NM * 4,     // 4 NM
+    NM * 6,     // 6 NM
+    NM * 8,     // 8 NM
+    NM * 12,    // 12 NM
+    NM * 16,    // 16 NM
+    NM * 24,    // 24 NM
 ];
 
 /// Range table for DRS4W WiFi radar in km mode (0.125–24 km).
@@ -586,44 +588,44 @@ static RANGE_TABLE_DRS4W_KM: &[i32] = &[
 
 /// Range table for standard DRS series (non-NXT, up to 36 NM)
 static RANGE_TABLE_DRS: &[i32] = &[
-    116,   // 1/16 NM
-    231,   // 1/8 NM
-    463,   // 1/4 NM
-    926,   // 1/2 NM
-    1389,  // 3/4 NM
-    1852,  // 1 NM
-    2778,  // 1.5 NM
-    3704,  // 2 NM
-    5556,  // 3 NM
-    7408,  // 4 NM
-    11112, // 6 NM
-    14816, // 8 NM
-    22224, // 12 NM
-    29632, // 16 NM
-    44448, // 24 NM
-    59264, // 32 NM
-    66672, // 36 NM
+    FRAC_NM_16, // 1/16 NM
+    FRAC_NM_8,  // 1/8 NM
+    FRAC_NM_4,  // 1/4 NM
+    FRAC_NM_2,  // 1/2 NM
+    NM * 3 / 4, // 3/4 NM
+    NM,         // 1 NM
+    NM * 3 / 2, // 1.5 NM
+    NM * 2,     // 2 NM
+    NM * 3,     // 3 NM
+    NM * 4,     // 4 NM
+    NM * 6,     // 6 NM
+    NM * 8,     // 8 NM
+    NM * 12,    // 12 NM
+    NM * 16,    // 16 NM
+    NM * 24,    // 24 NM
+    NM * 32,    // 32 NM
+    NM * 36,    // 36 NM
 ];
 
 /// Range table for FAR series commercial radars (different range increments)
 static RANGE_TABLE_FAR: &[i32] = &[
-    231,    // 1/8 NM
-    463,    // 1/4 NM
-    926,    // 1/2 NM
-    1389,   // 3/4 NM
-    1852,   // 1 NM
-    2778,   // 1.5 NM
-    3704,   // 2 NM
-    5556,   // 3 NM
-    7408,   // 4 NM
-    11112,  // 6 NM
-    14816,  // 8 NM
-    22224,  // 12 NM
-    29632,  // 16 NM
-    44448,  // 24 NM
-    59264,  // 32 NM
-    88896,  // 48 NM
-    177792, // 96 NM
+    FRAC_NM_8,  // 1/8 NM
+    FRAC_NM_4,  // 1/4 NM
+    FRAC_NM_2,  // 1/2 NM
+    NM * 3 / 4, // 3/4 NM
+    NM,         // 1 NM
+    NM * 3 / 2, // 1.5 NM
+    NM * 2,     // 2 NM
+    NM * 3,     // 3 NM
+    NM * 4,     // 4 NM
+    NM * 6,     // 6 NM
+    NM * 8,     // 8 NM
+    NM * 12,    // 12 NM
+    NM * 16,    // 16 NM
+    NM * 24,    // 24 NM
+    NM * 32,    // 32 NM
+    NM * 48,    // 48 NM
+    NM * 96,    // 96 NM
 ];
 
 /// Get the combined NM + km range table for a specific model.

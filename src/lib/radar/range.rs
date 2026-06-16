@@ -10,9 +10,9 @@
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::sync::LazyLock;
 
-use crate::radar::NAUTICAL_MILE_F64;
+use crate::radar::NM_F64;
 
-use super::NAUTICAL_MILE;
+use super::{FRAC_NM_2, FRAC_NM_4, FRAC_NM_8, FRAC_NM_16, FRAC_NM_32, NM};
 
 // What follows are ranges that we try when range detection is attempted
 // where the code will send all those ranges to the radar to see if it
@@ -21,30 +21,30 @@ use super::NAUTICAL_MILE;
 // All ranges seen on all radars
 static ALL_POSSIBLE_NAUTICAL_RANGES: LazyLock<Ranges> = LazyLock::new(|| {
     Ranges::new(vec![
-        Range::initial(57),                  // 1/32 nm
-        Range::initial(115),                 // 1/16 nm
-        Range::initial(231),                 // 1/8 nm
-        Range::initial(463),                 // 1/4 nm
-        Range::initial(926),                 // 1/2 nm
-        Range::initial(1389),                // 3/4 nm
-        Range::initial(NAUTICAL_MILE),       // 1 nm
-        Range::initial(NAUTICAL_MILE + 926), // 1.5 nm
-        Range::initial(NAUTICAL_MILE * 2),   // 2 nm
-        Range::initial(NAUTICAL_MILE * 3),   // 3 nm
-        Range::initial(NAUTICAL_MILE * 4),   // 4 nm
-        Range::initial(NAUTICAL_MILE * 6),   // 6 nm
-        Range::initial(NAUTICAL_MILE * 8),   // 8 nm
-        Range::initial(NAUTICAL_MILE * 12),  // 12 nm
-        Range::initial(NAUTICAL_MILE * 16),  // 16 nm
-        Range::initial(NAUTICAL_MILE * 24),  // 24 nm
-        Range::initial(NAUTICAL_MILE * 32),  // 32 nm
-        Range::initial(NAUTICAL_MILE * 36),  // 36 nm
-        Range::initial(NAUTICAL_MILE * 40),  // 40 nm
-        Range::initial(NAUTICAL_MILE * 48),  // 48 nm
-        Range::initial(NAUTICAL_MILE * 64),  // 64 nm
-        Range::initial(NAUTICAL_MILE * 72),  // 72 nm
-        Range::initial(NAUTICAL_MILE * 96),  // 96 nm
-        Range::initial(NAUTICAL_MILE * 120), // 120 nm
+        Range::initial(FRAC_NM_32), // 1/32 nm
+        Range::initial(FRAC_NM_16), // 1/16 nm
+        Range::initial(FRAC_NM_8),  // 1/8 nm
+        Range::initial(FRAC_NM_4),  // 1/4 nm
+        Range::initial(FRAC_NM_2),  // 1/2 nm
+        Range::initial(NM * 3 / 4), // 3/4 nm
+        Range::initial(NM),         // 1 nm
+        Range::initial(NM * 3 / 2), // 1.5 nm
+        Range::initial(NM * 2),     // 2 nm
+        Range::initial(NM * 3),     // 3 nm
+        Range::initial(NM * 4),     // 4 nm
+        Range::initial(NM * 6),     // 6 nm
+        Range::initial(NM * 8),     // 8 nm
+        Range::initial(NM * 12),    // 12 nm
+        Range::initial(NM * 16),    // 16 nm
+        Range::initial(NM * 24),    // 24 nm
+        Range::initial(NM * 32),    // 32 nm
+        Range::initial(NM * 36),    // 36 nm
+        Range::initial(NM * 40),    // 40 nm
+        Range::initial(NM * 48),    // 48 nm
+        Range::initial(NM * 64),    // 64 nm
+        Range::initial(NM * 72),    // 72 nm
+        Range::initial(NM * 96),    // 96 nm
+        Range::initial(NM * 120),   // 120 nm
     ])
 });
 
@@ -179,24 +179,24 @@ impl Display for Range {
                 } else {
                     write!(f, "{} m", v)
                 }
-            } else if v >= NAUTICAL_MILE - 1 {
-                if Self::near(v, NAUTICAL_MILE) {
-                    write!(f, "{} nm", (v + 1) / NAUTICAL_MILE)
+            } else if v >= NM - 1 {
+                if Self::near(v, NM) {
+                    write!(f, "{} nm", (v + 1) / NM)
                 } else {
-                    write!(f, "{} nm", v as f64 / NAUTICAL_MILE_F64)
+                    write!(f, "{} nm", v as f64 / NM_F64)
                 }
-            } else if Self::near(v, NAUTICAL_MILE / 2) {
-                write!(f, "{}/2 nm", (v + 1) / (NAUTICAL_MILE / 2))
-            } else if Self::near(v, NAUTICAL_MILE / 4) {
-                write!(f, "{}/4 nm", (v + 1) / (NAUTICAL_MILE / 4))
-            } else if Self::near(v, NAUTICAL_MILE / 8) {
-                write!(f, "{}/8 nm", (v + 1) / (NAUTICAL_MILE / 8))
-            } else if Self::near(v, NAUTICAL_MILE / 16) {
-                write!(f, "{}/16 nm", (v + 1) / (NAUTICAL_MILE / 16))
-            } else if Self::near(v, NAUTICAL_MILE / 32) {
-                write!(f, "{}/32 nm", (v + 1) / (NAUTICAL_MILE / 32))
+            } else if Self::near(v, FRAC_NM_2) {
+                write!(f, "{}/2 nm", (v + 1) / FRAC_NM_2)
+            } else if Self::near(v, FRAC_NM_4) {
+                write!(f, "{}/4 nm", (v + 1) / FRAC_NM_4)
+            } else if Self::near(v, FRAC_NM_8) {
+                write!(f, "{}/8 nm", (v + 1) / FRAC_NM_8)
+            } else if Self::near(v, FRAC_NM_16) {
+                write!(f, "{}/16 nm", (v + 1) / FRAC_NM_16)
+            } else if Self::near(v, FRAC_NM_32) {
+                write!(f, "{}/32 nm", (v + 1) / FRAC_NM_32)
             } else {
-                write!(f, "{} nm", v as f64 / NAUTICAL_MILE_F64)
+                write!(f, "{} nm", v as f64 / NM_F64)
             }
         }
     }

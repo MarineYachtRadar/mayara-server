@@ -6,7 +6,10 @@ use tokio_graceful_shutdown::{SubsystemBuilder, SubsystemHandle};
 use crate::config::GuardZone;
 use crate::locator::LocatorAddress;
 use crate::radar::settings::ControlId;
-use crate::radar::{GeoPosition, RadarInfo, SharedRadars};
+use crate::radar::{
+    FRAC_NM_2, FRAC_NM_4, FRAC_NM_8, FRAC_NM_16, FRAC_NM_32, GeoPosition, NM, RadarInfo,
+    SharedRadars,
+};
 use crate::{Brand, Cli};
 
 mod command;
@@ -26,11 +29,50 @@ const EMULATOR_HEADING: f64 = 270.0; // West
 // Speed in knots (nautical miles per hour)
 const EMULATOR_SPEED_KNOTS: f64 = 2.0;
 
-// Supported ranges in meters
+// Supported ranges in meters. The list interleaves metric (50, 75, 100, …)
+// and NM-derived (FRAC_NM_8, FRAC_NM_4, …) values so the emulator covers
+// both range modes.
 pub(crate) const EMULATOR_RANGES: &[i32] = &[
-    50, 57, 75, 100, 115, 231, 250, 463, 500, 750, 926, 1000, 1389, 1500, 1852, 2000, 2778, 3000,
-    3704, 4000, 5556, 6000, 7408, 8000, 11112, 12000, 14816, 16000, 22224, 24000, 29632, 36000,
-    44448, 48000, 59264, 64000, 66672, 72000, 74080, 88896,
+    50,
+    FRAC_NM_32,
+    75,
+    100,
+    FRAC_NM_16,
+    FRAC_NM_8,
+    250,
+    FRAC_NM_4,
+    500,
+    750,
+    FRAC_NM_2,
+    1000,
+    NM * 3 / 4,
+    1500,
+    NM,
+    2000,
+    NM * 3 / 2,
+    3000,
+    NM * 2,
+    4000,
+    NM * 3,
+    6000,
+    NM * 4,
+    8000,
+    NM * 6,
+    12000,
+    NM * 8,
+    16000,
+    NM * 12,
+    24000,
+    NM * 16,
+    36000,
+    NM * 24,
+    48000,
+    NM * 32,
+    64000,
+    NM * 36,
+    72000,
+    NM * 40,
+    NM * 48,
 ];
 
 /// Get the initial position for the emulator, considering static-position/stationary override

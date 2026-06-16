@@ -20,15 +20,13 @@ pub use tracker::{
 use serde::Serialize;
 use utoipa::ToSchema;
 
-use super::NAUTICAL_MILE_F64;
+use super::NM_F64;
 
 // ============================================================================
 // Geographic constants and utilities
 // ============================================================================
 
-pub const METERS_PER_DEGREE_LATITUDE: f64 = 60. * NAUTICAL_MILE_F64;
-pub const KN_TO_MS: f64 = NAUTICAL_MILE_F64 / 3600.;
-pub const MS_TO_KN: f64 = 3600. / NAUTICAL_MILE_F64;
+pub const METERS_PER_DEGREE_LATITUDE: f64 = 60. * NM_F64;
 
 /// The length of a degree longitude varies by the latitude,
 /// the more north or south you get the shorter it becomes.
@@ -122,7 +120,7 @@ pub struct TargetDangerApi {
 
 impl TargetDangerApi {
     /// CPA threshold for the danger flag (0.5 nautical miles in metres).
-    pub const DANGER_CPA_M: f64 = 0.5 * super::NAUTICAL_MILE_F64;
+    pub const DANGER_CPA_M: f64 = 0.5 * super::NM_F64;
     /// TCPA threshold for the danger flag (6 minutes in seconds).
     pub const DANGER_TCPA_S: f64 = 6.0 * 60.0;
 

@@ -22,6 +22,8 @@
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
+use crate::radar::NM_F64;
+
 // =============================================================================
 // Spoke geometry
 // =============================================================================
@@ -211,16 +213,14 @@ pub(crate) const RANGE_TABLE_NM: [f64; 20] = [
     64.0, 72.0, 96.0,
 ];
 
-const NM_TO_METERS: f64 = 1852.0;
-
 /// Convert a range index to meters.
 pub(crate) fn range_index_to_meters(index: u8) -> f64 {
     let idx = index as usize;
     if idx < RANGE_TABLE_NM.len() {
-        RANGE_TABLE_NM[idx] * NM_TO_METERS
+        RANGE_TABLE_NM[idx] * NM_F64
     } else {
         // Fallback for unknown indices
-        RANGE_TABLE_NM[RANGE_TABLE_NM.len() - 1] * NM_TO_METERS
+        RANGE_TABLE_NM[RANGE_TABLE_NM.len() - 1] * NM_F64
     }
 }
 

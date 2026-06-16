@@ -43,8 +43,25 @@ use crate::stream::SignalKDelta;
 use crate::{Brand, Cli, TargetMode};
 use range::Ranges;
 
-pub const NAUTICAL_MILE: i32 = 1852; // 1 nautical mile in meters
-pub const NAUTICAL_MILE_F64: f64 = 1852.; // 1 nautical mile in meters
+/// 1 nautical mile in metres, integer.
+pub const NM: i32 = 1852;
+/// 1 nautical mile in metres, floating point.
+pub const NM_F64: f64 = 1852.;
+
+/// `FRAC_NM_n` = 1 nm / n in metres, mirroring `std::f64::consts::FRAC_PI_n`.
+/// Defined for the powers-of-two denominators that show up in radar range
+/// tables; awkward fractions (3/4 nm, 1.5 nm, …) are written inline as
+/// `NM * 3 / 4` / `NM * 3 / 2`.
+pub const FRAC_NM_2: i32 = NM / 2;
+pub const FRAC_NM_4: i32 = NM / 4;
+pub const FRAC_NM_8: i32 = NM / 8;
+pub const FRAC_NM_16: i32 = NM / 16;
+pub const FRAC_NM_32: i32 = NM / 32;
+
+/// Knots ↔ m/s, derived from `NM_F64`. Placed here (alongside the NM
+/// constants) rather than scattered as `1852.0 / 3600.0` literals.
+pub const KN_TO_MS: f64 = NM_F64 / 3600.;
+pub const MS_TO_KN: f64 = 3600. / NM_F64;
 
 // A "native to radar" bearing, usually [0..2048] or [0..4096] or [0..8192]
 pub type SpokeBearing = u16;

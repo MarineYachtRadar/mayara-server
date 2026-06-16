@@ -24,9 +24,9 @@ use crate::Cli;
 use crate::brand::navico::info::{HaloHeadingPacket, HaloNavigationPacket, Information};
 use crate::brand::navico::{HALO_HEADING_INFO_ADDRESS, HaloMode};
 use crate::network;
+use crate::radar::MS_TO_KN;
 use crate::radar::settings::ControlId;
 use crate::radar::spoke::GenericSpoke;
-use crate::radar::target::MS_TO_KN;
 use crate::radar::{
     BYTE_LOOKUP_LENGTH, CommonRadar, DopplerMode, Legend, Power, RadarError, RadarInfo,
     SharedRadars, SpokeBearing,

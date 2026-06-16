@@ -427,6 +427,7 @@ mod tests {
     use std::f64::consts::PI;
 
     use super::*;
+    use crate::radar::KN_TO_MS;
 
     #[test]
     fn test_imm_model_straight_line() {
@@ -495,7 +496,7 @@ mod tests {
         // Circle parameters (matching emulator world.rs)
         let radius_m = 250.0;
         let speed_knots = 15.0;
-        let speed_ms = speed_knots * 1852.0 / 3600.0; // ~7.72 m/s
+        let speed_ms = speed_knots * KN_TO_MS; // ~7.72 m/s
         let angular_velocity = speed_ms / radius_m; // ~0.031 rad/s
 
         // Time for one full circle = 2π / angular_velocity ≈ 203 seconds

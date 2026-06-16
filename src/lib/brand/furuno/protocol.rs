@@ -29,6 +29,8 @@ use std::fmt::{self, Display};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::time::Duration;
 
+use crate::radar::{FRAC_NM_2, FRAC_NM_4, FRAC_NM_8, FRAC_NM_16, NM};
+
 // =============================================================================
 // Spoke geometry
 // =============================================================================
@@ -489,28 +491,28 @@ pub(crate) const WIRE_UNIT_KM: i32 = 1;
 /// that do not correspond to a sorted range order. Verified via Wireshark
 /// captures from TimeZero ↔ DRS4D-NXT.
 pub(crate) const WIRE_INDEX_TABLE: [(i32, i32); 22] = [
-    (21, 116),    // 1/16 nm = 116m - wire index 21!
-    (0, 231),     // 1/8 nm = 231m
-    (1, 463),     // 1/4 nm = 463m
-    (2, 926),     // 1/2 nm = 926m
-    (3, 1389),    // 3/4 nm = 1389m
-    (4, 1852),    // 1 nm = 1852m
-    (5, 2778),    // 1.5 nm = 2778m
-    (6, 3704),    // 2 nm = 3704m
-    (7, 5556),    // 3 nm = 5556m
-    (8, 7408),    // 4 nm = 7408m
-    (9, 11112),   // 6 nm = 11112m
-    (10, 14816),  // 8 nm = 14816m
-    (11, 22224),  // 12 nm = 22224m
-    (12, 29632),  // 16 nm = 29632m
-    (13, 44448),  // 24 nm = 44448m
-    (14, 59264),  // 32 nm = 59264m
-    (19, 66672),  // 36 nm = 66672m (OUT OF SEQUENCE!)
-    (15, 88896),  // 48 nm = 88896m
-    (20, 118528), // 64 nm = 118528m (OUT OF SEQUENCE!)
-    (16, 133344), // 72 nm = 133344m
-    (17, 177792), // 96 nm = 177792m
-    (18, 222240), // 120 nm = 222240m
+    (21, FRAC_NM_16), // 1/16 nm — wire index 21!
+    (0, FRAC_NM_8),   // 1/8 nm
+    (1, FRAC_NM_4),   // 1/4 nm
+    (2, FRAC_NM_2),   // 1/2 nm
+    (3, NM * 3 / 4),  // 3/4 nm
+    (4, NM),          // 1 nm
+    (5, NM * 3 / 2),  // 1.5 nm
+    (6, NM * 2),      // 2 nm
+    (7, NM * 3),      // 3 nm
+    (8, NM * 4),      // 4 nm
+    (9, NM * 6),      // 6 nm
+    (10, NM * 8),     // 8 nm
+    (11, NM * 12),    // 12 nm
+    (12, NM * 16),    // 16 nm
+    (13, NM * 24),    // 24 nm
+    (14, NM * 32),    // 32 nm
+    (19, NM * 36),    // 36 nm (OUT OF SEQUENCE!)
+    (15, NM * 48),    // 48 nm
+    (20, NM * 64),    // 64 nm (OUT OF SEQUENCE!)
+    (16, NM * 72),    // 72 nm
+    (17, NM * 96),    // 96 nm
+    (18, NM * 120),   // 120 nm
 ];
 
 /// Wire index → meters mapping (km mode, wire unit 1).

@@ -1,6 +1,6 @@
 use std::f64::consts::{PI, TAU};
 
-use crate::radar::GeoPosition;
+use crate::radar::{GeoPosition, KN_TO_MS};
 
 // Constants for east-moving targets simulation
 const TARGET_SPEED_KNOTS: f64 = 5.0;
@@ -32,7 +32,6 @@ const FAST_TARGET_SPACING: f64 = 400.0; // meters between targets
 const NUM_FAST_TARGETS: usize = 10;
 
 // Conversion constants
-const KNOTS_TO_MS: f64 = 1852.0 / 3600.0; // 1 knot = 1852m/h = 0.5144 m/s
 const DEG_TO_RAD: f64 = PI / 180.0;
 
 /// Radius of the half-circle turn when reversing course (meters)
@@ -73,7 +72,7 @@ impl Target {
         Target {
             position,
             heading,
-            speed: speed_knots * KNOTS_TO_MS,
+            speed: speed_knots * KN_TO_MS,
             turn: None,
         }
     }
@@ -172,7 +171,7 @@ pub(crate) struct CirclingTarget {
 
 impl CirclingTarget {
     fn new(center: GeoPosition, radius: f64, speed_knots: f64) -> Self {
-        let speed_ms = speed_knots * KNOTS_TO_MS;
+        let speed_ms = speed_knots * KN_TO_MS;
         // Angular velocity = v / r (radians per second)
         let angular_velocity = speed_ms / radius;
 
