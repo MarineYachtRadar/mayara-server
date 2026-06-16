@@ -1503,8 +1503,8 @@ mod tests {
 
     fn identity_lookup() -> WireToLegendTable {
         let mut lookup = [0u8; BYTE_LOOKUP_LENGTH];
-        for j in 0..BYTE_LOOKUP_LENGTH {
-            lookup[j] = j as u8;
+        for (j, slot) in lookup.iter_mut().enumerate() {
+            *slot = j as u8;
         }
         lookup
     }

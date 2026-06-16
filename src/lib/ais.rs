@@ -526,14 +526,14 @@ mod tests {
         let mut vessel = AisVessel::new("123456789".to_string());
         let updates = json!([{
             "values": [
-                {"path": "navigation.courseOverGroundTrue", "value": 1.5708},
+                {"path": "navigation.courseOverGroundTrue", "value": 1.5},
                 {"path": "navigation.speedOverGround", "value": 5.14}
             ]
         }]);
 
         let changed = vessel.update_from_signalk(&updates);
         assert!(changed);
-        assert_eq!(vessel.cog, Some(1.5708));
+        assert_eq!(vessel.cog, Some(1.5));
         assert_eq!(vessel.sog, Some(5.14));
     }
 

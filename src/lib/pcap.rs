@@ -48,7 +48,7 @@ const IP_PROTO_UDP: u8 = 17;
 /// start with a 4-byte magic number. Both `.gz` and uncompressed files are
 /// supported.
 pub fn parse_file(path: &Path) -> io::Result<Vec<PcapPacket>> {
-    let data = if path.extension().map_or(false, |e| e == "gz") {
+    let data = if path.extension().is_some_and(|e| e == "gz") {
         let file = fs::File::open(path)?;
         let mut decoder = flate2::read::GzDecoder::new(file);
         let mut buf = Vec::new();
@@ -257,7 +257,7 @@ pub fn write_file(path: &Path, packets: &[PcapPacket]) -> io::Result<()> {
         data.extend_from_slice(&pkt.payload);
     }
 
-    if path.extension().map_or(false, |e| e == "gz") {
+    if path.extension().is_some_and(|e| e == "gz") {
         use flate2::Compression;
         use flate2::write::GzEncoder;
         use std::io::Write;
