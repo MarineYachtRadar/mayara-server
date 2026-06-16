@@ -246,22 +246,37 @@ pub(crate) fn update_when_model_known(info: &mut RadarInfo, model: RadarModel, v
     // auto) already set. The defaults installed in new() were plain numeric
     // controls because capabilities aren't known at discovery time.
     if cap.auto_gain {
-        info.controls
-            .update_definition(new_auto(ControlId::Gain, 0., 100., HAS_AUTO_NOT_ADJUSTABLE));
+        info.controls.update_definition(new_auto(
+            ControlId::Gain,
+            0.,
+            100.,
+            HAS_AUTO_NOT_ADJUSTABLE,
+        ));
     } else {
-        info.controls.update_definition(new_numeric(ControlId::Gain, 0., 100.));
+        info.controls
+            .update_definition(new_numeric(ControlId::Gain, 0., 100.));
     }
     if cap.auto_sea {
-        info.controls
-            .update_definition(new_auto(ControlId::Sea, 0., 100., HAS_AUTO_NOT_ADJUSTABLE));
+        info.controls.update_definition(new_auto(
+            ControlId::Sea,
+            0.,
+            100.,
+            HAS_AUTO_NOT_ADJUSTABLE,
+        ));
     } else {
-        info.controls.update_definition(new_numeric(ControlId::Sea, 0., 100.));
+        info.controls
+            .update_definition(new_numeric(ControlId::Sea, 0., 100.));
     }
     if cap.auto_rain {
-        info.controls
-            .update_definition(new_auto(ControlId::Rain, 0., 100., HAS_AUTO_NOT_ADJUSTABLE));
+        info.controls.update_definition(new_auto(
+            ControlId::Rain,
+            0.,
+            100.,
+            HAS_AUTO_NOT_ADJUSTABLE,
+        ));
     } else {
-        info.controls.update_definition(new_numeric(ControlId::Rain, 0., 100.));
+        info.controls
+            .update_definition(new_numeric(ControlId::Rain, 0., 100.));
     }
 
     info.controls.add(new_string(ControlId::FirmwareVersion));
@@ -273,8 +288,10 @@ pub(crate) fn update_when_model_known(info: &mut RadarInfo, model: RadarModel, v
     }
 
     // STC (Sensitivity Time Control) — all models support this
-    info.controls
-        .add(new_list(ControlId::NearStcCurve, &["0", "1", "2", "3", "4"]));
+    info.controls.add(new_list(
+        ControlId::NearStcCurve,
+        &["0", "1", "2", "3", "4"],
+    ));
     info.controls
         .add(new_list(ControlId::MiddleStcCurve, &["0", "1", "2", "3"]));
     info.controls
@@ -636,10 +653,9 @@ fn get_ranges_by_model(model: &RadarModel) -> Vec<i32> {
         RadarModel::DRS4W => (RANGE_TABLE_DRS4W, RANGE_TABLE_DRS4W_KM),
 
         // Standard DRS series and unknown models
-        RadarModel::Unknown
-        | RadarModel::DRS
-        | RadarModel::DRS4DL
-        | RadarModel::DRS6AXCLASS => (RANGE_TABLE_DRS, RANGE_TABLE_DRS_KM),
+        RadarModel::Unknown | RadarModel::DRS | RadarModel::DRS4DL | RadarModel::DRS6AXCLASS => {
+            (RANGE_TABLE_DRS, RANGE_TABLE_DRS_KM)
+        }
     };
 
     let mut ranges: Vec<i32> = Vec::with_capacity(nm_table.len() + km_table.len());

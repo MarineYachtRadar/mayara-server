@@ -27,8 +27,8 @@ pub(crate) fn to_protobuf_spoke(
     } else {
         let heading = crate::navdata::get_heading_true();
         heading.map(|h| {
-            (((h * spokes_per_revolution as f64 / TAU) as u16 + angle)
-                % spokes_per_revolution) as u32
+            (((h * spokes_per_revolution as f64 / TAU) as u16 + angle) % spokes_per_revolution)
+                as u32
         })
     };
 

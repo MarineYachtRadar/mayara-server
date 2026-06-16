@@ -1099,4 +1099,3 @@ pub mod close_code {
     /// action.
     pub const AGAIN: u16 = 1013;
 }
-

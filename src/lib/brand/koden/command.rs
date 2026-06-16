@@ -124,12 +124,8 @@ impl CommandSender for Command {
                     self.set_byte(CMD_GAIN, pct_to_u8(value_f64)).await
                 }
             }
-            ControlId::Sea => {
-                self.set_byte(CMD_STC, pct_to_u8(value_f64)).await
-            }
-            ControlId::Rain => {
-                self.set_byte(CMD_FTC, pct_to_u8(value_f64)).await
-            }
+            ControlId::Sea => self.set_byte(CMD_STC, pct_to_u8(value_f64)).await,
+            ControlId::Rain => self.set_byte(CMD_FTC, pct_to_u8(value_f64)).await,
             ControlId::SeaState => {
                 // 0=Manual, 1=Auto, 2=Harbor
                 let wire_val = match value {
@@ -140,9 +136,7 @@ impl CommandSender for Command {
                 };
                 self.set_byte(CMD_AUTO_STC_MODE, wire_val).await
             }
-            ControlId::PulseWidth => {
-                self.set_byte(CMD_PULSE_LENGTH, value as u8).await
-            }
+            ControlId::PulseWidth => self.set_byte(CMD_PULSE_LENGTH, value as u8).await,
             ControlId::InterferenceRejection => {
                 let wire_val = match value {
                     0 => 0x00,

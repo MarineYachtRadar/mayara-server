@@ -129,7 +129,10 @@ mod tests {
         let decoded = RecordingIdentity::from_json(&bytes).unwrap();
 
         assert_eq!(decoded.brand_id, original.brand_id);
-        assert_eq!(decoded.spokes_per_revolution, original.spokes_per_revolution);
+        assert_eq!(
+            decoded.spokes_per_revolution,
+            original.spokes_per_revolution
+        );
         assert_eq!(decoded.max_spoke_len, original.max_spoke_len);
         assert_eq!(decoded.pixel_values, original.pixel_values);
         assert_eq!(decoded.doppler_levels, original.doppler_levels);

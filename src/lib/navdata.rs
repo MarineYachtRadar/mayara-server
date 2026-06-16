@@ -117,11 +117,7 @@ fn set_own_ship_context(context: &str) {
         // misroute later own-ship URN deltas into the AIS store.
         let should_set = match guard.as_deref() {
             None => true,
-            Some("vessels.self")
-                if context.starts_with("vessels.urn:mrn:signalk:uuid:") =>
-            {
-                true
-            }
+            Some("vessels.self") if context.starts_with("vessels.urn:mrn:signalk:uuid:") => true,
             _ => false,
         };
         if should_set {
@@ -522,9 +518,7 @@ pub(crate) fn set_position(lat: Option<f64>, lon: Option<f64>, source: &str) {
         // Only broadcast on meaningful change — ~1m at the equator
         // (1e-5 deg ≈ 1.11 m). Avoids flooding subscribers with sub-meter
         // GPS jitter on a stationary boat.
-        let changed = !was_valid
-            || (old_lat - lat).abs() > 1e-5
-            || (old_lon - lon).abs() > 1e-5;
+        let changed = !was_valid || (old_lat - lat).abs() > 1e-5 || (old_lon - lon).abs() > 1e-5;
         if changed {
             broadcast_position_update(lat, lon, source);
         }
@@ -762,8 +756,7 @@ fn probe_timeout_for(consecutive_no_nav: u32) -> Duration {
         return OWN_SHIP_NAV_PROBE_TIMEOUT;
     }
     let shift = consecutive_no_nav.min(OWN_SHIP_NAV_PROBE_SHIFT_CAP);
-    let scaled =
-        OWN_SHIP_NAV_PROBE_TIMEOUT.saturating_mul(1u32 << shift);
+    let scaled = OWN_SHIP_NAV_PROBE_TIMEOUT.saturating_mul(1u32 << shift);
     scaled.min(OWN_SHIP_NAV_PROBE_TIMEOUT_MAX)
 }
 
@@ -1011,11 +1004,7 @@ impl NavigationData {
                             return Ok(());
                         }
                         e => {
-                            log::debug!(
-                                "{} receive_ws_loop restart on result {:?}",
-                                self.what,
-                                e
-                            );
+                            log::debug!("{} receive_ws_loop restart on result {:?}", self.what, e);
                         }
                     }
                 }
@@ -1077,9 +1066,7 @@ impl NavigationData {
         }
 
         if self.nmea0183_mode {
-            return self
-                .find_mdns_nmea0183(&mdns, subsys, rx_ip_change)
-                .await;
+            return self.find_mdns_nmea0183(&mdns, subsys, rx_ip_change).await;
         }
 
         let r = crate::signalk::find_mdns_service(
@@ -1489,10 +1476,7 @@ impl NavigationData {
                 set_position(gll.latitude, gll.longitude, "nmea0183");
             }
             Ok(ParsedMessage::Hdt(hdt)) => {
-                set_heading_true(
-                    hdt.heading_true.map(|h| h.to_radians()),
-                    "nmea0183",
-                );
+                set_heading_true(hdt.heading_true.map(|h| h.to_radians()), "nmea0183");
             }
             Ok(ParsedMessage::Vtg(vtg)) => {
                 set_cog(vtg.cog_true.map(|c| c.to_radians()));

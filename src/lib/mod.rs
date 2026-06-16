@@ -19,15 +19,15 @@ pub mod brand;
 pub mod config;
 pub mod locator;
 pub mod navdata;
+pub mod network;
 #[cfg(feature = "pcap-replay")]
 pub(crate) mod nnd;
 #[cfg(feature = "pcap-replay")]
 pub mod pcap;
-pub mod replay;
-pub mod network;
 pub mod protos;
 pub mod radar;
 pub mod recording;
+pub mod replay;
 pub mod signalk;
 pub mod stream;
 pub mod util;
@@ -624,15 +624,15 @@ pub async fn start_session(
     let rx_ip_change_clone = tx_ip_change.subscribe();
     subsystem.start(SubsystemBuilder::new(
         "NavData",
-        async move |subsys: &mut SubsystemHandle| {
-            navdata.run(subsys, rx_ip_change_clone).await
-        },
+        async move |subsys: &mut SubsystemHandle| navdata.run(subsys, rx_ip_change_clone).await,
     ));
     let tx_interface_request_clone = tx_interface_request.clone();
     subsystem.start(SubsystemBuilder::new(
         "Locator",
         async move |subsys: &mut SubsystemHandle| {
-            locator.run(subsys, tx_ip_change, tx_interface_request_clone).await
+            locator
+                .run(subsys, tx_ip_change, tx_interface_request_clone)
+                .await
         },
     ));
 
@@ -640,15 +640,18 @@ pub async fn start_session(
     #[cfg(feature = "pcap-replay")]
     if replay::is_active() {
         let repeat = args.repeat;
-        subsystem.start(SubsystemBuilder::new("PcapReplay", async move |subsys: &mut SubsystemHandle| {
-            tokio::select! { biased;
-                _ = subsys.on_shutdown_requested() => {
-                    log::debug!("PcapReplay shutdown requested");
-                },
-                _ = replay::run(true, repeat) => {}
-            }
-            Ok::<(), miette::Report>(())
-        }));
+        subsystem.start(SubsystemBuilder::new(
+            "PcapReplay",
+            async move |subsys: &mut SubsystemHandle| {
+                tokio::select! { biased;
+                    _ = subsys.on_shutdown_requested() => {
+                        log::debug!("PcapReplay shutdown requested");
+                    },
+                    _ = replay::run(true, repeat) => {}
+                }
+                Ok::<(), miette::Report>(())
+            },
+        ));
     }
 
     (radars, tx_interface_request)
@@ -806,6 +809,10 @@ mod tests {
             signalk_token_file: None,
             ..parse_cli(&[])
         };
-        assert!(cli.resolved_signalk_token_with_env(no_env).unwrap().is_none());
+        assert!(
+            cli.resolved_signalk_token_with_env(no_env)
+                .unwrap()
+                .is_none()
+        );
     }
 }

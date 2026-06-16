@@ -5,7 +5,7 @@
 //! Verifies that replaying the fixture through the full pipeline
 //! detects the radar with the correct brand, model, and capabilities.
 
-use mayara::{replay, Cli};
+use mayara::{Cli, replay};
 use std::path::Path;
 use std::time::Duration;
 use tokio_graceful_shutdown::{SubsystemBuilder, SubsystemHandle, Toplevel};
@@ -60,33 +60,36 @@ async fn replay_garmin_xhd() {
     Toplevel::new(async move |s: &mut SubsystemHandle| {
         let (radars, _) = mayara::start_session(&s, args).await;
 
-        s.start(SubsystemBuilder::new("test", async move |subsys: &mut SubsystemHandle| {
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-            loop {
-                let keys = radars.get_keys();
-                if !keys.is_empty() {
-                    let key = &keys[0];
-                    let info = radars.get_by_key(key).expect("radar info");
+        s.start(SubsystemBuilder::new(
+            "test",
+            async move |subsys: &mut SubsystemHandle| {
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+                loop {
+                    let keys = radars.get_keys();
+                    if !keys.is_empty() {
+                        let key = &keys[0];
+                        let info = radars.get_by_key(key).expect("radar info");
 
-                    // Wait until the model has been identified
-                    if info.controls.model_name().is_some() && !info.ranges.all.is_empty() {
-                        assert!(key.starts_with("gar"), "expected Garmin key, got: {}", key);
-                        assert_eq!(info.brand, mayara::Brand::Garmin);
-                        let model = info.controls.model_name().unwrap();
-                        assert!(model.contains("xHD"), "expected xHD model, got: {}", model);
-                        assert!(!info.doppler, "xHD should not support Doppler");
-                        break;
+                        // Wait until the model has been identified
+                        if info.controls.model_name().is_some() && !info.ranges.all.is_empty() {
+                            assert!(key.starts_with("gar"), "expected Garmin key, got: {}", key);
+                            assert_eq!(info.brand, mayara::Brand::Garmin);
+                            let model = info.controls.model_name().unwrap();
+                            assert!(model.contains("xHD"), "expected xHD model, got: {}", model);
+                            assert!(!info.doppler, "xHD should not support Doppler");
+                            break;
+                        }
                     }
+                    if tokio::time::Instant::now() > deadline {
+                        panic!("Timeout: no radar detected within 5 seconds");
+                    }
+                    tokio::time::sleep(Duration::from_millis(100)).await;
                 }
-                if tokio::time::Instant::now() > deadline {
-                    panic!("Timeout: no radar detected within 5 seconds");
-                }
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
 
-            subsys.request_shutdown();
-            Ok::<(), miette::Report>(())
-        }));
+                subsys.request_shutdown();
+                Ok::<(), miette::Report>(())
+            },
+        ));
     })
     .handle_shutdown_requests(Duration::from_millis(2000))
     .await

@@ -119,10 +119,26 @@ impl Command {
             enabled
         );
 
-        cmd.extend_from_slice(&[CMD_NOTRANSMIT_ENABLE, CATEGORY_CONTROL, sector, 0, 0, 0, enabled]);
+        cmd.extend_from_slice(&[
+            CMD_NOTRANSMIT_ENABLE,
+            CATEGORY_CONTROL,
+            sector,
+            0,
+            0,
+            0,
+            enabled,
+        ]);
         self.send(&cmd).await?;
         cmd.clear();
-        cmd.extend_from_slice(&[CMD_NOTRANSMIT_SECTOR, CATEGORY_CONTROL, sector, 0, 0, 0, enabled]);
+        cmd.extend_from_slice(&[
+            CMD_NOTRANSMIT_SECTOR,
+            CATEGORY_CONTROL,
+            sector,
+            0,
+            0,
+            0,
+            enabled,
+        ]);
         cmd.extend_from_slice(&value_start.to_le_bytes());
         cmd.extend_from_slice(&value_end.to_le_bytes());
 
@@ -197,7 +213,14 @@ impl CommandSender for Command {
                 let v = Self::scale_100_to_byte(value);
                 let auto = auto as u32;
 
-                cmd.extend_from_slice(&[CMD_GAIN_VARIANT, CATEGORY_CONTROL, 0x00, 0x00, 0x00, 0x00]);
+                cmd.extend_from_slice(&[
+                    CMD_GAIN_VARIANT,
+                    CATEGORY_CONTROL,
+                    0x00,
+                    0x00,
+                    0x00,
+                    0x00,
+                ]);
                 cmd.extend_from_slice(&auto.to_le_bytes());
                 cmd.extend_from_slice(&v.to_le_bytes());
             }
@@ -243,14 +266,34 @@ impl CommandSender for Command {
             ControlId::Rain => {
                 let v = Self::scale_100_to_byte(value);
                 cmd.extend_from_slice(&[
-                    CMD_GAIN_VARIANT, CATEGORY_CONTROL, 0x04, 0, 0, 0, 0, 0, 0, 0, v,
+                    CMD_GAIN_VARIANT,
+                    CATEGORY_CONTROL,
+                    0x04,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    v,
                 ]);
             }
             ControlId::SideLobeSuppression => {
                 let v = Self::scale_100_to_byte(value);
 
                 cmd.extend_from_slice(&[
-                    CMD_GAIN_VARIANT, CATEGORY_CONTROL, 0x05, 0, 0, 0, auto, 0, 0, 0, v,
+                    CMD_GAIN_VARIANT,
+                    CATEGORY_CONTROL,
+                    0x05,
+                    0,
+                    0,
+                    0,
+                    auto,
+                    0,
+                    0,
+                    0,
+                    v,
                 ]);
             }
             ControlId::InterferenceRejection => {
@@ -259,7 +302,9 @@ impl CommandSender for Command {
             ControlId::TargetExpansion => {
                 if self.model.is_halo() {
                     cmd.extend_from_slice(&[
-                        CMD_HALO_TARGET_EXPANSION, CATEGORY_CONTROL, value as u8,
+                        CMD_HALO_TARGET_EXPANSION,
+                        CATEGORY_CONTROL,
+                        value as u8,
                     ]);
                 } else {
                     cmd.extend_from_slice(&[CMD_TARGET_EXPANSION, CATEGORY_CONTROL, value as u8]);
@@ -294,7 +339,9 @@ impl CommandSender for Command {
             }
             ControlId::LocalInterferenceRejection => {
                 cmd.extend_from_slice(&[
-                    CMD_LOCAL_INTERFERENCE_REJECTION, CATEGORY_CONTROL, value as u8,
+                    CMD_LOCAL_INTERFERENCE_REJECTION,
+                    CATEGORY_CONTROL,
+                    value as u8,
                 ]);
             }
             ControlId::ScanSpeed => {
@@ -303,7 +350,11 @@ impl CommandSender for Command {
             ControlId::Mode => {
                 // Bird Plus (value 6) maps to tUseMode { mode: 5, variant: 1 }
                 // All other modes: variant 0
-                let (mode, variant) = if value as u8 == 6 { (5u8, 1u8) } else { (value as u8, 0u8) };
+                let (mode, variant) = if value as u8 == 6 {
+                    (5u8, 1u8)
+                } else {
+                    (value as u8, 0u8)
+                };
                 cmd.extend_from_slice(&[CMD_USE_MODE, CATEGORY_CONTROL, mode, variant]);
             }
             ControlId::NoiseRejection => {
@@ -324,13 +375,24 @@ impl CommandSender for Command {
             ControlId::AntennaForward | ControlId::AntennaStarboard => {
                 let (ahead_mm, starboard_mm) = if cv.id == ControlId::AntennaForward {
                     let other = controls.get(&ControlId::AntennaStarboard).unwrap();
-                    ((value * 1000.) as i32, (other.as_f64().unwrap_or(0.) * 1000.) as i32)
+                    (
+                        (value * 1000.) as i32,
+                        (other.as_f64().unwrap_or(0.) * 1000.) as i32,
+                    )
                 } else {
                     let other = controls.get(&ControlId::AntennaForward).unwrap();
-                    ((other.as_f64().unwrap_or(0.) * 1000.) as i32, (value * 1000.) as i32)
+                    (
+                        (other.as_f64().unwrap_or(0.) * 1000.) as i32,
+                        (value * 1000.) as i32,
+                    )
                 };
                 cmd.extend_from_slice(&[
-                    CMD_INSTALLATION, CATEGORY_CONTROL, INSTALL_TAG_ANTENNA_OFFSET, 0, 0, 0,
+                    CMD_INSTALLATION,
+                    CATEGORY_CONTROL,
+                    INSTALL_TAG_ANTENNA_OFFSET,
+                    0,
+                    0,
+                    0,
                 ]);
                 cmd.extend_from_slice(&ahead_mm.to_le_bytes());
                 cmd.extend_from_slice(&starboard_mm.to_le_bytes());
@@ -338,7 +400,12 @@ impl CommandSender for Command {
             ControlId::AntennaHeight => {
                 let height_mm = (value * 1000.) as i32;
                 cmd.extend_from_slice(&[
-                    CMD_INSTALLATION, CATEGORY_CONTROL, INSTALL_TAG_ANTENNA_HEIGHT, 0, 0, 0,
+                    CMD_INSTALLATION,
+                    CATEGORY_CONTROL,
+                    INSTALL_TAG_ANTENNA_HEIGHT,
+                    0,
+                    0,
+                    0,
                 ]);
                 cmd.extend_from_slice(&height_mm.to_le_bytes());
             }

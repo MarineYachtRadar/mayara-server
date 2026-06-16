@@ -9,13 +9,13 @@ use tokio_graceful_shutdown::SubsystemHandle;
 use crate::Cli;
 use crate::brand::raymarine::RaymarineModel;
 use crate::network;
-use crate::replay::RadarSocket;
 use crate::radar::range::Ranges;
 use crate::radar::{BYTE_LOOKUP_LENGTH, CommonRadar, Legend, RadarError, RadarInfo, SharedRadars};
+use crate::replay::RadarSocket;
 
 // use super::command::Command;
-use super::{BaseModel, ExternalControllerWitness};
 use super::command::Command;
+use super::{BaseModel, ExternalControllerWitness};
 
 mod quantum;
 mod rd;
@@ -100,17 +100,39 @@ impl FeatureFlags {
     fn has_flag(&self, mask: u32) -> bool {
         (self.raw & mask) != 0
     }
-    pub(crate) fn is_quantum(&self) -> bool { self.has_flag(super::protocol::FEATURE_QUANTUM) }
-    pub(crate) fn is_cyclone(&self) -> bool { self.has_flag(super::protocol::FEATURE_CYCLONE) }
-    pub(crate) fn has_doppler(&self) -> bool { self.has_flag(super::protocol::FEATURE_DOPPLER) }
-    pub(crate) fn has_doppler_auto_acquire(&self) -> bool { self.has_flag(super::protocol::FEATURE_DOPPLER_AUTO_ACQUIRE) }
-    pub(crate) fn has_doppler_bird_mode(&self) -> bool { self.has_flag(super::protocol::FEATURE_DOPPLER_BIRD_MODE) }
-    pub(crate) fn has_bird_mode(&self) -> bool { self.has_flag(super::protocol::FEATURE_BIRD_MODE) }
-    pub(crate) fn has_auto_rain(&self) -> bool { self.has_flag(super::protocol::FEATURE_AUTO_RAIN) }
-    pub(crate) fn has_marpa(&self) -> bool { self.has_flag(super::protocol::FEATURE_MARPA) }
-    pub(crate) fn has_dual_range_marpa(&self) -> bool { self.has_flag(super::protocol::FEATURE_DUAL_RANGE_MARPA) }
-    pub(crate) fn is_analogue(&self) -> bool { self.has_flag(super::protocol::FEATURE_ANALOGUE) }
-    pub(crate) fn is_digital(&self) -> bool { self.has_flag(super::protocol::FEATURE_DIGITAL) }
+    pub(crate) fn is_quantum(&self) -> bool {
+        self.has_flag(super::protocol::FEATURE_QUANTUM)
+    }
+    pub(crate) fn is_cyclone(&self) -> bool {
+        self.has_flag(super::protocol::FEATURE_CYCLONE)
+    }
+    pub(crate) fn has_doppler(&self) -> bool {
+        self.has_flag(super::protocol::FEATURE_DOPPLER)
+    }
+    pub(crate) fn has_doppler_auto_acquire(&self) -> bool {
+        self.has_flag(super::protocol::FEATURE_DOPPLER_AUTO_ACQUIRE)
+    }
+    pub(crate) fn has_doppler_bird_mode(&self) -> bool {
+        self.has_flag(super::protocol::FEATURE_DOPPLER_BIRD_MODE)
+    }
+    pub(crate) fn has_bird_mode(&self) -> bool {
+        self.has_flag(super::protocol::FEATURE_BIRD_MODE)
+    }
+    pub(crate) fn has_auto_rain(&self) -> bool {
+        self.has_flag(super::protocol::FEATURE_AUTO_RAIN)
+    }
+    pub(crate) fn has_marpa(&self) -> bool {
+        self.has_flag(super::protocol::FEATURE_MARPA)
+    }
+    pub(crate) fn has_dual_range_marpa(&self) -> bool {
+        self.has_flag(super::protocol::FEATURE_DUAL_RANGE_MARPA)
+    }
+    pub(crate) fn is_analogue(&self) -> bool {
+        self.has_flag(super::protocol::FEATURE_ANALOGUE)
+    }
+    pub(crate) fn is_digital(&self) -> bool {
+        self.has_flag(super::protocol::FEATURE_DIGITAL)
+    }
 }
 
 pub(crate) struct RaymarineReportReceiver {
@@ -198,8 +220,11 @@ impl RaymarineReportReceiver {
     }
 
     async fn start_report_socket(&mut self) -> io::Result<()> {
-        match network::create_udp_listen(&self.common.info.report_addr, &self.common.info.nic_addr, network::SocketType::Multicast)
-        {
+        match network::create_udp_listen(
+            &self.common.info.report_addr,
+            &self.common.info.nic_addr,
+            network::SocketType::Multicast,
+        ) {
             Ok(socket) => {
                 self.report_socket = Some(socket);
                 log::debug!(
@@ -373,7 +398,11 @@ impl RaymarineReportReceiver {
             }
             0x288942 => {
                 // Database report — not spoke data. Ignore.
-                log::trace!("{}: Quantum database report len={}", self.common.key, data.len());
+                log::trace!(
+                    "{}: Quantum database report len={}",
+                    self.common.key,
+                    data.len()
+                );
             }
             0x280005 => {
                 log::trace!("{}: Quantum radar mode report", self.common.key);

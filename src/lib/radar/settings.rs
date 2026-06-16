@@ -372,7 +372,9 @@ impl ControlId {
             ControlId::UserName => "User defined name for the radar",
             ControlId::SupplyVoltage => "DC supply voltage at the radar",
             ControlId::DeviceTemperature => "Internal temperature of the radar",
-            ControlId::ScanAverageMode => "Scan-to-scan averaging reduces noise by comparing successive sweeps",
+            ControlId::ScanAverageMode => {
+                "Scan-to-scan averaging reduces noise by comparing successive sweeps"
+            }
             ControlId::ScanAverageSensitivity => "Threshold for scan averaging filter",
             ControlId::ParkPosition => "Antenna park position when entering standby",
             ControlId::TransmitChannel => "Transmit frequency channel selection (auto or manual)",
@@ -380,7 +382,9 @@ impl ControlId {
             ControlId::MiddleStcCurve => "Middle-range STC suppression curve",
             ControlId::FarStcCurve => "Far-range STC suppression curve",
             ControlId::StcRange => "Distance boundary between STC range bands",
-            ControlId::AntiJamming => "Anti-jamming filter reduces interference from other radars on the same frequency",
+            ControlId::AntiJamming => {
+                "Anti-jamming filter reduces interference from other radars on the same frequency"
+            }
             ControlId::EchoFormat => "Experimental echo format request (NXT only: IMO or Tile)",
         }
     }
@@ -1442,9 +1446,7 @@ impl SharedControls {
                             format!("{:?}", value),
                         )),
                     }?;
-                    Ok(control
-                        .set(n, None, None, None)?
-                        .map(|_| control.clone()))
+                    Ok(control.set(n, None, None, None)?.map(|_| control.clone()))
                 }
             } else {
                 Err(ControlError::NotSupported(*control_id))

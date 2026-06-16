@@ -90,7 +90,9 @@ impl Target {
                 } else {
                     turn.start_bearing - PI
                 };
-                self.position = turn.center.position_from_bearing(final_bearing, turn.radius);
+                self.position = turn
+                    .center
+                    .position_from_bearing(final_bearing, turn.radius);
                 self.heading = (turn.start_heading + 180.0) % 360.0;
             } else {
                 let current_bearing = if turn.clockwise {
@@ -98,7 +100,9 @@ impl Target {
                 } else {
                     turn.start_bearing - turn.turned
                 };
-                self.position = turn.center.position_from_bearing(current_bearing, turn.radius);
+                self.position = turn
+                    .center
+                    .position_from_bearing(current_bearing, turn.radius);
                 let heading_delta_deg = turn.turned.to_degrees();
                 self.heading = if turn.clockwise {
                     (turn.start_heading + heading_delta_deg) % 360.0
@@ -585,7 +589,12 @@ impl EmulatorWorld {
 
     /// Get the radar return intensity at a given position (legacy method)
     #[allow(dead_code)]
-    pub(crate) fn get_intensity(&self, _boat_pos: &GeoPosition, bearing_rad: f64, distance: f64) -> u8 {
+    pub(crate) fn get_intensity(
+        &self,
+        _boat_pos: &GeoPosition,
+        bearing_rad: f64,
+        distance: f64,
+    ) -> u8 {
         self.get_intensity_fast(bearing_rad.sin(), bearing_rad.cos(), distance)
     }
 }

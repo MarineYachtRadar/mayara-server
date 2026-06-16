@@ -278,13 +278,11 @@ impl CommandSender for Command {
         // value so the radar receives a valid command.
         let value = match cv.as_i32() {
             Ok(v) => v,
-            Err(_) if cv.auto.is_some() && cv.value.is_none() => {
-                controls
-                    .get(&cv.id)
-                    .and_then(|c| c.value)
-                    .map(|v| v as i32)
-                    .unwrap_or(0)
-            }
+            Err(_) if cv.auto.is_some() && cv.value.is_none() => controls
+                .get(&cv.id)
+                .and_then(|c| c.value)
+                .map(|v| v as i32)
+                .unwrap_or(0),
             Err(e) => return Err(e),
         };
         let auto: i32 = if cv.auto.unwrap_or(false) { 1 } else { 0 };
@@ -545,11 +543,7 @@ impl CommandSender for Command {
             }
 
             ControlId::GuardZone1 | ControlId::GuardZone2 => {
-                let zone_index: i32 = if cv.id == ControlId::GuardZone1 {
-                    0
-                } else {
-                    1
-                };
+                let zone_index: i32 = if cv.id == ControlId::GuardZone1 { 0 } else { 1 };
 
                 if let Some(zone) = controls.guard_zone(&cv.id) {
                     if zone.enabled {

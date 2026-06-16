@@ -273,7 +273,10 @@ pub(crate) fn create_udp_listen(
     Ok(crate::replay::RadarSocket::Udp(socket))
 }
 
-pub(crate) fn create_multicast_send(addr: &SocketAddrV4, nic_addr: &Ipv4Addr) -> io::Result<UdpSocket> {
+pub(crate) fn create_multicast_send(
+    addr: &SocketAddrV4,
+    nic_addr: &Ipv4Addr,
+) -> io::Result<UdpSocket> {
     let socket: socket2::Socket = new_socket()?;
 
     let socketaddr = SocketAddr::new(IpAddr::V4(*addr.ip()), addr.port());

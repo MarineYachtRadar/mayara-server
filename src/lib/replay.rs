@@ -14,7 +14,6 @@
 
 #[cfg(feature = "pcap-replay")]
 use std::collections::HashMap;
-use tokio::net::UdpSocket;
 use std::io;
 use std::net::{SocketAddr, SocketAddrV4};
 #[cfg(feature = "pcap-replay")]
@@ -23,6 +22,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 #[cfg(feature = "pcap-replay")]
 use std::time::Duration;
+use tokio::net::UdpSocket;
 
 use tokio::sync::mpsc;
 #[cfg(feature = "pcap-replay")]
@@ -43,17 +43,13 @@ pub(crate) enum RadarSocket {
 
 impl RadarSocket {
     /// Receive a packet, matching the `UdpSocket::recv_buf_from` API.
-    pub async fn recv_buf_from(
-        &mut self,
-        buf: &mut Vec<u8>,
-    ) -> io::Result<(usize, SocketAddr)> {
+    pub async fn recv_buf_from(&mut self, buf: &mut Vec<u8>) -> io::Result<(usize, SocketAddr)> {
         match self {
             RadarSocket::Udp(sock) => sock.recv_buf_from(buf).await,
             RadarSocket::Replay(rx) => rx.recv_buf_from(buf).await,
         }
     }
 }
-
 
 /// A packet received from replay, including the original source address.
 #[derive(Debug, Clone)]
@@ -120,18 +116,20 @@ pub fn init(path: &Path) -> io::Result<()> {
             packets,
             channels: Mutex::new(HashMap::new()),
         }))
-        .map_err(|_| {
-            io::Error::new(io::ErrorKind::AlreadyExists, "replay already initialized")
-        })?;
+        .map_err(|_| io::Error::new(io::ErrorKind::AlreadyExists, "replay already initialized"))?;
     Ok(())
 }
 
 /// Returns true if pcap replay is active.
 pub(crate) fn is_active() -> bool {
     #[cfg(feature = "pcap-replay")]
-    { REPLAY.get().is_some() }
+    {
+        REPLAY.get().is_some()
+    }
     #[cfg(not(feature = "pcap-replay"))]
-    { false }
+    {
+        false
+    }
 }
 
 /// Create a replay receiver for the given multicast/listen address.
@@ -188,13 +186,17 @@ pub async fn run(realistic_timing: bool, repeat: bool) {
         sleep(Duration::from_millis(10)).await;
     }
 
-    let realistic_timing = realistic_timing
-        && !INSTANT_TIMING.load(std::sync::atomic::Ordering::Relaxed);
+    let realistic_timing =
+        realistic_timing && !INSTANT_TIMING.load(std::sync::atomic::Ordering::Relaxed);
 
     log::info!(
         "Replay: starting dispatcher ({} packets, timing={}, repeat={})",
         state.packets.len(),
-        if realistic_timing { "realistic" } else { "instant" },
+        if realistic_timing {
+            "realistic"
+        } else {
+            "instant"
+        },
         repeat,
     );
 

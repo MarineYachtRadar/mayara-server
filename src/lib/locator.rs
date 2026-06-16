@@ -538,18 +538,15 @@ impl Locator {
         );
 
         interface_state.first_loop = false;
-        interface_state
-            .interface_api
-            .interfaces
-            .insert(
-                InterfaceId::new("replay", Some(fake_nic)),
-                RadarInterfaceApi::new(
-                    InterfaceStatus::Ok,
-                    Some(fake_nic),
-                    Some(Ipv4Addr::new(255, 0, 0, 0)),
-                    None,
-                ),
-            );
+        interface_state.interface_api.interfaces.insert(
+            InterfaceId::new("replay", Some(fake_nic)),
+            RadarInterfaceApi::new(
+                InterfaceStatus::Ok,
+                Some(fake_nic),
+                Some(Ipv4Addr::new(255, 0, 0, 0)),
+                None,
+            ),
+        );
 
         Ok(sockets)
     }

@@ -54,10 +54,7 @@ pub async fn capture_one_shot(nic_addrs: &[Ipv4Addr], duration: Duration) -> Vec
             let socket = match create_udp_listen(&group, &nic_addr, SocketType::Multicast) {
                 Ok(s) => s,
                 Err(e) => {
-                    log::debug!(
-                        "passive_capture: skip {} on {}: {}",
-                        group, nic_addr, e
-                    );
+                    log::debug!("passive_capture: skip {} on {}: {}", group, nic_addr, e);
                     continue;
                 }
             };

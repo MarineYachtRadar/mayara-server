@@ -156,8 +156,7 @@ impl ImmMotionModel {
         for j in 0..3 {
             if c_bar[j] > 1e-10 {
                 for i in 0..3 {
-                    mixing_probs[i][j] =
-                        TRANSITION_PROB[i][j] * self.model_probs[i] / c_bar[j];
+                    mixing_probs[i][j] = TRANSITION_PROB[i][j] * self.model_probs[i] / c_bar[j];
                 }
             }
         }
@@ -183,8 +182,7 @@ impl ImmMotionModel {
             "IMM filters must share ref_lat/ref_lon for mixing to be valid"
         );
 
-        let mut mixed: [(Vector4, Matrix4x4); 3] =
-            [(Vector4::zeros(), Matrix4x4::zeros()); 3];
+        let mut mixed: [(Vector4, Matrix4x4); 3] = [(Vector4::zeros(), Matrix4x4::zeros()); 3];
         for j in 0..3 {
             // x0_j = Σ_i μ_{i|j} · x_i
             let mut x0 = Vector4::zeros();
@@ -203,9 +201,12 @@ impl ImmMotionModel {
         }
 
         // Write the mixed priors back into each filter.
-        self.cv_filter.set_state_and_covariance(mixed[0].0, mixed[0].1);
-        self.ca_filter.set_state_and_covariance(mixed[1].0, mixed[1].1);
-        self.ct_filter.set_state_and_covariance(mixed[2].0, mixed[2].1);
+        self.cv_filter
+            .set_state_and_covariance(mixed[0].0, mixed[0].1);
+        self.ca_filter
+            .set_state_and_covariance(mixed[1].0, mixed[1].1);
+        self.ct_filter
+            .set_state_and_covariance(mixed[2].0, mixed[2].1);
 
         // Predicted model probabilities for the upcoming update step.
         self.model_probs = c_bar;
@@ -593,10 +594,7 @@ mod tests {
         // 20 clean updates moving north at ~10 m/s.
         let delta_lat = 30.0 / super::super::METERS_PER_DEGREE_LATITUDE;
         for i in 1..=20u64 {
-            model.update(
-                GeoPosition::new(52.0 + delta_lat * i as f64, 4.0),
-                i * 3000,
-            );
+            model.update(GeoPosition::new(52.0 + delta_lat * i as f64, 4.0), i * 3000);
         }
 
         // All three filters should predict the same future position to
@@ -633,10 +631,7 @@ mod tests {
 
         let lat_step = 30.0 / super::super::METERS_PER_DEGREE_LATITUDE;
         for i in 1..=5u64 {
-            model.update(
-                GeoPosition::new(52.0 + lat_step * i as f64, 4.0),
-                i * 3000,
-            );
+            model.update(GeoPosition::new(52.0 + lat_step * i as f64, 4.0), i * 3000);
         }
 
         let baseline_motion = model.get_motion();

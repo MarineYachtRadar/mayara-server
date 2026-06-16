@@ -14,9 +14,9 @@ mod web;
 
 use mayara;
 use mayara::recording::RecordingManager;
-use mayara::{Cli, network};
 #[cfg(feature = "pcap-replay")]
 use mayara::replay;
+use mayara::{Cli, network};
 
 #[tokio::main]
 async fn main() -> Result<()> {

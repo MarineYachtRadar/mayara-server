@@ -5,7 +5,7 @@ use tokio::time::{Instant, interval};
 use tokio_graceful_shutdown::SubsystemHandle;
 
 use super::command::Command;
-use super::world::{EmulatorWorld, TurnProgress, TURN_RADIUS};
+use super::world::{EmulatorWorld, TURN_RADIUS, TurnProgress};
 use super::{EMULATOR_SPOKE_LEN, EMULATOR_SPOKES, get_initial_position};
 use crate::Cli;
 use crate::radar::settings::{ControlId, ControlUpdate};
@@ -202,8 +202,9 @@ impl EmulatorReportReceiver {
                 } else {
                     turn.start_bearing - PI
                 };
-                self.boat_position =
-                    turn.center.position_from_bearing(final_bearing, turn.radius);
+                self.boat_position = turn
+                    .center
+                    .position_from_bearing(final_bearing, turn.radius);
                 self.boat_heading = (turn.start_heading + 180.0) % 360.0;
                 log::info!(
                     "Emulator: turn complete, now heading {:.0}°",
@@ -215,8 +216,9 @@ impl EmulatorReportReceiver {
                 } else {
                     turn.start_bearing - turn.turned
                 };
-                self.boat_position =
-                    turn.center.position_from_bearing(current_bearing, turn.radius);
+                self.boat_position = turn
+                    .center
+                    .position_from_bearing(current_bearing, turn.radius);
                 let heading_delta_deg = turn.turned.to_degrees();
                 self.boat_heading = if turn.clockwise {
                     (turn.start_heading + heading_delta_deg) % 360.0
@@ -319,8 +321,7 @@ impl EmulatorReportReceiver {
 
             // Heading in `EMULATOR_SPOKES`-units, matching the convention
             // every brand's normalized `add_spoke` heading uses now.
-            let heading_spoke =
-                ((self.boat_heading / 360.0) * EMULATOR_SPOKES as f64) as u16;
+            let heading_spoke = ((self.boat_heading / 360.0) * EMULATOR_SPOKES as f64) as u16;
 
             self.common.add_spoke(
                 self.current_range,

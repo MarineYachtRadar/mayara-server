@@ -9,9 +9,9 @@ use axum::{
     routing::{delete, get, post, put},
 };
 use futures_util::StreamExt;
-use tokio::io::AsyncWriteExt;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
 
 use mayara::recording::{
@@ -198,8 +198,7 @@ pub fn routes(router: axum::Router<Web>) -> axum::Router<Web> {
         )
         .route(
             &format!("{}/files/upload", RECORDINGS_BASE),
-            post(upload_recording_handler)
-                .layer(DefaultBodyLimit::max(MAX_UPLOAD_SIZE)),
+            post(upload_recording_handler).layer(DefaultBodyLimit::max(MAX_UPLOAD_SIZE)),
         )
         .route(
             &format!("{}/directories", RECORDINGS_BASE),
