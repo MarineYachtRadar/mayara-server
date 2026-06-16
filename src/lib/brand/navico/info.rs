@@ -42,10 +42,7 @@ pub(crate) struct HaloHeadingPacket {
 
 impl HaloHeadingPacket {
     pub(crate) fn transmute(bytes: &[u8]) -> Result<Self, anyhow::Error> {
-        Ok(unsafe {
-            let report: [u8; 72] = bytes.try_into()?;
-            transmute(report)
-        })
+        Ok(unsafe { transmute::<[u8; 72], Self>(bytes.try_into()?) })
     }
 }
 
@@ -71,10 +68,7 @@ pub(crate) struct HaloNavigationPacket {
 
 impl HaloNavigationPacket {
     pub(crate) fn transmute(bytes: &[u8]) -> Result<Self, anyhow::Error> {
-        Ok(unsafe {
-            let report: [u8; 72] = bytes.try_into()?;
-            transmute(report)
-        })
+        Ok(unsafe { transmute::<[u8; 72], Self>(bytes.try_into()?) })
     }
 }
 

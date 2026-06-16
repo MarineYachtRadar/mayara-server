@@ -219,11 +219,9 @@ struct StateMode {
 impl StateMode {
     fn transmute(bytes: &[u8]) -> Result<Self, anyhow::Error> {
         // This is safe as the struct's bits are always all valid representations,
-        // or we convert them using a fail safe function
-        Ok(unsafe {
-            let report: [u8; 18] = bytes.try_into()?; // Hardwired length on purpose to verify length
-            transmute(report)
-        })
+        // or we convert them using a fail safe function.
+        // The hardwired [u8; 18] on the transmute also verifies length via try_into.
+        Ok(unsafe { transmute::<[u8; 18], Self>(bytes.try_into()?) })
     }
 }
 
@@ -256,11 +254,8 @@ struct StateSetup {
 impl StateSetup {
     fn transmute(bytes: &[u8]) -> Result<Self, anyhow::Error> {
         // This is safe as the struct's bits are always all valid representations,
-        // or we convert them using a fail safe function
-        Ok(unsafe {
-            let report: [u8; 99] = bytes.try_into()?;
-            transmute(report)
-        })
+        // or we convert them using a fail safe function.
+        Ok(unsafe { transmute::<[u8; 99], Self>(bytes.try_into()?) })
     }
 }
 
@@ -293,11 +288,9 @@ struct StateProperties {
 impl StateProperties {
     fn transmute(bytes: &[u8]) -> Result<Self, anyhow::Error> {
         // This is safe as the struct's bits are always all valid representations,
-        // or we convert them using a fail safe function
-        Ok(unsafe {
-            let report: [u8; 129] = bytes.try_into()?; // Hardwired length on purpose to verify length
-            transmute(report)
-        })
+        // or we convert them using a fail safe function.
+        // The hardwired [u8; 129] on the transmute also verifies length via try_into.
+        Ok(unsafe { transmute::<[u8; 129], Self>(bytes.try_into()?) })
     }
 }
 
@@ -324,11 +317,8 @@ struct StateConfig {
 impl StateConfig {
     fn transmute(bytes: &[u8]) -> Result<Self, anyhow::Error> {
         // This is safe as the struct's bits are always all valid representations,
-        // or we convert them using a fail safe function
-        Ok(unsafe {
-            let report: [u8; 66] = bytes.try_into()?;
-            transmute(report)
-        })
+        // or we convert them using a fail safe function.
+        Ok(unsafe { transmute::<[u8; 66], Self>(bytes.try_into()?) })
     }
 }
 
