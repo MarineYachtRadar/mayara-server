@@ -23,7 +23,7 @@ use utoipa::OpenApi;
 use utoipa::ToSchema;
 use utoipa_swagger_ui::{Config as SwaggerConfig, SwaggerUi};
 
-use crate::web::{derive_public_base, spokes_handler};
+use crate::web::{derive_public_base, signalk::diagnostics, spokes_handler};
 
 use super::super::{Message, Web, WebSocket, WebSocketUpgrade};
 use mayara::{
@@ -69,6 +69,7 @@ const RADAR_TARGET_URI: &str = "/signalk/v2/api/vessels/self/radars/{radar_id}/t
     paths(
         get_radars,
         get_interfaces,
+        diagnostics::get_diagnostics,
         get_radar,
         get_control_values,
         get_control_value,
@@ -99,6 +100,10 @@ struct ApiDoc;
 pub(crate) fn routes(axum: axum::Router<Web>) -> axum::Router<Web> {
     axum.route(BASE_URI, get(get_radars))
         .route(INTERFACES_URI, get(get_interfaces))
+        .route(
+            diagnostics::DIAGNOSTICS_URI,
+            get(diagnostics::get_diagnostics),
+        )
         .route(CONTROL_URI, get(control_stream_handler))
         .route(SPOKES_URI, get(spokes_handler))
         .route(RADAR_CAPABILITIES_URI, get(get_radar))

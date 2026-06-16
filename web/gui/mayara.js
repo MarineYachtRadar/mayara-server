@@ -2,6 +2,7 @@ import van from "./vendor/van-1.5.2.debug.js";
 import {
   fetchRadars,
   fetchInterfaces,
+  getDiagnosticsUrl,
   isStandaloneMode,
   detectMode,
 } from "./api.js";
@@ -758,20 +759,78 @@ function hideInterfacesPopup() {
   }
 }
 
-function showActionButtons() {
-  if (!isStandaloneMode()) {
-    return;
+// Fetch the diagnostics blob via JS so we can show a busy state on the
+// button instead of giving the user no feedback while the ~5 s endpoint
+// runs. Mutates the button DOM directly — Van.js reactive state would
+// be overkill for a single transient interaction.
+async function downloadDiagnostics(btn) {
+  if (btn.disabled) return;
+  const restoreLabel = btn.textContent;
+  btn.disabled = true;
+  btn.replaceChildren(
+    span({
+      class: "myr_pulse",
+      style:
+        "display: inline-block; vertical-align: middle; margin-right: 10px;",
+    }),
+    document.createTextNode("Generating diagnostics…")
+  );
+  try {
+    const resp = await fetch(getDiagnosticsUrl());
+    if (!resp.ok) {
+      throw new Error(`HTTP ${resp.status} ${resp.statusText}`);
+    }
+    const blob = await resp.blob();
+    const filename =
+      parseAttachmentFilename(resp.headers.get("Content-Disposition")) ||
+      fallbackDiagnosticsFilename();
+    triggerBlobDownload(blob, filename);
+  } catch (err) {
+    console.error("Failed to download diagnostics:", err);
+    alert("Failed to generate diagnostics: " + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.replaceChildren(document.createTextNode(restoreLabel));
   }
+}
 
+// Parse the filename out of `attachment; filename="…"`. Only the quoted
+// form is recognised — that's what mayara always emits.
+function parseAttachmentFilename(headerValue) {
+  if (!headerValue) return null;
+  const m = headerValue.match(/filename="([^"]+)"/);
+  return m ? m[1] : null;
+}
+
+function fallbackDiagnosticsFilename() {
+  const ts = new Date()
+    .toISOString()
+    .replace(/[-:]/g, "")
+    .replace(/\.\d+Z$/, "Z");
+  return `mayara-network-diagnostics-${ts}.json.gz`;
+}
+
+function triggerBlobDownload(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+function showActionButtons() {
   const container = document.getElementById("action_buttons");
   if (!container) {
     return;
   }
 
-  van.add(
-    container,
-    div(
-      { class: "myr_action_buttons" },
+  const buttons = [];
+
+  if (isStandaloneMode()) {
+    buttons.push(
       button(
         {
           class: "myr_radar_link myr_radar_link_secondary",
@@ -786,8 +845,30 @@ function showActionButtons() {
         },
         "Recordings"
       )
+    );
+  }
+
+  // Generating the diagnostics is a ~5 s blocking operation server-side
+  // (ARP read + 3 s mDNS browse + 5 s passive multicast snoop, run in
+  // parallel and capped by the longest leg). Without an explicit busy
+  // state the button would just look broken for that whole interval, so
+  // intercept the click, fetch via JS, and swap the label for a pulsing
+  // "Generating diagnostics…" indicator while the request is in flight.
+  buttons.push(
+    button(
+      {
+        class: "myr_radar_link myr_radar_link_secondary",
+        title:
+          "Download a gzipped JSON report of the network state " +
+          "(takes ~5 seconds). Attach this to a GitHub issue when " +
+          "reporting that a radar is not detected.",
+        onclick: (e) => downloadDiagnostics(e.currentTarget),
+      },
+      "Network Diagnostics"
     )
   );
+
+  van.add(container, div({ class: "myr_action_buttons" }, ...buttons));
 }
 
 async function loadRadars() {

@@ -17,6 +17,11 @@ pub(crate) mod macos;
 #[cfg(target_os = "windows")]
 pub(crate) mod windows;
 
+pub mod arp;
+pub mod devices;
+pub mod mdns_browse;
+pub mod passive_capture;
+
 static G_REPLAY: AtomicBool = AtomicBool::new(false);
 
 pub fn set_replay(replay: bool) {

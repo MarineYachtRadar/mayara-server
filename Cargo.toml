@@ -10,7 +10,7 @@ keywords = ["radar", "marine", "server", "websocket", "rest-api"]
 categories = ["network-programming", "web-programming::http-server"]
 
 [package.metadata]
-api-version = "3.2.0"
+api-version = "3.3.0"
 
 [lib]
 name = "mayara"
@@ -23,7 +23,7 @@ garmin = []
 koden = []
 raymarine = []
 emulator = []
-pcap-replay = ["dep:flate2"]
+pcap-replay = []
 # default = ["navico", "furuno", "raymarine"]
 default = ["navico", "furuno", "garmin", "koden", "raymarine", "emulator"]
 
@@ -44,7 +44,7 @@ crossbeam = "0.8.4"
 directories = "6.0.0"
 enum-primitive-derive = "0.3.0"
 env_logger = { version = "0.11", default-features = false, features = ["humantime", "auto-color"] }
-flate2 = { version = "1", optional = true }
+flate2 = "1"
 futures = "0.3.32"
 futures-util = "0.3.32"
 headers = "0.4.1"
