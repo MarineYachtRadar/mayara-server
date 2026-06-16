@@ -76,7 +76,12 @@ static ALL_POSSIBLE_METRIC_RANGES: LazyLock<Ranges> = LazyLock::new(|| {
     ])
 });
 
-#[derive(Debug, Clone, Copy, Eq, Ord)]
+/// A single radar range entry. `distance` is the only field that
+/// participates in equality and ordering; `index` is purely informational
+/// (it tags the entry's position in some originating table) and two
+/// `Range`s with the same `distance` are considered equal regardless of
+/// `index`.
+#[derive(Debug, Clone, Copy, Eq)]
 pub struct Range {
     distance: i32,
     index: usize,
@@ -143,6 +148,11 @@ impl Range {
     }
 }
 
+impl Ord for Range {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.distance.cmp(&other.distance)
+    }
+}
 impl PartialOrd for Range {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
@@ -220,7 +230,7 @@ impl Ranges {
         let mut mixed = Vec::new();
         let mut all = Vec::new();
 
-        ranges.sort_by(|a, b| a.distance.cmp(&b.distance));
+        ranges.sort();
         for (i, range) in ranges.iter().enumerate() {
             if Range::metric(range.distance) {
                 metric.push(Range::new(range.distance, i));
