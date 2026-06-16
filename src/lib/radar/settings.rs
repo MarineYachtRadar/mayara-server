@@ -2043,17 +2043,27 @@ impl RadarControlValue {
         }
     }
 
+    /// Decode `path` into `radar_id` and `control_id`.
+    ///
+    /// The path is built by [`Self::new`] as `radars.<radar>.controls.<control>`.
+    /// On success the matching fields on `self` are populated and the borrowed
+    /// `radar_id` slice is returned so the caller can immediately look the
+    /// radar up.
     pub fn parse_path(&mut self) -> Option<&str> {
         let mut path = self.path.as_str();
-        if path.starts_with("radars.") {
-            path = &path["radars.".len()..];
+        if let Some(rest) = path.strip_prefix("radars.") {
+            path = rest;
         }
-        if let Some(r) = path.split('.').next_back() {
-            self.control_id = ControlId::try_from(r).ok();
-            if self.control_id.is_some() {
-                self.radar_id = Some(r.to_string());
-                return Some(r);
-            }
+        // Split on the canonical `.controls.` separator. Using `split('.')`
+        // and taking the last segment as the radar id was wrong: it stored
+        // the *control* name in `radar_id`, which broke multi-radar routing
+        // because the caller in the Signal K stream handler then looked the
+        // radar up by the control name and silently dropped the request.
+        let (radar_id, control_name) = path.rsplit_once(".controls.")?;
+        self.control_id = ControlId::try_from(control_name).ok();
+        if self.control_id.is_some() {
+            self.radar_id = Some(radar_id.to_string());
+            return Some(radar_id);
         }
 
         None
@@ -3450,6 +3460,84 @@ mod test {
     use clap::Parser;
 
     use super::*;
+
+    /// Build a `RadarControlValue` with `path` set and every other field
+    /// at its default — `parse_path` only touches `path` / `radar_id` /
+    /// `control_id`, so the rest is irrelevant for these tests.
+    fn rcv_with_path(path: &str) -> RadarControlValue {
+        RadarControlValue {
+            radar_id: None,
+            control_id: None,
+            path: path.to_string(),
+            value: None,
+            units: None,
+            auto: None,
+            auto_value: None,
+            end_value: None,
+            start_distance: None,
+            end_distance: None,
+            enabled: None,
+            allowed: None,
+            error: None,
+            x1: None,
+            y1: None,
+            x2: None,
+            y2: None,
+            width: None,
+            timestamp: None,
+        }
+    }
+
+    #[test]
+    fn parse_path_canonical_form() {
+        let mut rcv = rcv_with_path("radars.nav1034A.controls.gain");
+        let radar_id = rcv.parse_path().unwrap().to_string();
+
+        assert_eq!(radar_id, "nav1034A");
+        assert_eq!(rcv.radar_id.as_deref(), Some("nav1034A"));
+        assert_eq!(rcv.control_id, Some(ControlId::Gain));
+    }
+
+    #[test]
+    fn parse_path_without_radars_prefix() {
+        // Some clients omit the leading `radars.` segment.
+        let mut rcv = rcv_with_path("nav1034A.controls.gain");
+        let radar_id = rcv.parse_path().unwrap().to_string();
+
+        assert_eq!(radar_id, "nav1034A");
+        assert_eq!(rcv.radar_id.as_deref(), Some("nav1034A"));
+        assert_eq!(rcv.control_id, Some(ControlId::Gain));
+    }
+
+    #[test]
+    fn parse_path_unknown_control_returns_none() {
+        let mut rcv = rcv_with_path("radars.nav1034A.controls.notARealControl");
+        assert!(rcv.parse_path().is_none());
+        assert!(rcv.control_id.is_none());
+        // radar_id must NOT be populated on failure — the caller relies on the
+        // return value, but defending the field too keeps callers honest.
+        assert!(rcv.radar_id.is_none());
+    }
+
+    #[test]
+    fn parse_path_missing_controls_separator_returns_none() {
+        let mut rcv = rcv_with_path("radars.nav1034A.gain");
+        assert!(rcv.parse_path().is_none());
+        assert!(rcv.control_id.is_none());
+        assert!(rcv.radar_id.is_none());
+    }
+
+    #[test]
+    fn parse_path_radar_id_with_dots() {
+        // Hypothetical multi-segment radar id — `rsplit_once` must split
+        // on the right-most `.controls.` so the whole prefix is the radar.
+        let mut rcv = rcv_with_path("radars.foo.bar.controls.gain");
+        let radar_id = rcv.parse_path().unwrap().to_string();
+
+        assert_eq!(radar_id, "foo.bar");
+        assert_eq!(rcv.radar_id.as_deref(), Some("foo.bar"));
+        assert_eq!(rcv.control_id, Some(ControlId::Gain));
+    }
 
     #[test]
     fn serialize_control_value() {
