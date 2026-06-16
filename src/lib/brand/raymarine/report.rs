@@ -1,6 +1,5 @@
 use anyhow::{Error, bail};
 use std::collections::HashMap;
-use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::UdpSocket;
@@ -257,7 +256,7 @@ impl RaymarineReportReceiver {
         }
     }
 
-    async fn start_report_socket(&mut self) -> io::Result<()> {
+    async fn start_report_socket(&mut self) {
         // Unicast topology (report address non-multicast): the report loop and
         // the command sender share one connected socket. Create it on demand
         // here — this is the receiver's retry point — and hand a clone to the
@@ -277,9 +276,9 @@ impl RaymarineReportReceiver {
                         self.unicast_socket = Some(sock);
                     }
                     Err(e) => {
-                        // Leave report_socket None so run() retries; never
-                        // fall back to a separate command socket (collision).
-                        sleep(Duration::from_millis(1000)).await;
+                        // Leave report_socket None so run() retries (it
+                        // owns the back-off); never fall back to a separate
+                        // command socket (collision).
                         log::debug!(
                             "{}: {} via {}: unicast report socket failed: {}",
                             self.common.key,
@@ -287,7 +286,7 @@ impl RaymarineReportReceiver {
                             &self.common.info.nic_addr,
                             e
                         );
-                        return Ok(());
+                        return;
                     }
                 }
             }
@@ -299,33 +298,32 @@ impl RaymarineReportReceiver {
                 &self.common.info.report_addr,
                 &self.common.info.nic_addr
             );
-            return Ok(());
-        }
-        match network::create_udp_listen(
-            &self.common.info.report_addr,
-            &self.common.info.nic_addr,
-            network::SocketType::Any,
-        ) {
-            Ok(socket) => {
-                self.report_socket = Some(socket);
-                log::debug!(
-                    "{}: {} via {}: listening for reports",
-                    self.common.key,
-                    &self.common.info.report_addr,
-                    &self.common.info.nic_addr
-                );
-                Ok(())
-            }
-            Err(e) => {
-                sleep(Duration::from_millis(1000)).await;
-                log::debug!(
-                    "{}: {} via {}: create multicast failed: {}",
-                    self.common.key,
-                    &self.common.info.report_addr,
-                    &self.common.info.nic_addr,
-                    e
-                );
-                Ok(())
+        } else {
+            // Multicast mode
+            match network::create_udp_listen(
+                &self.common.info.report_addr,
+                &self.common.info.nic_addr,
+                network::SocketType::Any,
+            ) {
+                Ok(socket) => {
+                    self.report_socket = Some(socket);
+                    log::debug!(
+                        "{}: {} via {}: listening for reports",
+                        self.common.key,
+                        &self.common.info.report_addr,
+                        &self.common.info.nic_addr
+                    );
+                }
+                Err(e) => {
+                    // Back-off and shutdown observation live in run().
+                    log::debug!(
+                        "{}: {} via {}: create multicast failed: {}",
+                        self.common.key,
+                        &self.common.info.report_addr,
+                        &self.common.info.nic_addr,
+                        e
+                    );
+                }
             }
         }
     }
@@ -440,21 +438,15 @@ impl RaymarineReportReceiver {
     }
 
     pub(super) async fn run(mut self, subsys: &mut SubsystemHandle) -> Result<(), RadarError> {
-        self.start_report_socket().await?;
         loop {
-            if self.report_socket.is_some() {
-                match self.socket_loop(subsys).await {
-                    Err(RadarError::Shutdown) => {
-                        return Ok(());
-                    }
-                    _ => {
-                        // Ignore, reopen socket
-                    }
-                }
-                self.report_socket = None;
-            } else {
+            self.start_report_socket().await;
+            if self.report_socket.is_none() {
                 sleep(Duration::from_millis(1000)).await;
-                self.start_report_socket().await?;
+                continue;
+            }
+            match self.socket_loop(subsys).await {
+                Err(RadarError::Shutdown) => return Ok(()),
+                _ => self.report_socket = None,
             }
         }
     }
