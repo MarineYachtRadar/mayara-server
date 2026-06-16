@@ -882,21 +882,21 @@ impl SharedRadars {
         let radars = self.radars.read().unwrap();
         for (key, info) in radars.info.iter() {
             // Check if radar is in standby (can be switched to transmit)
-            if let Some(status) = info.controls.get_status() {
-                if status == Power::Standby {
-                    log::info!("Requesting transmit mode for radar '{}'", key);
-                    let control_value = ControlValue::new(
-                        ControlId::Power,
-                        serde_json::Value::Number(serde_json::Number::from(2)), // 2 = Transmit
-                    );
-                    // Create a dummy reply channel - we don't need the response
-                    let (reply_tx, _reply_rx) = tokio::sync::mpsc::channel(1);
-                    if let Err(e) = info
-                        .controls
-                        .send_to_command_handler(control_value, reply_tx)
-                    {
-                        log::error!("Failed to send transmit command to '{}': {:?}", key, e);
-                    }
+            if let Some(status) = info.controls.get_status()
+                && status == Power::Standby
+            {
+                log::info!("Requesting transmit mode for radar '{}'", key);
+                let control_value = ControlValue::new(
+                    ControlId::Power,
+                    serde_json::Value::Number(serde_json::Number::from(2)), // 2 = Transmit
+                );
+                // Create a dummy reply channel - we don't need the response
+                let (reply_tx, _reply_rx) = tokio::sync::mpsc::channel(1);
+                if let Err(e) = info
+                    .controls
+                    .send_to_command_handler(control_value, reply_tx)
+                {
+                    log::error!("Failed to send transmit command to '{}': {:?}", key, e);
                 }
             }
         }
@@ -1736,31 +1736,31 @@ impl CommonRadar {
             if let Some(ref mut detector) = self.blob_detector {
                 let completed_blobs = detector.process_spoke(&spoke);
 
-                if !completed_blobs.is_empty() {
-                    if let Some(ref blob_tx) = self.blob_tx {
-                        let max_speed_mode = self.info.controls.arpa_detect_max_speed();
-                        let max_target_speed_ms = SpokeContext::max_speed_from_mode(max_speed_mode);
+                if !completed_blobs.is_empty()
+                    && let Some(ref blob_tx) = self.blob_tx
+                {
+                    let max_speed_mode = self.info.controls.arpa_detect_max_speed();
+                    let max_target_speed_ms = SpokeContext::max_speed_from_mode(max_speed_mode);
 
-                        for blob in &completed_blobs {
-                            let ctx = SpokeContext {
-                                time: spoke.time.unwrap_or(self.spoke_time),
-                                range: spoke.range,
-                                bearing: spoke.bearing.map(|b| b as u16),
-                                lat: spoke.lat,
-                                lon: spoke.lon,
-                                spokes_per_revolution: self.info.spokes_per_revolution,
-                                spoke_len: spoke.data.len(),
-                                angle: spoke.angle as u16,
-                                max_target_speed_ms,
-                                doppler_auto_track: self.info.controls.doppler_auto_track(),
-                            };
-                            let msg = BlobMessage {
-                                radar_key: self.key.clone(),
-                                blob: blob.clone(),
-                                context: ctx,
-                            };
-                            let _ = blob_tx.try_send(msg);
-                        }
+                    for blob in &completed_blobs {
+                        let ctx = SpokeContext {
+                            time: spoke.time.unwrap_or(self.spoke_time),
+                            range: spoke.range,
+                            bearing: spoke.bearing.map(|b| b as u16),
+                            lat: spoke.lat,
+                            lon: spoke.lon,
+                            spokes_per_revolution: self.info.spokes_per_revolution,
+                            spoke_len: spoke.data.len(),
+                            angle: spoke.angle as u16,
+                            max_target_speed_ms,
+                            doppler_auto_track: self.info.controls.doppler_auto_track(),
+                        };
+                        let msg = BlobMessage {
+                            radar_key: self.key.clone(),
+                            blob: blob.clone(),
+                            context: ctx,
+                        };
+                        let _ = blob_tx.try_send(msg);
                     }
                 }
             }
@@ -1817,10 +1817,10 @@ impl CommonRadar {
     }
 
     pub(crate) fn send_spoke_message(&mut self) {
-        if let Some(message) = self.spoke_message.take() {
-            if !message.spokes.is_empty() {
-                self.info.broadcast_radar_message(message);
-            }
+        if let Some(message) = self.spoke_message.take()
+            && !message.spokes.is_empty()
+        {
+            self.info.broadcast_radar_message(message);
         }
     }
 

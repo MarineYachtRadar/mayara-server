@@ -67,12 +67,12 @@ impl SignalKDelta {
                 if !path.starts_with("radars.") || !path.contains(".controls.") {
                     continue;
                 }
-                if let Some(radar_id) = path.split('.').nth(1) {
-                    if !meta_sent.contains(radar_id) {
-                        // Found a radar whose meta hasn't been sent yet
-                        needs_meta = true;
-                        break;
-                    }
+                if let Some(radar_id) = path.split('.').nth(1)
+                    && !meta_sent.contains(radar_id)
+                {
+                    // Found a radar whose meta hasn't been sent yet
+                    needs_meta = true;
+                    break;
                 }
             }
             if needs_meta {
@@ -655,38 +655,38 @@ impl ActiveSubscriptions {
         }
         if let (Some(radar_id), Some(control_id)) = (rcv.radar_id.as_deref(), &rcv.control_id) {
             for key in [radar_id, "*"] {
-                if let Some(paths) = self.paths.get_mut(key) {
-                    if let Some(path) = paths.get_mut(control_id) {
-                        let policy = path.policy.as_ref().unwrap_or(&Policy::Instant);
+                if let Some(paths) = self.paths.get_mut(key)
+                    && let Some(path) = paths.get_mut(control_id)
+                {
+                    let policy = path.policy.as_ref().unwrap_or(&Policy::Instant);
 
-                        if *policy == Policy::Fixed {
-                            if !full {
-                                return false;
-                            }
-                            if let Some(period) = path.period {
-                                let now = SystemTime::now();
-
-                                if path.last_sent.is_none()
-                                    || path.last_sent.unwrap() + Duration::from_micros(period) > now
-                                {
-                                    path.last_sent = Some(now);
-                                    return false;
-                                }
-                            }
+                    if *policy == Policy::Fixed {
+                        if !full {
+                            return false;
                         }
-
-                        if let Some(min_period) = path.min_period {
+                        if let Some(period) = path.period {
                             let now = SystemTime::now();
 
                             if path.last_sent.is_none()
-                                || path.last_sent.unwrap() + Duration::from_micros(min_period) > now
+                                || path.last_sent.unwrap() + Duration::from_micros(period) > now
                             {
                                 path.last_sent = Some(now);
                                 return false;
                             }
                         }
-                        return true;
                     }
+
+                    if let Some(min_period) = path.min_period {
+                        let now = SystemTime::now();
+
+                        if path.last_sent.is_none()
+                            || path.last_sent.unwrap() + Duration::from_micros(min_period) > now
+                        {
+                            path.last_sent = Some(now);
+                            return false;
+                        }
+                    }
+                    return true;
                 }
             }
         } else {
@@ -738,38 +738,38 @@ impl ActiveSubscriptions {
         };
 
         for key in [radar_id, "*"] {
-            if let Some(paths) = self.paths.get_mut(key) {
-                if let Some(path) = paths.get_mut(&control_id) {
-                    let policy = path.policy.as_ref().unwrap_or(&Policy::Instant);
+            if let Some(paths) = self.paths.get_mut(key)
+                && let Some(path) = paths.get_mut(&control_id)
+            {
+                let policy = path.policy.as_ref().unwrap_or(&Policy::Instant);
 
-                    if *policy == Policy::Fixed {
-                        if !full {
-                            return false;
-                        }
-                        if let Some(period) = path.period {
-                            let now = SystemTime::now();
-
-                            if path.last_sent.is_none()
-                                || path.last_sent.unwrap() + Duration::from_micros(period) > now
-                            {
-                                path.last_sent = Some(now);
-                                return false;
-                            }
-                        }
+                if *policy == Policy::Fixed {
+                    if !full {
+                        return false;
                     }
-
-                    if let Some(min_period) = path.min_period {
+                    if let Some(period) = path.period {
                         let now = SystemTime::now();
 
                         if path.last_sent.is_none()
-                            || path.last_sent.unwrap() + Duration::from_micros(min_period) > now
+                            || path.last_sent.unwrap() + Duration::from_micros(period) > now
                         {
                             path.last_sent = Some(now);
                             return false;
                         }
                     }
-                    return true;
                 }
+
+                if let Some(min_period) = path.min_period {
+                    let now = SystemTime::now();
+
+                    if path.last_sent.is_none()
+                        || path.last_sent.unwrap() + Duration::from_micros(min_period) > now
+                    {
+                        path.last_sent = Some(now);
+                        return false;
+                    }
+                }
+                return true;
             }
         }
 

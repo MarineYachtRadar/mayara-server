@@ -1129,14 +1129,14 @@ impl NavicoReportReceiver {
 
             match tag {
                 installation_tag::NAME => {
-                    if let Some(name) = c_string(payload) {
-                        if !name.is_empty() {
-                            let _ = self
-                                .common
-                                .info
-                                .controls
-                                .set_string(&ControlId::UserName, name.to_string());
-                        }
+                    if let Some(name) = c_string(payload)
+                        && !name.is_empty()
+                    {
+                        let _ = self
+                            .common
+                            .info
+                            .controls
+                            .set_string(&ControlId::UserName, name.to_string());
                     }
                 }
                 installation_tag::ANTENNA_GEOMETRY if payload.len() >= 14 => {

@@ -109,15 +109,15 @@ pub async fn start_recording(
     initial_state_json: &[u8],
 ) -> Result<ActiveRecording, String> {
     // Validate inputs before any filesystem operations
-    if let Some(f) = filename {
-        if !is_valid_name(f) {
-            return Err("Invalid filename".to_string());
-        }
+    if let Some(f) = filename
+        && !is_valid_name(f)
+    {
+        return Err("Invalid filename".to_string());
     }
-    if let Some(sub) = subdirectory {
-        if !is_valid_name(sub) {
-            return Err("Invalid subdirectory".to_string());
-        }
+    if let Some(sub) = subdirectory
+        && !is_valid_name(sub)
+    {
+        return Err("Invalid subdirectory".to_string());
     }
 
     let manager = RecordingManager::new();

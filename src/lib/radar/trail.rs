@@ -52,11 +52,11 @@ impl TrailBuffer {
 
         let legend = info.get_legend();
         let mut minimal_legend_value = 0;
-        if let Some(control) = info.controls.get(&ControlId::DopplerTrailsOnly) {
-            if let Some(value) = control.value {
-                let value = value > 0.;
-                minimal_legend_value = Self::compute_minimal_legend_value(&legend, value);
-            }
+        if let Some(control) = info.controls.get(&ControlId::DopplerTrailsOnly)
+            && let Some(value) = control.value
+        {
+            let value = value > 0.;
+            minimal_legend_value = Self::compute_minimal_legend_value(&legend, value);
         }
 
         TrailBuffer {

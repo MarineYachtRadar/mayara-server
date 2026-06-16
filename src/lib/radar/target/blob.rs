@@ -430,10 +430,10 @@ impl BlobDetector {
                 if p < 0 {
                     continue;
                 }
-                if let Some(&id) = self.pixel_index.get(&(s, p as usize)) {
-                    if !ids.contains(&id) {
-                        ids.push(id);
-                    }
+                if let Some(&id) = self.pixel_index.get(&(s, p as usize))
+                    && !ids.contains(&id)
+                {
+                    ids.push(id);
                 }
             }
         }

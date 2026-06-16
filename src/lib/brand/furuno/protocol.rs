@@ -590,10 +590,10 @@ pub(crate) fn wire_index_to_meters_for_unit(wire_index: i32, wire_unit: i32) -> 
 /// Determine the wire unit for a range value in meters.
 /// Metric distances (km-based) use wire unit 1, nautical use wire unit 0.
 pub(crate) fn wire_unit_for_meters(meters: i32) -> i32 {
-    if WIRE_INDEX_TABLE_KM.iter().any(|(_, m)| *m == meters) {
-        if crate::radar::range::Range::is_metric_distance(meters) {
-            return WIRE_UNIT_KM;
-        }
+    if WIRE_INDEX_TABLE_KM.iter().any(|(_, m)| *m == meters)
+        && crate::radar::range::Range::is_metric_distance(meters)
+    {
+        return WIRE_UNIT_KM;
     }
     WIRE_UNIT_NM
 }

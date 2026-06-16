@@ -872,13 +872,12 @@ impl SharedControls {
                     return Ok(Value::Number(n));
                 }
 
-                if let Some(descriptions) = &control.item.descriptions {
-                    if let Some(idx) = descriptions
+                if let Some(descriptions) = &control.item.descriptions
+                    && let Some(idx) = descriptions
                         .iter()
                         .position(|(_, d)| d.eq_ignore_ascii_case(&s))
-                    {
-                        return Ok(Value::Number(Number::from(idx)));
-                    }
+                {
+                    return Ok(Value::Number(Number::from(idx)));
                 }
 
                 // 3. If no match, keep the string as it is.
@@ -995,17 +994,16 @@ impl SharedControls {
                 );
 
                 // Reject values not in the valid set (e.g. sparse capability bitmasks)
-                if let Some(ref valid_values) = c.item.valid_values {
-                    if let Some(ref v) = cv.value {
-                        if let Some(f) = v.as_f64() {
-                            let i = f as i32;
-                            if !valid_values.contains(&i) {
-                                return Err(RadarError::ControlError(ControlError::Invalid(
-                                    cv.id,
-                                    format!("{}", i),
-                                )));
-                            }
-                        }
+                if let Some(ref valid_values) = c.item.valid_values
+                    && let Some(ref v) = cv.value
+                    && let Some(f) = v.as_f64()
+                {
+                    let i = f as i32;
+                    if !valid_values.contains(&i) {
+                        return Err(RadarError::ControlError(ControlError::Invalid(
+                            cv.id,
+                            format!("{}", i),
+                        )));
                     }
                 }
 
@@ -2827,10 +2825,10 @@ impl Control {
             self.item
         );
 
-        if let Some(wire_offset) = self.item.wire_offset {
-            if wire_offset > 0.0 {
-                value -= wire_offset;
-            }
+        if let Some(wire_offset) = self.item.wire_offset
+            && wire_offset > 0.0
+        {
+            value -= wire_offset;
         }
 
         if let Some(wire_scale_factor) = self.item.wire_scale_factor {
@@ -2953,11 +2951,11 @@ impl Control {
         }
 
         // Apply wire offset
-        if let Some(wire_offset) = self.item.wire_offset {
-            if wire_offset > 0.0 {
-                start -= wire_offset;
-                end -= wire_offset;
-            }
+        if let Some(wire_offset) = self.item.wire_offset
+            && wire_offset > 0.0
+        {
+            start -= wire_offset;
+            end -= wire_offset;
         }
 
         // Apply wire scale factor

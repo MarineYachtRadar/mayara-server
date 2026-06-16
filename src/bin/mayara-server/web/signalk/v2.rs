@@ -1466,15 +1466,15 @@ async fn send_current_navigation(
             delta.add_position_update(lat, lon, "mayara");
         }
     }
-    if subscriptions.is_subscribed_path("navigation.headingTrue", false) {
-        if let Some(h) = navdata::get_heading_true() {
-            delta.add_navigation_update("navigation.headingTrue", h, "mayara");
-        }
+    if subscriptions.is_subscribed_path("navigation.headingTrue", false)
+        && let Some(h) = navdata::get_heading_true()
+    {
+        delta.add_navigation_update("navigation.headingTrue", h, "mayara");
     }
-    if subscriptions.is_subscribed_path("navigation.headingMagnetic", false) {
-        if let Some(h) = navdata::get_heading_magnetic() {
-            delta.add_navigation_update("navigation.headingMagnetic", h, "mayara");
-        }
+    if subscriptions.is_subscribed_path("navigation.headingMagnetic", false)
+        && let Some(h) = navdata::get_heading_magnetic()
+    {
+        delta.add_navigation_update("navigation.headingMagnetic", h, "mayara");
     }
 
     if let Some(d) = delta.build() {

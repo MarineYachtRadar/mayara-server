@@ -367,10 +367,10 @@ impl Persistence {
             info.controls.set_user_name(p.user_name.clone());
             info.controls.set_spoke_processing(p.spoke_processing);
             info.controls.set_range_units(p.range_units);
-            if let Some(ranges) = &p.ranges {
-                if ranges.len() > 0 {
-                    info.set_ranges(Ranges::new_by_distance(ranges));
-                }
+            if let Some(ranges) = &p.ranges
+                && ranges.len() > 0
+            {
+                info.set_ranges(Ranges::new_by_distance(ranges));
             }
             if let Some(zone) = &p.guard_zone_1 {
                 info.controls.set_guard_zone(&ControlId::GuardZone1, zone);

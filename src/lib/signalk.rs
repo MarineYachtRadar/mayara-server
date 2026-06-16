@@ -423,12 +423,12 @@ async fn connect_via_discovery(
     }
 
     // Fall back to TCP if advertised.
-    if let Some(ref tcp_url) = discovery.tcp_url {
-        if let Some(tcp_addr) = parse_tcp_url(tcp_url) {
-            let stream = TcpStream::connect(tcp_addr).await.map_err(RadarError::Io)?;
-            log::info!("Connected to Signal K via TCP: {}", tcp_url);
-            return Ok(Connection::Tcp(stream, tcp_addr));
-        }
+    if let Some(ref tcp_url) = discovery.tcp_url
+        && let Some(tcp_addr) = parse_tcp_url(tcp_url)
+    {
+        let stream = TcpStream::connect(tcp_addr).await.map_err(RadarError::Io)?;
+        log::info!("Connected to Signal K via TCP: {}", tcp_url);
+        return Ok(Connection::Tcp(stream, tcp_addr));
     }
 
     Err(RadarError::SignalK(

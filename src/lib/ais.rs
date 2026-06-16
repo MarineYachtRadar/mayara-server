@@ -144,60 +144,59 @@ impl AisVessel {
                                 }
                             }
                             "navigation.headingTrue" => {
-                                if let Some(heading) = value.as_f64() {
-                                    if self.heading != Some(heading) {
-                                        self.heading = Some(heading);
-                                        changed = true;
-                                    }
+                                if let Some(heading) = value.as_f64()
+                                    && self.heading != Some(heading)
+                                {
+                                    self.heading = Some(heading);
+                                    changed = true;
                                 }
                             }
                             "navigation.courseOverGroundTrue" => {
-                                if let Some(cog) = value.as_f64() {
-                                    if self.cog != Some(cog) {
-                                        self.cog = Some(cog);
-                                        changed = true;
-                                    }
+                                if let Some(cog) = value.as_f64()
+                                    && self.cog != Some(cog)
+                                {
+                                    self.cog = Some(cog);
+                                    changed = true;
                                 }
                             }
                             "navigation.speedOverGround" => {
-                                if let Some(sog) = value.as_f64() {
-                                    if self.sog != Some(sog) {
-                                        self.sog = Some(sog);
-                                        changed = true;
-                                    }
+                                if let Some(sog) = value.as_f64()
+                                    && self.sog != Some(sog)
+                                {
+                                    self.sog = Some(sog);
+                                    changed = true;
                                 }
                             }
                             "design.length" => {
                                 if let Some(length) = value.get("overall").and_then(|v| v.as_f64())
+                                    && self.dimensions.length != Some(length)
                                 {
-                                    if self.dimensions.length != Some(length) {
-                                        self.dimensions.length = Some(length);
-                                        changed = true;
-                                    }
+                                    self.dimensions.length = Some(length);
+                                    changed = true;
                                 }
                             }
                             "design.beam" => {
-                                if let Some(beam) = value.as_f64() {
-                                    if self.dimensions.beam != Some(beam) {
-                                        self.dimensions.beam = Some(beam);
-                                        changed = true;
-                                    }
+                                if let Some(beam) = value.as_f64()
+                                    && self.dimensions.beam != Some(beam)
+                                {
+                                    self.dimensions.beam = Some(beam);
+                                    changed = true;
                                 }
                             }
                             "sensors.ais.fromBow" => {
-                                if let Some(from_bow) = value.as_f64() {
-                                    if self.dimensions.from_bow != Some(from_bow) {
-                                        self.dimensions.from_bow = Some(from_bow);
-                                        changed = true;
-                                    }
+                                if let Some(from_bow) = value.as_f64()
+                                    && self.dimensions.from_bow != Some(from_bow)
+                                {
+                                    self.dimensions.from_bow = Some(from_bow);
+                                    changed = true;
                                 }
                             }
                             "sensors.ais.fromCenter" => {
-                                if let Some(from_center) = value.as_f64() {
-                                    if self.dimensions.from_center != Some(from_center) {
-                                        self.dimensions.from_center = Some(from_center);
-                                        changed = true;
-                                    }
+                                if let Some(from_center) = value.as_f64()
+                                    && self.dimensions.from_center != Some(from_center)
+                                {
+                                    self.dimensions.from_center = Some(from_center);
+                                    changed = true;
                                 }
                             }
                             "" => {

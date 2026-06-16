@@ -464,10 +464,10 @@ async fn playback_task(
             let seek_ms = target
                 .take()
                 .unwrap_or_else(|| position_ms.load(Ordering::Relaxed));
-            if seek_ms > 0 {
-                if let Err(e) = mrr_reader.seek_to_timestamp(seek_ms) {
-                    warn!("Seek to {}ms failed: {}", seek_ms, e);
-                }
+            if seek_ms > 0
+                && let Err(e) = mrr_reader.seek_to_timestamp(seek_ms)
+            {
+                warn!("Seek to {}ms failed: {}", seek_ms, e);
             }
         }
 

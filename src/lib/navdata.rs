@@ -131,13 +131,12 @@ fn set_own_ship_context(context: &str) {
 /// roam to a different server (with a different vessel URN) cannot silently
 /// misroute AIS traffic to the stale context.
 fn reset_own_ship_context() {
-    if let Some(lock) = OWN_SHIP_CONTEXT.get() {
-        if let Ok(mut guard) = lock.write() {
-            if guard.is_some() {
-                log::debug!("Clearing own-ship context on reconnect");
-                *guard = None;
-            }
-        }
+    if let Some(lock) = OWN_SHIP_CONTEXT.get()
+        && let Ok(mut guard) = lock.write()
+        && guard.is_some()
+    {
+        log::debug!("Clearing own-ship context on reconnect");
+        *guard = None;
     }
 }
 
@@ -543,10 +542,10 @@ pub(crate) fn clear_own_ship_nav() {
     set_position(None, None, "disconnect");
     set_cog(None);
     set_sog(None);
-    if let Some(lock) = LAST_OWN_SHIP_NAV.get() {
-        if let Ok(mut guard) = lock.lock() {
-            *guard = None;
-        }
+    if let Some(lock) = LAST_OWN_SHIP_NAV.get()
+        && let Ok(mut guard) = lock.lock()
+    {
+        *guard = None;
     }
 }
 
@@ -637,15 +636,15 @@ impl ConnectionType {
                 let parts: Vec<&str> = interface.splitn(2, ':').collect();
                 if parts.len() == 1 {
                     return ConnectionType::Mdns;
-                } else if parts.len() == 2 {
-                    if let Ok(addr) = parts[1].parse() {
-                        match parts[0].to_ascii_lowercase().as_str() {
-                            "udp" => return ConnectionType::Udp(addr),
-                            "tcp" => return ConnectionType::Tcp(addr),
-                            "ws" => return ConnectionType::Ws(addr, false),
-                            "wss" => return ConnectionType::Ws(addr, true),
-                            _ => {} // fallthrough to panic below
-                        }
+                } else if parts.len() == 2
+                    && let Ok(addr) = parts[1].parse()
+                {
+                    match parts[0].to_ascii_lowercase().as_str() {
+                        "udp" => return ConnectionType::Udp(addr),
+                        "tcp" => return ConnectionType::Tcp(addr),
+                        "ws" => return ConnectionType::Ws(addr, false),
+                        "wss" => return ConnectionType::Ws(addr, true),
+                        _ => {} // fallthrough to panic below
                     }
                 }
             }
@@ -1078,10 +1077,10 @@ impl NavigationData {
         .await
         .map(signalk_connection_to_stream);
 
-        if let Ok(r3) = mdns.shutdown() {
-            if let Ok(r3) = r3.recv() {
-                log::debug!("mdns_shutdown: {:?}", r3);
-            }
+        if let Ok(r3) = mdns.shutdown()
+            && let Ok(r3) = r3.recv()
+        {
+            log::debug!("mdns_shutdown: {:?}", r3);
         }
         r
     }
@@ -1138,10 +1137,10 @@ impl NavigationData {
             }
         }
 
-        if let Ok(r3) = mdns.shutdown() {
-            if let Ok(r3) = r3.recv() {
-                log::debug!("mdns_shutdown: {:?}", r3);
-            }
+        if let Ok(r3) = mdns.shutdown()
+            && let Ok(r3) = r3.recv()
+        {
+            log::debug!("mdns_shutdown: {:?}", r3);
         }
         r
     }

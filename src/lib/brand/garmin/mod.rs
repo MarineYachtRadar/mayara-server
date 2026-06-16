@@ -183,12 +183,12 @@ impl GarminLocator {
                 report::GarminReportReceiver::new(&self.args, info, radars.clone());
 
             // Attach Range B if dual-range
-            if let Some(ib) = info_b {
-                if let Some(mut ib) = radars.add(ib) {
-                    ib.start_forwarding_radar_messages_to_stdout(subsys);
-                    radars.update(&mut ib);
-                    report_receiver.set_range_b(&self.args, ib, radars.clone());
-                }
+            if let Some(ib) = info_b
+                && let Some(mut ib) = radars.add(ib)
+            {
+                ib.start_forwarding_radar_messages_to_stdout(subsys);
+                radars.update(&mut ib);
+                report_receiver.set_range_b(&self.args, ib, radars.clone());
             }
 
             subsys.start(SubsystemBuilder::new(

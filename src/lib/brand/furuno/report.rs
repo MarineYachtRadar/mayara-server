@@ -353,11 +353,10 @@ impl FurunoReportReceiver {
                             if let Some(ref mut cs) = self.command_sender {
                                 cs.dual_range_id = 1;
                             }
-                            if let Some(ref mut cb) = self.common_b {
-                                if let Err(e) = cb.process_control_update(cv, &mut self.command_sender).await {
+                            if let Some(ref mut cb) = self.common_b
+                                && let Err(e) = cb.process_control_update(cv, &mut self.command_sender).await {
                                     return Err(e);
                                 }
-                            }
                         },
                     }
                 },
@@ -472,10 +471,10 @@ impl FurunoReportReceiver {
     /// `drid` 0 = Range A (self.common), `drid` 1 = Range B (self.common_b).
     /// Falls back to Range A if Range B is not configured.
     fn common_for_range(&mut self, drid: u8) -> &mut CommonRadar {
-        if drid == 1 {
-            if let Some(ref mut cb) = self.common_b {
-                return cb;
-            }
+        if drid == 1
+            && let Some(ref mut cb) = self.common_b
+        {
+            return cb;
         }
         &mut self.common
     }
@@ -1240,15 +1239,11 @@ impl FurunoReportReceiver {
 
         let mut r = Ok(());
 
-        if want_multicast {
-            if let Err(e) = self.start_multicast_socket().await {
-                r = Err(e);
-            }
+        if want_multicast && let Err(e) = self.start_multicast_socket().await {
+            r = Err(e);
         }
-        if want_broadcast {
-            if let Err(e) = self.start_broadcast_socket().await {
-                r = Err(e);
-            }
+        if want_broadcast && let Err(e) = self.start_broadcast_socket().await {
+            r = Err(e);
         }
 
         if self.multicast_socket.is_some() || self.broadcast_socket.is_some() {
