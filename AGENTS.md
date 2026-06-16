@@ -53,6 +53,13 @@ Keep commits small and atomic - one logical change per commit. Split unrelated c
 **DO NOT** edit CHANGELOG.md — it is auto-generated from conventional commits at release time by git-cliff.
 **MANDATORY:** Never amend commits that have already been pushed to GitHub. Only amend local, unpushed commits.
 **MANDATORY:** Always rebase and clean up commit history before creating a PR or pushing changes. Amend fixes and corrections to the relevant existing commit instead of creating chains of "fix typo" or "oops" commits. The final history should contain only intentional, complete commits - no work-in-progress artifacts.
+**MANDATORY:** Run `cargo fmt` before every commit that touches Rust code. Every commit pushed to `main` must be `cargo fmt --check` clean — CI enforces this and will fail the build otherwise. Install the repo's pre-commit hook to catch this locally:
+
+```shell
+git config core.hooksPath .githooks
+```
+
+The hook lives in `.githooks/pre-commit` and runs `cargo fmt --check` whenever staged changes include any `.rs` file.
 
 ## Pull Request Guidelines
 

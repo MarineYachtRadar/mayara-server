@@ -1,0 +1,35 @@
+#!/bin/sh
+#
+# Block any commit that would push a `cargo fmt`-dirty tree.
+#
+# Install once per clone:
+#     git config core.hooksPath .githooks
+#
+# The whole working tree is checked (not just staged files) because
+# `cargo fmt --check` is fast and the goal is that `main` is always
+# fmt-clean. If you have unrelated unstaged changes that fail the check,
+# run `cargo fmt` (idempotent, safe) and re-stage what you intended.
+
+set -e
+
+# Skip if there are no Rust files in the staged set — non-Rust commits
+# (docs, CI tweaks, etc.) shouldn't be gated on Rust formatter state.
+staged_rs=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.rs$' || true)
+if [ -z "$staged_rs" ]; then
+    exit 0
+fi
+
+if ! command -v cargo >/dev/null 2>&1; then
+    echo "pre-commit: cargo not found on PATH — skipping fmt check." >&2
+    exit 0
+fi
+
+if ! cargo fmt --check >/dev/null 2>&1; then
+    echo
+    echo "pre-commit: cargo fmt --check failed."
+    echo "  Run 'cargo fmt' and re-stage."
+    echo
+    # Show the diff so the offending file(s) are obvious without re-running.
+    cargo fmt --check 2>&1 | head -40 >&2
+    exit 1
+fi
