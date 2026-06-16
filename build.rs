@@ -1,6 +1,8 @@
 use std::{env, fs, path::PathBuf, process::Command};
 
 fn main() {
+    install_git_hooks_path();
+
     let mut src_path = PathBuf::from("src");
     src_path.push("lib");
     src_path.push("protos");
@@ -128,4 +130,50 @@ fn copy_dir_recursive(src: &PathBuf, dest: &PathBuf) {
             fs::copy(&path, &dest_path).unwrap();
         }
     }
+}
+
+/// Point this clone's `core.hooksPath` at `.githooks/` on first `cargo build`,
+/// so contributors get the pre-commit `cargo fmt` check without having to
+/// run `git config` themselves. Cheap and idempotent:
+///
+/// - Skips when we're not in a git working tree (e.g. crates.io packaged
+///   builds or `cargo vendor` output).
+/// - Skips when `.githooks/pre-commit` is missing.
+/// - Skips when `core.hooksPath` is already set to anything other than
+///   `.githooks` — contributors who configured their own hooks path are
+///   left alone (a one-line `cargo:warning=` tells them what they're
+///   missing).
+fn install_git_hooks_path() {
+    println!("cargo:rerun-if-changed=.githooks/pre-commit");
+
+    if !PathBuf::from(".git").is_dir() {
+        return;
+    }
+    if !PathBuf::from(".githooks/pre-commit").is_file() {
+        return;
+    }
+
+    let current = Command::new("git")
+        .args(["config", "--local", "--get", "core.hooksPath"])
+        .output();
+    let current = match current {
+        Ok(out) => String::from_utf8_lossy(&out.stdout).trim().to_string(),
+        Err(_) => return, // git not on PATH — nothing useful we can do.
+    };
+
+    if current == ".githooks" {
+        return; // Already wired up.
+    }
+    if !current.is_empty() {
+        println!(
+            "cargo:warning=core.hooksPath is set to '{}'; leaving it alone. \
+             Set it to '.githooks' to enable the repo's pre-commit cargo fmt check.",
+            current
+        );
+        return;
+    }
+
+    let _ = Command::new("git")
+        .args(["config", "--local", "core.hooksPath", ".githooks"])
+        .status();
 }
