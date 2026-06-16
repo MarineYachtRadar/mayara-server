@@ -80,7 +80,10 @@ fn enumerate_host_interfaces() -> Vec<HostInterface> {
                     .collect(),
             })
             .collect(),
-        Err(_) => Vec::new(),
+        Err(e) => {
+            log::warn!("diagnostics: NetworkInterface::show() failed: {}", e);
+            Vec::new()
+        }
     }
 }
 
