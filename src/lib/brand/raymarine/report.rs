@@ -441,8 +441,13 @@ impl RaymarineReportReceiver {
         loop {
             self.start_report_socket().await;
             if self.report_socket.is_none() {
-                sleep(Duration::from_millis(1000)).await;
-                continue;
+                // Bind keeps failing: back off, but race the sleep against
+                // a shutdown request so a graceful shutdown can't hang on
+                // a long network outage.
+                tokio::select! {
+                    _ = sleep(Duration::from_millis(1000)) => continue,
+                    _ = subsys.on_shutdown_requested() => return Ok(()),
+                }
             }
             match self.socket_loop(subsys).await {
                 Err(RadarError::Shutdown) => return Ok(()),
