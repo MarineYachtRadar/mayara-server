@@ -31,7 +31,7 @@ pub(crate) struct TrailBuffer {
     cartesian_lookup: PolarToCartesianLookup,
     true_trails: Box<Array2<u8>>,
     true_trails_offset: PointInt,
-    relative_trails: Box<Vec<u16>>,
+    relative_trails: Vec<u16>,
     trail_length_ms: u32,
     rotation_speed_ms: u32,
     minimal_legend_value: u8,
@@ -75,7 +75,7 @@ impl TrailBuffer {
                 trail_size as usize,
             ))),
             true_trails_offset: PointInt { x: 0, y: 0 },
-            relative_trails: Box::new(vec![0; spokes_per_revolution * max_spoke_len]),
+            relative_trails: vec![0; spokes_per_revolution * max_spoke_len],
             trail_length_ms: 0,
             rotation_speed_ms: 0,
             minimal_legend_value,
@@ -204,7 +204,7 @@ impl TrailBuffer {
         self.update_relative_trails(spoke.angle as u16, &mut spoke.data);
     }
 
-    fn update_true_trails(&mut self, range: u32, bearing: SpokeBearing, data: &mut Vec<u8>) {
+    fn update_true_trails(&mut self, range: u32, bearing: SpokeBearing, data: &mut [u8]) {
         if self.trail_length_ms == 0 || self.rotation_speed_ms == 0 {
             return;
         }

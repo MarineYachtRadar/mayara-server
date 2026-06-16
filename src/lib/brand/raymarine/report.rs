@@ -414,7 +414,7 @@ impl RaymarineReportReceiver {
             }
             // Guard zone, alarm, MARPA, self-test, etc. — logged but not acted on
             id if (id & 0xFFFF0000 == 0x28000000 || id & 0xFFFF0000 == 0x01000000) => {
-                if self.reported_unknown.get(&id).is_none() {
+                if !self.reported_unknown.contains_key(&id) {
                     log::debug!(
                         "{}: Unhandled report ID 0x{:08X} len={}",
                         self.common.key,
@@ -425,7 +425,7 @@ impl RaymarineReportReceiver {
                 }
             }
             _ => {
-                if self.reported_unknown.get(&id).is_none() {
+                if !self.reported_unknown.contains_key(&id) {
                     log::debug!("{}: Unknown report ID 0x{:08X}", self.common.key, id);
                     self.reported_unknown.insert(id, true);
                 }

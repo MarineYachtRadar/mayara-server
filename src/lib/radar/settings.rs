@@ -2673,7 +2673,7 @@ impl Control {
         self.item.valid_values = Some(values);
     }
 
-    pub(crate) fn set_valid_ranges(&mut self, ranges: &Vec<Range>) {
+    pub(crate) fn set_valid_ranges(&mut self, ranges: &[Range]) {
         if ranges.is_empty() {
             return;
         }

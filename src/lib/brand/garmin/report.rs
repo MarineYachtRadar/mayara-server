@@ -591,7 +591,7 @@ impl GarminReportReceiver {
             MSG_CAPABILITY => self.process_capability(data)?,
             MSG_RANGE_TABLE => self.process_range_table(data)?,
             _ => {
-                if self.reported_unknown.get(&packet_type).is_none() {
+                if !self.reported_unknown.contains_key(&packet_type) {
                     log::debug!(
                         "{}: Unknown report packet_type={:04X} len={}",
                         self.common.key,

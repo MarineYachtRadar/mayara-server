@@ -711,7 +711,7 @@ impl SharedRadars {
             return None;
         }
 
-        let is_new = radars.info.get(&key).is_none();
+        let is_new = !radars.info.contains_key(&key);
         if is_new {
             // Set any previously detected model and ranges
             radars
