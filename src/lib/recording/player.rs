@@ -374,7 +374,7 @@ pub async fn load_recording(
             speed: speed.clone(),
             loop_playback: loop_playback.clone(),
             filename: filename.to_string(),
-            radar_key: radar_key,
+            radar_key,
             duration_ms: footer.duration_ms,
             frame_count: footer.frame_count,
             state: state.clone(),
