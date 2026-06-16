@@ -146,17 +146,17 @@ impl ImmMotionModel {
     /// same ref_lat/ref_lon on all three from the same first measurement.
     fn mix_states(&mut self) {
         let mut c_bar = [0.0; 3];
-        for j in 0..3 {
-            for i in 0..3 {
-                c_bar[j] += TRANSITION_PROB[i][j] * self.model_probs[i];
+        for (j, c) in c_bar.iter_mut().enumerate() {
+            for (i, &p) in self.model_probs.iter().enumerate() {
+                *c += TRANSITION_PROB[i][j] * p;
             }
         }
 
         let mut mixing_probs = [[0.0_f64; 3]; 3];
-        for j in 0..3 {
-            if c_bar[j] > 1e-10 {
-                for i in 0..3 {
-                    mixing_probs[i][j] = TRANSITION_PROB[i][j] * self.model_probs[i] / c_bar[j];
+        for (j, &c_j) in c_bar.iter().enumerate() {
+            if c_j > 1e-10 {
+                for (i, &p_i) in self.model_probs.iter().enumerate() {
+                    mixing_probs[i][j] = TRANSITION_PROB[i][j] * p_i / c_j;
                 }
             }
         }
@@ -183,7 +183,7 @@ impl ImmMotionModel {
         );
 
         let mut mixed: [(Vector4, Matrix4x4); 3] = [(Vector4::zeros(), Matrix4x4::zeros()); 3];
-        for j in 0..3 {
+        for (j, slot) in mixed.iter_mut().enumerate() {
             // x0_j = Σ_i μ_{i|j} · x_i
             let mut x0 = Vector4::zeros();
             for i in 0..3 {
@@ -197,7 +197,7 @@ impl ImmMotionModel {
                 p0 += mixing_probs[i][j] * (snapshots[i].1 + dx * dx.transpose());
             }
 
-            mixed[j] = (x0, p0);
+            *slot = (x0, p0);
         }
 
         // Write the mixed priors back into each filter.
@@ -217,15 +217,16 @@ impl ImmMotionModel {
         let likelihoods = [cv_likelihood, ca_likelihood, ct_likelihood];
 
         // Calculate normalization factor
-        let mut c = 0.0;
-        for i in 0..3 {
-            c += likelihoods[i] * self.model_probs[i];
-        }
+        let c: f64 = likelihoods
+            .iter()
+            .zip(self.model_probs.iter())
+            .map(|(l, p)| l * p)
+            .sum();
 
         // Update probabilities
         if c > 1e-10 {
-            for i in 0..3 {
-                self.model_probs[i] = likelihoods[i] * self.model_probs[i] / c;
+            for (p, &l) in self.model_probs.iter_mut().zip(likelihoods.iter()) {
+                *p = l * *p / c;
             }
         }
 
@@ -255,9 +256,9 @@ impl ImmMotionModel {
         let mut cos_sum = 0.0;
         let cogs = [cv_motion.1, ca_motion.1, ct_motion.1];
 
-        for i in 0..3 {
-            sin_sum += self.model_probs[i] * cogs[i].sin();
-            cos_sum += self.model_probs[i] * cogs[i].cos();
+        for (&p, &cog) in self.model_probs.iter().zip(cogs.iter()) {
+            sin_sum += p * cog.sin();
+            cos_sum += p * cog.cos();
         }
 
         self.cog = sin_sum.atan2(cos_sum);

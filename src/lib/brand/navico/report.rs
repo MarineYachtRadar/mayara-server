@@ -60,7 +60,7 @@ fn extract_heading_value(x: u16) -> Option<u16> {
 }
 
 #[derive(Deserialize, Debug, Clone, Copy)]
-#[repr(packed)]
+#[repr(C, packed)]
 struct GenBr24Header {
     header_len: u8,        // 1 bytes
     status: u8,            // 1 bytes
@@ -75,7 +75,7 @@ struct GenBr24Header {
 } /* total size = 24 */
 
 #[derive(Deserialize, Debug, Clone, Copy)]
-#[repr(packed)]
+#[repr(C, packed)]
 struct Gen3PlusHeader {
     header_len: u8,        // 1 bytes
     status: u8,            // 1 bytes
@@ -91,18 +91,18 @@ struct Gen3PlusHeader {
 } /* total size = 24 */
 
 #[derive(Debug, Clone, Copy)]
-#[repr(packed)]
+#[repr(C, packed)]
 struct RadarLine {
     _header: Gen3PlusHeader, // or GenBr24Header
     _data: [u8; SPOKE_DATA_LENGTH],
 }
 
-#[repr(packed)]
+#[repr(C, packed)]
 struct FrameHeader {
     _frame_hdr: [u8; 8],
 }
 
-#[repr(packed)]
+#[repr(C, packed)]
 struct RadarFramePkt {
     _header: FrameHeader,
     _line: [RadarLine; SPOKES_PER_FRAME], //  scan lines, or spokes
@@ -207,7 +207,7 @@ const INFO_BY_OTHERS_TIMEOUT: Duration = Duration::from_secs(10);
 const INFO_BY_US_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Debug)]
-#[repr(packed)]
+#[repr(C, packed)]
 struct StateMode {
     // 0xC401
     _sub_opcode: u8,
@@ -219,16 +219,14 @@ struct StateMode {
 impl StateMode {
     fn transmute(bytes: &[u8]) -> Result<Self, anyhow::Error> {
         // This is safe as the struct's bits are always all valid representations,
-        // or we convert them using a fail safe function
-        Ok(unsafe {
-            let report: [u8; 18] = bytes.try_into()?; // Hardwired length on purpose to verify length
-            transmute(report)
-        })
+        // or we convert them using a fail safe function.
+        // The hardwired [u8; 18] on the transmute also verifies length via try_into.
+        Ok(unsafe { transmute::<[u8; 18], Self>(bytes.try_into()?) })
     }
 }
 
 #[derive(Debug)]
-#[repr(packed)]
+#[repr(C, packed)]
 struct StateSetup {
     // 0xC402
     _sub_opcode: u8,
@@ -256,16 +254,13 @@ struct StateSetup {
 impl StateSetup {
     fn transmute(bytes: &[u8]) -> Result<Self, anyhow::Error> {
         // This is safe as the struct's bits are always all valid representations,
-        // or we convert them using a fail safe function
-        Ok(unsafe {
-            let report: [u8; 99] = bytes.try_into()?;
-            transmute(report)
-        })
+        // or we convert them using a fail safe function.
+        Ok(unsafe { transmute::<[u8; 99], Self>(bytes.try_into()?) })
     }
 }
 
 #[derive(Debug)]
-#[repr(packed)]
+#[repr(C, packed)]
 struct StateProperties {
     // 0xC403 — fixed 129 bytes
     _sub_opcode: u8,                 //   0  0x03
@@ -293,16 +288,14 @@ struct StateProperties {
 impl StateProperties {
     fn transmute(bytes: &[u8]) -> Result<Self, anyhow::Error> {
         // This is safe as the struct's bits are always all valid representations,
-        // or we convert them using a fail safe function
-        Ok(unsafe {
-            let report: [u8; 129] = bytes.try_into()?; // Hardwired length on purpose to verify length
-            transmute(report)
-        })
+        // or we convert them using a fail safe function.
+        // The hardwired [u8; 129] on the transmute also verifies length via try_into.
+        Ok(unsafe { transmute::<[u8; 129], Self>(bytes.try_into()?) })
     }
 }
 
 #[derive(Debug)]
-#[repr(packed)]
+#[repr(C, packed)]
 struct StateConfig {
     // 0xC404
     _sub_opcode: u8,
@@ -324,16 +317,13 @@ struct StateConfig {
 impl StateConfig {
     fn transmute(bytes: &[u8]) -> Result<Self, anyhow::Error> {
         // This is safe as the struct's bits are always all valid representations,
-        // or we convert them using a fail safe function
-        Ok(unsafe {
-            let report: [u8; 66] = bytes.try_into()?;
-            transmute(report)
-        })
+        // or we convert them using a fail safe function.
+        Ok(unsafe { transmute::<[u8; 66], Self>(bytes.try_into()?) })
     }
 }
 
 #[derive(Debug, Copy, Clone)]
-#[repr(packed)]
+#[repr(C, packed)]
 struct SectorBlankingReport {
     enabled: u8,
     start_angle: [u8; 2],
@@ -407,15 +397,7 @@ impl NavicoReportReceiver {
 
         let wire_to_legend = wire_to_legend(&info.get_legend());
 
-        let common = CommonRadar::new(
-            &args,
-            key,
-            info,
-            radars.clone(),
-            control_update_rx,
-            replay,
-            blob_tx,
-        );
+        let common = CommonRadar::new(args, key, info, radars, control_update_rx, replay, blob_tx);
 
         let now = Instant::now();
         NavicoReportReceiver {
@@ -444,7 +426,7 @@ impl NavicoReportReceiver {
     pub(super) async fn run(mut self, subsys: &mut SubsystemHandle) -> Result<(), RadarError> {
         self.start_report_socket()?;
         loop {
-            match self.socket_loop(&subsys).await {
+            match self.socket_loop(subsys).await {
                 Ok(()) => {
                     break Ok(());
                 }
@@ -621,10 +603,7 @@ impl NavicoReportReceiver {
                 },
 
                 r = self.common.control_update_rx.recv() => {
-                    match r {
-                        Ok(cu) => {let _ = self.common.process_control_update(cu, &mut self.command_sender).await;},
-                        Err(_) => {},
-                    }
+                    if let Ok(cu) = r {let _ = self.common.process_control_update(cu, &mut self.command_sender).await;}
                 }
 
 
@@ -764,10 +743,8 @@ impl NavicoReportReceiver {
                                 report
                             );
                         }
-                    } else {
-                        if let Ok(report) = HaloHeadingPacket::transmute(&self.info_buf) {
-                            log::trace!("{}: Halo heading report {:?}", self.common.key, report);
-                        }
+                    } else if let Ok(report) = HaloHeadingPacket::transmute(&self.info_buf) {
+                        log::trace!("{}: Halo heading report {:?}", self.common.key, report);
                     }
                 }
             }
@@ -1129,14 +1106,14 @@ impl NavicoReportReceiver {
 
             match tag {
                 installation_tag::NAME => {
-                    if let Some(name) = c_string(payload) {
-                        if !name.is_empty() {
-                            let _ = self
-                                .common
-                                .info
-                                .controls
-                                .set_string(&ControlId::UserName, name.to_string());
-                        }
+                    if let Some(name) = c_string(payload)
+                        && !name.is_empty()
+                    {
+                        let _ = self
+                            .common
+                            .info
+                            .controls
+                            .set_string(&ControlId::UserName, name.to_string());
                     }
                 }
                 installation_tag::ANTENNA_GEOMETRY if payload.len() >= 14 => {
@@ -1302,7 +1279,7 @@ impl NavicoReportReceiver {
         scanline: usize,
     ) -> Option<(u32, SpokeBearing, Option<u16>)> {
         match self.model {
-            Model::BR24 | Model::Gen3 => match decode_bin::<GenBr24Header>(&header_slice) {
+            Model::BR24 | Model::Gen3 => match decode_bin::<GenBr24Header>(header_slice) {
                 Ok(header) => {
                     log::trace!("Received {:04} header {:?}", scanline, header);
 
@@ -1310,10 +1287,10 @@ impl NavicoReportReceiver {
                 }
                 Err(e) => {
                     log::warn!("Illegible spoke: {} header {:02X?}", e, &header_slice);
-                    return None;
+                    None
                 }
             },
-            _ => match decode_bin::<Gen3PlusHeader>(&header_slice) {
+            _ => match decode_bin::<Gen3PlusHeader>(header_slice) {
                 Ok(header) => {
                     log::trace!("Received {:04} header {:?}", scanline, header);
 
@@ -1321,7 +1298,7 @@ impl NavicoReportReceiver {
                 }
                 Err(e) => {
                     log::warn!("Illegible spoke: {} header {:02X?}", e, &header_slice);
-                    return None;
+                    None
                 }
             },
         }

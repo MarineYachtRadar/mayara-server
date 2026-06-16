@@ -133,9 +133,9 @@ pub(crate) fn update_when_model_known(
             user_name.push(' ');
             user_name.push_str(&serial);
         }
-        if radar_info.dual.is_some() {
+        if let Some(dual) = radar_info.dual.as_ref() {
             user_name.push(' ');
-            user_name.push_str(&radar_info.dual.as_ref().unwrap());
+            user_name.push_str(dual);
         }
         controls.set_user_name(user_name);
     }

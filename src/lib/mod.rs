@@ -86,8 +86,8 @@ pub struct Cli {
     /// - `udp:` — UDP listener for NMEA 0183 broadcasts
     /// - `ws:`  — WebSocket via Signal K discovery; supports `--signalk-token`
     /// - `wss:` — WebSocket Secure via Signal K discovery; supports
-    ///            `--signalk-token`; requires `--accept-invalid-certs` for
-    ///            self-signed certificates
+    ///   `--signalk-token`; requires `--accept-invalid-certs` for
+    ///   self-signed certificates
     ///
     /// Authenticated Signal K servers can only be reached via `ws:` or `wss:`.
     /// The plain `tcp:` transport is strictly for anonymous setups.
@@ -212,8 +212,8 @@ impl Cli {
     }
 
     /// Resolve the upstream Signal K bearer token by precedence:
-    /// `--signalk-token` > `--signalk-token-file` > env `MAYARA_SIGNALK_TOKEN`
-    /// > none. The file is read once; outer whitespace is trimmed. An
+    /// `--signalk-token` > `--signalk-token-file` > env `MAYARA_SIGNALK_TOKEN` > none.
+    /// The file is read once; outer whitespace is trimmed. An
     /// empty/whitespace-only value resolves to `None` so misconfigured
     /// deployments don't silently send blank tokens. Embedded control
     /// characters (including `\r`/`\n`) cause an `InvalidData` error so a
@@ -294,9 +294,9 @@ impl Brand {
     }
 }
 
-impl Into<Brand> for &str {
-    fn into(self) -> Brand {
-        match self.to_ascii_lowercase().as_str() {
+impl From<&str> for Brand {
+    fn from(val: &str) -> Self {
+        match val.to_ascii_lowercase().as_str() {
             "furuno" => Brand::Furuno,
             "garmin" => Brand::Garmin,
             "koden" => Brand::Koden,
@@ -404,6 +404,7 @@ struct InterfaceId {
         }
     }
 }))]
+#[derive(Default)]
 pub struct InterfaceApi {
     /// Set of radar brands that have been compiled into this server
     #[schema(example = json!(["Navico", "Furuno"]))]
@@ -411,15 +412,6 @@ pub struct InterfaceApi {
     /// Map of network interface name to its radar listener information
     #[schema(value_type = HashMap<String, RadarInterfaceApi>)]
     interfaces: HashMap<InterfaceId, RadarInterfaceApi>,
-}
-
-impl Default for InterfaceApi {
-    fn default() -> Self {
-        InterfaceApi {
-            brands: HashSet::new(),
-            interfaces: HashMap::new(),
-        }
-    }
 }
 
 impl RadarInterfaceApi {

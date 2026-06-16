@@ -127,10 +127,7 @@ fn parse_content_disposition_filename(value: &str) -> Option<String> {
 }
 
 fn sanitize_for_header(filename: &str) -> String {
-    filename
-        .replace('"', "_")
-        .replace('\n', "_")
-        .replace('\r', "_")
+    filename.replace(['"', '\n', '\r'], "_")
 }
 
 pub fn routes(router: axum::Router<Web>) -> axum::Router<Web> {
@@ -231,21 +228,21 @@ async fn start_recording_handler(
     State(state): State<Web>,
     Json(req): Json<StartRecordingRequest>,
 ) -> impl IntoResponse {
-    if let Some(ref f) = req.filename {
-        if let Err(e) = validate_filename(f) {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": e})),
-            );
-        }
+    if let Some(ref f) = req.filename
+        && let Err(e) = validate_filename(f)
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e})),
+        );
     }
-    if let Some(ref sub) = req.subdirectory {
-        if let Err(e) = validate_filename(sub) {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": e})),
-            );
-        }
+    if let Some(ref sub) = req.subdirectory
+        && let Err(e) = validate_filename(sub)
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e})),
+        );
     }
 
     let mut active = state.recording_state.active_recording.write().await;
@@ -605,14 +602,14 @@ async fn download_recording_handler(
         )
             .into_response();
     }
-    if let Some(ref sub) = query.subdirectory {
-        if let Err(e) = validate_filename(sub) {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": e})),
-            )
-                .into_response();
-        }
+    if let Some(ref sub) = query.subdirectory
+        && let Err(e) = validate_filename(sub)
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e})),
+        )
+            .into_response();
     }
     let manager = RecordingManager::new();
     let info = match manager.get_recording(&filename, query.subdirectory.as_deref()) {

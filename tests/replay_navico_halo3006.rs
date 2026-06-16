@@ -58,7 +58,7 @@ async fn replay_navico_halo3006() {
     let args = test_args();
 
     Toplevel::new(async move |s: &mut SubsystemHandle| {
-        let (radars, _) = mayara::start_session(&s, args).await;
+        let (radars, _) = mayara::start_session(s, args).await;
 
         s.start(SubsystemBuilder::new(
             "test",

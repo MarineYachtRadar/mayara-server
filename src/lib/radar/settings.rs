@@ -34,7 +34,7 @@ pub enum ApiVersion {
 }
 
 thread_local! {
-    static API_VERSION: RefCell<ApiVersion> = RefCell::new(ApiVersion::V3);
+    static API_VERSION: RefCell<ApiVersion> = const { RefCell::new(ApiVersion::V3) };
 }
 
 pub fn set_api_version(version: ApiVersion) {
@@ -43,7 +43,7 @@ pub fn set_api_version(version: ApiVersion) {
     });
 }
 pub fn get_api_version() -> ApiVersion {
-    API_VERSION.with(|v| v.borrow().clone())
+    API_VERSION.with(|v| *v.borrow())
 }
 
 #[derive(
@@ -872,13 +872,12 @@ impl SharedControls {
                     return Ok(Value::Number(n));
                 }
 
-                if let Some(descriptions) = &control.item.descriptions {
-                    if let Some(idx) = descriptions
+                if let Some(descriptions) = &control.item.descriptions
+                    && let Some(idx) = descriptions
                         .iter()
-                        .position(|(_, d)| d.eq_ignore_ascii_case(&s))
-                    {
-                        return Ok(Value::Number(Number::from(idx)));
-                    }
+                        .position(|(_, d)| d.eq_ignore_ascii_case(s))
+                {
+                    return Ok(Value::Number(Number::from(idx)));
                 }
 
                 // 3. If no match, keep the string as it is.
@@ -886,12 +885,10 @@ impl SharedControls {
             }
 
             // For arrays we recurse into each element
-            Value::Array(_) | Value::Object(_) => {
-                return Err(RadarError::CannotSetControlIdValue(
-                    control.item.control_id,
-                    value.clone(),
-                ));
-            }
+            Value::Array(_) | Value::Object(_) => Err(RadarError::CannotSetControlIdValue(
+                control.item.control_id,
+                value.clone(),
+            )),
         }
     }
 
@@ -950,9 +947,7 @@ impl SharedControls {
         cv_value: Option<f64>,
         control: &Control,
     ) -> Result<Option<f64>, RadarError> {
-        let value_as_value = cv_value
-            .and_then(|v| Number::from_f64(v))
-            .map(Value::Number);
+        let value_as_value = cv_value.and_then(Number::from_f64).map(Value::Number);
         let (_, result) = Self::convert_to_wire_number(cv_units, value_as_value, control)?;
         Ok(result.and_then(|v| v.as_f64()))
     }
@@ -995,17 +990,16 @@ impl SharedControls {
                 );
 
                 // Reject values not in the valid set (e.g. sparse capability bitmasks)
-                if let Some(ref valid_values) = c.item.valid_values {
-                    if let Some(ref v) = cv.value {
-                        if let Some(f) = v.as_f64() {
-                            let i = f as i32;
-                            if !valid_values.contains(&i) {
-                                return Err(RadarError::ControlError(ControlError::Invalid(
-                                    cv.id,
-                                    format!("{}", i),
-                                )));
-                            }
-                        }
+                if let Some(ref valid_values) = c.item.valid_values
+                    && let Some(ref v) = cv.value
+                    && let Some(f) = v.as_f64()
+                {
+                    let i = f as i32;
+                    if !valid_values.contains(&i) {
+                        return Err(RadarError::ControlError(ControlError::Invalid(
+                            cv.id,
+                            format!("{}", i),
+                        )));
                     }
                 }
 
@@ -1024,7 +1018,7 @@ impl SharedControls {
                         end_distance,
                         cv.enabled,
                     )
-                    .map_err(|e| RadarError::ControlError(e))?;
+                    .map_err(RadarError::ControlError)?;
                     // Broadcast the update to the radar so blob detector gets updated
                     return self.send_to_command_handler(cv, reply_tx);
                 }
@@ -1037,7 +1031,7 @@ impl SharedControls {
                     let y2 = cv.y2.unwrap_or(0.0);
                     let width = cv.width.unwrap_or(0.0);
                     self.set_rect(&cv.id, x1, y1, x2, y2, width, cv.enabled)
-                        .map_err(|e| RadarError::ControlError(e))?;
+                        .map_err(RadarError::ControlError)?;
                     // Broadcast the update to the radar so exclusion mask gets updated
                     return self.send_to_command_handler(cv, reply_tx);
                 }
@@ -1047,7 +1041,7 @@ impl SharedControls {
                         if let Some(value) = cv.value {
                             self.set_value(&cv.id, value)
                                 .map(|_| ())
-                                .map_err(|e| RadarError::ControlError(e))
+                                .map_err(RadarError::ControlError)
                         } else {
                             Err(RadarError::CannotSetControlId(cv.id))
                         }
@@ -1122,7 +1116,7 @@ impl SharedControls {
         }
         let control_value = ControlValue::from(control, None);
         let locked = self.controls.read().unwrap();
-        match locked.all_clients_tx.send(control_value.clone()) {
+        match locked.all_clients_tx.send(control_value) {
             Err(_e) => {}
             Ok(cnt) => {
                 log::trace!(
@@ -1141,7 +1135,7 @@ impl SharedControls {
                 .controls
                 .get(&ControlId::Range)
                 .expect("Range should always be set");
-            sk_delta.add_meta_for_control(&locked.radar_id, &range_control);
+            sk_delta.add_meta_for_control(&locked.radar_id, range_control);
             log::debug!("meta: {:?}", sk_delta);
         }
         sk_delta.add_updates(vec![radar_control_value]);
@@ -1216,7 +1210,7 @@ impl SharedControls {
     pub fn get_control_keys(&self) -> Vec<&'static str> {
         let locked = self.controls.read().unwrap();
 
-        locked.controls.iter().map(|(k, _)| k.into()).collect()
+        locked.controls.keys().map(|k| k.into()).collect()
     }
 
     pub fn contains_key(&self, control_id: &ControlId) -> bool {
@@ -1401,7 +1395,7 @@ impl SharedControls {
                 } else {
                     let i = value
                         .parse::<i32>()
-                        .map_err(|_| ControlError::Invalid(control_id.clone(), value))?;
+                        .map_err(|_| ControlError::Invalid(*control_id, value))?;
                     Ok(control
                         .set(i as f64, None, None, None)?
                         .map(|_| control.clone()))
@@ -1413,7 +1407,7 @@ impl SharedControls {
 
         if let Some(control) = control {
             self.send_to_all_clients(&control);
-            Ok(control.description.clone())
+            Ok(control.description)
         } else {
             Ok(None)
         }
@@ -1435,16 +1429,13 @@ impl SharedControls {
                 } else {
                     let n = match value.clone() {
                         Value::String(s) => s.parse::<i32>().map(|i| i as f64).map_err(|_| {
-                            ControlError::Invalid(control_id.clone(), format!("{:?}", value))
+                            ControlError::Invalid(*control_id, format!("{:?}", value))
                         }),
                         Value::Bool(b) => Ok(b as i32 as f64),
                         Value::Number(n) => n.as_f64().ok_or_else(|| {
-                            ControlError::Invalid(control_id.clone(), format!("{:?}", value))
+                            ControlError::Invalid(*control_id, format!("{:?}", value))
                         }),
-                        _ => Err(ControlError::Invalid(
-                            control_id.clone(),
-                            format!("{:?}", value),
-                        )),
+                        _ => Err(ControlError::Invalid(*control_id, format!("{:?}", value))),
                     }?;
                     Ok(control.set(n, None, None, None)?.map(|_| control.clone()))
                 }
@@ -1456,7 +1447,7 @@ impl SharedControls {
         if let Some(control) = control {
             self.send_to_all_clients(&control);
 
-            Ok(control.description.clone())
+            Ok(control.description)
         } else {
             Ok(None)
         }
@@ -1525,6 +1516,7 @@ impl SharedControls {
     }
 
     /// Set a rectangular exclusion zone with corner-based coordinates
+    #[allow(clippy::too_many_arguments)] // 4 corner coords + zone id + label + ack channel — flat is clearer than a struct
     pub fn set_rect(
         &self,
         control_id: &ControlId,
@@ -1562,7 +1554,7 @@ impl SharedControls {
                 return descriptions.get(&value).cloned();
             }
         }
-        return None;
+        None
     }
 
     pub fn set_user_name(&self, name: String) {
@@ -1649,7 +1641,7 @@ impl SharedControls {
     pub fn set_model_name(&self, name: String) {
         let mut locked = self.controls.write().unwrap();
         let control = locked.controls.get_mut(&ControlId::ModelName).unwrap();
-        control.set_string(name.clone());
+        control.set_string(name);
     }
 
     pub fn model_name(&self) -> Option<String> {
@@ -1760,10 +1752,7 @@ impl SharedControls {
     pub(crate) fn get_status(&self) -> Option<Power> {
         let locked = self.controls.read().unwrap();
         if let Some(control) = locked.controls.get(&ControlId::Power) {
-            return control
-                .value()
-                .map(|v| Power::from_value(&v).ok())
-                .flatten();
+            return control.value().and_then(|v| Power::from_value(&v).ok());
         }
 
         None
@@ -1866,7 +1855,7 @@ impl ControlValue {
         ControlValue {
             id: control.item().control_id,
             value: control.value(),
-            units: control.item().units.clone(),
+            units: control.item().units,
             auto: control.auto,
             auto_value: control.auto_value(),
             end_value: control.end_value(),
@@ -2036,7 +2025,7 @@ impl RadarControlValue {
             radar_id: Some(radar.to_string()),
             control_id: Some(control.item().control_id),
             value: control.value(),
-            units: control.item().units.clone(),
+            units: control.item().units,
             auto: control.auto,
             auto_value: control.auto_value(),
             end_value: control.end_value(),
@@ -2059,7 +2048,7 @@ impl RadarControlValue {
         if path.starts_with("radars.") {
             path = &path["radars.".len()..];
         }
-        if let Some(r) = path.split('.').last() {
+        if let Some(r) = path.split('.').next_back() {
             self.control_id = ControlId::try_from(r).ok();
             if self.control_id.is_some() {
                 self.radar_id = Some(r.to_string());
@@ -2419,7 +2408,7 @@ pub(crate) fn new_list(control_id: ControlId, descriptions: &[&str]) -> ControlB
         None,
         Some(
             descriptions
-                .into_iter()
+                .iter()
                 .enumerate()
                 .map(|(i, n)| (i as i32, n.to_string()))
                 .collect(),
@@ -2649,7 +2638,7 @@ pub struct Control {
 
 impl Control {
     fn new(item: ControlDefinition) -> Self {
-        let value = item.default_value.clone();
+        let value = item.default_value;
         let timestamp = if value.is_some() {
             Some(Utc::now())
         } else {
@@ -2685,7 +2674,7 @@ impl Control {
         self.item.valid_values = Some(values);
     }
 
-    pub(crate) fn set_valid_ranges(&mut self, ranges: &Vec<Range>) {
+    pub(crate) fn set_valid_ranges(&mut self, ranges: &[Range]) {
         if ranges.is_empty() {
             return;
         }
@@ -2693,7 +2682,7 @@ impl Control {
         let mut descriptions = HashMap::new();
         for range in ranges.iter() {
             values.push(range.distance());
-            descriptions.insert(range.distance() as i32, format!("{}", range));
+            descriptions.insert(range.distance(), format!("{}", range));
         }
 
         self.item.min_value = Some(values[0] as f64);
@@ -2715,7 +2704,7 @@ impl Control {
             if v == v as i32 as f64 {
                 Number::from_i128(v as i128)
             } else {
-                Number::from_f64(v as f64)
+                Number::from_f64(v)
             }
         } {
             Value::Number(n)
@@ -2730,7 +2719,7 @@ impl Control {
 
     pub fn value(&self) -> Option<Value> {
         if self.item.data_type == ControlDataType::String {
-            return self.description.clone().map(|v| Value::String(v));
+            return self.description.clone().map(Value::String);
         }
 
         self.value.map(|v| self.to_number(v))
@@ -2827,10 +2816,10 @@ impl Control {
             self.item
         );
 
-        if let Some(wire_offset) = self.item.wire_offset {
-            if wire_offset > 0.0 {
-                value -= wire_offset;
-            }
+        if let Some(wire_offset) = self.item.wire_offset
+            && wire_offset > 0.0
+        {
+            value -= wire_offset;
         }
 
         if let Some(wire_scale_factor) = self.item.wire_scale_factor {
@@ -2843,7 +2832,7 @@ impl Control {
                 value,
                 wire_scale_factor
             );
-            value = value / wire_scale_factor;
+            value /= wire_scale_factor;
 
             auto_value = auto_value.map(|v| v / wire_scale_factor);
             log::debug!("{} map value to scaled {}", self.item.control_id, value);
@@ -2953,17 +2942,17 @@ impl Control {
         }
 
         // Apply wire offset
-        if let Some(wire_offset) = self.item.wire_offset {
-            if wire_offset > 0.0 {
-                start -= wire_offset;
-                end -= wire_offset;
-            }
+        if let Some(wire_offset) = self.item.wire_offset
+            && wire_offset > 0.0
+        {
+            start -= wire_offset;
+            end -= wire_offset;
         }
 
         // Apply wire scale factor
         if let Some(wire_scale_factor) = self.item.wire_scale_factor {
-            start = start / wire_scale_factor;
-            end = end / wire_scale_factor;
+            start /= wire_scale_factor;
+            end /= wire_scale_factor;
         }
 
         // Convert to SI units
@@ -3136,7 +3125,7 @@ impl Control {
 
     pub fn set_string(&mut self, value: String) -> Option<()> {
         let value = Some(value);
-        if &self.description != &value {
+        if self.description != value {
             self.description = value;
             self.needs_refresh = false;
             self.timestamp = Some(Utc::now());
@@ -3294,6 +3283,7 @@ fn is_false(v: &bool) -> bool {
 }
 
 impl ControlDefinition {
+    #[allow(clippy::too_many_arguments)] // every field of ControlDefinition surfaces here; macro builders below depend on the shape
     fn new(
         control_id: ControlId,
         data_type: ControlDataType,
@@ -3480,7 +3470,7 @@ mod test {
         // Check with optional fields and V3 ID
         let json = r#"{"id":"gain","value":"49","auto":true,"enabled":false}"#;
 
-        match serde_json::from_str::<ControlValue>(&json) {
+        match serde_json::from_str::<ControlValue>(json) {
             Ok(cv) => {
                 assert_eq!(cv.id, ControlId::Gain);
                 assert_eq!(cv.value, Some(Value::String("49".to_string())));
@@ -3495,7 +3485,7 @@ mod test {
         // Check without optional fields and with v1 ID
         let json = r#"{"id":"4","value":49}"#;
 
-        match serde_json::from_str::<ControlValue>(&json) {
+        match serde_json::from_str::<ControlValue>(json) {
             Ok(cv) => {
                 assert_eq!(cv.id, ControlId::Gain);
                 assert_eq!(
@@ -3513,7 +3503,7 @@ mod test {
         // Check with illegal negative v1 ID
         let json = r#"{"id":"-1","value":"49"}"#;
 
-        assert!(serde_json::from_str::<ControlValue>(&json).is_err());
+        assert!(serde_json::from_str::<ControlValue>(json).is_err());
     }
 
     #[test]

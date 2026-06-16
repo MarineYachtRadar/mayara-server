@@ -118,11 +118,8 @@ impl EmulatorReportReceiver {
                 }
 
                 r = self.common.control_update_rx.recv() => {
-                    match r {
-                        Ok(cu) => {
-                            self.handle_control_update(cu).await;
-                        }
-                        Err(_) => {}
+                    if let Ok(cu) = r {
+                        self.handle_control_update(cu).await;
                     }
                 }
             }
@@ -134,44 +131,44 @@ impl EmulatorReportReceiver {
 
         match cv.id {
             ControlId::Power => {
-                if let Some(ref value) = cv.value {
-                    if let Some(power_val) = value.as_f64() {
-                        let power = power_val as i32;
-                        match power {
-                            2 => {
-                                // Transmit
-                                log::info!("{}: Starting transmission", self.common.key);
-                                self.transmitting = true;
-                                self.common
-                                    .set_value(&ControlId::Power, Power::Transmit as i32 as f64);
-                            }
-                            1 => {
-                                // Standby
-                                log::info!("{}: Stopping transmission (standby)", self.common.key);
-                                self.transmitting = false;
-                                self.common
-                                    .set_value(&ControlId::Power, Power::Standby as i32 as f64);
-                            }
-                            0 => {
-                                // Off
-                                log::info!("{}: Power off", self.common.key);
-                                self.transmitting = false;
-                                self.common
-                                    .set_value(&ControlId::Power, Power::Off as i32 as f64);
-                            }
-                            _ => {}
+                if let Some(ref value) = cv.value
+                    && let Some(power_val) = value.as_f64()
+                {
+                    let power = power_val as i32;
+                    match power {
+                        2 => {
+                            // Transmit
+                            log::info!("{}: Starting transmission", self.common.key);
+                            self.transmitting = true;
+                            self.common
+                                .set_value(&ControlId::Power, Power::Transmit as i32 as f64);
                         }
+                        1 => {
+                            // Standby
+                            log::info!("{}: Stopping transmission (standby)", self.common.key);
+                            self.transmitting = false;
+                            self.common
+                                .set_value(&ControlId::Power, Power::Standby as i32 as f64);
+                        }
+                        0 => {
+                            // Off
+                            log::info!("{}: Power off", self.common.key);
+                            self.transmitting = false;
+                            self.common
+                                .set_value(&ControlId::Power, Power::Off as i32 as f64);
+                        }
+                        _ => {}
                     }
                 }
             }
             ControlId::Range => {
-                if let Some(ref value) = cv.value {
-                    if let Some(range_val) = value.as_f64() {
-                        let range = range_val as u32;
-                        log::debug!("{}: Range changed to {} m", self.common.key, range);
-                        self.current_range = range;
-                        self.common.set_value(&ControlId::Range, range as f64);
-                    }
+                if let Some(ref value) = cv.value
+                    && let Some(range_val) = value.as_f64()
+                {
+                    let range = range_val as u32;
+                    log::debug!("{}: Range changed to {} m", self.common.key, range);
+                    self.current_range = range;
+                    self.common.set_value(&ControlId::Range, range as f64);
                 }
             }
             _ => {

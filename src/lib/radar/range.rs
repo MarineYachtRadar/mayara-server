@@ -76,7 +76,12 @@ static ALL_POSSIBLE_METRIC_RANGES: LazyLock<Ranges> = LazyLock::new(|| {
     ])
 });
 
-#[derive(Debug, Clone, Copy, Eq, Ord)]
+/// A single radar range entry. `distance` is the only field that
+/// participates in equality and ordering; `index` is purely informational
+/// (it tags the entry's position in some originating table) and two
+/// `Range`s with the same `distance` are considered equal regardless of
+/// `index`.
+#[derive(Debug, Clone, Copy, Eq)]
 pub struct Range {
     distance: i32,
     index: usize,
@@ -106,7 +111,7 @@ impl Range {
     }
 
     fn near(a: i32, b: i32) -> bool {
-        return a % b == 0 || a % b == 1 || a % b == b - 1;
+        a % b == 0 || a % b == 1 || a % b == b - 1
     }
 
     /// Check if a distance value (in meters) looks like a metric (km-based) range
@@ -143,6 +148,11 @@ impl Range {
     }
 }
 
+impl Ord for Range {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.distance.cmp(&other.distance)
+    }
+}
 impl PartialOrd for Range {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
@@ -169,26 +179,24 @@ impl Display for Range {
                 } else {
                     write!(f, "{} m", v)
                 }
-            } else {
-                if v >= NAUTICAL_MILE - 1 {
-                    if Self::near(v, NAUTICAL_MILE) {
-                        write!(f, "{} nm", (v + 1) / NAUTICAL_MILE)
-                    } else {
-                        write!(f, "{} nm", v as f64 / NAUTICAL_MILE_F64)
-                    }
-                } else if Self::near(v, NAUTICAL_MILE / 2) {
-                    write!(f, "{}/2 nm", (v + 1) / (NAUTICAL_MILE / 2))
-                } else if Self::near(v, NAUTICAL_MILE / 4) {
-                    write!(f, "{}/4 nm", (v + 1) / (NAUTICAL_MILE / 4))
-                } else if Self::near(v, NAUTICAL_MILE / 8) {
-                    write!(f, "{}/8 nm", (v + 1) / (NAUTICAL_MILE / 8))
-                } else if Self::near(v, NAUTICAL_MILE / 16) {
-                    write!(f, "{}/16 nm", (v + 1) / (NAUTICAL_MILE / 16))
-                } else if Self::near(v, NAUTICAL_MILE / 32) {
-                    write!(f, "{}/32 nm", (v + 1) / (NAUTICAL_MILE / 32))
+            } else if v >= NAUTICAL_MILE - 1 {
+                if Self::near(v, NAUTICAL_MILE) {
+                    write!(f, "{} nm", (v + 1) / NAUTICAL_MILE)
                 } else {
                     write!(f, "{} nm", v as f64 / NAUTICAL_MILE_F64)
                 }
+            } else if Self::near(v, NAUTICAL_MILE / 2) {
+                write!(f, "{}/2 nm", (v + 1) / (NAUTICAL_MILE / 2))
+            } else if Self::near(v, NAUTICAL_MILE / 4) {
+                write!(f, "{}/4 nm", (v + 1) / (NAUTICAL_MILE / 4))
+            } else if Self::near(v, NAUTICAL_MILE / 8) {
+                write!(f, "{}/8 nm", (v + 1) / (NAUTICAL_MILE / 8))
+            } else if Self::near(v, NAUTICAL_MILE / 16) {
+                write!(f, "{}/16 nm", (v + 1) / (NAUTICAL_MILE / 16))
+            } else if Self::near(v, NAUTICAL_MILE / 32) {
+                write!(f, "{}/32 nm", (v + 1) / (NAUTICAL_MILE / 32))
+            } else {
+                write!(f, "{} nm", v as f64 / NAUTICAL_MILE_F64)
             }
         }
     }
@@ -220,7 +228,7 @@ impl Ranges {
         let mut mixed = Vec::new();
         let mut all = Vec::new();
 
-        ranges.sort_by(|a, b| a.distance.cmp(&b.distance));
+        ranges.sort();
         for (i, range) in ranges.iter().enumerate() {
             if Range::metric(range.distance) {
                 metric.push(Range::new(range.distance, i));

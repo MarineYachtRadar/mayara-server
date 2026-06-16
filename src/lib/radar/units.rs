@@ -49,9 +49,9 @@ pub enum Units {
 }
 
 impl Units {
-    pub(crate) fn to_si(&self, value: f64) -> (Units, f64) {
+    pub(crate) fn to_si(self, value: f64) -> (Units, f64) {
         // Celsius→Kelvin is an affine transform (offset, not just scale).
-        if *self == Units::Celsius {
+        if self == Units::Celsius {
             return (Units::Kelvin, value + 273.15);
         }
         let (units, factor) = match self {
@@ -76,9 +76,14 @@ impl Units {
         (units, value * factor)
     }
 
-    pub(crate) fn from_si(&self, value: f64) -> f64 {
+    // `from_*` usually names a constructor (no `self`); here it instead
+    // names "convert FROM SI, given this unit". The name is established
+    // at the call site (`wire_units.from_si(value)`) — rename would just
+    // be churn.
+    #[allow(clippy::wrong_self_convention)]
+    pub(crate) fn from_si(self, value: f64) -> f64 {
         // Kelvin→Celsius is an affine transform (offset, not just scale).
-        if *self == Units::Celsius {
+        if self == Units::Celsius {
             return value - 273.15;
         }
         let factor = match self {

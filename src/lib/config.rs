@@ -198,7 +198,7 @@ impl Persistence {
         let mut writer = BufWriter::new(&file);
 
         serde_json::to_writer_pretty(writer.by_ref(), &self.config)?;
-        write!(writer, "\n")?;
+        writeln!(writer)?;
         writer.flush()?;
 
         info!("Written config file '{}'", &self.path.display());
@@ -207,13 +207,9 @@ impl Persistence {
     }
 
     fn save(&mut self) {
-        match self.saver() {
-            Err(e) => {
-                warn!("cannot store config '{}': {}", &self.path.display(), e);
-                return;
-            }
-            Ok(_) => {}
-        };
+        if let Err(e) = self.saver() {
+            warn!("cannot store config '{}': {}", &self.path.display(), e);
+        }
     }
 
     pub(crate) fn store(&mut self, radar_info: &RadarInfo) {
@@ -222,11 +218,7 @@ impl Persistence {
         }
         let mut modified = false;
 
-        let radar = self
-            .config
-            .radars
-            .entry(radar_info.key())
-            .or_insert(Radar::default());
+        let radar = self.config.radars.entry(radar_info.key()).or_default();
 
         let user_name = radar_info.controls.user_name();
         if radar.user_name != user_name {
@@ -360,17 +352,16 @@ impl Persistence {
 
     pub(crate) fn update_info_from_persistence(&self, info: &mut RadarInfo) {
         if let Some(p) = self.config.radars.get(&info.key()) {
-            if p.model_name.is_some() {
-                info.controls
-                    .set_model_name(p.model_name.as_ref().unwrap().clone());
+            if let Some(model_name) = p.model_name.as_ref() {
+                info.controls.set_model_name(model_name.clone());
             }
             info.controls.set_user_name(p.user_name.clone());
             info.controls.set_spoke_processing(p.spoke_processing);
             info.controls.set_range_units(p.range_units);
-            if let Some(ranges) = &p.ranges {
-                if ranges.len() > 0 {
-                    info.set_ranges(Ranges::new_by_distance(ranges));
-                }
+            if let Some(ranges) = &p.ranges
+                && !ranges.is_empty()
+            {
+                info.set_ranges(Ranges::new_by_distance(ranges));
             }
             if let Some(zone) = &p.guard_zone_1 {
                 info.controls.set_guard_zone(&ControlId::GuardZone1, zone);

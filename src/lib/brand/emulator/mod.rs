@@ -100,9 +100,7 @@ pub(crate) fn create_emulator_radar(args: &Cli, radars: &SharedRadars, subsys: &
         log::info!("Emulator radar '{}' created", info.key());
 
         // Set the ranges
-        let ranges = crate::radar::range::Ranges::new_by_distance(
-            &EMULATOR_RANGES.iter().map(|&r| r).collect::<Vec<_>>(),
-        );
+        let ranges = crate::radar::range::Ranges::new_by_distance(EMULATOR_RANGES);
         info.set_ranges(ranges);
 
         // Set a default guard zone for testing if none was loaded from persistence

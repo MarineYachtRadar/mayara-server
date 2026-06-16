@@ -23,7 +23,7 @@ const U01_DEFAULT: [u8; 26] = [
 const HEADING_U07_DEFAULT: [u8; 5] = [0xff, 0x7f, 0x79, 0xf8, 0xfc];
 
 #[derive(Debug)]
-#[repr(packed)]
+#[repr(C, packed)]
 #[allow(dead_code)]
 pub(crate) struct HaloHeadingPacket {
     marker: [u8; 4],      //  0..4   "NKOE"
@@ -42,15 +42,12 @@ pub(crate) struct HaloHeadingPacket {
 
 impl HaloHeadingPacket {
     pub(crate) fn transmute(bytes: &[u8]) -> Result<Self, anyhow::Error> {
-        Ok(unsafe {
-            let report: [u8; 72] = bytes.try_into()?;
-            transmute(report)
-        })
+        Ok(unsafe { transmute::<[u8; 72], Self>(bytes.try_into()?) })
     }
 }
 
 #[derive(Debug)]
-#[repr(packed)]
+#[repr(C, packed)]
 #[allow(dead_code)]
 pub(crate) struct HaloNavigationPacket {
     marker: [u8; 4],   //  0..4   "NKOE"
@@ -71,15 +68,12 @@ pub(crate) struct HaloNavigationPacket {
 
 impl HaloNavigationPacket {
     pub(crate) fn transmute(bytes: &[u8]) -> Result<Self, anyhow::Error> {
-        Ok(unsafe {
-            let report: [u8; 72] = bytes.try_into()?;
-            transmute(report)
-        })
+        Ok(unsafe { transmute::<[u8; 72], Self>(bytes.try_into()?) })
     }
 }
 
 #[derive(Debug)]
-#[repr(packed)]
+#[repr(C, packed)]
 #[allow(dead_code)]
 pub(crate) struct HaloSpeedPacket {
     marker: [u8; 6],  //  0..6   01 d3 01 00 00 00
@@ -128,7 +122,7 @@ impl Information {
     pub(crate) fn new(key: String, info: &RadarInfo) -> Self {
         Information {
             key,
-            nic_addr: info.nic_addr.clone(),
+            nic_addr: info.nic_addr,
             sock: [None, None, None],
             counter: 0,
             last_heading: None,

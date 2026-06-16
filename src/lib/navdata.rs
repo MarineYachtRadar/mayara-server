@@ -131,13 +131,12 @@ fn set_own_ship_context(context: &str) {
 /// roam to a different server (with a different vessel URN) cannot silently
 /// misroute AIS traffic to the stale context.
 fn reset_own_ship_context() {
-    if let Some(lock) = OWN_SHIP_CONTEXT.get() {
-        if let Ok(mut guard) = lock.write() {
-            if guard.is_some() {
-                log::debug!("Clearing own-ship context on reconnect");
-                *guard = None;
-            }
-        }
+    if let Some(lock) = OWN_SHIP_CONTEXT.get()
+        && let Ok(mut guard) = lock.write()
+        && guard.is_some()
+    {
+        log::debug!("Clearing own-ship context on reconnect");
+        *guard = None;
     }
 }
 
@@ -367,7 +366,7 @@ pub fn get_heading_true() -> Option<f64> {
     if !heading.is_nan() {
         return Some(heading);
     }
-    return None;
+    None
 }
 
 /// Get the magnetic heading in radians [0..2*PI>, if known. Forwarded to the
@@ -377,7 +376,7 @@ pub fn get_heading_magnetic() -> Option<f64> {
     if !heading.is_nan() {
         return Some(heading);
     }
-    return None;
+    None
 }
 
 ///
@@ -495,7 +494,7 @@ pub fn get_radar_position() -> Option<GeoPosition> {
         let lon = POSITION_LON.load(Ordering::Acquire);
         return Some(GeoPosition::new(lat, lon));
     }
-    return None;
+    None
 }
 
 pub fn get_position() -> (Option<f64>, Option<f64>) {
@@ -505,7 +504,7 @@ pub fn get_position() -> (Option<f64>, Option<f64>) {
         log::trace!("navdata::get_position() -> lat={}, lon={}", lat, lon);
         return (Some(lat), Some(lon));
     }
-    return (None, None);
+    (None, None)
 }
 
 pub(crate) fn set_position(lat: Option<f64>, lon: Option<f64>, source: &str) {
@@ -524,7 +523,6 @@ pub(crate) fn set_position(lat: Option<f64>, lon: Option<f64>, source: &str) {
         }
     } else {
         POSITION_VALID.store(false, Ordering::Release);
-        return;
     }
 }
 
@@ -543,10 +541,10 @@ pub(crate) fn clear_own_ship_nav() {
     set_position(None, None, "disconnect");
     set_cog(None);
     set_sog(None);
-    if let Some(lock) = LAST_OWN_SHIP_NAV.get() {
-        if let Ok(mut guard) = lock.lock() {
-            *guard = None;
-        }
+    if let Some(lock) = LAST_OWN_SHIP_NAV.get()
+        && let Ok(mut guard) = lock.lock()
+    {
+        *guard = None;
     }
 }
 
@@ -555,7 +553,7 @@ pub(crate) fn get_cog() -> Option<f64> {
     if !cog.is_nan() {
         return Some(cog);
     }
-    return None;
+    None
 }
 
 pub(crate) fn set_cog(cog: Option<f64>) {
@@ -578,7 +576,7 @@ pub(crate) fn get_sog() -> Option<f64> {
     if !sog.is_nan() {
         return Some(sog);
     }
-    return None;
+    None
 }
 
 pub(crate) fn set_sog(sog: Option<f64>) {
@@ -592,11 +590,10 @@ pub(crate) fn set_sog(sog: Option<f64>) {
 const NMEA0183_SERVICE_NAME: &str = "_nmea-0183._tcp.local.";
 
 /// Subscription for own-ship navigation data only
-const SUBSCRIBE_SELF: &'static str = "{\"context\":\"vessels.self\",\"subscribe\":[{\"path\":\"navigation.headingTrue\"},{\"path\":\"navigation.headingMagnetic\"},{\"path\":\"navigation.magneticVariation\"},{\"path\":\"navigation.position\"},{\"path\":\"navigation.speedOverGround\"},{\"path\":\"navigation.courseOverGroundTrue\"}]}\r\n";
+const SUBSCRIBE_SELF: &str = "{\"context\":\"vessels.self\",\"subscribe\":[{\"path\":\"navigation.headingTrue\"},{\"path\":\"navigation.headingMagnetic\"},{\"path\":\"navigation.magneticVariation\"},{\"path\":\"navigation.position\"},{\"path\":\"navigation.speedOverGround\"},{\"path\":\"navigation.courseOverGroundTrue\"}]}\r\n";
 
 /// Additional subscription for all vessels (sent after own-ship context is known)
-const SUBSCRIBE_ALL: &'static str =
-    "{\"context\":\"vessels.*\",\"subscribe\":[{\"path\":\"*\"}]}\r\n";
+const SUBSCRIBE_ALL: &str = "{\"context\":\"vessels.*\",\"subscribe\":[{\"path\":\"*\"}]}\r\n";
 
 /// A Signal K subscription the transport layer should send in response to an
 /// incoming message. Both TCP and WebSocket receive loops share this decision
@@ -637,15 +634,15 @@ impl ConnectionType {
                 let parts: Vec<&str> = interface.splitn(2, ':').collect();
                 if parts.len() == 1 {
                     return ConnectionType::Mdns;
-                } else if parts.len() == 2 {
-                    if let Ok(addr) = parts[1].parse() {
-                        match parts[0].to_ascii_lowercase().as_str() {
-                            "udp" => return ConnectionType::Udp(addr),
-                            "tcp" => return ConnectionType::Tcp(addr),
-                            "ws" => return ConnectionType::Ws(addr, false),
-                            "wss" => return ConnectionType::Ws(addr, true),
-                            _ => {} // fallthrough to panic below
-                        }
+                } else if parts.len() == 2
+                    && let Ok(addr) = parts[1].parse()
+                {
+                    match parts[0].to_ascii_lowercase().as_str() {
+                        "udp" => return ConnectionType::Udp(addr),
+                        "tcp" => return ConnectionType::Tcp(addr),
+                        "ws" => return ConnectionType::Ws(addr, false),
+                        "wss" => return ConnectionType::Ws(addr, true),
+                        _ => {} // fallthrough to panic below
                     }
                 }
             }
@@ -658,6 +655,7 @@ impl ConnectionType {
 
 use crate::signalk::WsStream;
 
+#[allow(clippy::large_enum_variant)] // WS stream legitimately carries more state than TCP/UDP; never stored in arrays — only one live at a time per receiver
 enum Stream {
     /// Plain TCP. For Signal K connections `peer` carries the upstream we
     /// resolved so the cooldown logic can mark the server silent on close.
@@ -855,36 +853,35 @@ impl NavigationData {
         // In NND replay mode, consume NMEA sentences from the replay channel
         // instead of connecting to a live TCP/UDP source.
         #[cfg(feature = "pcap-replay")]
-        if crate::replay::is_active() {
-            if let Some(mut rx) = crate::replay::create_listen(&crate::nnd::NMEA_REPLAY_ADDRESS) {
-                // Ensure we have an NMEA parser even if --nmea0183 wasn't passed
-                if self.nmea_parser.is_none() {
-                    self.nmea_parser = Some(NmeaParser::new());
-                }
-                log::info!("NavData: listening for NMEA replay packets");
-                let mut buf = Vec::with_capacity(1024);
-                loop {
-                    tokio::select! { biased;
-                        _ = subsys.on_shutdown_requested() => {
-                            return Ok(());
-                        },
-                        result = rx.recv_buf_from(&mut buf) => {
-                            match result {
-                                Ok((len, _from)) => {
-                                    if let Ok(text) = std::str::from_utf8(&buf[..len]) {
-                                        for line in text.lines() {
-                                            let trimmed = line.trim();
-                                            if trimmed.starts_with('$') || trimmed.starts_with('!') {
-                                                if let Err(e) = self.parse_nmea0183(trimmed) {
-                                                    log::warn!("NMEA replay: {}", e);
-                                                }
+        if crate::replay::is_active()
+            && let Some(mut rx) = crate::replay::create_listen(&crate::nnd::NMEA_REPLAY_ADDRESS)
+        {
+            // Ensure we have an NMEA parser even if --nmea0183 wasn't passed
+            if self.nmea_parser.is_none() {
+                self.nmea_parser = Some(NmeaParser::new());
+            }
+            log::info!("NavData: listening for NMEA replay packets");
+            let mut buf = Vec::with_capacity(1024);
+            loop {
+                tokio::select! { biased;
+                    _ = subsys.on_shutdown_requested() => {
+                        return Ok(());
+                    },
+                    result = rx.recv_buf_from(&mut buf) => {
+                        match result {
+                            Ok((len, _from)) => {
+                                if let Ok(text) = std::str::from_utf8(&buf[..len]) {
+                                    for line in text.lines() {
+                                        let trimmed = line.trim();
+                                        if (trimmed.starts_with('$') || trimmed.starts_with('!'))
+                                            && let Err(e) = self.parse_nmea0183(trimmed) {
+                                                log::warn!("NMEA replay: {}", e);
                                             }
-                                        }
                                     }
-                                    buf.clear();
                                 }
-                                Err(_) => return Ok(()),
+                                buf.clear();
                             }
+                            Err(_) => return Ok(()),
                         }
                     }
                 }
@@ -938,7 +935,7 @@ impl NavigationData {
             let probe_timeout = probe_timeout_for(consecutive_no_nav);
 
             match self
-                .find_service(&subsys, &mut rx_ip_change, &navigation_address)
+                .find_service(subsys, &mut rx_ip_change, &navigation_address)
                 .await
             {
                 Ok(Stream::Tcp(stream, signalk_peer)) => {
@@ -950,7 +947,7 @@ impl NavigationData {
                             .map(|a| a.to_string())
                             .unwrap_or_else(|_| "<unknown>".to_string())
                     );
-                    let result = self.receive_loop(stream, &subsys, probe_timeout).await;
+                    let result = self.receive_loop(stream, subsys, probe_timeout).await;
                     // NMEA0183-over-TCP (signalk_peer is None) doesn't carry
                     // own-ship-nav semantics — the probe never fires and the
                     // counter has nothing to track. Only Signal K TCP
@@ -982,7 +979,7 @@ impl NavigationData {
                     // NMEA0183-over-UDP has no Signal K own-ship probe so
                     // it's outside the backoff path: success or failure
                     // here doesn't update consecutive_no_nav.
-                    match self.receive_udp_loop(socket, &subsys).await {
+                    match self.receive_udp_loop(socket, subsys).await {
                         Err(RadarError::Shutdown) => {
                             log::debug!("{} receive_loop shutdown", self.what);
                             return Ok(());
@@ -994,7 +991,7 @@ impl NavigationData {
                 }
                 Ok(Stream::WebSocket(ws, url, signalk_peer)) => {
                     log::info!("Listening to {} data via WebSocket from {}", self.what, url);
-                    let result = self.receive_ws_loop(ws, &subsys, probe_timeout).await;
+                    let result = self.receive_ws_loop(ws, subsys, probe_timeout).await;
                     let saw_own_ship = own_ship_nav_seen();
                     Self::update_signalk_silent_state(Some(signalk_peer), &result);
                     consecutive_no_nav = next_consecutive(consecutive_no_nav, saw_own_ship);
@@ -1055,13 +1052,7 @@ impl NavigationData {
 
         if interface.is_some() {
             let _ = mdns.disable_interface(IfKind::All);
-            let navigation_address = self
-                .args
-                .navigation_address
-                .as_ref()
-                .unwrap()
-                .to_string()
-                .clone();
+            let navigation_address = self.args.navigation_address.as_ref().unwrap().to_string();
             let _ = mdns.enable_interface(IfKind::Name(navigation_address));
         }
 
@@ -1078,10 +1069,10 @@ impl NavigationData {
         .await
         .map(signalk_connection_to_stream);
 
-        if let Ok(r3) = mdns.shutdown() {
-            if let Ok(r3) = r3.recv() {
-                log::debug!("mdns_shutdown: {:?}", r3);
-            }
+        if let Ok(r3) = mdns.shutdown()
+            && let Ok(r3) = r3.recv()
+        {
+            log::debug!("mdns_shutdown: {:?}", r3);
         }
         r
     }
@@ -1138,10 +1129,10 @@ impl NavigationData {
             }
         }
 
-        if let Ok(r3) = mdns.shutdown() {
-            if let Ok(r3) = r3.recv() {
-                log::debug!("mdns_shutdown: {:?}", r3);
-            }
+        if let Ok(r3) = mdns.shutdown()
+            && let Ok(r3) = r3.recv()
+        {
+            log::debug!("mdns_shutdown: {:?}", r3);
         }
         r
     }
@@ -1451,15 +1442,12 @@ impl NavigationData {
     fn process_udp_buf(&mut self, buf: &[u8]) {
         if let Ok(data) = String::from_utf8(buf.to_vec()) {
             for line in data.lines() {
-                match if self.nmea0183_mode {
+                if let Err(e) = if self.nmea0183_mode {
                     self.parse_nmea0183(line)
                 } else {
-                    parse_signalk(&line)
+                    parse_signalk(line)
                 } {
-                    Err(e) => {
-                        log::warn!("{}", e)
-                    }
-                    Ok(_) => {}
+                    log::warn!("{}", e)
                 }
             }
         }
@@ -1611,9 +1599,7 @@ fn apply_signalk_value(values_entry: &Value, source: &str) {
 }
 
 async fn connect_to_socket(address: SocketAddr) -> Result<TcpStream, RadarError> {
-    let stream = TcpStream::connect(address)
-        .await
-        .map_err(|e| RadarError::Io(e))?;
+    let stream = TcpStream::connect(address).await.map_err(RadarError::Io)?;
     log::debug!("Connected to {}", address);
     Ok(stream)
 }
@@ -1634,6 +1620,8 @@ where
     // Box<> places this on the heap, not stack.
     // Pin<> makes sure it doesn't move or get invalid as an object.
     // Vec<> so we can store a list of these.
+    #[allow(clippy::type_complexity)]
+    // single-use; the comment block above already explains each layer
     let futures: Vec<Pin<Box<dyn Future<Output = Result<TcpStream, RadarError>> + Send>>> =
         addresses
             .into_iter()

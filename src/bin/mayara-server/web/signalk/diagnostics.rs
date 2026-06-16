@@ -86,6 +86,9 @@ fn enumerate_host_interfaces() -> Vec<HostInterface> {
     }
 }
 
+// Each push is `#[cfg]`-gated, so the lint's `vec![...]` suggestion
+// doesn't apply (the macro can't take conditional elements).
+#[allow(clippy::vec_init_then_push)]
 fn compiled_features() -> Vec<&'static str> {
     let mut features = Vec::new();
     #[cfg(feature = "navico")]

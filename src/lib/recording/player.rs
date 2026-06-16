@@ -309,8 +309,7 @@ pub async fn load_recording(
 
     if let Some(mut info) = radars.add(info) {
         // Set ranges so the radar appears as active in the GUI
-        let ranges =
-            crate::radar::range::Ranges::new_by_distance(&vec![header.max_spoke_len as i32]);
+        let ranges = crate::radar::range::Ranges::new_by_distance(&[header.max_spoke_len as i32]);
         info.set_ranges(ranges);
 
         // Set power to transmit so GUI shows radar as active
@@ -375,14 +374,14 @@ pub async fn load_recording(
             speed: speed.clone(),
             loop_playback: loop_playback.clone(),
             filename: filename.to_string(),
-            radar_key: radar_key.clone(),
+            radar_key,
             duration_ms: footer.duration_ms,
             frame_count: footer.frame_count,
             state: state.clone(),
             seek_target: seek_target.clone(),
         };
 
-        let path_clone = path.clone();
+        let path_clone = path;
         tokio::spawn(async move {
             playback_task(
                 path_clone,
@@ -405,6 +404,7 @@ pub async fn load_recording(
     }
 }
 
+#[allow(clippy::too_many_arguments)] // playback config + 3 shared flags + 3 channels — bundling adds indirection without reuse
 async fn playback_task(
     path: PathBuf,
     message_tx: broadcast::Sender<Vec<u8>>,
@@ -464,10 +464,10 @@ async fn playback_task(
             let seek_ms = target
                 .take()
                 .unwrap_or_else(|| position_ms.load(Ordering::Relaxed));
-            if seek_ms > 0 {
-                if let Err(e) = mrr_reader.seek_to_timestamp(seek_ms) {
-                    warn!("Seek to {}ms failed: {}", seek_ms, e);
-                }
+            if seek_ms > 0
+                && let Err(e) = mrr_reader.seek_to_timestamp(seek_ms)
+            {
+                warn!("Seek to {}ms failed: {}", seek_ms, e);
             }
         }
 

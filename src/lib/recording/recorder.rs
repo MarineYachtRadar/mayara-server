@@ -109,15 +109,15 @@ pub async fn start_recording(
     initial_state_json: &[u8],
 ) -> Result<ActiveRecording, String> {
     // Validate inputs before any filesystem operations
-    if let Some(f) = filename {
-        if !is_valid_name(f) {
-            return Err("Invalid filename".to_string());
-        }
+    if let Some(f) = filename
+        && !is_valid_name(f)
+    {
+        return Err("Invalid filename".to_string());
     }
-    if let Some(sub) = subdirectory {
-        if !is_valid_name(sub) {
-            return Err("Invalid subdirectory".to_string());
-        }
+    if let Some(sub) = subdirectory
+        && !is_valid_name(sub)
+    {
+        return Err("Invalid subdirectory".to_string());
     }
 
     let manager = RecordingManager::new();
@@ -185,7 +185,7 @@ pub async fn start_recording(
     let active = ActiveRecording {
         stop_flag: stop_flag.clone(),
         radar_id: radar_key.to_string(),
-        filename: filename.clone(),
+        filename,
         subdirectory: subdirectory.map(String::from),
         frame_count: frame_count.clone(),
         duration_ms: duration_ms.clone(),
@@ -195,7 +195,7 @@ pub async fn start_recording(
 
     let message_rx = radar_info.message_tx.subscribe();
 
-    let path_clone = path.clone();
+    let path_clone = path;
     tokio::spawn(async move {
         recording_task(
             mrr_writer,
@@ -250,7 +250,7 @@ async fn recording_task(
 
                 frames += 1;
 
-                if frames % 10 == 0 {
+                if frames.is_multiple_of(10) {
                     frame_count.store(frames, Ordering::Relaxed);
                     duration_ms.store(timestamp_ms, Ordering::Relaxed);
                     size_bytes.store(approx_size, Ordering::Relaxed);

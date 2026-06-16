@@ -12,7 +12,6 @@ use web::Web;
 
 mod web;
 
-use mayara;
 use mayara::recording::RecordingManager;
 #[cfg(feature = "pcap-replay")]
 use mayara::replay;

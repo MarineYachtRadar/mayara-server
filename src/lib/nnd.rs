@@ -120,13 +120,12 @@ fn parse_time_line(data: &[u8], pos: usize) -> Duration {
     // Extract the millisecond offset after "Time: "
     if line.len() > 6 {
         let after_prefix = &line[6..]; // skip "Time: "
-        if let Some(space) = after_prefix.iter().position(|&b| b == b' ') {
-            if let Ok(ms) = std::str::from_utf8(&after_prefix[..space])
+        if let Some(space) = after_prefix.iter().position(|&b| b == b' ')
+            && let Ok(ms) = std::str::from_utf8(&after_prefix[..space])
                 .unwrap_or("")
                 .parse::<u64>()
-            {
-                return Duration::from_millis(ms);
-            }
+        {
+            return Duration::from_millis(ms);
         }
     }
     Duration::ZERO

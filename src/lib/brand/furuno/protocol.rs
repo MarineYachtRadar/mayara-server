@@ -151,7 +151,7 @@ pub(crate) const LOGIN_EXPECTED_HEADER: [u8; 8] = [0x9, 0x1, 0x0, 0xc, 0x1, 0x0,
 
 /// 32-byte beacon report — radar serial/name identification.
 #[derive(Deserialize, Debug, Copy, Clone)]
-#[repr(packed)]
+#[repr(C, packed)]
 pub(crate) struct FurunoRadarReport {
     pub _header: [u8; 11],
     pub length: u8,
@@ -161,7 +161,7 @@ pub(crate) struct FurunoRadarReport {
 
 /// 170-byte model report — radar model name, firmware versions, serial number.
 #[derive(Deserialize, Debug, Copy, Clone)]
-#[repr(packed)]
+#[repr(C, packed)]
 pub(crate) struct FurunoRadarModelReport {
     pub _filler1: [u8; 24],
     pub model: [u8; 32],
@@ -176,6 +176,8 @@ pub(crate) struct FurunoRadarModelReport {
 // =============================================================================
 
 /// All known Furuno radar models.
+#[allow(clippy::upper_case_acronyms)]
+// Furuno's product line names (DRS, FAR, NXT, …) are themselves all-caps; keeping them as Furuno publishes them
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RadarModel {
     Unknown,
@@ -590,10 +592,10 @@ pub(crate) fn wire_index_to_meters_for_unit(wire_index: i32, wire_unit: i32) -> 
 /// Determine the wire unit for a range value in meters.
 /// Metric distances (km-based) use wire unit 1, nautical use wire unit 0.
 pub(crate) fn wire_unit_for_meters(meters: i32) -> i32 {
-    if WIRE_INDEX_TABLE_KM.iter().any(|(_, m)| *m == meters) {
-        if crate::radar::range::Range::is_metric_distance(meters) {
-            return WIRE_UNIT_KM;
-        }
+    if WIRE_INDEX_TABLE_KM.iter().any(|(_, m)| *m == meters)
+        && crate::radar::range::Range::is_metric_distance(meters)
+    {
+        return WIRE_UNIT_KM;
     }
     WIRE_UNIT_NM
 }

@@ -34,7 +34,7 @@ impl KodenReportReceiver {
             args,
             key,
             info,
-            radars.clone(),
+            radars,
             control_update_rx,
             args.is_replay(),
             blob_tx,
@@ -48,7 +48,7 @@ impl KodenReportReceiver {
 
     pub(crate) async fn run(mut self, subsys: &mut SubsystemHandle) -> Result<(), RadarError> {
         loop {
-            if let Err(e) = self.data_loop(&subsys).await {
+            if let Err(e) = self.data_loop(subsys).await {
                 log::error!("{}: Data loop error: {}, restarting", self.common.key, e);
             }
             if subsys.is_shutdown_requested() {
@@ -109,9 +109,7 @@ impl KodenReportReceiver {
                     match r {
                         Err(_) => {},
                         Ok(cv) => {
-                            if let Err(e) = self.common.process_control_update(cv, &mut self.command_sender).await {
-                                return Err(e);
-                            }
+                            self.common.process_control_update(cv, &mut self.command_sender).await?
                         },
                     }
                 }

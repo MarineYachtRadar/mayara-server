@@ -112,7 +112,7 @@ impl Model {
     /// Returns true for all HALO variants (dome and open array).
     pub(crate) fn is_halo(&self) -> bool {
         let v = *self as u32;
-        v >= 14 && v <= 23
+        (14..=23).contains(&v)
     }
 }
 
@@ -348,11 +348,11 @@ impl NavicoLocator {
                 16,
                 SPOKES_PER_REVOLUTION,
                 SPOKE_PIXEL_LEN,
-                (*from).into(),
-                via.clone(),
-                scanner.data.into(),
-                scanner.report.into(),
-                scanner.send.into(),
+                *from,
+                *via,
+                scanner.data,
+                scanner.report,
+                scanner.send,
                 |id, tx| settings::new(id, tx, &self.args, None),
                 false, // Doppler unknown at beacon time; set from capabilities later
                 false,
@@ -386,7 +386,7 @@ impl NavicoLocator {
 
             let report_name = info.key() + " reports";
 
-            info.start_forwarding_radar_messages_to_stdout(&subsys);
+            info.start_forwarding_radar_messages_to_stdout(subsys);
 
             let report_receiver =
                 report::NavicoReportReceiver::new(&self.args, info, radars.clone());
@@ -468,7 +468,7 @@ mod tests {
     // switch to dynamic parsing.
 
     #[derive(TestDeserialize, Debug, Copy, Clone)]
-    #[repr(packed)]
+    #[repr(C, packed)]
     struct NavicoBeaconHeader {
         _id: u16,
         _serial_no: [u8; 16],
@@ -484,7 +484,7 @@ mod tests {
     }
 
     #[derive(TestDeserialize, Debug, Copy, Clone)]
-    #[repr(packed)]
+    #[repr(C, packed)]
     struct NavicoBeaconRadar {
         _filler1: [u8; 10],
         data: NetworkSocketAddrV4,
@@ -495,7 +495,7 @@ mod tests {
     }
 
     #[derive(TestDeserialize, Debug, Copy, Clone)]
-    #[repr(packed)]
+    #[repr(C, packed)]
     struct NavicoBeaconDual {
         _header: NavicoBeaconHeader,
         a: NavicoBeaconRadar,
@@ -692,9 +692,9 @@ mod tests {
             ("HALO 24", &BEACON_HALO24[..]),
         ] {
             let old: NavicoBeaconDual =
-                decode_bin(packet).expect(&format!("{}: bincode failed", name));
-            let new =
-                parse_gen3plus_beacon(packet).expect(&format!("{}: dynamic parse failed", name));
+                decode_bin(packet).unwrap_or_else(|_| panic!("{}: bincode failed", name));
+            let new = parse_gen3plus_beacon(packet)
+                .unwrap_or_else(|| panic!("{}: dynamic parse failed", name));
 
             let old_a_data: SocketAddrV4 = old.a.data.into();
             let old_a_send: SocketAddrV4 = old.a.send.into();

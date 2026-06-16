@@ -316,24 +316,24 @@ impl TrackerManager {
 
         // Only broadcast immediately when a target is first promoted to tracking.
         // All other updates are batched and sent once per revolution to avoid flooding.
-        if let ProcessResult::Promoted(target_id) = result {
-            if let Some(target) = tracker.get_target(target_id) {
-                let target_api = active_target_to_api(target, radar_position.as_ref());
-                let mut delta = SignalKDelta::new();
-                delta.add_target_update(&msg.radar_key, target_id, Some(target_api));
-                if let Err(e) = self.sk_client_tx.send(delta) {
-                    log::trace!("Failed to broadcast promoted target: {}", e);
-                }
+        if let ProcessResult::Promoted(target_id) = result
+            && let Some(target) = tracker.get_target(target_id)
+        {
+            let target_api = active_target_to_api(target, radar_position.as_ref());
+            let mut delta = SignalKDelta::new();
+            delta.add_target_update(&msg.radar_key, target_id, Some(target_api));
+            if let Err(e) = self.sk_client_tx.send(delta) {
+                log::trace!("Failed to broadcast promoted target: {}", e);
             }
         }
 
         // Fire the guard-zone alarm on the first acquisition of a target
         // inside the zone. Subsequent matches against the same target go
         // through ProcessResult::Updated and don't touch the counter.
-        if let ProcessResult::NewAcquiring(_) = result {
-            if let CandidateSource::GuardZone(zone) = source {
-                self.enter_guard_zone(&msg.radar_key, zone);
-            }
+        if let ProcessResult::NewAcquiring(_) = result
+            && let CandidateSource::GuardZone(zone) = source
+        {
+            self.enter_guard_zone(&msg.radar_key, zone);
         }
 
         // On revolution boundary, send a single batched delta with all tracking targets
@@ -1021,7 +1021,7 @@ mod tests {
         let mut tracker = super::super::tracker::TargetTracker::new_merged(2048);
 
         // Process 4 times to promote (requires 4 updates)
-        tracker.process_candidate(candidate.clone());
+        tracker.process_candidate(candidate);
         for i in 1..4u64 {
             let c = TargetCandidate {
                 time: 1000 + i * 3000,

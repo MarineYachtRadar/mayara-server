@@ -31,7 +31,7 @@ pub(crate) struct TrailBuffer {
     cartesian_lookup: PolarToCartesianLookup,
     true_trails: Box<Array2<u8>>,
     true_trails_offset: PointInt,
-    relative_trails: Box<Vec<u16>>,
+    relative_trails: Vec<u16>,
     trail_length_ms: u32,
     rotation_speed_ms: u32,
     minimal_legend_value: u8,
@@ -44,7 +44,7 @@ impl TrailBuffer {
     pub fn new(info: &RadarInfo) -> Self {
         let spokes_per_revolution = info.spokes_per_revolution as usize;
         let max_spoke_len = info.max_spoke_len as usize;
-        let trail_size: i16 = (info.max_spoke_len as i16 * 2 + MARGIN_I16 * 2) as i16;
+        let trail_size: i16 = info.max_spoke_len as i16 * 2 + MARGIN_I16 * 2;
         let cartesian_lookup = PolarToCartesianLookup::new(
             info.spokes_per_revolution as usize,
             info.max_spoke_len as usize,
@@ -52,11 +52,11 @@ impl TrailBuffer {
 
         let legend = info.get_legend();
         let mut minimal_legend_value = 0;
-        if let Some(control) = info.controls.get(&ControlId::DopplerTrailsOnly) {
-            if let Some(value) = control.value {
-                let value = value > 0.;
-                minimal_legend_value = Self::compute_minimal_legend_value(&legend, value);
-            }
+        if let Some(control) = info.controls.get(&ControlId::DopplerTrailsOnly)
+            && let Some(value) = control.value
+        {
+            let value = value > 0.;
+            minimal_legend_value = Self::compute_minimal_legend_value(&legend, value);
         }
 
         TrailBuffer {
@@ -75,7 +75,7 @@ impl TrailBuffer {
                 trail_size as usize,
             ))),
             true_trails_offset: PointInt { x: 0, y: 0 },
-            relative_trails: Box::new(vec![0; spokes_per_revolution * max_spoke_len]),
+            relative_trails: vec![0; spokes_per_revolution * max_spoke_len],
             trail_length_ms: 0,
             rotation_speed_ms: 0,
             minimal_legend_value,
@@ -97,27 +97,27 @@ impl TrailBuffer {
             }
             ControlId::DopplerTrailsOnly => {
                 let v = cv.as_value()?;
-                let r = controls.set_value(&cv.id, v.clone());
+                let r = controls.set_value(&cv.id, v);
                 if r.is_ok() {
                     let value = controls.get(&cv.id).unwrap().as_u16().unwrap_or(0) > 0;
                     self.set_doppler_trail_only(value);
                 }
-                return r.map(|_| ()).map_err(|e| RadarError::ControlError(e));
+                return r.map(|_| ()).map_err(RadarError::ControlError);
             }
             ControlId::TargetTrails => {
                 let v = cv.as_value()?;
-                let r = controls.set_value(&cv.id, v.clone());
+                let r = controls.set_value(&cv.id, v);
                 if r.is_ok() {
                     let value = controls.get(&cv.id).unwrap().as_u16().unwrap_or(0);
                     self.set_relative_trails_length(value);
                 }
-                return r.map(|_| ()).map_err(|e| RadarError::ControlError(e));
+                return r.map(|_| ()).map_err(RadarError::ControlError);
             }
             ControlId::TrailsMotion => {
                 let true_motion = cv.as_bool()?;
                 return self
                     .set_trails_mode(true_motion)
-                    .map_err(|e| RadarError::ControlError(e));
+                    .map_err(RadarError::ControlError);
             }
             _ => Err(RadarError::CannotSetControlId(cv.id)),
         };
@@ -128,7 +128,7 @@ impl TrailBuffer {
             reply = controls
                 .set_value(&cv.id, value)
                 .map(|_| ())
-                .map_err(|e| RadarError::ControlError(e));
+                .map_err(RadarError::ControlError);
         }
         reply
     }
@@ -204,7 +204,7 @@ impl TrailBuffer {
         self.update_relative_trails(spoke.angle as u16, &mut spoke.data);
     }
 
-    fn update_true_trails(&mut self, range: u32, bearing: SpokeBearing, data: &mut Vec<u8>) {
+    fn update_true_trails(&mut self, range: u32, bearing: SpokeBearing, data: &mut [u8]) {
         if self.trail_length_ms == 0 || self.rotation_speed_ms == 0 {
             return;
         }
@@ -217,10 +217,9 @@ impl TrailBuffer {
 
         while radius < data.len() - 1 {
             //  len - 1 : no trails on range circle
-            let mut point = self
+            let mut point = *self
                 .cartesian_lookup
-                .get_point_int(bearing as usize, radius)
-                .clone();
+                .get_point_int(bearing as usize, radius);
 
             point.x += self.trail_size / 2 + self.true_trails_offset.x;
             point.y += self.trail_size / 2 + self.true_trails_offset.y;
@@ -241,15 +240,10 @@ impl TrailBuffer {
                     *trail = trail.wrapping_add(1); // Yes, we want overflow here after 65535 rotations
                 }
 
-                let trail = *trail as u8;
+                let trail = *trail;
                 if self.motion_true && data[radius] == 0 && trail > 0 && trail < max_trail_value {
-                    let mut index: u8 = (trail * BLOB_HISTORY_COLORS / max_trail_value) as u8;
-                    if index >= BLOB_HISTORY_COLORS {
-                        index = BLOB_HISTORY_COLORS;
-                    }
-                    if index < 1 {
-                        index = 1;
-                    }
+                    let index: u8 = (trail * BLOB_HISTORY_COLORS / max_trail_value)
+                        .clamp(1, BLOB_HISTORY_COLORS);
 
                     data[radius] = self.legend.history_start + index - 1;
                 }
@@ -290,7 +284,7 @@ impl TrailBuffer {
             // zoom trails
             let zoom_factor = pixels_per_meter / self.pixels_per_meter;
 
-            if zoom_factor < 0.25 || zoom_factor > 4.00 {
+            if !(0.25..=4.00).contains(&zoom_factor) {
                 self.clear();
                 return;
             }
@@ -374,7 +368,7 @@ impl TrailBuffer {
         let (to_start, to_end, from_start, from_end, zero_start, zero_end) = if n > 0 {
             let n = n as usize;
             (
-                0 as usize,
+                0_usize,
                 self.true_trails.nrows() - n,
                 n,
                 self.true_trails.nrows(),
@@ -386,7 +380,7 @@ impl TrailBuffer {
             (
                 n,
                 self.true_trails.nrows(),
-                0 as usize,
+                0_usize,
                 self.true_trails.nrows() - n,
                 0,
                 n,
@@ -420,7 +414,7 @@ impl TrailBuffer {
         let (to_start, to_end, from_start, from_end, zero_start, zero_end) = if n > 0 {
             let n = n as usize;
             (
-                0 as usize,
+                0_usize,
                 self.true_trails.ncols() - n,
                 n,
                 self.true_trails.ncols(),
@@ -432,7 +426,7 @@ impl TrailBuffer {
             (
                 n,
                 self.true_trails.ncols(),
-                0 as usize,
+                0_usize,
                 self.true_trails.ncols() - n,
                 0,
                 n,
@@ -513,8 +507,8 @@ impl TrailBuffer {
         }
         let max_trail_value = (self.trail_length_ms / self.rotation_speed_ms) as u16;
 
-        let trail = &mut self.relative_trails[angle as usize * self.max_spoke_len as usize
-            ..(angle + 1) as usize * self.max_spoke_len];
+        let trail = &mut self.relative_trails
+            [angle as usize * self.max_spoke_len..(angle + 1) as usize * self.max_spoke_len];
 
         let mut radius = 0;
 
@@ -535,14 +529,8 @@ impl TrailBuffer {
                 && trail[radius] > 0
                 && trail[radius] < max_trail_value
             {
-                let mut index =
-                    (trail[radius] * BLOB_HISTORY_COLORS as u16 / max_trail_value) as u8;
-                if index >= BLOB_HISTORY_COLORS {
-                    index = BLOB_HISTORY_COLORS;
-                }
-                if index < 1 {
-                    index = 1;
-                }
+                let index = ((trail[radius] * BLOB_HISTORY_COLORS as u16 / max_trail_value) as u8)
+                    .clamp(1, BLOB_HISTORY_COLORS);
 
                 data[radius] = self.legend.history_start + index - 1;
             }
@@ -562,21 +550,23 @@ impl TrailBuffer {
     // zoom_factor > 1 -> zoom in, enlarge image
     fn zoom_relative_trails(&mut self, zoom_factor: f64) {
         let mut new_trail = vec![0; self.max_spoke_len];
-        let mut index_prev = 0;
         for spoke in 0..self.spokes_per_revolution {
+            // Reset the interpolation start-of-run cursor on every spoke;
+            // letting it carry over across spokes lets a later spoke's
+            // first `index_new` end up less than `index_prev`, which the
+            // `.fill(...)` slice would panic on.
+            let mut index_prev = 0;
             {
                 let trail = &self.relative_trails
                     [spoke * self.max_spoke_len..(spoke + 1) * self.max_spoke_len];
 
-                for j in 0..self.max_spoke_len {
+                for (j, &t) in trail.iter().enumerate() {
                     let index_new = (j as f64 * zoom_factor) as usize;
                     if index_new >= self.max_spoke_len {
                         break;
                     }
-                    if trail[j] != 0 {
-                        for k in index_prev..=index_new {
-                            new_trail[k] = trail[j];
-                        }
+                    if t != 0 && index_prev <= index_new {
+                        new_trail[index_prev..=index_new].fill(t);
                     }
                     index_prev = index_new + 1;
                 }

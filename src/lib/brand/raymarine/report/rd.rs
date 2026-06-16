@@ -12,8 +12,7 @@ use crate::util::decode_bin;
 use super::{RaymarineReportReceiver, ReceiverState};
 
 #[derive(Deserialize, Debug, Clone, Copy)]
-#[repr(packed)]
-
+#[repr(C, packed)]
 struct FrameHeader {
     field01: u32, // 0x00010003
     _zero_1: u32,
@@ -26,14 +25,14 @@ struct FrameHeader {
 }
 
 #[derive(Deserialize, Debug, Clone, Copy)]
-#[repr(packed)]
+#[repr(C, packed)]
 struct SpokeHeader2 {
     field01: u32,
     _length: u32, // ..
 }
 
 #[derive(Deserialize, Debug, Clone, Copy)]
-#[repr(packed)]
+#[repr(C, packed)]
 struct SpokeHeader1 {
     field01: u32, // 0x00000001
     length: u32,  // 0x00000028
@@ -48,7 +47,7 @@ struct SpokeHeader1 {
 }
 
 #[derive(Deserialize, Debug, Clone, Copy)]
-#[repr(packed)]
+#[repr(C, packed)]
 struct SpokeHeader3 {
     field01: u32, // 0x00000003
     length: u32,
@@ -210,7 +209,7 @@ pub(crate) fn process_frame(receiver: &mut RaymarineReportReceiver, data: &[u8])
             );
             break;
         }
-        next_offset = next_offset + SPOKE_DATA_LENGTH;
+        next_offset += SPOKE_DATA_LENGTH;
 
         let mut data_len = header3.data_len as usize;
         if next_offset + data_len > data.len() {
@@ -292,7 +291,7 @@ fn process_spoke(
 }
 
 #[derive(Deserialize, Debug, Clone, Copy)]
-#[repr(packed)]
+#[repr(C, packed)]
 struct StatusReport {
     field01: u32,          // 0x010001  // 0-3
     ranges: [u32; 11],     // 4 - 47
@@ -395,8 +394,8 @@ pub(super) fn process_status_report(receiver: &mut RaymarineReportReceiver, data
         let mut ranges = Ranges::empty();
         let report_ranges = report.ranges; // copy for alignment
 
-        for i in 0..report_ranges.len() {
-            let meters = (report_ranges[i] as f64 * 1.852f64) as i32; // Convert to nautical miles
+        for (i, &raw) in report_ranges.iter().enumerate() {
+            let meters = (raw as f64 * 1.852f64) as i32; // Convert to nautical miles
 
             ranges.push(Range::new(meters, i));
         }
@@ -457,7 +456,7 @@ pub(super) fn process_status_report(receiver: &mut RaymarineReportReceiver, data
 }
 
 #[derive(Deserialize, Debug, Clone, Copy)]
-#[repr(packed)]
+#[repr(C, packed)]
 struct FixedReport {
     magnetron_time: u16,
     _fieldx_2: [u8; 6],
@@ -591,8 +590,7 @@ pub(super) fn process_info_report(receiver: &mut RaymarineReportReceiver, data: 
         Some(model) => model,
         None => {
             if model_serial.parse::<u64>().is_ok() {
-                let model = RaymarineModel::new_eseries();
-                model
+                RaymarineModel::new_eseries()
             } else {
                 log::error!(
                     "{}: Unknown model serial: {}",

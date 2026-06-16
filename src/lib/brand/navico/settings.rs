@@ -23,11 +23,11 @@ pub(crate) fn new(
     let mut controls = HashMap::new();
 
     new_string(ControlId::ModelName).build(&mut controls);
-    if model.is_some() {
+    if let Some(model) = model {
         controls
             .get_mut(&ControlId::ModelName)
             .unwrap()
-            .set_string(model.unwrap().to_string());
+            .set_string(model.to_string());
     }
 
     new_numeric(ControlId::AntennaForward, -100., 100.)
@@ -101,7 +101,7 @@ pub(crate) fn update_when_model_known(
 
     if let Some(serial_number) = radar_info.serial_no.as_ref() {
         controls
-            .set_string(&&ControlId::SerialNumber, serial_number.to_string())
+            .set_string(&ControlId::SerialNumber, serial_number.to_string())
             .unwrap();
     }
     // Update the UserName; it had to be present at start so it could be loaded from
@@ -114,9 +114,9 @@ pub(crate) fn update_when_model_known(
             user_name.push(' ');
             user_name.push_str(&serial.split_off(7));
         }
-        if radar_info.dual.is_some() {
+        if let Some(dual) = radar_info.dual.as_ref() {
             user_name.push(' ');
-            user_name.push_str(&radar_info.dual.as_ref().unwrap());
+            user_name.push_str(dual);
         }
         controls.set_user_name(user_name);
     }

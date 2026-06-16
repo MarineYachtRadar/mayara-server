@@ -187,7 +187,7 @@ We put them in a map for now, but probably we only need to store the last one.
  */
 
 #[derive(Deserialize, Debug, Copy, Clone)]
-#[repr(packed)]
+#[repr(C, packed)]
 struct RaymarineBeacon36 {
     beacon_type: [u8; 4],              // 0: always 0
     link_id: [u8; 4],                  // 4
@@ -201,7 +201,7 @@ struct RaymarineBeacon36 {
 }
 
 #[derive(Deserialize, Debug, Copy, Clone)]
-#[repr(packed)]
+#[repr(C, packed)]
 struct RaymarineBeacon56 {
     beacon_type: [u8; 4], // 0: always 1
     subtype: [u8; 4],     // 4
@@ -372,11 +372,11 @@ impl RaymarineLocator {
                         0,
                         spokes_per_revolution,
                         max_spoke_len,
-                        radar_addr.into(),
-                        from.clone(),
-                        radar_addr.into(),
-                        radar_addr.into(),
-                        radar_send.into(),
+                        radar_addr,
+                        *from,
+                        radar_addr,
+                        radar_addr,
+                        radar_send,
                         |id, tx| settings::new(id, tx, &self.args, info.model),
                         doppler,
                         false,
@@ -527,7 +527,7 @@ impl RaymarineLocator {
 
         if let Some(mut info) = radars.add(info) {
             // It's new, start the RadarProcessor thread
-            info.start_forwarding_radar_messages_to_stdout(&subsys);
+            info.start_forwarding_radar_messages_to_stdout(subsys);
 
             let report_name = info.key();
             radars.update(&mut info);
@@ -670,7 +670,7 @@ const RAYMARINE_WOL_RADAR: [u8; 102] = [
     0xc7, 0xd, 0xef, 0xa0,
 ];
 
-const BEACONS: [&'static [u8]; 3] = [
+const BEACONS: [&[u8]; 3] = [
     &RAYMARINE_MFD_BEACON,
     &RAYMARINE_WAKE_RADAR,
     &RAYMARINE_WOL_RADAR,
@@ -836,7 +836,7 @@ mod tests {
             SocketAddrV4::new(Ipv4Addr::new(232, 1, 167, 1), 2574)
         );
 
-        let mut state = RaymarineLocator::new(args.clone());
+        let mut state = RaymarineLocator::new(args);
         let r = state.process_beacon_36_report(&DATA3_36, &VIA, radars);
         assert!(r.is_ok());
         let r = r.unwrap();

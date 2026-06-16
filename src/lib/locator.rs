@@ -46,7 +46,7 @@ impl LocatorAddress {
     ) -> LocatorAddress {
         LocatorAddress {
             id,
-            address: address.clone(),
+            address: *address,
             brand,
             beacon_request_packets,
             locator,
@@ -95,17 +95,16 @@ impl Locator {
         #[cfg(feature = "emulator")]
         if self.args.emulator {
             log::info!("Emulator mode: creating emulator radar directly");
-            crate::brand::emulator::create_emulator_radar(&self.args, &radars, &subsys);
+            crate::brand::emulator::create_emulator_radar(&self.args, radars, subsys);
 
-            // Keep the locator running to handle interface requests
-            loop {
-                tokio::select! {
-                    _ = subsys.on_shutdown_requested() => {
-                        log::debug!("Emulator locator shutdown");
-                        return Ok(());
-                    }
-                }
-            }
+            // Keep the locator running until shutdown — there is no other
+            // event we could observe here, so just await the shutdown
+            // signal directly instead of a single-arm select! inside a
+            // loop (which clippy correctly flags as a loop that never
+            // actually loops).
+            subsys.on_shutdown_requested().await;
+            log::debug!("Emulator locator shutdown");
+            return Ok(());
         }
 
         log::debug!("Entering loop, listening for radars");
@@ -198,8 +197,8 @@ impl Locator {
                                     &buf,
                                     &addr,
                                     &locator_socket.nic_addr,
-                                    &radars,
-                                    &subsys,
+                                    radars,
+                                    subsys,
                                 );
                                 if self.args.multiple_radar || !radars.have_active() {
                                     // Respawn this task
@@ -363,7 +362,7 @@ impl Locator {
                                                 &nic_ip,
                                             );
                                         }
-                                        interface_state.active_nic_addresses.push(nic_ip.clone());
+                                        interface_state.active_nic_addresses.push(nic_ip);
                                         interface_state.lost_nic_names.remove(&itf.name);
                                     }
 
@@ -380,7 +379,7 @@ impl Locator {
                                                 && only_interface.is_none()
                                             {
                                                 listeners.insert(
-                                                    radar_listen_address.brand.clone(),
+                                                    radar_listen_address.brand,
                                                     format!("No match for {}", listen_addr.ip()),
                                                 );
                                                 continue;
@@ -396,7 +395,7 @@ impl Locator {
                                                 Ok(socket) => {
                                                     sockets.push(LocatorSocket {
                                                         sock: socket,
-                                                        nic_addr: nic_ip.clone(),
+                                                        nic_addr: nic_ip,
                                                         state: radar_listen_address.locator.clone(),
                                                     });
                                                     log::debug!(
@@ -418,8 +417,7 @@ impl Locator {
                                                     e.to_string()
                                                 }
                                             };
-                                            listeners
-                                                .insert(radar_listen_address.brand.clone(), status);
+                                            listeners.insert(radar_listen_address.brand, status);
                                         } else {
                                             log::trace!(
                                                 "Ignoring IPv6 address {:?}",
@@ -442,7 +440,7 @@ impl Locator {
                             }
                         }
                         if self.args.interface.is_some()
-                            && interface_state.active_nic_addresses.len() == 0
+                            && interface_state.active_nic_addresses.is_empty()
                         {
                             return Err(RadarError::InterfaceNoV4(
                                 self.args.interface.clone().unwrap(),
@@ -480,7 +478,7 @@ impl Locator {
                 }
                 interface_state.first_loop = false;
 
-                if self.args.interface.is_some() && interface_state.active_nic_addresses.len() == 0
+                if self.args.interface.is_some() && interface_state.active_nic_addresses.is_empty()
                 {
                     return Err(RadarError::InterfaceNotFound(
                         self.args.interface.clone().unwrap(),

@@ -341,6 +341,7 @@ pub struct RadarInfo {
 }
 
 impl RadarInfo {
+    #[allow(clippy::too_many_arguments)] // every radar field comes flat from per-brand discovery; the brands are the only callers
     pub fn new<F>(
         radars: &SharedRadars,
         args: &Cli,
@@ -364,8 +365,7 @@ impl RadarInfo {
     {
         let (message_tx, _message_rx) = tokio::sync::broadcast::channel(32);
 
-        let (targets, replay, output) =
-            { (args.targets.clone(), args.is_replay(), args.output.clone()) };
+        let (targets, replay, output) = { (args.targets.clone(), args.is_replay(), args.output) };
         let doppler_levels = if doppler { 1 } else { 0 };
         let has_rain_class = false;
         let legend = default_legend(&targets, doppler_levels, has_rain_class, pixel_values);
@@ -399,7 +399,7 @@ impl RadarInfo {
             spoke_data_addr,
             report_addr,
             send_command_addr,
-            legend: legend,
+            legend,
             message_tx,
             ranges: Ranges::empty(),
             controls,
@@ -681,6 +681,12 @@ pub struct SharedRadars {
     radars: Arc<RwLock<Radars>>,
 }
 
+impl Default for SharedRadars {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SharedRadars {
     pub fn new() -> Self {
         let (sk_client_tx, _) = tokio::sync::broadcast::channel(SK_CLIENT_CHANNEL_CAPACITY);
@@ -706,7 +712,7 @@ impl SharedRadars {
             return None;
         }
 
-        let is_new = radars.info.get(&key).is_none();
+        let is_new = !radars.info.contains_key(&key);
         if is_new {
             // Set any previously detected model and ranges
             radars
@@ -746,10 +752,9 @@ impl SharedRadars {
         let radars = self.radars.read().unwrap();
         radars
             .info
-            .iter()
-            .map(|(_k, v)| v)
-            .filter(|i| i.ranges.len() > 0)
-            .map(|v| v.clone())
+            .values()
+            .filter(|i| !i.ranges.is_empty())
+            .cloned()
             .collect()
     }
 
@@ -757,9 +762,8 @@ impl SharedRadars {
         let radars = self.radars.read().unwrap();
         radars
             .info
-            .iter()
-            .map(|(_k, v)| v)
-            .filter(|i| i.ranges.len() > 0)
+            .values()
+            .filter(|i| !i.ranges.is_empty())
             .count()
             > 0
     }
@@ -882,21 +886,21 @@ impl SharedRadars {
         let radars = self.radars.read().unwrap();
         for (key, info) in radars.info.iter() {
             // Check if radar is in standby (can be switched to transmit)
-            if let Some(status) = info.controls.get_status() {
-                if status == Power::Standby {
-                    log::info!("Requesting transmit mode for radar '{}'", key);
-                    let control_value = ControlValue::new(
-                        ControlId::Power,
-                        serde_json::Value::Number(serde_json::Number::from(2)), // 2 = Transmit
-                    );
-                    // Create a dummy reply channel - we don't need the response
-                    let (reply_tx, _reply_rx) = tokio::sync::mpsc::channel(1);
-                    if let Err(e) = info
-                        .controls
-                        .send_to_command_handler(control_value, reply_tx)
-                    {
-                        log::error!("Failed to send transmit command to '{}': {:?}", key, e);
-                    }
+            if let Some(status) = info.controls.get_status()
+                && status == Power::Standby
+            {
+                log::info!("Requesting transmit mode for radar '{}'", key);
+                let control_value = ControlValue::new(
+                    ControlId::Power,
+                    serde_json::Value::Number(serde_json::Number::from(2)), // 2 = Transmit
+                );
+                // Create a dummy reply channel - we don't need the response
+                let (reply_tx, _reply_rx) = tokio::sync::mpsc::channel(1);
+                if let Err(e) = info
+                    .controls
+                    .send_to_command_handler(control_value, reply_tx)
+                {
+                    log::error!("Failed to send transmit command to '{}': {:?}", key, e);
                 }
             }
         }
@@ -1183,109 +1187,6 @@ fn default_legend(
     legend
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use axum::response::IntoResponse;
-
-    #[test]
-    fn legend() {
-        let targets = crate::TargetMode::Arpa;
-        let legend = default_legend(&targets, 1, false, 16);
-        let json = serde_json::to_string_pretty(&legend).unwrap();
-        println!("{}", json);
-    }
-
-    #[test]
-    fn radar_error_into_response_not_recursive() {
-        // This test verifies that RadarError::into_response() does not cause
-        // infinite recursion. If the implementation is broken, this test will
-        // cause a stack overflow.
-        let error = RadarError::NoSuchRadar("test".to_string());
-        let response = error.into_response();
-
-        // If we reach here, no stack overflow occurred
-        assert_eq!(response.status(), http::StatusCode::NOT_FOUND);
-    }
-
-    /// Idle mode (issue #274) relies on `RadarInfo.is_idle` being an
-    /// `Arc<AtomicBool>` so every clone — including the ones
-    /// `SharedRadars::get_by_key` returns to the web layer — points at
-    /// the SAME atomic. If anyone refactors the field to a plain
-    /// `AtomicBool`, `wake_up()` calls on the clone the web layer sees
-    /// become no-ops against the clone the data_loop sees, and the GUI
-    /// silently falls back to "PPI blank for a beat every time you
-    /// connect".
-    ///
-    /// We can't easily construct a full `RadarInfo` in a unit test
-    /// (the factory needs `SharedRadars`, a controls closure, several
-    /// `SocketAddrV4`s, …), so this test pins the contract on the
-    /// `is_idle` field itself: a function that accepts only
-    /// `Arc<AtomicBool>` and the cross-clone propagation that depends
-    /// on that exact type. A refactor to a plain `AtomicBool` fails
-    /// the compile-time portion; a refactor that keeps the type but
-    /// breaks sharing through some other mechanism fails the runtime
-    /// portion.
-    #[test]
-    fn is_idle_field_must_be_arc_atomic_bool() {
-        fn assert_arc_atomic_bool_field(_field: &Arc<AtomicBool>) {}
-
-        // Use the actual field by name — if a refactor renames or
-        // retypes it, this test fails to compile.
-        let info = test_helpers::dummy_is_idle_field();
-        assert_arc_atomic_bool_field(&info);
-
-        let clone = info.clone();
-        clone.store(true, Ordering::Relaxed);
-        assert!(
-            info.load(Ordering::Relaxed),
-            "wake_up on a RadarInfo clone must reach the data_loop's clone"
-        );
-        assert!(Arc::ptr_eq(&info, &clone));
-    }
-
-    // ----- idle-mode predicate (issue #274) -----
-
-    #[test]
-    fn should_idle_yes_when_standby_and_no_subscribers() {
-        assert!(should_idle(Some(Power::Standby as i32), 0));
-    }
-
-    #[test]
-    fn should_idle_no_when_transmitting_even_with_no_subscribers() {
-        // A transmitting radar drives downstream consumers we may not see
-        // directly (MFDs over multicast, recording, ARPA targets via the
-        // tracker channel). Never idle while it's broadcasting useful data.
-        assert!(!should_idle(Some(Power::Transmit as i32), 0));
-    }
-
-    #[test]
-    fn should_idle_no_when_standby_with_subscribers() {
-        // Some client is watching the spoke stream — keep the pipeline hot
-        // so the moment the radar transitions to Transmit, the first frame
-        // is decoded and rendered without a tick of blank PPI.
-        assert!(!should_idle(Some(Power::Standby as i32), 1));
-    }
-
-    #[test]
-    fn should_idle_no_when_power_is_unknown() {
-        // Before the radar has reported its first Status frame we don't
-        // know its state. Default to processing frames so we never blank
-        // the PPI for a viewer that connects very early in startup.
-        assert!(!should_idle(None, 0));
-    }
-
-    mod test_helpers {
-        use super::*;
-        /// Mint a stand-in for `RadarInfo.is_idle` so the test above
-        /// doesn't have to construct a full `RadarInfo`. If the field
-        /// type changes, the caller fails to compile.
-        pub(super) fn dummy_is_idle_field() -> Arc<AtomicBool> {
-            Arc::new(AtomicBool::new(false))
-        }
-    }
-}
-
 pub(crate) struct CommonRadar {
     pub key: String,
     pub info: RadarInfo,
@@ -1524,7 +1425,7 @@ impl CommonRadar {
                             .controls
                             .set_value(&cv.id, value)
                             .map(|_| ())
-                            .map_err(|e| RadarError::ControlError(e));
+                            .map_err(RadarError::ControlError);
                         if result.is_ok() {
                             self.update(); // Persist the change
                         }
@@ -1644,7 +1545,7 @@ impl CommonRadar {
             .iter()
             .filter_map(|r| r.as_ref())
             .filter(|r| r.enabled)
-            .map(|r| exclusion::rect_to_internal(r))
+            .map(exclusion::rect_to_internal)
             .collect();
 
         if active_zones.is_empty() && active_rects.is_empty() {
@@ -1704,15 +1605,15 @@ impl CommonRadar {
             if log::log_enabled!(log::Level::Trace) {
                 // Verify spoke contains legal values
                 let max_value = self.info.legend.pixels.len() as u8;
-                for i in 0..generic_spoke.len() {
-                    if generic_spoke[i] >= max_value {
+                for pixel in generic_spoke.iter_mut() {
+                    if *pixel >= max_value {
                         log::error!(
                             "{}: Spoke contains value {} which is >= {}",
                             self.key,
-                            generic_spoke[i],
+                            *pixel,
                             max_value
                         );
-                        generic_spoke[i] = 0;
+                        *pixel = 0;
                     }
                 }
             }
@@ -1736,31 +1637,31 @@ impl CommonRadar {
             if let Some(ref mut detector) = self.blob_detector {
                 let completed_blobs = detector.process_spoke(&spoke);
 
-                if !completed_blobs.is_empty() {
-                    if let Some(ref blob_tx) = self.blob_tx {
-                        let max_speed_mode = self.info.controls.arpa_detect_max_speed();
-                        let max_target_speed_ms = SpokeContext::max_speed_from_mode(max_speed_mode);
+                if !completed_blobs.is_empty()
+                    && let Some(ref blob_tx) = self.blob_tx
+                {
+                    let max_speed_mode = self.info.controls.arpa_detect_max_speed();
+                    let max_target_speed_ms = SpokeContext::max_speed_from_mode(max_speed_mode);
 
-                        for blob in &completed_blobs {
-                            let ctx = SpokeContext {
-                                time: spoke.time.unwrap_or(self.spoke_time),
-                                range: spoke.range,
-                                bearing: spoke.bearing.map(|b| b as u16),
-                                lat: spoke.lat,
-                                lon: spoke.lon,
-                                spokes_per_revolution: self.info.spokes_per_revolution,
-                                spoke_len: spoke.data.len(),
-                                angle: spoke.angle as u16,
-                                max_target_speed_ms,
-                                doppler_auto_track: self.info.controls.doppler_auto_track(),
-                            };
-                            let msg = BlobMessage {
-                                radar_key: self.key.clone(),
-                                blob: blob.clone(),
-                                context: ctx,
-                            };
-                            let _ = blob_tx.try_send(msg);
-                        }
+                    for blob in &completed_blobs {
+                        let ctx = SpokeContext {
+                            time: spoke.time.unwrap_or(self.spoke_time),
+                            range: spoke.range,
+                            bearing: spoke.bearing.map(|b| b as u16),
+                            lat: spoke.lat,
+                            lon: spoke.lon,
+                            spokes_per_revolution: self.info.spokes_per_revolution,
+                            spoke_len: spoke.data.len(),
+                            angle: spoke.angle as u16,
+                            max_target_speed_ms,
+                            doppler_auto_track: self.info.controls.doppler_auto_track(),
+                        };
+                        let msg = BlobMessage {
+                            radar_key: self.key.clone(),
+                            blob: blob.clone(),
+                            context: ctx,
+                        };
+                        let _ = blob_tx.try_send(msg);
                     }
                 }
             }
@@ -1775,7 +1676,6 @@ impl CommonRadar {
             // dropping this feed is invisible to single-radar displays.
 
             // Always broadcast spoke to clients
-            let mut spoke = spoke;
             self.trails
                 .update_trails(&mut spoke, &self.info.legend, &self.info.controls);
             message.spokes.push(spoke);
@@ -1817,10 +1717,10 @@ impl CommonRadar {
     }
 
     pub(crate) fn send_spoke_message(&mut self) {
-        if let Some(message) = self.spoke_message.take() {
-            if !message.spokes.is_empty() {
-                self.info.broadcast_radar_message(message);
-            }
+        if let Some(message) = self.spoke_message.take()
+            && !message.spokes.is_empty()
+        {
+            self.info.broadcast_radar_message(message);
         }
     }
 
@@ -1839,7 +1739,7 @@ impl CommonRadar {
             .set_value_auto_enabled(control_id, value, auto, enabled)
         {
             Err(e) => {
-                log::error!("{}: {}", self.key, e.to_string());
+                log::error!("{}: {}", self.key, e);
             }
             Ok(Some(())) => {
                 if log::log_enabled!(log::Level::Debug) {
@@ -1863,7 +1763,7 @@ impl CommonRadar {
     where
         f64: From<T>,
     {
-        self.set(control_id, value.into(), None, None)
+        self.set(control_id, value, None, None)
     }
 
     pub(crate) fn set_value_auto<T>(&mut self, control_id: &ControlId, value: T, auto: u8)
@@ -1883,7 +1783,7 @@ impl CommonRadar {
     pub(crate) fn set_string(&mut self, control: &ControlId, value: String) {
         match self.info.controls.set_string(control, value) {
             Err(e) => {
-                log::error!("{}: {}", self.key, e.to_string());
+                log::error!("{}: {}", self.key, e);
             }
             Ok(Some(v)) => {
                 log::debug!("{}: Control '{}' new value '{}'", self.key, control, v);
@@ -1899,7 +1799,7 @@ impl CommonRadar {
             .set_wire_range(control_id, min as f64, max as f64)
         {
             Err(e) => {
-                log::error!("{}: {}", self.key, e.to_string());
+                log::error!("{}: {}", self.key, e);
             }
             Ok(Some(())) => {
                 if log::log_enabled!(log::Level::Debug) {
@@ -1933,7 +1833,7 @@ impl CommonRadar {
             .set_value_with_many_auto(control_id, value, auto_value)
         {
             Err(e) => {
-                log::error!("{}: {}", self.key, e.to_string());
+                log::error!("{}: {}", self.key, e);
             }
             Ok(Some(())) => {
                 if log::log_enabled!(log::Level::Debug) {
@@ -1967,7 +1867,7 @@ impl CommonRadar {
             .set_sector(control_id, start.into(), end.into(), enabled)
         {
             Err(e) => {
-                log::error!("{}: {}", self.key, e.to_string());
+                log::error!("{}: {}", self.key, e);
             }
             Ok(Some(())) => {
                 if log::log_enabled!(log::Level::Debug) {
@@ -2030,4 +1930,107 @@ fn apply_antenna_offset(
     const METERS_PER_DEG_LAT: f64 = 111_111.0;
     spoke.lat = Some(lat + north_m / METERS_PER_DEG_LAT);
     spoke.lon = Some(lon + east_m / (METERS_PER_DEG_LAT * lat.to_radians().cos()));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::response::IntoResponse;
+
+    #[test]
+    fn legend() {
+        let targets = crate::TargetMode::Arpa;
+        let legend = default_legend(&targets, 1, false, 16);
+        let json = serde_json::to_string_pretty(&legend).unwrap();
+        println!("{}", json);
+    }
+
+    #[test]
+    fn radar_error_into_response_not_recursive() {
+        // This test verifies that RadarError::into_response() does not cause
+        // infinite recursion. If the implementation is broken, this test will
+        // cause a stack overflow.
+        let error = RadarError::NoSuchRadar("test".to_string());
+        let response = error.into_response();
+
+        // If we reach here, no stack overflow occurred
+        assert_eq!(response.status(), http::StatusCode::NOT_FOUND);
+    }
+
+    /// Idle mode (issue #274) relies on `RadarInfo.is_idle` being an
+    /// `Arc<AtomicBool>` so every clone — including the ones
+    /// `SharedRadars::get_by_key` returns to the web layer — points at
+    /// the SAME atomic. If anyone refactors the field to a plain
+    /// `AtomicBool`, `wake_up()` calls on the clone the web layer sees
+    /// become no-ops against the clone the data_loop sees, and the GUI
+    /// silently falls back to "PPI blank for a beat every time you
+    /// connect".
+    ///
+    /// We can't easily construct a full `RadarInfo` in a unit test
+    /// (the factory needs `SharedRadars`, a controls closure, several
+    /// `SocketAddrV4`s, …), so this test pins the contract on the
+    /// `is_idle` field itself: a function that accepts only
+    /// `Arc<AtomicBool>` and the cross-clone propagation that depends
+    /// on that exact type. A refactor to a plain `AtomicBool` fails
+    /// the compile-time portion; a refactor that keeps the type but
+    /// breaks sharing through some other mechanism fails the runtime
+    /// portion.
+    #[test]
+    fn is_idle_field_must_be_arc_atomic_bool() {
+        fn assert_arc_atomic_bool_field(_field: &Arc<AtomicBool>) {}
+
+        // Use the actual field by name — if a refactor renames or
+        // retypes it, this test fails to compile.
+        let info = test_helpers::dummy_is_idle_field();
+        assert_arc_atomic_bool_field(&info);
+
+        let clone = info.clone();
+        clone.store(true, Ordering::Relaxed);
+        assert!(
+            info.load(Ordering::Relaxed),
+            "wake_up on a RadarInfo clone must reach the data_loop's clone"
+        );
+        assert!(Arc::ptr_eq(&info, &clone));
+    }
+
+    // ----- idle-mode predicate (issue #274) -----
+
+    #[test]
+    fn should_idle_yes_when_standby_and_no_subscribers() {
+        assert!(should_idle(Some(Power::Standby as i32), 0));
+    }
+
+    #[test]
+    fn should_idle_no_when_transmitting_even_with_no_subscribers() {
+        // A transmitting radar drives downstream consumers we may not see
+        // directly (MFDs over multicast, recording, ARPA targets via the
+        // tracker channel). Never idle while it's broadcasting useful data.
+        assert!(!should_idle(Some(Power::Transmit as i32), 0));
+    }
+
+    #[test]
+    fn should_idle_no_when_standby_with_subscribers() {
+        // Some client is watching the spoke stream — keep the pipeline hot
+        // so the moment the radar transitions to Transmit, the first frame
+        // is decoded and rendered without a tick of blank PPI.
+        assert!(!should_idle(Some(Power::Standby as i32), 1));
+    }
+
+    #[test]
+    fn should_idle_no_when_power_is_unknown() {
+        // Before the radar has reported its first Status frame we don't
+        // know its state. Default to processing frames so we never blank
+        // the PPI for a viewer that connects very early in startup.
+        assert!(!should_idle(None, 0));
+    }
+
+    mod test_helpers {
+        use super::*;
+        /// Mint a stand-in for `RadarInfo.is_idle` so the test above
+        /// doesn't have to construct a full `RadarInfo`. If the field
+        /// type changes, the caller fails to compile.
+        pub(super) fn dummy_is_idle_field() -> Arc<AtomicBool> {
+            Arc::new(AtomicBool::new(false))
+        }
+    }
 }

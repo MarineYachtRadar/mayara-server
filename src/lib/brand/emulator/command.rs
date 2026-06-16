@@ -31,12 +31,12 @@ impl CommandSender for Command {
         );
         // RangeUnits is a client-side display preference; persist it in
         // SharedControls since no emulator state loop echoes it back.
-        if cv.id == ControlId::RangeUnits {
-            if let Some(v) = cv.value.as_ref().and_then(|v| v.as_f64()) {
-                controls
-                    .set_value(&ControlId::RangeUnits, v.into())
-                    .map_err(RadarError::ControlError)?;
-            }
+        if cv.id == ControlId::RangeUnits
+            && let Some(v) = cv.value.as_ref().and_then(|v| v.as_f64())
+        {
+            controls
+                .set_value(&ControlId::RangeUnits, v.into())
+                .map_err(RadarError::ControlError)?;
         }
         // Emulator just acknowledges the command - actual state is managed in report.rs
         Ok(())

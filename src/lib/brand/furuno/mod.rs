@@ -39,10 +39,7 @@ fn login_to_radar(radar_addr: SocketAddrV4) -> Result<u16, io::Error> {
     stream.read_exact(&mut buf)?;
 
     if buf != LOGIN_EXPECTED_HEADER {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("Unexpected reply {:?}", buf),
-        ));
+        return Err(io::Error::other(format!("Unexpected reply {:?}", buf)));
     }
     stream.read_exact(&mut buf[0..4])?;
 
@@ -118,7 +115,7 @@ impl FurunoLocator {
 
             let report_name = info.key();
 
-            info.start_forwarding_radar_messages_to_stdout(&subsys);
+            info.start_forwarding_radar_messages_to_stdout(subsys);
 
             // In replay mode, detect model from the original beacon string
             // (not from controls which persistence may have overwritten).
@@ -144,7 +141,7 @@ impl FurunoLocator {
             if let Some(ref mut ib) = info_b {
                 ib.send_command_addr.set_port(port);
                 ib.report_addr.set_port(port);
-                ib.start_forwarding_radar_messages_to_stdout(&subsys);
+                ib.start_forwarding_radar_messages_to_stdout(subsys);
                 if let Some(model) = replay_model.filter(|m| *m != RadarModel::Unknown) {
                     settings::update_when_model_known(ib, model, REPLAY_FIRMWARE_VERSION);
                     radars.update(ib);
@@ -219,7 +216,7 @@ impl FurunoLocator {
                     return Ok(());
                 }
                 if let Some(name) = c_string(&data.name) {
-                    let radar_addr: SocketAddrV4 = from.clone();
+                    let radar_addr: SocketAddrV4 = *from;
 
                     log::debug!(
                         "Furuno radar '{name}' seen at '{radar_addr} but looking for other report"
@@ -272,7 +269,7 @@ impl FurunoLocator {
                 let spoke_data_addr = SPOKE_DATA_MULTICAST_ADDRESS;
 
                 let report_addr: SocketAddrV4 = SocketAddrV4::new(*from.ip(), 0); // Port is set in login_to_radar
-                let send_command_addr: SocketAddrV4 = report_addr.clone();
+                let send_command_addr: SocketAddrV4 = report_addr;
 
                 // NXT models support dual range
                 let is_dual_range = model.contains("NXT");
@@ -289,7 +286,7 @@ impl FurunoLocator {
                     SPOKES,
                     SPOKE_LEN,
                     *from,
-                    nic_addr.clone(),
+                    *nic_addr,
                     spoke_data_addr,
                     report_addr,
                     send_command_addr,
@@ -319,7 +316,7 @@ impl FurunoLocator {
                         SPOKES,
                         SPOKE_LEN,
                         *from,
-                        nic_addr.clone(),
+                        *nic_addr,
                         spoke_data_addr,
                         report_addr,
                         send_command_addr,
@@ -339,7 +336,7 @@ impl FurunoLocator {
                     None
                 };
 
-                self.found(radar_info, info_b, radars, subsys, &model);
+                self.found(radar_info, info_b, radars, subsys, model);
             }
             Err(e) => {
                 log::error!(

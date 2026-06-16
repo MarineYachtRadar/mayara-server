@@ -386,17 +386,17 @@ impl CommandSender for Command {
 
         let result = match (&cv.id, self.radar_type) {
             (ControlId::Power, GarminRadarType::HD) => {
-                let on = match Power::from_value(&cv.as_value()?).unwrap_or(Power::Standby) {
-                    Power::Transmit => true,
-                    _ => false,
-                };
+                let on = matches!(
+                    Power::from_value(&cv.as_value()?).unwrap_or(Power::Standby),
+                    Power::Transmit
+                );
                 self.set_transmit_hd(on).await
             }
             (ControlId::Power, GarminRadarType::XHD) => {
-                let on = match Power::from_value(&cv.as_value()?).unwrap_or(Power::Standby) {
-                    Power::Transmit => true,
-                    _ => false,
-                };
+                let on = matches!(
+                    Power::from_value(&cv.as_value()?).unwrap_or(Power::Standby),
+                    Power::Transmit
+                );
                 self.set_transmit(on).await
             }
             (ControlId::Range, GarminRadarType::HD) => self.set_range_hd(value as u32).await,

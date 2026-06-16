@@ -128,6 +128,7 @@ pub(crate) type WsStream =
 /// Result of a successful Signal K connection. The `SocketAddr` is the
 /// concrete upstream we resolved and connected to — surfaced so the receive
 /// loop can mark the server silent if it never delivers any deltas.
+#[allow(clippy::large_enum_variant)] // returned by value, never stored in a collection; WS variant is intrinsically heavier
 pub(crate) enum Connection {
     Tcp(TcpStream, SocketAddr),
     WebSocket(WsStream, String, SocketAddr),
@@ -423,12 +424,12 @@ async fn connect_via_discovery(
     }
 
     // Fall back to TCP if advertised.
-    if let Some(ref tcp_url) = discovery.tcp_url {
-        if let Some(tcp_addr) = parse_tcp_url(tcp_url) {
-            let stream = TcpStream::connect(tcp_addr).await.map_err(RadarError::Io)?;
-            log::info!("Connected to Signal K via TCP: {}", tcp_url);
-            return Ok(Connection::Tcp(stream, tcp_addr));
-        }
+    if let Some(ref tcp_url) = discovery.tcp_url
+        && let Some(tcp_addr) = parse_tcp_url(tcp_url)
+    {
+        let stream = TcpStream::connect(tcp_addr).await.map_err(RadarError::Io)?;
+        log::info!("Connected to Signal K via TCP: {}", tcp_url);
+        return Ok(Connection::Tcp(stream, tcp_addr));
     }
 
     Err(RadarError::SignalK(

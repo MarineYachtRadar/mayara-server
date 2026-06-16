@@ -245,28 +245,26 @@ impl ActiveTarget {
         // speeds of 8-10 m/s with random direction. The Kalman filter
         // correctly converges toward the true low speed and avoids
         // false rejections of stationary buoys.
-        if self.update_count >= MIN_UPDATES_FOR_TURN_REJECTION {
-            if let (Some(current_cog), Some(new_cog), Some(kalman_sog)) =
+        if self.update_count >= MIN_UPDATES_FOR_TURN_REJECTION
+            && let (Some(current_cog), Some(new_cog), Some(kalman_sog)) =
                 (self.cog, measured_cog, self.sog)
-            {
-                if kalman_sog > TURN_REJECTION_SPEED_MS {
-                    let mut turn = (new_cog - current_cog).to_degrees();
-                    if turn > 180.0 {
-                        turn -= 360.0;
-                    }
-                    if turn < -180.0 {
-                        turn += 360.0;
-                    }
-                    if turn.abs() > MAX_TURN_ANGLE_DEG {
-                        log::debug!(
-                            "Target {}: rejecting update - turn {:.1}° at {:.1} m/s (Kalman)",
-                            self.id,
-                            turn,
-                            kalman_sog
-                        );
-                        return false;
-                    }
-                }
+            && kalman_sog > TURN_REJECTION_SPEED_MS
+        {
+            let mut turn = (new_cog - current_cog).to_degrees();
+            if turn > 180.0 {
+                turn -= 360.0;
+            }
+            if turn < -180.0 {
+                turn += 360.0;
+            }
+            if turn.abs() > MAX_TURN_ANGLE_DEG {
+                log::debug!(
+                    "Target {}: rejecting update - turn {:.1}° at {:.1} m/s (Kalman)",
+                    self.id,
+                    turn,
+                    kalman_sog
+                );
+                return false;
             }
         }
 
@@ -480,11 +478,10 @@ impl TargetTracker {
             if self.active_targets[&a].update_count >= 4 {
                 continue;
             }
-            for j in 0..ids.len() {
+            for (j, &b) in ids.iter().enumerate() {
                 if i == j {
                     continue;
                 }
-                let b = ids[j];
                 if to_remove.contains(&b) {
                     continue;
                 }
@@ -551,9 +548,11 @@ impl TargetTracker {
 
     /// Check for timed out targets.
     /// Returns (deleted_ids, newly_lost_ids) - both as target IDs.
+    ///
     /// Marks targets as Lost if not seen for N revolutions:
     /// - Normal targets: 3 revolutions
     /// - Stationary targets: 10 revolutions (extended to handle temporary merging)
+    ///
     /// Deletes targets N revolutions after being marked lost:
     /// - Normal targets: 4 revolutions after lost
     /// - Stationary targets: 10 revolutions after lost
@@ -624,46 +623,46 @@ impl TargetTracker {
         self.stats.candidates_processed += 1;
 
         // 1. Try to match against active targets (including those in Acquiring status)
-        if let Some(target_id) = self.match_active_target(&candidate) {
-            if let Some(target) = self.active_targets.get_mut(&target_id) {
-                let was_acquiring = target.status == TargetStatus::Acquiring;
+        if let Some(target_id) = self.match_active_target(&candidate)
+            && let Some(target) = self.active_targets.get_mut(&target_id)
+        {
+            let was_acquiring = target.status == TargetStatus::Acquiring;
 
-                // Update may return false if the maneuver is rejected as implausible
-                if !target.update(&candidate) {
-                    // Rejected - don't count as match, let it potentially create new target
-                    log::debug!(
-                        "Update rejected for target {} - maneuver implausible",
-                        target_id
-                    );
-                    // Fall through to create new target if from guard zone
-                } else {
-                    self.stats.active_matches += 1;
-                    // Update revolution count for lost detection
-                    target.set_last_update_revolution(self.revolution_count);
+            // Update may return false if the maneuver is rejected as implausible
+            if !target.update(&candidate) {
+                // Rejected - don't count as match, let it potentially create new target
+                log::debug!(
+                    "Update rejected for target {} - maneuver implausible",
+                    target_id
+                );
+                // Fall through to create new target if from guard zone
+            } else {
+                self.stats.active_matches += 1;
+                // Update revolution count for lost detection
+                target.set_last_update_revolution(self.revolution_count);
 
-                    // If target transitioned from Acquiring to Tracking, report as Promoted
-                    if was_acquiring && target.status == TargetStatus::Tracking {
-                        log::info!(
-                            "Promoted target {} to tracking at ({:.6}, {:.6}), SOG={:.1}m/s, COG={:.1}°",
-                            target_id,
-                            target.position.lat(),
-                            target.position.lon(),
-                            target.sog.unwrap_or(0.0),
-                            target.cog.map(|c| c.to_degrees()).unwrap_or(0.0)
-                        );
-                        return ProcessResult::Promoted(target_id);
-                    }
-
-                    log::debug!(
-                        "Updated active target {} at ({:.6}, {:.6}), SOG={:.1}m/s, COG={:.1}°",
+                // If target transitioned from Acquiring to Tracking, report as Promoted
+                if was_acquiring && target.status == TargetStatus::Tracking {
+                    log::info!(
+                        "Promoted target {} to tracking at ({:.6}, {:.6}), SOG={:.1}m/s, COG={:.1}°",
                         target_id,
                         target.position.lat(),
                         target.position.lon(),
                         target.sog.unwrap_or(0.0),
                         target.cog.map(|c| c.to_degrees()).unwrap_or(0.0)
                     );
-                    return ProcessResult::Updated(target_id);
+                    return ProcessResult::Promoted(target_id);
                 }
+
+                log::debug!(
+                    "Updated active target {} at ({:.6}, {:.6}), SOG={:.1}m/s, COG={:.1}°",
+                    target_id,
+                    target.position.lat(),
+                    target.position.lon(),
+                    target.sog.unwrap_or(0.0),
+                    target.cog.map(|c| c.to_degrees()).unwrap_or(0.0)
+                );
+                return ProcessResult::Updated(target_id);
             }
         }
 
@@ -734,7 +733,7 @@ impl TargetTracker {
 
             if distance < threshold {
                 // Track only the closest match
-                if best_match.map_or(true, |(_, best_dist)| distance < best_dist) {
+                if best_match.is_none_or(|(_, best_dist)| distance < best_dist) {
                     best_match = Some((*id, distance));
                 }
             }

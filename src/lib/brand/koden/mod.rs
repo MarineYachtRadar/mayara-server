@@ -126,7 +126,7 @@ impl KodenLocator {
 
         if let Some(info) = radars.add(radar_info) {
             let report_name = info.key();
-            info.start_forwarding_radar_messages_to_stdout(&subsys);
+            info.start_forwarding_radar_messages_to_stdout(subsys);
 
             let report_receiver =
                 report::KodenReportReceiver::new(&self.args, radars.clone(), info);

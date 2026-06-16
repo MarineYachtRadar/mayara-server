@@ -31,7 +31,7 @@ async fn wait_for_ip_addr_change(
     cancel_token: CancellationToken,
     tx_ip_change: broadcast::Sender<()>,
 ) -> Result<(), RadarError> {
-    let (mut conn, mut _handle, mut messages) = new_connection().map_err(|e| RadarError::Io(e))?;
+    let (mut conn, mut _handle, mut messages) = new_connection().map_err(RadarError::Io)?;
 
     // These flags specify what kinds of broadcast messages we want to listen
     // for.
@@ -67,8 +67,7 @@ async fn wait_for_ip_addr_change(
                     }
                 } else {
                     log::error!("Failed to receive message");
-                    return Err(RadarError::Io(std::io::Error::new(
-                        std::io::ErrorKind::Other,
+                    return Err(RadarError::Io(std::io::Error::other(
                         "Failed to receive message",
                     )));
                 }

@@ -225,7 +225,7 @@ async fn get_radars(State(state): State<Web>, headers: hyper::header::HeaderMap)
 
     log::debug!("Radar state request, target host = '{}'", host);
     let mut api: HashMap<String, RadarApiV3> = HashMap::new();
-    for info in state.radars.get_active().clone() {
+    for info in state.radars.get_active() {
         let spoke_data_uri = SPOKES_URI.replace("{id}", &info.key());
         let v = RadarApiV3 {
             name: info.controls.user_name(),
@@ -262,7 +262,7 @@ async fn get_interfaces(State(state): State<Web>, headers: hyper::header::Header
     log::debug!("Interface state request for host '{}'", host);
 
     let (tx, mut rx) = mpsc::channel(1);
-    if let Err(_) = state.tx_interface_request.send(Some(tx)) {
+    if state.tx_interface_request.send(Some(tx)).is_err() {
         return Json(InterfaceApi::default()).into_response();
     }
     match rx.recv().await {
@@ -568,12 +568,12 @@ async fn set_control_value(
 #[derive(Deserialize, Debug, ToSchema)]
 #[serde(rename_all = "camelCase")]
 #[schema(example = json!({
-    "bearing": 0.7854,
+    "bearing": 1.0,
     "distance": 1852.0
 }))]
 struct AcquireTargetRequest {
-    /// Target bearing in radians true [0, 2π)
-    #[schema(example = 0.7854)]
+    /// Target bearing in radians true [0, 2π).
+    #[schema(example = 1.0)]
     bearing: Option<f64>,
     /// Target distance in meters
     #[schema(example = 1852.0)]
@@ -1128,7 +1128,7 @@ async fn control_stream_handler(
     };
 
     let radars = state.radars.clone();
-    let shutdown_tx = state.shutdown_tx.clone();
+    let shutdown_tx = state.shutdown_tx;
 
     // finalize the upgrade process by returning upgrade callback.
     // we can customize the callback by sending additional info such as address.
@@ -1163,7 +1163,7 @@ async fn ws_signalk_delta_shim(
 /// radars using a single websocket
 ///
 async fn ws_signalk_delta(
-    mut socket: &mut WebSocket,
+    socket: &mut WebSocket,
     subscribe: Subscribe,
     send_cached_values: bool,
     radars: SharedRadars,
@@ -1179,9 +1179,9 @@ async fn ws_signalk_delta(
         send_cached_values
     );
 
-    send_hello(&mut socket).await?;
+    send_hello(socket).await?;
 
-    let mut subscriptions = ActiveSubscriptions::new(subscribe.clone());
+    let mut subscriptions = ActiveSubscriptions::new(subscribe);
 
     let mut sk_delta = SignalKDelta::new();
     sk_delta.add_meta_updates(&radars, &mut meta_radar_data_sent);
@@ -1225,7 +1225,7 @@ async fn ws_signalk_delta(
                     Some(message) => {
                         if let Err(e) = send_message(socket, &message).await {
                             log::error!("send to websocket client: {e}");
-                            break Err(e.into());
+                            break Err(e);
                         }
 
                     },
@@ -1261,7 +1261,7 @@ async fn ws_signalk_delta(
                     Some(Ok(message)) => {
                         match message {
                             Message::Text(message) => {
-                                handle_client_request(&mut socket, message.as_str(), &mut subscriptions, &radars, reply_tx.clone()).await;
+                                handle_client_request(socket, message.as_str(), &mut subscriptions, &radars, reply_tx.clone()).await;
                             },
                             _ => {
                                 log::debug!("Dropping unexpected message {:?}", message);
@@ -1281,7 +1281,7 @@ async fn ws_signalk_delta(
             }
 
             _ = tokio::time::sleep(subscriptions.get_timeout()) => {
-                if let Err(e) = send_all_subscribed(&mut socket, &radars, &mut subscriptions).await
+                if let Err(e) = send_all_subscribed(socket, &radars, &mut subscriptions).await
                 {
                     log::warn!("Cannot send subscribed data to websocket");
                     break Err(e);
@@ -1299,7 +1299,7 @@ fn map_axum_error(e: axum::Error) -> Result<(), RadarError> {
         // careless in closing websocket
         return Ok(());
     }
-    return Err(e.into());
+    Err(e.into())
 }
 
 async fn send_message<T>(socket: &mut WebSocket, message: T) -> Result<(), RadarError>
@@ -1310,12 +1310,13 @@ where
     socket
         .send(Message::Text(message.into()))
         .await
-        .map_err(|e| RadarError::Axum(e))?;
+        .map_err(RadarError::Axum)?;
     Ok(())
 }
 
 #[derive(Deserialize, Debug)]
 #[serde(untagged)]
+#[allow(clippy::large_enum_variant)] // one-shot deserialization sink; `RadarControlValue` carries the full control payload, but this enum value never lives past the match in handle_client_request
 enum StreamRequest {
     RadarControlValue(RadarControlValue),
     Subscription(Subscription),
@@ -1382,7 +1383,7 @@ async fn handle_client_request(
                 log::debug!("stream error {}", str_message);
                 let ws_message = Message::Text(str_message.into());
 
-                let _ = socket.send(ws_message);
+                let _ = socket.send(ws_message).await;
             }
         }
     }
@@ -1395,7 +1396,7 @@ async fn handle_control_request(
     mut rcv: RadarControlValue,
 ) -> Result<(), RadarError> {
     if let Some(radar_id) = rcv.parse_path() {
-        if let Some(radar) = radars.get_by_key(&radar_id) {
+        if let Some(radar) = radars.get_by_key(radar_id) {
             // Mirror the REST PUT path's idle-exit. Any control written
             // over the WebSocket stream is also user interaction; without
             // this, a WS-only client (e.g. some MFD integrations) leaves
@@ -1466,15 +1467,15 @@ async fn send_current_navigation(
             delta.add_position_update(lat, lon, "mayara");
         }
     }
-    if subscriptions.is_subscribed_path("navigation.headingTrue", false) {
-        if let Some(h) = navdata::get_heading_true() {
-            delta.add_navigation_update("navigation.headingTrue", h, "mayara");
-        }
+    if subscriptions.is_subscribed_path("navigation.headingTrue", false)
+        && let Some(h) = navdata::get_heading_true()
+    {
+        delta.add_navigation_update("navigation.headingTrue", h, "mayara");
     }
-    if subscriptions.is_subscribed_path("navigation.headingMagnetic", false) {
-        if let Some(h) = navdata::get_heading_magnetic() {
-            delta.add_navigation_update("navigation.headingMagnetic", h, "mayara");
-        }
+    if subscriptions.is_subscribed_path("navigation.headingMagnetic", false)
+        && let Some(h) = navdata::get_heading_magnetic()
+    {
+        delta.add_navigation_update("navigation.headingMagnetic", h, "mayara");
     }
 
     if let Some(d) = delta.build() {
@@ -1497,7 +1498,7 @@ async fn send_all_subscribed(
         rcvs.retain(|x| subscriptions.is_subscribed(x, true));
     }
     log::debug!("Sending {} subscribed controls", rcvs.len());
-    if rcvs.len() > 0 {
+    if !rcvs.is_empty() {
         let mut delta: SignalKDelta = SignalKDelta::new();
         delta.add_updates(rcvs);
         send_message(socket, delta.build().unwrap()).await?;

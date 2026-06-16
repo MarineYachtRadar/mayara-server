@@ -34,6 +34,12 @@ pub struct SignalKDelta {
     updates: Vec<DeltaUpdate>,
 }
 
+impl Default for SignalKDelta {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SignalKDelta {
     pub fn new() -> SignalKDelta {
         Self {
@@ -67,12 +73,12 @@ impl SignalKDelta {
                 if !path.starts_with("radars.") || !path.contains(".controls.") {
                     continue;
                 }
-                if let Some(radar_id) = path.split('.').nth(1) {
-                    if !meta_sent.contains(radar_id) {
-                        // Found a radar whose meta hasn't been sent yet
-                        needs_meta = true;
-                        break;
-                    }
+                if let Some(radar_id) = path.split('.').nth(1)
+                    && !meta_sent.contains(radar_id)
+                {
+                    // Found a radar whose meta hasn't been sent yet
+                    needs_meta = true;
+                    break;
                 }
             }
             if needs_meta {
@@ -208,10 +214,10 @@ impl SignalKDelta {
     }
 
     pub fn build(self) -> Option<Self> {
-        if self.updates.len() > 0 {
+        if !self.updates.is_empty() {
             return Some(self);
         }
-        return None;
+        None
     }
 }
 
@@ -352,14 +358,12 @@ impl DeltaUpdate {
             values.push(DeltaValue::Control { path, value });
         }
 
-        let delta_update = DeltaUpdate {
+        DeltaUpdate {
             timestamp: None,
             source: Some(PACKAGE.to_string()),
             meta: Vec::new(),
             values,
-        };
-
-        return delta_update;
+        }
     }
 }
 
@@ -390,7 +394,7 @@ fn get_meta_delta(radars: &SharedRadars, meta_sent: &mut HashSet<String>) -> Opt
         }
     }
 
-    if meta.len() == 0 {
+    if meta.is_empty() {
         return None;
     }
     let delta_update = DeltaUpdate {
@@ -620,7 +624,7 @@ impl ActiveSubscriptions {
                     }
                 }
             } else {
-                match ControlId::from_str(&control_id) {
+                match ControlId::from_str(control_id) {
                     Ok(id) => {
                         paths.remove(&id);
                     }
@@ -655,45 +659,45 @@ impl ActiveSubscriptions {
         }
         if let (Some(radar_id), Some(control_id)) = (rcv.radar_id.as_deref(), &rcv.control_id) {
             for key in [radar_id, "*"] {
-                if let Some(paths) = self.paths.get_mut(key) {
-                    if let Some(path) = paths.get_mut(control_id) {
-                        let policy = path.policy.as_ref().unwrap_or(&Policy::Instant);
+                if let Some(paths) = self.paths.get_mut(key)
+                    && let Some(path) = paths.get_mut(control_id)
+                {
+                    let policy = path.policy.as_ref().unwrap_or(&Policy::Instant);
 
-                        if *policy == Policy::Fixed {
-                            if !full {
-                                return false;
-                            }
-                            if let Some(period) = path.period {
-                                let now = SystemTime::now();
-
-                                if path.last_sent.is_none()
-                                    || path.last_sent.unwrap() + Duration::from_micros(period) > now
-                                {
-                                    path.last_sent = Some(now);
-                                    return false;
-                                }
-                            }
+                    if *policy == Policy::Fixed {
+                        if !full {
+                            return false;
                         }
-
-                        if let Some(min_period) = path.min_period {
+                        if let Some(period) = path.period {
                             let now = SystemTime::now();
 
                             if path.last_sent.is_none()
-                                || path.last_sent.unwrap() + Duration::from_micros(min_period) > now
+                                || path.last_sent.unwrap() + Duration::from_micros(period) > now
                             {
                                 path.last_sent = Some(now);
                                 return false;
                             }
                         }
-                        return true;
                     }
+
+                    if let Some(min_period) = path.min_period {
+                        let now = SystemTime::now();
+
+                        if path.last_sent.is_none()
+                            || path.last_sent.unwrap() + Duration::from_micros(min_period) > now
+                        {
+                            path.last_sent = Some(now);
+                            return false;
+                        }
+                    }
+                    return true;
                 }
             }
         } else {
             panic!("Invalid use of is_subscribed(), can only be done on internal RCV");
         }
 
-        return false;
+        false
     }
 
     pub fn is_subscribed_path(&mut self, path: &str, full: bool) -> bool {
@@ -738,42 +742,42 @@ impl ActiveSubscriptions {
         };
 
         for key in [radar_id, "*"] {
-            if let Some(paths) = self.paths.get_mut(key) {
-                if let Some(path) = paths.get_mut(&control_id) {
-                    let policy = path.policy.as_ref().unwrap_or(&Policy::Instant);
+            if let Some(paths) = self.paths.get_mut(key)
+                && let Some(path) = paths.get_mut(&control_id)
+            {
+                let policy = path.policy.as_ref().unwrap_or(&Policy::Instant);
 
-                    if *policy == Policy::Fixed {
-                        if !full {
-                            return false;
-                        }
-                        if let Some(period) = path.period {
-                            let now = SystemTime::now();
-
-                            if path.last_sent.is_none()
-                                || path.last_sent.unwrap() + Duration::from_micros(period) > now
-                            {
-                                path.last_sent = Some(now);
-                                return false;
-                            }
-                        }
+                if *policy == Policy::Fixed {
+                    if !full {
+                        return false;
                     }
-
-                    if let Some(min_period) = path.min_period {
+                    if let Some(period) = path.period {
                         let now = SystemTime::now();
 
                         if path.last_sent.is_none()
-                            || path.last_sent.unwrap() + Duration::from_micros(min_period) > now
+                            || path.last_sent.unwrap() + Duration::from_micros(period) > now
                         {
                             path.last_sent = Some(now);
                             return false;
                         }
                     }
-                    return true;
                 }
+
+                if let Some(min_period) = path.min_period {
+                    let now = SystemTime::now();
+
+                    if path.last_sent.is_none()
+                        || path.last_sent.unwrap() + Duration::from_micros(min_period) > now
+                    {
+                        path.last_sent = Some(now);
+                        return false;
+                    }
+                }
+                return true;
             }
         }
 
-        return false;
+        false
     }
 
     /// Check if subscribed to a navigation path
@@ -943,7 +947,7 @@ where
     match opt {
         Some(s) => Policy::from_str(&s.to_ascii_lowercase())
             .map(Some)
-            .map_err(|_| serde::de::Error::unknown_variant(&s, &Policy::VARIANTS)),
+            .map_err(|_| serde::de::Error::unknown_variant(&s, Policy::VARIANTS)),
         None => Ok(None), // field missing → None
     }
 }

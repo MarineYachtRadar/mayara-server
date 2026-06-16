@@ -137,8 +137,8 @@ impl FurunoReportReceiver {
         let common = CommonRadar::new(
             args,
             key,
-            info.clone(),
-            radars.clone(),
+            info,
+            radars,
             control_update_rx,
             args.is_replay(),
             blob_tx,
@@ -200,11 +200,11 @@ impl FurunoReportReceiver {
             // Port not set yet, we need to login to the radar first.
             return Err(RadarError::InvalidPort);
         }
-        let sock = TcpSocket::new_v4().map_err(|e| RadarError::Io(e))?;
+        let sock = TcpSocket::new_v4().map_err(RadarError::Io)?;
         let stream = sock
             .connect(std::net::SocketAddr::V4(self.common.info.send_command_addr))
             .await
-            .map_err(|e| RadarError::Io(e))?;
+            .map_err(RadarError::Io)?;
 
         // Furuno radars silently drop the control TCP socket after an idle
         // period (observed on DRS4D-NXT after ~2 min). Without keepalive the
@@ -332,9 +332,7 @@ impl FurunoReportReceiver {
                             if let Some(ref mut cs) = self.command_sender {
                                 cs.dual_range_id = 0;
                             }
-                            if let Err(e) = self.common.process_control_update( cv, &mut self.command_sender).await {
-                                return Err(e);
-                            }
+                            self.common.process_control_update( cv, &mut self.command_sender).await?
                         },
                     }
                 },
@@ -353,11 +351,10 @@ impl FurunoReportReceiver {
                             if let Some(ref mut cs) = self.command_sender {
                                 cs.dual_range_id = 1;
                             }
-                            if let Some(ref mut cb) = self.common_b {
-                                if let Err(e) = cb.process_control_update(cv, &mut self.command_sender).await {
+                            if let Some(ref mut cb) = self.common_b
+                                && let Err(e) = cb.process_control_update(cv, &mut self.command_sender).await {
                                     return Err(e);
                                 }
-                            }
                         },
                     }
                 },
@@ -428,11 +425,8 @@ impl FurunoReportReceiver {
                 log::warn!("{}: Failed to login to radar: {}", self.common.key, e);
             } else if let Err(e) = self.start_command_stream().await {
                 log::warn!("{}: Failed to start command stream: {}", self.common.key, e);
-            } else {
-                match self.data_loop(&subsys).await {
-                    Err(RadarError::Shutdown) => return Ok(()),
-                    _ => {}
-                }
+            } else if let Err(RadarError::Shutdown) = self.data_loop(subsys).await {
+                return Ok(());
             }
 
             tokio::select! {
@@ -472,10 +466,10 @@ impl FurunoReportReceiver {
     /// `drid` 0 = Range A (self.common), `drid` 1 = Range B (self.common_b).
     /// Falls back to Range A if Range B is not configured.
     fn common_for_range(&mut self, drid: u8) -> &mut CommonRadar {
-        if drid == 1 {
-            if let Some(ref mut cb) = self.common_b {
-                return cb;
-            }
+        if drid == 1
+            && let Some(ref mut cb) = self.common_b
+        {
+            return cb;
         }
         &mut self.common
     }
@@ -567,7 +561,7 @@ impl FurunoReportReceiver {
 
         let cmd_str = values_iter
             .next()
-            .ok_or(io::Error::new(io::ErrorKind::Other, "No command ID"))?;
+            .ok_or(io::Error::other("No command ID"))?;
         let cmd = u8::from_str_radix(cmd_str, 16)?;
 
         let command_id = match CommandId::from_u8(cmd) {
@@ -610,7 +604,7 @@ impl FurunoReportReceiver {
 
             CommandId::Status => {
                 // Response format: $N69,{status},{drid},{wman},{w_send},{w_stop},0
-                if numbers.len() < 1 {
+                if numbers.is_empty() {
                     bail!("No arguments for Status command");
                 }
                 let generic_state = match numbers[0] {
@@ -655,11 +649,11 @@ impl FurunoReportReceiver {
 
                 // Coupled transmit: on DRS models both ranges share TX state.
                 // Propagate power to the other range.
-                if self.common_b.is_some() {
+                if let Some(common_b) = self.common_b.as_mut() {
                     let other = if drid == 1 {
                         &mut self.common
                     } else {
-                        self.common_b.as_mut().unwrap()
+                        common_b
                     };
                     other.set_value(&ControlId::Power, power_value);
                     if !is_standby {
@@ -709,7 +703,7 @@ impl FurunoReportReceiver {
             CommandId::ScanSpeed => {
                 // Response format: $N89,{mode},0
                 // mode: 0=24RPM, 2=Auto
-                if numbers.len() < 1 {
+                if numbers.is_empty() {
                     bail!(
                         "Insufficient ({}) arguments for ScanSpeed command",
                         numbers.len()
@@ -809,7 +803,7 @@ impl FurunoReportReceiver {
             CommandId::MainBangSize => {
                 // Response format: $N83,{value},0
                 // value: 0-255 (raw value, needs conversion to 0-100%)
-                if numbers.len() < 1 {
+                if numbers.is_empty() {
                     bail!(
                         "Insufficient ({}) arguments for MainBangSize command",
                         numbers.len()
@@ -865,7 +859,7 @@ impl FurunoReportReceiver {
             CommandId::RezBoost => {
                 // Response format: $NEE,{level},{screen}
                 // level: 0=OFF, 1=Low, 2=Medium, 3=High
-                if numbers.len() < 1 {
+                if numbers.is_empty() {
                     bail!(
                         "Insufficient ({}) arguments for RezBoost command",
                         numbers.len()
@@ -877,7 +871,7 @@ impl FurunoReportReceiver {
             CommandId::BirdMode => {
                 // Response format: $NED,{level},{screen}
                 // level: 0=OFF, 1=Low, 2=Medium, 3=High
-                if numbers.len() < 1 {
+                if numbers.is_empty() {
                     bail!(
                         "Insufficient ({}) arguments for BirdMode command",
                         numbers.len()
@@ -1146,17 +1140,17 @@ impl FurunoReportReceiver {
             self.common.update();
 
             // Also update Range B if present
-            if self.common_b.is_some() {
-                let legend_b = {
-                    let cb = self.common_b.as_mut().unwrap();
-                    settings::update_when_model_known(&mut cb.info, model, version);
-                    if !cb.info.controls.contains_key(&ControlId::Doppler) {
-                        self.target_analyzer_known[1] = true;
-                    }
-                    let legend = cb.info.get_legend();
-                    cb.update();
-                    legend
-                };
+            let legend_b = self.common_b.as_mut().map(|cb| {
+                settings::update_when_model_known(&mut cb.info, model, version);
+                let has_doppler = cb.info.controls.contains_key(&ControlId::Doppler);
+                let legend = cb.info.get_legend();
+                cb.update();
+                (legend, has_doppler)
+            });
+            if let Some((legend_b, has_doppler)) = legend_b {
+                if !has_doppler {
+                    self.target_analyzer_known[1] = true;
+                }
                 let mode_b = self.doppler_wire_mode_for(1);
                 self.wire_to_legend[1] = Self::wire_to_legend(&legend_b, mode_b, low_power);
             }
@@ -1240,15 +1234,11 @@ impl FurunoReportReceiver {
 
         let mut r = Ok(());
 
-        if want_multicast {
-            if let Err(e) = self.start_multicast_socket().await {
-                r = Err(e);
-            }
+        if want_multicast && let Err(e) = self.start_multicast_socket().await {
+            r = Err(e);
         }
-        if want_broadcast {
-            if let Err(e) = self.start_broadcast_socket().await {
-                r = Err(e);
-            }
+        if want_broadcast && let Err(e) = self.start_broadcast_socket().await {
+            r = Err(e);
         }
 
         if self.multicast_socket.is_some() || self.broadcast_socket.is_some() {
@@ -1287,7 +1277,7 @@ impl FurunoReportReceiver {
             return;
         }
 
-        let metadata: FurunoSpokeMetadata = self.parse_metadata_header(&data);
+        let metadata: FurunoSpokeMetadata = self.parse_metadata_header(data);
 
         let sweep_count = metadata.sweep_count;
         let sweep_len = metadata.sweep_len as usize;
@@ -1469,8 +1459,8 @@ impl FurunoReportReceiver {
 
         while pos + 4 <= frame_end {
             // Per-spoke sub-header: angle, heading/flags, first pixel + strip size
-            let angle = ((data[pos] as u16) | ((data[pos + 1] as u16 & 0x1F) << 8)) as u16;
-            let heading = ((data[pos + 2] as u16) | ((data[pos + 3] as u16 & 0x1F) << 8)) as u16;
+            let angle = (data[pos] as u16) | ((data[pos + 1] as u16 & 0x1F) << 8);
+            let heading = (data[pos + 2] as u16) | ((data[pos + 3] as u16 & 0x1F) << 8);
             pos += 4;
 
             if pos >= frame_end {
@@ -1741,9 +1731,9 @@ impl FurunoReportReceiver {
             return src[..dst_len].to_vec();
         }
         let mut out = vec![0u8; dst_len];
-        for i in 0..dst_len {
+        for (i, slot) in out.iter_mut().enumerate() {
             let j = (i * effective) / dst_len;
-            out[i] = src[j];
+            *slot = src[j];
         }
         out
     }
@@ -1892,7 +1882,7 @@ impl FurunoReportReceiver {
         }
 
         let heading: Option<u16> = if metadata.have_heading > 0 {
-            Some(heading as u16)
+            Some(heading)
         } else {
             let heading = crate::navdata::get_heading_true();
             heading.map(|h| (h * SPOKES as f64 / TAU) as u16)

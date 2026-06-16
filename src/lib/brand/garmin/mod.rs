@@ -52,6 +52,7 @@ const GARMIN_HD_RANGES_NAUTICAL: &[i32] = &[
 ];
 
 /// Supported Garmin radar types
+#[allow(clippy::upper_case_acronyms)] // HD / XHD are Garmin's published product-line names
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(dead_code)]
 pub(crate) enum GarminRadarType {
@@ -183,12 +184,12 @@ impl GarminLocator {
                 report::GarminReportReceiver::new(&self.args, info, radars.clone());
 
             // Attach Range B if dual-range
-            if let Some(ib) = info_b {
-                if let Some(mut ib) = radars.add(ib) {
-                    ib.start_forwarding_radar_messages_to_stdout(subsys);
-                    radars.update(&mut ib);
-                    report_receiver.set_range_b(&self.args, ib, radars.clone());
-                }
+            if let Some(ib) = info_b
+                && let Some(mut ib) = radars.add(ib)
+            {
+                ib.start_forwarding_radar_messages_to_stdout(subsys);
+                radars.update(&mut ib);
+                report_receiver.set_range_b(&self.args, ib, radars.clone());
             }
 
             subsys.start(SubsystemBuilder::new(
@@ -506,6 +507,7 @@ impl GarminLocator {
 
     /// Build a `RadarInfo` for the given radar and hand it off to the
     /// shared registry.
+    #[allow(clippy::too_many_arguments)] // discovery params arrive flat from the locator; bundling has no real reuse
     fn register(
         &mut self,
         detected_type: GarminRadarType,
@@ -569,7 +571,7 @@ impl GarminLocator {
             detected_type.spokes_per_revolution(),
             detected_type.max_spoke_len(),
             *from,
-            nic_addr.clone(),
+            *nic_addr,
             spoke_data_addr,
             report_addr,
             radar_send,
@@ -596,7 +598,7 @@ impl GarminLocator {
                 detected_type.spokes_per_revolution(),
                 detected_type.max_spoke_len(),
                 *from,
-                nic_addr.clone(),
+                *nic_addr,
                 spoke_data_addr,
                 report_addr,
                 radar_send,
@@ -662,6 +664,51 @@ fn hd_ranges() -> Ranges {
         }
     }
     Ranges::new_by_distance(&all)
+}
+
+impl RadarLocator for GarminLocator {
+    fn process(
+        &mut self,
+        message: &[u8],
+        from: &SocketAddrV4,
+        nic_addr: &Ipv4Addr,
+        radars: &SharedRadars,
+        subsys: &SubsystemHandle,
+    ) -> Result<(), io::Error> {
+        self.process_report(message, from, nic_addr, radars, subsys)
+    }
+
+    fn clone(&self) -> Box<dyn RadarLocator> {
+        Box::new(Clone::clone(self))
+    }
+}
+
+pub(super) fn new(args: &Cli, addresses: &mut Vec<LocatorAddress>) {
+    if addresses.iter().any(|i| i.id == LocatorId::Garmin) {
+        return;
+    }
+
+    // Build a single GarminLocator and clone it into both LocatorAddress
+    // entries so the CDM listener and the report listener share the same
+    // backing maps (radars + product_ids). The Arc<Mutex<...>> inside
+    // makes the clones cheap and gives them a single source of truth.
+    let locator = GarminLocator::new(args.clone());
+
+    addresses.push(LocatorAddress::new(
+        LocatorId::Garmin,
+        &REPORT_ADDRESS,
+        Brand::Garmin,
+        vec![],
+        Box::new(Clone::clone(&locator)),
+    ));
+
+    addresses.push(LocatorAddress::new(
+        LocatorId::GarminCdm,
+        &CDM_HEARTBEAT_ADDRESS,
+        Brand::Garmin,
+        vec![],
+        Box::new(locator),
+    ));
 }
 
 #[cfg(test)]
@@ -767,49 +814,4 @@ mod tests {
         // HD is always HD
         assert_eq!(detect_model_name(GarminRadarType::HD, &caps), "Garmin HD");
     }
-}
-
-impl RadarLocator for GarminLocator {
-    fn process(
-        &mut self,
-        message: &[u8],
-        from: &SocketAddrV4,
-        nic_addr: &Ipv4Addr,
-        radars: &SharedRadars,
-        subsys: &SubsystemHandle,
-    ) -> Result<(), io::Error> {
-        self.process_report(message, from, nic_addr, radars, subsys)
-    }
-
-    fn clone(&self) -> Box<dyn RadarLocator> {
-        Box::new(Clone::clone(self))
-    }
-}
-
-pub(super) fn new(args: &Cli, addresses: &mut Vec<LocatorAddress>) {
-    if addresses.iter().any(|i| i.id == LocatorId::Garmin) {
-        return;
-    }
-
-    // Build a single GarminLocator and clone it into both LocatorAddress
-    // entries so the CDM listener and the report listener share the same
-    // backing maps (radars + product_ids). The Arc<Mutex<...>> inside
-    // makes the clones cheap and gives them a single source of truth.
-    let locator = GarminLocator::new(args.clone());
-
-    addresses.push(LocatorAddress::new(
-        LocatorId::Garmin,
-        &REPORT_ADDRESS,
-        Brand::Garmin,
-        vec![],
-        Box::new(Clone::clone(&locator)),
-    ));
-
-    addresses.push(LocatorAddress::new(
-        LocatorId::GarminCdm,
-        &CDM_HEARTBEAT_ADDRESS,
-        Brand::Garmin,
-        vec![],
-        Box::new(locator),
-    ));
 }

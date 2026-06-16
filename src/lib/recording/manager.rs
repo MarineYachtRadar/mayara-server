@@ -84,10 +84,10 @@ impl RecordingManager {
     }
 
     pub fn list_recordings(&self, subdirectory: Option<&str>) -> Vec<RecordingInfo> {
-        if let Some(sub) = subdirectory {
-            if !is_valid_name(sub) {
-                return Vec::new();
-            }
+        if let Some(sub) = subdirectory
+            && !is_valid_name(sub)
+        {
+            return Vec::new();
         }
 
         let dir = match subdirectory {
@@ -104,19 +104,17 @@ impl RecordingManager {
         if let Ok(entries) = fs::read_dir(&dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.is_file() {
-                    if let Some(ext) = path.extension() {
-                        if ext == "mrr" {
-                            if let Some(info) = self.get_recording_info(&path, subdirectory) {
-                                recordings.push(info);
-                            }
-                        }
-                    }
+                if path.is_file()
+                    && let Some(ext) = path.extension()
+                    && ext == "mrr"
+                    && let Some(info) = self.get_recording_info(&path, subdirectory)
+                {
+                    recordings.push(info);
                 }
             }
         }
 
-        recordings.sort_by(|a, b| b.modified_ms.cmp(&a.modified_ms));
+        recordings.sort_by_key(|r| std::cmp::Reverse(r.modified_ms));
         recordings
     }
 
@@ -126,16 +124,16 @@ impl RecordingManager {
         if let Ok(entries) = fs::read_dir(&self.base_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.is_dir() {
-                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                        let recordings = self.list_recordings(Some(name));
-                        let total_size: u64 = recordings.iter().map(|r| r.size).sum();
-                        dirs.push(DirectoryInfo {
-                            name: name.to_string(),
-                            recording_count: recordings.len(),
-                            total_size,
-                        });
-                    }
+                if path.is_dir()
+                    && let Some(name) = path.file_name().and_then(|n| n.to_str())
+                {
+                    let recordings = self.list_recordings(Some(name));
+                    let total_size: u64 = recordings.iter().map(|r| r.size).sum();
+                    dirs.push(DirectoryInfo {
+                        name: name.to_string(),
+                        recording_count: recordings.len(),
+                        total_size,
+                    });
                 }
             }
         }

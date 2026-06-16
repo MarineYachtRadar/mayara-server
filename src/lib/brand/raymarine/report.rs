@@ -40,7 +40,11 @@ const WAKE_INTERVAL: Duration = Duration::from_secs(3);
 const OBSERVATION_WINDOW: Duration = Duration::from_secs(5);
 const EXTERNAL_QUIET_WINDOW: Duration = Duration::from_secs(60);
 
-// The LookupSpokeEnum is an index into an array, really
+// The LookupSpokeEnum is an index into an array, really.
+// `Normal` is unused at the moment — the runtime always picks the
+// Doppler row (see quantum::process_frame); the variant is kept so
+// the enum continues to document the table's layout.
+#[allow(dead_code)]
 enum LookupDoppler {
     Normal = 0,
     Doppler = 1,
@@ -56,19 +60,22 @@ pub(super) fn wire_to_legend(legend: &Legend) -> WireToLegendTable {
     let doppler_approaching = legend.doppler_approaching.map(|(s, _)| s).unwrap_or(0);
     let doppler_receding = legend.doppler_receding.map(|(s, _)| s).unwrap_or(0);
 
+    // `LOOKUP_DOPPLER_LENGTH == 2`, so the array splits cleanly into the
+    // two parallel sub-tables (Normal | Doppler) we want to populate.
+    let [normal, doppler] = &mut lookup;
     if legend.pixel_colors >= 128 {
-        for j in 0..BYTE_LOOKUP_LENGTH {
-            lookup[LookupDoppler::Normal as usize][j] = j as u8 / 2;
-            lookup[LookupDoppler::Doppler as usize][j] = match j {
+        for (j, (n, d)) in normal.iter_mut().zip(doppler.iter_mut()).enumerate() {
+            *n = j as u8 / 2;
+            *d = match j {
                 0xff => doppler_approaching,
                 0xfe => doppler_receding,
                 _ => j as u8 / 2,
             };
         }
     } else {
-        for j in 0..BYTE_LOOKUP_LENGTH {
-            lookup[LookupDoppler::Normal as usize][j] = j as u8;
-            lookup[LookupDoppler::Doppler as usize][j] = match j {
+        for (j, (n, d)) in normal.iter_mut().zip(doppler.iter_mut()).enumerate() {
+            *n = j as u8;
+            *d = match j {
                 0xff => doppler_approaching,
                 0xfe => doppler_receding,
                 _ => j as u8,
@@ -189,15 +196,7 @@ impl RaymarineReportReceiver {
 
         let wire_to_legend = wire_to_legend(&info.get_legend());
 
-        let common = CommonRadar::new(
-            args,
-            key,
-            info,
-            radars.clone(),
-            control_update_rx,
-            replay,
-            blob_tx,
-        );
+        let common = CommonRadar::new(args, key, info, radars, control_update_rx, replay, blob_tx);
 
         let now = Instant::now();
         RaymarineReportReceiver {
@@ -307,6 +306,7 @@ impl RaymarineReportReceiver {
     ///   - no status report has ever been received (state == Initial),
     ///   - no external Raymarine controller has been observed within
     ///     EXTERNAL_QUIET_WINDOW — see [`ExternalControllerWitness`].
+    ///
     /// Both base_model and the receiver state are monotonic, so once either
     /// disqualifies us we silence the arm for the receiver's lifetime; the
     /// witness gate can re-open and stays on the WAKE_INTERVAL cadence.
@@ -337,7 +337,7 @@ impl RaymarineReportReceiver {
             // Every 5th heartbeat (every 5 seconds), also send the
             // extended keep-alive with MARPA/AIS option data.
             self.heartbeat_counter += 1;
-            if self.heartbeat_counter % 5 == 0 {
+            if self.heartbeat_counter.is_multiple_of(5) {
                 cs.send_heartbeat_5s().await?;
             }
         }
@@ -349,7 +349,7 @@ impl RaymarineReportReceiver {
         self.start_report_socket().await?;
         loop {
             if self.report_socket.is_some() {
-                match self.socket_loop(&subsys).await {
+                match self.socket_loop(subsys).await {
                     Err(RadarError::Shutdown) => {
                         return Ok(());
                     }
@@ -421,7 +421,7 @@ impl RaymarineReportReceiver {
             }
             // Guard zone, alarm, MARPA, self-test, etc. — logged but not acted on
             id if (id & 0xFFFF0000 == 0x28000000 || id & 0xFFFF0000 == 0x01000000) => {
-                if self.reported_unknown.get(&id).is_none() {
+                if !self.reported_unknown.contains_key(&id) {
                     log::debug!(
                         "{}: Unhandled report ID 0x{:08X} len={}",
                         self.common.key,
@@ -432,7 +432,7 @@ impl RaymarineReportReceiver {
                 }
             }
             _ => {
-                if self.reported_unknown.get(&id).is_none() {
+                if !self.reported_unknown.contains_key(&id) {
                     log::debug!("{}: Unknown report ID 0x{:08X}", self.common.key, id);
                     self.reported_unknown.insert(id, true);
                 }
