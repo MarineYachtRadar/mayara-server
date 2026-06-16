@@ -23,11 +23,11 @@ pub(crate) fn new(
     let mut controls = HashMap::new();
 
     new_string(ControlId::ModelName).build(&mut controls);
-    if model.is_some() {
+    if let Some(model) = model {
         controls
             .get_mut(&ControlId::ModelName)
             .unwrap()
-            .set_string(model.unwrap().to_string());
+            .set_string(model.to_string());
     }
 
     new_numeric(ControlId::AntennaForward, -100., 100.)

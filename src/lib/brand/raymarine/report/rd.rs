@@ -13,7 +13,6 @@ use super::{RaymarineReportReceiver, ReceiverState};
 
 #[derive(Deserialize, Debug, Clone, Copy)]
 #[repr(C, packed)]
-
 struct FrameHeader {
     field01: u32, // 0x00010003
     _zero_1: u32,
