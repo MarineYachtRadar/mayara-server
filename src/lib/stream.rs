@@ -663,33 +663,28 @@ impl ActiveSubscriptions {
                     && let Some(path) = paths.get_mut(control_id)
                 {
                     let policy = path.policy.as_ref().unwrap_or(&Policy::Instant);
+                    let now = SystemTime::now();
 
                     if *policy == Policy::Fixed {
                         if !full {
                             return false;
                         }
-                        if let Some(period) = path.period {
-                            let now = SystemTime::now();
-
-                            if path.last_sent.is_none()
-                                || path.last_sent.unwrap() + Duration::from_micros(period) > now
-                            {
-                                path.last_sent = Some(now);
-                                return false;
-                            }
-                        }
-                    }
-
-                    if let Some(min_period) = path.min_period {
-                        let now = SystemTime::now();
-
-                        if path.last_sent.is_none()
-                            || path.last_sent.unwrap() + Duration::from_micros(min_period) > now
+                        if let Some(period) = path.period
+                            && let Some(last) = path.last_sent
+                            && last + Duration::from_micros(period) > now
                         {
-                            path.last_sent = Some(now);
                             return false;
                         }
                     }
+
+                    if let Some(min_period) = path.min_period
+                        && let Some(last) = path.last_sent
+                        && last + Duration::from_micros(min_period) > now
+                    {
+                        return false;
+                    }
+
+                    path.last_sent = Some(now);
                     return true;
                 }
             }
@@ -746,33 +741,28 @@ impl ActiveSubscriptions {
                 && let Some(path) = paths.get_mut(&control_id)
             {
                 let policy = path.policy.as_ref().unwrap_or(&Policy::Instant);
+                let now = SystemTime::now();
 
                 if *policy == Policy::Fixed {
                     if !full {
                         return false;
                     }
-                    if let Some(period) = path.period {
-                        let now = SystemTime::now();
-
-                        if path.last_sent.is_none()
-                            || path.last_sent.unwrap() + Duration::from_micros(period) > now
-                        {
-                            path.last_sent = Some(now);
-                            return false;
-                        }
-                    }
-                }
-
-                if let Some(min_period) = path.min_period {
-                    let now = SystemTime::now();
-
-                    if path.last_sent.is_none()
-                        || path.last_sent.unwrap() + Duration::from_micros(min_period) > now
+                    if let Some(period) = path.period
+                        && let Some(last) = path.last_sent
+                        && last + Duration::from_micros(period) > now
                     {
-                        path.last_sent = Some(now);
                         return false;
                     }
                 }
+
+                if let Some(min_period) = path.min_period
+                    && let Some(last) = path.last_sent
+                    && last + Duration::from_micros(min_period) > now
+                {
+                    return false;
+                }
+
+                path.last_sent = Some(now);
                 return true;
             }
         }
@@ -1186,5 +1176,131 @@ mod test {
         // is_subscribed_path the update list would be empty here.
         assert_eq!(delta.updates.len(), 1);
         assert_eq!(delta.updates[0].values.len(), 1);
+    }
+
+    fn throttled_path(
+        p: &str,
+        policy: Policy,
+        period: Option<u64>,
+        min_period: Option<u64>,
+    ) -> PathSubscribe {
+        PathSubscribe {
+            path: p.to_string(),
+            period,
+            policy: Some(policy),
+            min_period,
+            last_sent: None,
+        }
+    }
+
+    fn last_sent_of(
+        subs: &ActiveSubscriptions,
+        radar: &str,
+        control: ControlId,
+    ) -> Option<SystemTime> {
+        subs.paths
+            .get(radar)
+            .and_then(|m| m.get(&control))
+            .and_then(|p| p.last_sent)
+    }
+
+    fn set_last_sent(
+        subs: &mut ActiveSubscriptions,
+        radar: &str,
+        control: ControlId,
+        ts: SystemTime,
+    ) {
+        subs.paths
+            .get_mut(radar)
+            .and_then(|m| m.get_mut(&control))
+            .unwrap()
+            .last_sent = Some(ts);
+    }
+
+    #[test]
+    fn throttle_first_update_is_delivered() {
+        // The first update on a freshly-subscribed path must be delivered,
+        // and must mark `last_sent` so subsequent updates can be throttled.
+        let mut subs = ActiveSubscriptions::new(Subscribe::Some);
+        subs.subscribe(Subscription {
+            subscribe: vec![throttled_path(
+                "radars.nav1.controls.gain",
+                Policy::Fixed,
+                Some(1_000_000),
+                None,
+            )],
+        })
+        .unwrap();
+
+        assert!(subs.is_subscribed_path("radars.nav1.controls.gain", true));
+        assert!(last_sent_of(&subs, "nav1", ControlId::Gain).is_some());
+    }
+
+    #[test]
+    fn throttle_drop_does_not_advance_last_sent() {
+        // Regression test for the starvation bug: when an update arrives
+        // too soon, it must be dropped *without* moving the deadline
+        // forward. Otherwise every subsequent update is also dropped
+        // and the subscriber is starved indefinitely.
+        let mut subs = ActiveSubscriptions::new(Subscribe::Some);
+        subs.subscribe(Subscription {
+            subscribe: vec![throttled_path(
+                "radars.nav1.controls.gain",
+                Policy::Fixed,
+                Some(1_000_000_000), // 1000 s, effectively "never elapses during the test"
+                None,
+            )],
+        })
+        .unwrap();
+
+        let pinned = SystemTime::now();
+        set_last_sent(&mut subs, "nav1", ControlId::Gain, pinned);
+
+        assert!(!subs.is_subscribed_path("radars.nav1.controls.gain", true));
+        assert_eq!(last_sent_of(&subs, "nav1", ControlId::Gain), Some(pinned));
+    }
+
+    #[test]
+    fn throttle_send_after_period_advances_last_sent() {
+        let mut subs = ActiveSubscriptions::new(Subscribe::Some);
+        subs.subscribe(Subscription {
+            subscribe: vec![throttled_path(
+                "radars.nav1.controls.gain",
+                Policy::Fixed,
+                Some(1_000_000), // 1 s
+                None,
+            )],
+        })
+        .unwrap();
+
+        // Last send was a day ago — well past the period.
+        let long_ago = SystemTime::now() - Duration::from_secs(86_400);
+        set_last_sent(&mut subs, "nav1", ControlId::Gain, long_ago);
+
+        assert!(subs.is_subscribed_path("radars.nav1.controls.gain", true));
+        let after = last_sent_of(&subs, "nav1", ControlId::Gain).unwrap();
+        assert!(after > long_ago, "delivered update must advance last_sent");
+    }
+
+    #[test]
+    fn throttle_min_period_drop_does_not_advance_last_sent() {
+        // Same regression as above, but on the `min_period` branch with a
+        // non-Fixed policy — the bug existed in both code paths.
+        let mut subs = ActiveSubscriptions::new(Subscribe::Some);
+        subs.subscribe(Subscription {
+            subscribe: vec![throttled_path(
+                "radars.nav1.controls.gain",
+                Policy::Instant,
+                None,
+                Some(1_000_000_000),
+            )],
+        })
+        .unwrap();
+
+        let pinned = SystemTime::now();
+        set_last_sent(&mut subs, "nav1", ControlId::Gain, pinned);
+
+        assert!(!subs.is_subscribed_path("radars.nav1.controls.gain", false));
+        assert_eq!(last_sent_of(&subs, "nav1", ControlId::Gain), Some(pinned));
     }
 }
