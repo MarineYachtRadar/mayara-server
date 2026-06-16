@@ -2686,7 +2686,7 @@ impl Control {
         let mut descriptions = HashMap::new();
         for range in ranges.iter() {
             values.push(range.distance());
-            descriptions.insert(range.distance() as i32, format!("{}", range));
+            descriptions.insert(range.distance(), format!("{}", range));
         }
 
         self.item.min_value = Some(values[0] as f64);
@@ -2708,7 +2708,7 @@ impl Control {
             if v == v as i32 as f64 {
                 Number::from_i128(v as i128)
             } else {
-                Number::from_f64(v as f64)
+                Number::from_f64(v)
             }
         } {
             Value::Number(n)

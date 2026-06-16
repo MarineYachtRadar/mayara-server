@@ -1464,8 +1464,8 @@ impl FurunoReportReceiver {
 
         while pos + 4 <= frame_end {
             // Per-spoke sub-header: angle, heading/flags, first pixel + strip size
-            let angle = ((data[pos] as u16) | ((data[pos + 1] as u16 & 0x1F) << 8)) as u16;
-            let heading = ((data[pos + 2] as u16) | ((data[pos + 3] as u16 & 0x1F) << 8)) as u16;
+            let angle = (data[pos] as u16) | ((data[pos + 1] as u16 & 0x1F) << 8);
+            let heading = (data[pos + 2] as u16) | ((data[pos + 3] as u16 & 0x1F) << 8);
             pos += 4;
 
             if pos >= frame_end {
@@ -1887,7 +1887,7 @@ impl FurunoReportReceiver {
         }
 
         let heading: Option<u16> = if metadata.have_heading > 0 {
-            Some(heading as u16)
+            Some(heading)
         } else {
             let heading = crate::navdata::get_heading_true();
             heading.map(|h| (h * SPOKES as f64 / TAU) as u16)

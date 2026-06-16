@@ -44,7 +44,7 @@ impl TrailBuffer {
     pub fn new(info: &RadarInfo) -> Self {
         let spokes_per_revolution = info.spokes_per_revolution as usize;
         let max_spoke_len = info.max_spoke_len as usize;
-        let trail_size: i16 = (info.max_spoke_len as i16 * 2 + MARGIN_I16 * 2) as i16;
+        let trail_size: i16 = info.max_spoke_len as i16 * 2 + MARGIN_I16 * 2;
         let cartesian_lookup = PolarToCartesianLookup::new(
             info.spokes_per_revolution as usize,
             info.max_spoke_len as usize,
@@ -240,9 +240,9 @@ impl TrailBuffer {
                     *trail = trail.wrapping_add(1); // Yes, we want overflow here after 65535 rotations
                 }
 
-                let trail = *trail as u8;
+                let trail = *trail;
                 if self.motion_true && data[radius] == 0 && trail > 0 && trail < max_trail_value {
-                    let mut index: u8 = (trail * BLOB_HISTORY_COLORS / max_trail_value) as u8;
+                    let mut index: u8 = trail * BLOB_HISTORY_COLORS / max_trail_value;
                     if index >= BLOB_HISTORY_COLORS {
                         index = BLOB_HISTORY_COLORS;
                     }
@@ -373,7 +373,7 @@ impl TrailBuffer {
         let (to_start, to_end, from_start, from_end, zero_start, zero_end) = if n > 0 {
             let n = n as usize;
             (
-                0 as usize,
+                0_usize,
                 self.true_trails.nrows() - n,
                 n,
                 self.true_trails.nrows(),
@@ -385,7 +385,7 @@ impl TrailBuffer {
             (
                 n,
                 self.true_trails.nrows(),
-                0 as usize,
+                0_usize,
                 self.true_trails.nrows() - n,
                 0,
                 n,
@@ -419,7 +419,7 @@ impl TrailBuffer {
         let (to_start, to_end, from_start, from_end, zero_start, zero_end) = if n > 0 {
             let n = n as usize;
             (
-                0 as usize,
+                0_usize,
                 self.true_trails.ncols() - n,
                 n,
                 self.true_trails.ncols(),
@@ -431,7 +431,7 @@ impl TrailBuffer {
             (
                 n,
                 self.true_trails.ncols(),
-                0 as usize,
+                0_usize,
                 self.true_trails.ncols() - n,
                 0,
                 n,
@@ -512,8 +512,8 @@ impl TrailBuffer {
         }
         let max_trail_value = (self.trail_length_ms / self.rotation_speed_ms) as u16;
 
-        let trail = &mut self.relative_trails[angle as usize * self.max_spoke_len as usize
-            ..(angle + 1) as usize * self.max_spoke_len];
+        let trail = &mut self.relative_trails
+            [angle as usize * self.max_spoke_len..(angle + 1) as usize * self.max_spoke_len];
 
         let mut radius = 0;
 
