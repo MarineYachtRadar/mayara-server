@@ -1186,109 +1186,6 @@ fn default_legend(
     legend
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use axum::response::IntoResponse;
-
-    #[test]
-    fn legend() {
-        let targets = crate::TargetMode::Arpa;
-        let legend = default_legend(&targets, 1, false, 16);
-        let json = serde_json::to_string_pretty(&legend).unwrap();
-        println!("{}", json);
-    }
-
-    #[test]
-    fn radar_error_into_response_not_recursive() {
-        // This test verifies that RadarError::into_response() does not cause
-        // infinite recursion. If the implementation is broken, this test will
-        // cause a stack overflow.
-        let error = RadarError::NoSuchRadar("test".to_string());
-        let response = error.into_response();
-
-        // If we reach here, no stack overflow occurred
-        assert_eq!(response.status(), http::StatusCode::NOT_FOUND);
-    }
-
-    /// Idle mode (issue #274) relies on `RadarInfo.is_idle` being an
-    /// `Arc<AtomicBool>` so every clone — including the ones
-    /// `SharedRadars::get_by_key` returns to the web layer — points at
-    /// the SAME atomic. If anyone refactors the field to a plain
-    /// `AtomicBool`, `wake_up()` calls on the clone the web layer sees
-    /// become no-ops against the clone the data_loop sees, and the GUI
-    /// silently falls back to "PPI blank for a beat every time you
-    /// connect".
-    ///
-    /// We can't easily construct a full `RadarInfo` in a unit test
-    /// (the factory needs `SharedRadars`, a controls closure, several
-    /// `SocketAddrV4`s, …), so this test pins the contract on the
-    /// `is_idle` field itself: a function that accepts only
-    /// `Arc<AtomicBool>` and the cross-clone propagation that depends
-    /// on that exact type. A refactor to a plain `AtomicBool` fails
-    /// the compile-time portion; a refactor that keeps the type but
-    /// breaks sharing through some other mechanism fails the runtime
-    /// portion.
-    #[test]
-    fn is_idle_field_must_be_arc_atomic_bool() {
-        fn assert_arc_atomic_bool_field(_field: &Arc<AtomicBool>) {}
-
-        // Use the actual field by name — if a refactor renames or
-        // retypes it, this test fails to compile.
-        let info = test_helpers::dummy_is_idle_field();
-        assert_arc_atomic_bool_field(&info);
-
-        let clone = info.clone();
-        clone.store(true, Ordering::Relaxed);
-        assert!(
-            info.load(Ordering::Relaxed),
-            "wake_up on a RadarInfo clone must reach the data_loop's clone"
-        );
-        assert!(Arc::ptr_eq(&info, &clone));
-    }
-
-    // ----- idle-mode predicate (issue #274) -----
-
-    #[test]
-    fn should_idle_yes_when_standby_and_no_subscribers() {
-        assert!(should_idle(Some(Power::Standby as i32), 0));
-    }
-
-    #[test]
-    fn should_idle_no_when_transmitting_even_with_no_subscribers() {
-        // A transmitting radar drives downstream consumers we may not see
-        // directly (MFDs over multicast, recording, ARPA targets via the
-        // tracker channel). Never idle while it's broadcasting useful data.
-        assert!(!should_idle(Some(Power::Transmit as i32), 0));
-    }
-
-    #[test]
-    fn should_idle_no_when_standby_with_subscribers() {
-        // Some client is watching the spoke stream — keep the pipeline hot
-        // so the moment the radar transitions to Transmit, the first frame
-        // is decoded and rendered without a tick of blank PPI.
-        assert!(!should_idle(Some(Power::Standby as i32), 1));
-    }
-
-    #[test]
-    fn should_idle_no_when_power_is_unknown() {
-        // Before the radar has reported its first Status frame we don't
-        // know its state. Default to processing frames so we never blank
-        // the PPI for a viewer that connects very early in startup.
-        assert!(!should_idle(None, 0));
-    }
-
-    mod test_helpers {
-        use super::*;
-        /// Mint a stand-in for `RadarInfo.is_idle` so the test above
-        /// doesn't have to construct a full `RadarInfo`. If the field
-        /// type changes, the caller fails to compile.
-        pub(super) fn dummy_is_idle_field() -> Arc<AtomicBool> {
-            Arc::new(AtomicBool::new(false))
-        }
-    }
-}
-
 pub(crate) struct CommonRadar {
     pub key: String,
     pub info: RadarInfo,
@@ -2033,4 +1930,107 @@ fn apply_antenna_offset(
     const METERS_PER_DEG_LAT: f64 = 111_111.0;
     spoke.lat = Some(lat + north_m / METERS_PER_DEG_LAT);
     spoke.lon = Some(lon + east_m / (METERS_PER_DEG_LAT * lat.to_radians().cos()));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::response::IntoResponse;
+
+    #[test]
+    fn legend() {
+        let targets = crate::TargetMode::Arpa;
+        let legend = default_legend(&targets, 1, false, 16);
+        let json = serde_json::to_string_pretty(&legend).unwrap();
+        println!("{}", json);
+    }
+
+    #[test]
+    fn radar_error_into_response_not_recursive() {
+        // This test verifies that RadarError::into_response() does not cause
+        // infinite recursion. If the implementation is broken, this test will
+        // cause a stack overflow.
+        let error = RadarError::NoSuchRadar("test".to_string());
+        let response = error.into_response();
+
+        // If we reach here, no stack overflow occurred
+        assert_eq!(response.status(), http::StatusCode::NOT_FOUND);
+    }
+
+    /// Idle mode (issue #274) relies on `RadarInfo.is_idle` being an
+    /// `Arc<AtomicBool>` so every clone — including the ones
+    /// `SharedRadars::get_by_key` returns to the web layer — points at
+    /// the SAME atomic. If anyone refactors the field to a plain
+    /// `AtomicBool`, `wake_up()` calls on the clone the web layer sees
+    /// become no-ops against the clone the data_loop sees, and the GUI
+    /// silently falls back to "PPI blank for a beat every time you
+    /// connect".
+    ///
+    /// We can't easily construct a full `RadarInfo` in a unit test
+    /// (the factory needs `SharedRadars`, a controls closure, several
+    /// `SocketAddrV4`s, …), so this test pins the contract on the
+    /// `is_idle` field itself: a function that accepts only
+    /// `Arc<AtomicBool>` and the cross-clone propagation that depends
+    /// on that exact type. A refactor to a plain `AtomicBool` fails
+    /// the compile-time portion; a refactor that keeps the type but
+    /// breaks sharing through some other mechanism fails the runtime
+    /// portion.
+    #[test]
+    fn is_idle_field_must_be_arc_atomic_bool() {
+        fn assert_arc_atomic_bool_field(_field: &Arc<AtomicBool>) {}
+
+        // Use the actual field by name — if a refactor renames or
+        // retypes it, this test fails to compile.
+        let info = test_helpers::dummy_is_idle_field();
+        assert_arc_atomic_bool_field(&info);
+
+        let clone = info.clone();
+        clone.store(true, Ordering::Relaxed);
+        assert!(
+            info.load(Ordering::Relaxed),
+            "wake_up on a RadarInfo clone must reach the data_loop's clone"
+        );
+        assert!(Arc::ptr_eq(&info, &clone));
+    }
+
+    // ----- idle-mode predicate (issue #274) -----
+
+    #[test]
+    fn should_idle_yes_when_standby_and_no_subscribers() {
+        assert!(should_idle(Some(Power::Standby as i32), 0));
+    }
+
+    #[test]
+    fn should_idle_no_when_transmitting_even_with_no_subscribers() {
+        // A transmitting radar drives downstream consumers we may not see
+        // directly (MFDs over multicast, recording, ARPA targets via the
+        // tracker channel). Never idle while it's broadcasting useful data.
+        assert!(!should_idle(Some(Power::Transmit as i32), 0));
+    }
+
+    #[test]
+    fn should_idle_no_when_standby_with_subscribers() {
+        // Some client is watching the spoke stream — keep the pipeline hot
+        // so the moment the radar transitions to Transmit, the first frame
+        // is decoded and rendered without a tick of blank PPI.
+        assert!(!should_idle(Some(Power::Standby as i32), 1));
+    }
+
+    #[test]
+    fn should_idle_no_when_power_is_unknown() {
+        // Before the radar has reported its first Status frame we don't
+        // know its state. Default to processing frames so we never blank
+        // the PPI for a viewer that connects very early in startup.
+        assert!(!should_idle(None, 0));
+    }
+
+    mod test_helpers {
+        use super::*;
+        /// Mint a stand-in for `RadarInfo.is_idle` so the test above
+        /// doesn't have to construct a full `RadarInfo`. If the field
+        /// type changes, the caller fails to compile.
+        pub(super) fn dummy_is_idle_field() -> Arc<AtomicBool> {
+            Arc::new(AtomicBool::new(false))
+        }
+    }
 }

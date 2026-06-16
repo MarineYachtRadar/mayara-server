@@ -692,9 +692,9 @@ mod tests {
             ("HALO 24", &BEACON_HALO24[..]),
         ] {
             let old: NavicoBeaconDual =
-                decode_bin(packet).expect(&format!("{}: bincode failed", name));
-            let new =
-                parse_gen3plus_beacon(packet).expect(&format!("{}: dynamic parse failed", name));
+                decode_bin(packet).unwrap_or_else(|_| panic!("{}: bincode failed", name));
+            let new = parse_gen3plus_beacon(packet)
+                .unwrap_or_else(|| panic!("{}: dynamic parse failed", name));
 
             let old_a_data: SocketAddrV4 = old.a.data.into();
             let old_a_send: SocketAddrV4 = old.a.send.into();
