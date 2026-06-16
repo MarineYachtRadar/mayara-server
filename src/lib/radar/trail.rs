@@ -102,7 +102,7 @@ impl TrailBuffer {
                     let value = controls.get(&cv.id).unwrap().as_u16().unwrap_or(0) > 0;
                     self.set_doppler_trail_only(value);
                 }
-                return r.map(|_| ()).map_err(|e| RadarError::ControlError(e));
+                return r.map(|_| ()).map_err(RadarError::ControlError);
             }
             ControlId::TargetTrails => {
                 let v = cv.as_value()?;
@@ -111,13 +111,13 @@ impl TrailBuffer {
                     let value = controls.get(&cv.id).unwrap().as_u16().unwrap_or(0);
                     self.set_relative_trails_length(value);
                 }
-                return r.map(|_| ()).map_err(|e| RadarError::ControlError(e));
+                return r.map(|_| ()).map_err(RadarError::ControlError);
             }
             ControlId::TrailsMotion => {
                 let true_motion = cv.as_bool()?;
                 return self
                     .set_trails_mode(true_motion)
-                    .map_err(|e| RadarError::ControlError(e));
+                    .map_err(RadarError::ControlError);
             }
             _ => Err(RadarError::CannotSetControlId(cv.id)),
         };
@@ -128,7 +128,7 @@ impl TrailBuffer {
             reply = controls
                 .set_value(&cv.id, value)
                 .map(|_| ())
-                .map_err(|e| RadarError::ControlError(e));
+                .map_err(RadarError::ControlError);
         }
         reply
     }

@@ -200,11 +200,11 @@ impl FurunoReportReceiver {
             // Port not set yet, we need to login to the radar first.
             return Err(RadarError::InvalidPort);
         }
-        let sock = TcpSocket::new_v4().map_err(|e| RadarError::Io(e))?;
+        let sock = TcpSocket::new_v4().map_err(RadarError::Io)?;
         let stream = sock
             .connect(std::net::SocketAddr::V4(self.common.info.send_command_addr))
             .await
-            .map_err(|e| RadarError::Io(e))?;
+            .map_err(RadarError::Io)?;
 
         // Furuno radars silently drop the control TCP socket after an idle
         // period (observed on DRS4D-NXT after ~2 min). Without keepalive the

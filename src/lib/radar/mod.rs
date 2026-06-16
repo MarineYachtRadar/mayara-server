@@ -1523,7 +1523,7 @@ impl CommonRadar {
                             .controls
                             .set_value(&cv.id, value)
                             .map(|_| ())
-                            .map_err(|e| RadarError::ControlError(e));
+                            .map_err(RadarError::ControlError);
                         if result.is_ok() {
                             self.update(); // Persist the change
                         }
@@ -1643,7 +1643,7 @@ impl CommonRadar {
             .iter()
             .filter_map(|r| r.as_ref())
             .filter(|r| r.enabled)
-            .map(|r| exclusion::rect_to_internal(r))
+            .map(exclusion::rect_to_internal)
             .collect();
 
         if active_zones.is_empty() && active_rects.is_empty() {

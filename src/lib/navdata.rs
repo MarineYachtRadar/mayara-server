@@ -1609,9 +1609,7 @@ fn apply_signalk_value(values_entry: &Value, source: &str) {
 }
 
 async fn connect_to_socket(address: SocketAddr) -> Result<TcpStream, RadarError> {
-    let stream = TcpStream::connect(address)
-        .await
-        .map_err(|e| RadarError::Io(e))?;
+    let stream = TcpStream::connect(address).await.map_err(RadarError::Io)?;
     log::debug!("Connected to {}", address);
     Ok(stream)
 }

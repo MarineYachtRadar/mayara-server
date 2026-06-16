@@ -947,9 +947,7 @@ impl SharedControls {
         cv_value: Option<f64>,
         control: &Control,
     ) -> Result<Option<f64>, RadarError> {
-        let value_as_value = cv_value
-            .and_then(|v| Number::from_f64(v))
-            .map(Value::Number);
+        let value_as_value = cv_value.and_then(Number::from_f64).map(Value::Number);
         let (_, result) = Self::convert_to_wire_number(cv_units, value_as_value, control)?;
         Ok(result.and_then(|v| v.as_f64()))
     }
@@ -1020,7 +1018,7 @@ impl SharedControls {
                         end_distance,
                         cv.enabled,
                     )
-                    .map_err(|e| RadarError::ControlError(e))?;
+                    .map_err(RadarError::ControlError)?;
                     // Broadcast the update to the radar so blob detector gets updated
                     return self.send_to_command_handler(cv, reply_tx);
                 }
@@ -1033,7 +1031,7 @@ impl SharedControls {
                     let y2 = cv.y2.unwrap_or(0.0);
                     let width = cv.width.unwrap_or(0.0);
                     self.set_rect(&cv.id, x1, y1, x2, y2, width, cv.enabled)
-                        .map_err(|e| RadarError::ControlError(e))?;
+                        .map_err(RadarError::ControlError)?;
                     // Broadcast the update to the radar so exclusion mask gets updated
                     return self.send_to_command_handler(cv, reply_tx);
                 }
@@ -1043,7 +1041,7 @@ impl SharedControls {
                         if let Some(value) = cv.value {
                             self.set_value(&cv.id, value)
                                 .map(|_| ())
-                                .map_err(|e| RadarError::ControlError(e))
+                                .map_err(RadarError::ControlError)
                         } else {
                             Err(RadarError::CannotSetControlId(cv.id))
                         }
@@ -2723,7 +2721,7 @@ impl Control {
 
     pub fn value(&self) -> Option<Value> {
         if self.item.data_type == ControlDataType::String {
-            return self.description.clone().map(|v| Value::String(v));
+            return self.description.clone().map(Value::String);
         }
 
         self.value.map(|v| self.to_number(v))

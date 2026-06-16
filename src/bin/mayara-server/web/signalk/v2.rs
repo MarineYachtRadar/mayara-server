@@ -1310,7 +1310,7 @@ where
     socket
         .send(Message::Text(message.into()))
         .await
-        .map_err(|e| RadarError::Axum(e))?;
+        .map_err(RadarError::Axum)?;
     Ok(())
 }
 
