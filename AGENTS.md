@@ -72,6 +72,8 @@ PR titles are used to auto-generate the changelog and release notes. They **must
 
 PR descriptions must be **succinct and straight to the point**. Explain the motivation (why) and summarize the solution approach (how), but not the mechanics (what) - the diff shows what changed. Do not pad descriptions with unnecessary detail, verbose explanations, or self-congratulatory comments. If there are breaking changes, mention them explicitly. If a PR description includes a test plan with checkboxes, **all items must be checked** before the PR is ready for review - remove or complete any unchecked items.
 
+**Lead with the user-facing description.** Issue and PR descriptions must start with what a user of mayara sees or experiences — the symptom for a bug, the new capability for a feature, the impact for a change. Use plain language a boater or installer would understand, not Rust types, function names, or file paths. Only **after** that user-facing opener may the technical details (root cause, module, internal API, implementation approach) appear, in a clearly separated section. The same applies when rewriting an existing issue or PR description: the user-facing framing comes first, the gory details follow.
+
 When referencing issues, use `closes`, `fixes`, or `resolves` followed by the issue number (e.g., "closes #18", "fixes #21 and resolves #23").
 
 **MANDATORY:** One logical change per PR. Refactoring and behavior changes belong in separate PRs. If changes would result in multiple changelog entries, they should be separate PRs. Even if you have made multiple changes together locally, split them into separate PRs.
