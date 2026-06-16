@@ -26,18 +26,18 @@ const HEADING_U07_DEFAULT: [u8; 5] = [0xff, 0x7f, 0x79, 0xf8, 0xfc];
 #[repr(packed)]
 #[allow(dead_code)]
 pub(crate) struct HaloHeadingPacket {
-    marker: [u8; 4],   //  0..4   "NKOE"
-    preamble: [u8; 4], //  4..8   00 01 90 02
-    counter: [u8; 2],  //  8..10  big-endian counter
-    u01: [u8; 26],     // 10..36  fixed
-    u02: [u8; 4],      // 36..40  type discriminator: 12 f1 01 00
-    epoch: [u8; 8],    // 40..48  millis since 1970
-    u04: [u8; 8],      // 48..56  always 02 00 00 00 00 00 00 00
-    u05a: [u8; 4],     // 56..60  unknown (possibly position) — radar_pi sends 0
-    u05b: [u8; 4],     // 60..64  unknown (possibly position) — radar_pi sends 0
-    u06: [u8; 1],      // 64..65  always 0xff
+    marker: [u8; 4],      //  0..4   "NKOE"
+    preamble: [u8; 4],    //  4..8   00 01 90 02
+    counter: [u8; 2],     //  8..10  big-endian counter
+    u01: [u8; 26],        // 10..36  fixed
+    u02: [u8; 4],         // 36..40  type discriminator: 12 f1 01 00
+    epoch: [u8; 8],       // 40..48  millis since 1970
+    u04: [u8; 8],         // 48..56  always 02 00 00 00 00 00 00 00
+    u05a: [u8; 4],        // 56..60  unknown (possibly position) — radar_pi sends 0
+    u05b: [u8; 4],        // 60..64  unknown (possibly position) — radar_pi sends 0
+    u06: [u8; 1],         // 64..65  always 0xff
     pub heading: [u8; 2], // 65..67 heading: u16 LE, scale 0..0xF800 = 0..360°
-    u07: [u8; 5],      // 67..72  HEADING_U07_DEFAULT
+    u07: [u8; 5],         // 67..72  HEADING_U07_DEFAULT
 }
 
 impl HaloHeadingPacket {
@@ -82,12 +82,12 @@ impl HaloNavigationPacket {
 #[repr(packed)]
 #[allow(dead_code)]
 pub(crate) struct HaloSpeedPacket {
-    marker: [u8; 6], //  0..6   01 d3 01 00 00 00
+    marker: [u8; 6],  //  0..6   01 d3 01 00 00 00
     pub sog: [u8; 2], // 6..8   SOG: u16 LE, in dm/s (m/s × 10)
-    u00: [u8; 6],    //  8..14  00 00 01 00 00 00
+    u00: [u8; 6],     //  8..14  00 00 01 00 00 00
     pub cog: [u8; 2], // 14..16 COG: u16 LE, in tenths of degrees (0..3600)
-    u02: [u8; 6],    // 16..22  00 00 01 33 00 00
-    u03: u8,         // 22      00
+    u02: [u8; 6],     // 16..22  00 00 01 33 00 00
+    u03: u8,          // 22      00
 }
 
 /// Index into the `Information::sock` array.
@@ -261,11 +261,17 @@ impl Information {
 
     pub(super) async fn send_info_packets(&mut self) -> Result<(), RadarError> {
         let now = Instant::now();
-        if self.last_heading.is_none_or(|t| now - t >= HEADING_INTERVAL) {
+        if self
+            .last_heading
+            .is_none_or(|t| now - t >= HEADING_INTERVAL)
+        {
             self.send_heading_packet().await?;
             self.last_heading = Some(now);
         }
-        if self.last_navigation.is_none_or(|t| now - t >= NAVIGATION_INTERVAL) {
+        if self
+            .last_navigation
+            .is_none_or(|t| now - t >= NAVIGATION_INTERVAL)
+        {
             self.send_navigation_packet().await?;
             self.last_navigation = Some(now);
         }

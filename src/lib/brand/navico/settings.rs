@@ -228,8 +228,14 @@ pub(crate) fn update_from_capabilities(
     controls.set_valid_values_bitmask(&ControlId::TargetExpansion, caps.target_boost_mask);
     controls.set_valid_values_bitmask(&ControlId::NoiseRejection, caps.noise_reject_mask);
     controls.set_valid_values_bitmask(&ControlId::TargetSeparation, caps.beam_sharpening_mask);
-    controls.set_valid_values_bitmask(&ControlId::InterferenceRejection, caps.interference_reject_mask);
-    controls.set_valid_values_bitmask(&ControlId::LocalInterferenceRejection, caps.local_interference_mask);
+    controls.set_valid_values_bitmask(
+        &ControlId::InterferenceRejection,
+        caps.interference_reject_mask,
+    );
+    controls.set_valid_values_bitmask(
+        &ControlId::LocalInterferenceRejection,
+        caps.local_interference_mask,
+    );
 
     log::debug!("update_from_capabilities: refined controls from TLV");
 }

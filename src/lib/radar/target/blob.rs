@@ -154,8 +154,7 @@ impl SpokeArc {
             }
         }
 
-        let wrap_gap =
-            spokes_per_revolution - spokes[spokes.len() - 1] + spokes[0] - 1;
+        let wrap_gap = spokes_per_revolution - spokes[spokes.len() - 1] + spokes[0] - 1;
         if wrap_gap > largest_gap {
             largest_gap = wrap_gap;
             arc_start_idx = 0;
@@ -163,8 +162,8 @@ impl SpokeArc {
 
         let extent = spokes_per_revolution - largest_gap;
         let arc_start = spokes[arc_start_idx];
-        let center = ((arc_start as u32 + (extent as u32 / 2))
-            % spokes_per_revolution as u32) as u16;
+        let center =
+            ((arc_start as u32 + (extent as u32 / 2)) % spokes_per_revolution as u32) as u16;
 
         SpokeArc { extent, center }
     }
@@ -292,10 +291,8 @@ impl BlobDetector {
 
                 // Guard zones are head-relative (0 = forward) and can cross
                 // 0 with a negative start angle.
-                let start_spoke =
-                    radians_to_spoke(zone.start_angle, self.spokes_per_revolution);
-                let end_spoke =
-                    radians_to_spoke(zone.end_angle, self.spokes_per_revolution);
+                let start_spoke = radians_to_spoke(zone.start_angle, self.spokes_per_revolution);
+                let end_spoke = radians_to_spoke(zone.end_angle, self.spokes_per_revolution);
 
                 // Convert distances from meters to pixels
                 let start_pixel = (zone.start_distance / meters_per_pixel) as usize;
@@ -381,8 +378,8 @@ impl BlobDetector {
         // smallest circular range of spokes the blob touches — handles
         // wrap-around correctly unlike linear min/max.
         let avg_distance = (blob.min_pixel + blob.max_pixel) as f64 / 2.0 * meters_per_pixel;
-        let angular_extent = avg_distance
-            * (spoke_arc.extent as f64 * TAU / self.spokes_per_revolution as f64);
+        let angular_extent =
+            avg_distance * (spoke_arc.extent as f64 * TAU / self.spokes_per_revolution as f64);
 
         // Use larger dimension as "size"
         radial_extent.max(angular_extent)

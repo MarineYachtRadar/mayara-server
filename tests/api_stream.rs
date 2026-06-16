@@ -336,10 +336,9 @@ async fn test_websocket_deflate_negotiation() {
     extensions.permessage_deflate = Some(Default::default());
     config.extensions = extensions;
 
-    let (ws, response) =
-        connect_async_with_config(url, Some(config), false)
-            .await
-            .expect("Failed to connect with deflate");
+    let (ws, response) = connect_async_with_config(url, Some(config), false)
+        .await
+        .expect("Failed to connect with deflate");
 
     // Server should echo back the extension in the response
     let ext_header = response
@@ -347,10 +346,7 @@ async fn test_websocket_deflate_negotiation() {
         .get("sec-websocket-extensions")
         .expect("Response missing Sec-WebSocket-Extensions header");
     assert!(
-        ext_header
-            .to_str()
-            .unwrap()
-            .contains("permessage-deflate"),
+        ext_header.to_str().unwrap().contains("permessage-deflate"),
         "Server should negotiate permessage-deflate, got: {:?}",
         ext_header
     );
@@ -361,7 +357,10 @@ async fn test_websocket_deflate_negotiation() {
     write.send(text_msg(&msg)).await.expect("Failed to send");
 
     let result = timeout(Duration::from_secs(5), read.next()).await;
-    assert!(result.is_ok(), "Should receive data over compressed connection");
+    assert!(
+        result.is_ok(),
+        "Should receive data over compressed connection"
+    );
     if let Ok(Some(Ok(Message::Text(text)))) = result {
         let json: Value = serde_json::from_str(&text).expect("Should be valid JSON");
         assert!(
@@ -377,9 +376,7 @@ async fn test_websocket_without_deflate() {
     let url = format!("{}/signalk/v1/stream?subscribe=none", ws_url());
 
     // Connect without requesting compression
-    let (_, response) = connect_async(&url)
-        .await
-        .expect("Failed to connect");
+    let (_, response) = connect_async(&url).await.expect("Failed to connect");
 
     // Server should NOT include the extension header
     assert!(

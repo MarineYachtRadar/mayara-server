@@ -203,7 +203,11 @@ mod tests {
 
         let result = calculate_cpa(&own, &target).expect("relative velocity is non-zero");
         // TCPA must be negative — the closest point is in the past.
-        assert!(result.tcpa < 0.0, "TCPA should be negative, got {}", result.tcpa);
+        assert!(
+            result.tcpa < 0.0,
+            "TCPA should be negative, got {}",
+            result.tcpa
+        );
     }
 
     #[test]
@@ -226,7 +230,11 @@ mod tests {
         let result = calculate_cpa(&own, &target).expect("relative velocity is non-zero");
         // We're moving away from the closest-approach point right now,
         // so TCPA must be non-positive. CPA is the current ~500m distance.
-        assert!(result.tcpa <= 0.0, "TCPA should be ≤ 0, got {}", result.tcpa);
+        assert!(
+            result.tcpa <= 0.0,
+            "TCPA should be ≤ 0, got {}",
+            result.tcpa
+        );
         assert!(
             approx_eq(result.cpa, 500.0, 5.0),
             "CPA should be ~500m, got {}",

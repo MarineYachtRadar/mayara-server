@@ -616,10 +616,7 @@ fn parse_tcp_url(url: &str) -> Option<SocketAddr> {
     url.strip_prefix("tcp://")?.parse().ok()
 }
 
-async fn connect_websocket(
-    url: &str,
-    accept_invalid_certs: bool,
-) -> Result<WsStream, RadarError> {
+async fn connect_websocket(url: &str, accept_invalid_certs: bool) -> Result<WsStream, RadarError> {
     let is_wss = url.starts_with("wss://");
 
     let token = get_signalk_token();
@@ -646,7 +643,11 @@ async fn connect_websocket(
     match result {
         Ok((ws, _)) => {
             // Log the bare URL — `connect_url` may carry `?token=...`.
-            log::info!("Connected to Signal K via {}: {}", if is_wss { "WSS" } else { "WS" }, url);
+            log::info!(
+                "Connected to Signal K via {}: {}",
+                if is_wss { "WSS" } else { "WS" },
+                url
+            );
             Ok(ws)
         }
         Err(e) => {
@@ -934,10 +935,7 @@ mod tests {
         .unwrap();
 
         let result = parse_discovery_response(&json).unwrap();
-        assert_eq!(
-            result.tcp_url,
-            Some("tcp://192.168.1.1:8375".to_string())
-        );
+        assert_eq!(result.tcp_url, Some("tcp://192.168.1.1:8375".to_string()));
         assert_eq!(result.ws_url, None);
     }
 
@@ -1123,7 +1121,8 @@ mod tests {
 
     #[test]
     fn http_body_extracts_after_separator() {
-        let raw = b"HTTP/1.1 200 OK\r\nServer: signalk\r\nContent-Length: 13\r\n\r\n{\"hello\":\"w\"}";
+        let raw =
+            b"HTTP/1.1 200 OK\r\nServer: signalk\r\nContent-Length: 13\r\n\r\n{\"hello\":\"w\"}";
         assert_eq!(parse_http_body(raw).unwrap(), "{\"hello\":\"w\"}");
     }
 
@@ -1256,7 +1255,10 @@ mod tests {
         let addr: SocketAddr = "192.0.2.12:3000".parse().unwrap();
         {
             let mut map = silent_servers().lock().unwrap();
-            map.insert(addr, Instant::now() - SILENT_SERVER_COOLDOWN - Duration::from_secs(1));
+            map.insert(
+                addr,
+                Instant::now() - SILENT_SERVER_COOLDOWN - Duration::from_secs(1),
+            );
         }
         assert!(!is_signalk_server_silent(addr));
         // Stale entry must have been pruned.

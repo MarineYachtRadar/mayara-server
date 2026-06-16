@@ -373,10 +373,7 @@ pub struct DeltaMeta {
     value: ControlDefinition,
 }
 
-fn get_meta_delta(
-    radars: &SharedRadars,
-    meta_sent: &mut HashSet<String>,
-) -> Option<DeltaUpdate> {
+fn get_meta_delta(radars: &SharedRadars, meta_sent: &mut HashSet<String>) -> Option<DeltaUpdate> {
     let mut meta = Vec::new();
 
     for radar in radars.get_active() {
@@ -1079,10 +1076,7 @@ mod test {
     fn target_desubscribe_removes_pattern_and_empty_bucket() {
         let mut subs = ActiveSubscriptions::new(Subscribe::Some);
         subs.subscribe(Subscription {
-            subscribe: vec![
-                path("radars.nav1.targets.*"),
-                path("radars.nav1.targets.5"),
-            ],
+            subscribe: vec![path("radars.nav1.targets.*"), path("radars.nav1.targets.5")],
         })
         .unwrap();
         assert_eq!(subs.target_subscriptions.get("nav1").unwrap().len(), 2);
@@ -1106,10 +1100,7 @@ mod test {
     fn navigation_desubscribe_removes_path() {
         let mut subs = ActiveSubscriptions::new(Subscribe::Some);
         subs.subscribe(Subscription {
-            subscribe: vec![
-                path("navigation.headingTrue"),
-                path("navigation.position"),
-            ],
+            subscribe: vec![path("navigation.headingTrue"), path("navigation.position")],
         })
         .unwrap();
         assert_eq!(subs.navigation_subscriptions.len(), 2);
@@ -1160,7 +1151,10 @@ mod test {
             desubscribe: vec![path("notifications.foo")],
         })
         .unwrap();
-        assert_eq!(subs.notification_subscriptions, vec!["notifications.radar.*"]);
+        assert_eq!(
+            subs.notification_subscriptions,
+            vec!["notifications.radar.*"]
+        );
         assert!(subs.is_subscribed_path("notifications.radar.fur6424A.guardZone.1", false));
     }
 
@@ -1180,11 +1174,7 @@ mod test {
             message: "test".to_string(),
         };
         let mut delta = SignalKDelta::new();
-        delta.add_notification_update(
-            "notifications.radar.fur6424A.guardZone.1",
-            value,
-            "mayara",
-        );
+        delta.add_notification_update("notifications.radar.fur6424A.guardZone.1", value, "mayara");
 
         delta.apply_subscriptions(&mut subs);
         // The notification update must survive the subscription filter

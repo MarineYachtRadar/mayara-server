@@ -294,11 +294,7 @@ impl RecordingManager {
             }
             match fs::remove_file(&path) {
                 Ok(()) => info!("Removed orphaned upload: {}", path.display()),
-                Err(e) => warn!(
-                    "Failed to remove orphaned upload {}: {}",
-                    path.display(),
-                    e
-                ),
+                Err(e) => warn!("Failed to remove orphaned upload {}: {}", path.display(), e),
             }
         }
     }

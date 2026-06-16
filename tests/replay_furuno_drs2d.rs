@@ -64,34 +64,37 @@ async fn replay_furuno_drs2d() {
     Toplevel::new(async move |s: &mut SubsystemHandle| {
         let (radars, _) = mayara::start_session(&s, args).await;
 
-        s.start(SubsystemBuilder::new("test", async move |subsys: &mut SubsystemHandle| {
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-            loop {
-                let keys = radars.get_keys();
-                if !keys.is_empty() {
-                    let key = &keys[0];
-                    let info = radars.get_by_key(key).expect("radar info");
+        s.start(SubsystemBuilder::new(
+            "test",
+            async move |subsys: &mut SubsystemHandle| {
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+                loop {
+                    let keys = radars.get_keys();
+                    if !keys.is_empty() {
+                        let key = &keys[0];
+                        let info = radars.get_by_key(key).expect("radar info");
 
-                    if info.controls.model_name().is_some() && !info.ranges.all.is_empty() {
-                        assert!(key.starts_with("fur"), "expected Furuno key, got: {}", key);
-                        assert_eq!(info.brand, mayara::Brand::Furuno);
-                        assert_eq!(info.controls.model_name().unwrap(), "DRS");
-                        // Give the spoke worker time to ingest the trailing
-                        // spoke frames in the fixture so the alignment bug
-                        // (issue #195) would have a chance to panic.
-                        tokio::time::sleep(Duration::from_millis(500)).await;
-                        break;
+                        if info.controls.model_name().is_some() && !info.ranges.all.is_empty() {
+                            assert!(key.starts_with("fur"), "expected Furuno key, got: {}", key);
+                            assert_eq!(info.brand, mayara::Brand::Furuno);
+                            assert_eq!(info.controls.model_name().unwrap(), "DRS");
+                            // Give the spoke worker time to ingest the trailing
+                            // spoke frames in the fixture so the alignment bug
+                            // (issue #195) would have a chance to panic.
+                            tokio::time::sleep(Duration::from_millis(500)).await;
+                            break;
+                        }
                     }
+                    if tokio::time::Instant::now() > deadline {
+                        panic!("Timeout: no radar detected within 5 seconds");
+                    }
+                    tokio::time::sleep(Duration::from_millis(100)).await;
                 }
-                if tokio::time::Instant::now() > deadline {
-                    panic!("Timeout: no radar detected within 5 seconds");
-                }
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
 
-            subsys.request_shutdown();
-            Ok::<(), miette::Report>(())
-        }));
+                subsys.request_shutdown();
+                Ok::<(), miette::Report>(())
+            },
+        ));
     })
     .handle_shutdown_requests(Duration::from_millis(2000))
     .await

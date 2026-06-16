@@ -141,7 +141,6 @@ impl Range {
     pub fn is_nautical(&self) -> bool {
         !Self::metric(self.distance)
     }
-
 }
 
 impl PartialOrd for Range {

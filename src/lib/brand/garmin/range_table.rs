@@ -47,8 +47,8 @@ pub(crate) fn parse(payload: &[u8]) -> Option<Ranges> {
     if payload.len() < RANGES_OFFSET {
         return None;
     }
-    let count = u32::from_le_bytes(payload[COUNT_OFFSET..COUNT_OFFSET + 4].try_into().ok()?)
-        as usize;
+    let count =
+        u32::from_le_bytes(payload[COUNT_OFFSET..COUNT_OFFSET + 4].try_into().ok()?) as usize;
     if count == 0 || count > MAX_RANGE_ENTRIES {
         return None;
     }

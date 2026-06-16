@@ -22,19 +22,16 @@ const SPOKE_DATA_MULTICAST_ADDRESS: SocketAddrV4 =
     SocketAddrV4::new(Ipv4Addr::new(239, 255, 0, 2), 10024);
 
 /// Expected header bytes in a Furuno beacon report (bytes 0–10).
-const BEACON_REPORT_HEADER: [u8; 11] =
-    [0x1, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, 0x0];
+const BEACON_REPORT_HEADER: [u8; 11] = [0x1, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, 0x0];
 
 /// Minimum beacon report size (56 bytes = `size_of::<FurunoRadarReport>()`).
 const BEACON_REPORT_LENGTH_MIN: usize = 56;
 
 /// Beacon address as `SocketAddrV4` (the protocol constant is `SocketAddr`).
-const BEACON_ADDR: SocketAddrV4 =
-    SocketAddrV4::new(Ipv4Addr::new(172, 31, 255, 255), 10010);
+const BEACON_ADDR: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::new(172, 31, 255, 255), 10010);
 
 /// Synthetic source address for NND replay packets.
-const NND_SRC_ADDR: SocketAddrV4 =
-    SocketAddrV4::new(Ipv4Addr::new(172, 31, 0, 1), 10010);
+const NND_SRC_ADDR: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::new(172, 31, 0, 1), 10010);
 
 /// Synthetic destination address for NMEA replay packets.
 pub(crate) const NMEA_REPLAY_ADDRESS: SocketAddrV4 =
@@ -172,7 +169,10 @@ fn parse_record(data: &[u8], pos: usize) -> Option<(usize, &[u8], u8)> {
     if i == port_start || i >= data.len() || data[i] != b':' {
         return None;
     }
-    let lan_port: u8 = std::str::from_utf8(&data[port_start..i]).ok()?.parse().ok()?;
+    let lan_port: u8 = std::str::from_utf8(&data[port_start..i])
+        .ok()?
+        .parse()
+        .ok()?;
     i += 1; // skip ':'
 
     // The stated length includes the header plus 2 bytes of framing.
@@ -240,7 +240,9 @@ fn classify_payload(payload: &[u8], timestamp: Duration) -> Option<PcapPacket> {
                 // binary $ARPA packets that start with '$' but contain
                 // non-ASCII data).
                 if !nmea_data.is_empty()
-                    && nmea_data.iter().all(|&b| b.is_ascii_graphic() || b == b' ' || b == b'\r' || b == b'\n')
+                    && nmea_data
+                        .iter()
+                        .all(|&b| b.is_ascii_graphic() || b == b' ' || b == b'\r' || b == b'\n')
                 {
                     return Some(PcapPacket {
                         timestamp,
@@ -400,7 +402,9 @@ mod tests {
     #[test]
     fn model_from_nnd_filename() {
         assert_eq!(
-            model_from_filename(Path::new("Seattle_TZT3_DRS25A-NXT_TargetAnalyzer_ON.nnd.gz")),
+            model_from_filename(Path::new(
+                "Seattle_TZT3_DRS25A-NXT_TargetAnalyzer_ON.nnd.gz"
+            )),
             "DRS25ANXT"
         );
         assert_eq!(

@@ -61,33 +61,36 @@ async fn replay_navico_halo20plus() {
     Toplevel::new(async move |s: &mut SubsystemHandle| {
         let (radars, _) = mayara::start_session(&s, args).await;
 
-        s.start(SubsystemBuilder::new("test", async move |subsys: &mut SubsystemHandle| {
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-            loop {
-                let keys = radars.get_keys();
-                if !keys.is_empty() {
-                    let key = &keys[0];
-                    let info = radars.get_by_key(key).expect("radar info");
+        s.start(SubsystemBuilder::new(
+            "test",
+            async move |subsys: &mut SubsystemHandle| {
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+                loop {
+                    let keys = radars.get_keys();
+                    if !keys.is_empty() {
+                        let key = &keys[0];
+                        let info = radars.get_by_key(key).expect("radar info");
 
-                    // Wait until the model has been identified
-                    if info.controls.model_name().is_some() && !info.ranges.all.is_empty() {
-                        assert!(key.starts_with("nav"), "expected Navico key, got: {}", key);
-                        assert_eq!(info.brand, mayara::Brand::Navico);
-                        assert_eq!(info.controls.model_name().unwrap(), "HALO20+");
-                        assert!(info.doppler, "HALO20+ should support Doppler");
-                        assert_eq!(info.spokes_per_revolution, 2048);
-                        break;
+                        // Wait until the model has been identified
+                        if info.controls.model_name().is_some() && !info.ranges.all.is_empty() {
+                            assert!(key.starts_with("nav"), "expected Navico key, got: {}", key);
+                            assert_eq!(info.brand, mayara::Brand::Navico);
+                            assert_eq!(info.controls.model_name().unwrap(), "HALO20+");
+                            assert!(info.doppler, "HALO20+ should support Doppler");
+                            assert_eq!(info.spokes_per_revolution, 2048);
+                            break;
+                        }
                     }
+                    if tokio::time::Instant::now() > deadline {
+                        panic!("Timeout: no radar detected within 5 seconds");
+                    }
+                    tokio::time::sleep(Duration::from_millis(100)).await;
                 }
-                if tokio::time::Instant::now() > deadline {
-                    panic!("Timeout: no radar detected within 5 seconds");
-                }
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
 
-            subsys.request_shutdown();
-            Ok::<(), miette::Report>(())
-        }));
+                subsys.request_shutdown();
+                Ok::<(), miette::Report>(())
+            },
+        ));
     })
     .handle_shutdown_requests(Duration::from_millis(2000))
     .await

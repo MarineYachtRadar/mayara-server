@@ -46,9 +46,7 @@ pub struct Device {
 /// Returns an empty map if no NIC qualifies. In that case the function
 /// also skips the network I/O entirely, so the endpoint stays fast on
 /// degraded setups (laptop with only Wi-Fi, `--allow-wifi` off, etc.).
-pub async fn collect_per_interface(
-    iface_api: &InterfaceApi,
-) -> HashMap<Ipv4Addr, Vec<Device>> {
+pub async fn collect_per_interface(iface_api: &InterfaceApi) -> HashMap<Ipv4Addr, Vec<Device>> {
     let qualifying = collect_qualifying_nics(iface_api);
     if qualifying.is_empty() {
         return HashMap::new();
@@ -119,9 +117,7 @@ pub async fn collect_per_interface(
     //    subnet-match; the hit carries the NIC it came in on.
     for hit in passive_hits {
         if let Some(bucket) = per_nic.get_mut(&hit.nic) {
-            let dev = bucket
-                .entry(hit.ip)
-                .or_insert_with(|| empty_device(hit.ip));
+            let dev = bucket.entry(hit.ip).or_insert_with(|| empty_device(hit.ip));
             push_unique(&mut dev.sources, format!("passive:{}", hit.protocol));
         }
     }

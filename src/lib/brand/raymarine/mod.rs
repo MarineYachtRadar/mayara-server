@@ -23,7 +23,6 @@ mod protocol;
 mod report;
 mod settings;
 
-
 const NON_HD_PIXEL_VALUES: u8 = 16; // Old radars have one nibble
 const HD_PIXEL_VALUES_RAW: u16 = 256; // New radars have one byte pixels
 const HD_PIXEL_VALUES: u8 = (HD_PIXEL_VALUES_RAW / 2) as u8; // ... but we drop the last bit so we have space for other data
@@ -80,7 +79,13 @@ impl RaymarineModel {
             ),
             // Cyclone and Cyclone Pro models, untested, assume works as Quantum
             // Probably supports higher resulution though...
-            "E70620" => (BaseModel::Quantum, true, protocol::QUANTUM_MAX_SPOKE_LEN, true, "Cyclone"),
+            "E70620" => (
+                BaseModel::Quantum,
+                true,
+                protocol::QUANTUM_MAX_SPOKE_LEN,
+                true,
+                "Cyclone",
+            ),
             "E70621" => (
                 BaseModel::Quantum,
                 true,
@@ -89,8 +94,20 @@ impl RaymarineModel {
                 "Cyclone Pro",
             ),
             // Magnum, untested, assume works as RD
-            "E70484" => (BaseModel::RD, true, protocol::RD_HD_MAX_SPOKE_LEN, false, "Magnum 4kW"),
-            "E70487" => (BaseModel::RD, true, protocol::RD_HD_MAX_SPOKE_LEN, false, "Magnum 12kW"),
+            "E70484" => (
+                BaseModel::RD,
+                true,
+                protocol::RD_HD_MAX_SPOKE_LEN,
+                false,
+                "Magnum 4kW",
+            ),
+            "E70487" => (
+                BaseModel::RD,
+                true,
+                protocol::RD_HD_MAX_SPOKE_LEN,
+                false,
+                "Magnum 12kW",
+            ),
             // Open Array HD and SHD, introduced circa 2007
             "E52069" => (
                 BaseModel::RD,
@@ -121,8 +138,20 @@ impl RaymarineModel {
                 "Open Array SHD 12kW",
             ),
             // And the actual RD models, introduced circa 2004
-            "E92142" => (BaseModel::RD, true, protocol::RD_HD_MAX_SPOKE_LEN, false, "RD418HD"),
-            "E92143" => (BaseModel::RD, true, protocol::RD_HD_MAX_SPOKE_LEN, false, "RD424HD"),
+            "E92142" => (
+                BaseModel::RD,
+                true,
+                protocol::RD_HD_MAX_SPOKE_LEN,
+                false,
+                "RD418HD",
+            ),
+            "E92143" => (
+                BaseModel::RD,
+                true,
+                protocol::RD_HD_MAX_SPOKE_LEN,
+                false,
+                "RD424HD",
+            ),
             "E92130" => (BaseModel::RD, true, 512, false, "RD418D"),
             "E92132" => (BaseModel::RD, true, 512, false, "RD424D"),
 
@@ -321,8 +350,14 @@ impl RaymarineLocator {
                     let doppler = false; // Improved later when model is known better
 
                     let (spokes_per_revolution, max_spoke_len) = match model {
-                        BaseModel::Quantum => (protocol::QUANTUM_SPOKES_PER_REVOLUTION as usize, protocol::QUANTUM_MAX_SPOKE_LEN),
-                        BaseModel::RD => (protocol::RD_SPOKES_PER_REVOLUTION as usize, protocol::RD_HD_MAX_SPOKE_LEN),
+                        BaseModel::Quantum => (
+                            protocol::QUANTUM_SPOKES_PER_REVOLUTION as usize,
+                            protocol::QUANTUM_MAX_SPOKE_LEN,
+                        ),
+                        BaseModel::RD => (
+                            protocol::RD_SPOKES_PER_REVOLUTION as usize,
+                            protocol::RD_HD_MAX_SPOKE_LEN,
+                        ),
                     };
 
                     let radar_addr: SocketAddrV4 = data.report.into();
@@ -505,8 +540,7 @@ impl RaymarineLocator {
             subsys.start(SubsystemBuilder::new(
                 navdata_name,
                 async move |s: &mut SubsystemHandle| match crate::network::create_multicast_send(
-                    &send_addr,
-                    &nic_addr,
+                    &send_addr, &nic_addr,
                 ) {
                     Ok(sock) => navdata::run(s, sock).await.map_err(|e| e.into()),
                     Err(e) => {
@@ -574,7 +608,8 @@ impl RadarLocator for RaymarineLocator {
                     }
                 }
             }
-            protocol::beacon56::LEN => match Self::process_beacon_56_report(self, report, nic_addr) {
+            protocol::beacon56::LEN => match Self::process_beacon_56_report(self, report, nic_addr)
+            {
                 Ok(()) => {}
 
                 Err(e) => {

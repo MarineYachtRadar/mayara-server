@@ -28,8 +28,7 @@ use tokio::sync::mpsc;
 
 use super::super::Web;
 
-pub(crate) const DIAGNOSTICS_URI: &str =
-    "/signalk/v2/api/vessels/self/radars/diagnostics";
+pub(crate) const DIAGNOSTICS_URI: &str = "/signalk/v2/api/vessels/self/radars/diagnostics";
 
 #[derive(Serialize)]
 struct HostAddress {
@@ -121,10 +120,7 @@ fn config_summary(args: &mayara::Cli) -> Value {
     obj.insert("emulator".into(), json!(args.emulator));
     obj.insert("replay".into(), json!(args.replay));
     obj.insert("nmea0183".into(), json!(args.nmea0183));
-    obj.insert(
-        "navigation_address".into(),
-        json!(args.navigation_address),
-    );
+    obj.insert("navigation_address".into(), json!(args.navigation_address));
     obj.insert(
         "targets".into(),
         json!(format!("{:?}", args.targets).to_lowercase()),
@@ -240,7 +236,10 @@ fn inject_devices(locator: &mut Value, devices_by_nic: &HashMap<Ipv4Addr, Vec<De
 
 fn gzip_json(body: &Value) -> std::io::Result<Vec<u8>> {
     let json_bytes = serde_json::to_vec_pretty(body).expect("Value is always serializable");
-    let mut encoder = GzEncoder::new(Vec::with_capacity(json_bytes.len() / 4), Compression::default());
+    let mut encoder = GzEncoder::new(
+        Vec::with_capacity(json_bytes.len() / 4),
+        Compression::default(),
+    );
     encoder.write_all(&json_bytes)?;
     encoder.finish()
 }

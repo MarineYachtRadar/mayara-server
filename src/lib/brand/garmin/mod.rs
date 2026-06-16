@@ -520,9 +520,7 @@ impl GarminLocator {
         let report_addr = SocketAddrV4::new(Ipv4Addr::new(239, 254, 2, 0), REPORT_PORT);
         let spoke_data_addr = match detected_type {
             GarminRadarType::HD => report_addr,
-            GarminRadarType::XHD => {
-                SocketAddrV4::new(Ipv4Addr::new(239, 254, 2, 0), DATA_PORT)
-            }
+            GarminRadarType::XHD => SocketAddrV4::new(Ipv4Addr::new(239, 254, 2, 0), DATA_PORT),
             _ => return,
         };
 
@@ -743,10 +741,7 @@ mod tests {
         // Plain xHD — no advanced bits
         let mut caps = GarminCapabilities::empty();
         caps.set(cap::TRANSMIT_MODE);
-        assert_eq!(
-            detect_model_name(GarminRadarType::XHD, &caps),
-            "Garmin xHD"
-        );
+        assert_eq!(detect_model_name(GarminRadarType::XHD, &caps), "Garmin xHD");
 
         // xHD2 — has pulse expansion
         caps.set(cap::PULSE_EXPANSION_A);
@@ -770,10 +765,7 @@ mod tests {
         );
 
         // HD is always HD
-        assert_eq!(
-            detect_model_name(GarminRadarType::HD, &caps),
-            "Garmin HD"
-        );
+        assert_eq!(detect_model_name(GarminRadarType::HD, &caps), "Garmin HD");
     }
 }
 

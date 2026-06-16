@@ -95,7 +95,10 @@ pub(crate) fn parse_bytes(data: &[u8]) -> io::Result<Vec<PcapPacket>> {
     if link_type != LINKTYPE_ETHERNET {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("unsupported pcap link type {} (only Ethernet/1 is supported)", link_type),
+            format!(
+                "unsupported pcap link type {} (only Ethernet/1 is supported)",
+                link_type
+            ),
         ));
     }
 
@@ -121,7 +124,11 @@ pub(crate) fn parse_bytes(data: &[u8]) -> io::Result<Vec<PcapPacket>> {
         if let Some(mut pkt) = parse_udp_packet(pkt_data, Duration::ZERO) {
             // Anchor timing to the first UDP packet, not the first pcap record
             let first = first_ts.get_or_insert((ts_sec, ts_frac));
-            let divisor: u64 = if nanoseconds { 1_000_000_000 } else { 1_000_000 };
+            let divisor: u64 = if nanoseconds {
+                1_000_000_000
+            } else {
+                1_000_000
+            };
             let abs_first = first.0 as u64 * divisor + first.1 as u64;
             let abs_now = ts_sec as u64 * divisor + ts_frac as u64;
             pkt.timestamp =
@@ -206,7 +213,8 @@ pub fn write_file(path: &Path, packets: &[PcapPacket]) -> io::Result<()> {
     for pkt in packets {
         debug_assert!(
             pkt.payload.len() <= u16::MAX as usize - IP_HEADER_MIN_LEN - UDP_HEADER_LEN,
-            "payload too large for UDP/IPv4: {} bytes", pkt.payload.len()
+            "payload too large for UDP/IPv4: {} bytes",
+            pkt.payload.len()
         );
         let udp_len = (UDP_HEADER_LEN + pkt.payload.len()) as u16;
         let ip_total_len = (IP_HEADER_MIN_LEN + UDP_HEADER_LEN + pkt.payload.len()) as u16;
@@ -250,8 +258,8 @@ pub fn write_file(path: &Path, packets: &[PcapPacket]) -> io::Result<()> {
     }
 
     if path.extension().map_or(false, |e| e == "gz") {
-        use flate2::write::GzEncoder;
         use flate2::Compression;
+        use flate2::write::GzEncoder;
         use std::io::Write;
         let file = fs::File::create(path)?;
         let mut encoder = GzEncoder::new(file, Compression::default());
@@ -294,5 +302,4 @@ mod tests {
         assert_eq!(parsed[1].dst_addr.port(), 8765);
         std::fs::remove_file(&tmp).ok();
     }
-
 }

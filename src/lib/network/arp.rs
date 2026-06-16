@@ -246,10 +246,7 @@ mod windows_arp {
         for line in raw.lines() {
             let trimmed = line.trim();
             if let Some(rest) = trimmed.strip_prefix("Interface:") {
-                current_nic = rest
-                    .split_whitespace()
-                    .next()
-                    .map(|s| s.to_string());
+                current_nic = rest.split_whitespace().next().map(|s| s.to_string());
                 continue;
             }
             let cols: Vec<&str> = trimmed.split_whitespace().collect();
@@ -310,13 +307,22 @@ Interface: 10.0.0.7 --- 0xb
 fn normalize_mac(raw: &str) -> Option<String> {
     let s: String = raw
         .chars()
-        .map(|c| if c == '-' { ':' } else { c.to_ascii_lowercase() })
+        .map(|c| {
+            if c == '-' {
+                ':'
+            } else {
+                c.to_ascii_lowercase()
+            }
+        })
         .collect();
     let parts: Vec<&str> = s.split(':').collect();
     if parts.len() != 6 || parts.iter().any(|p| p.len() != 2) {
         return None;
     }
-    if !parts.iter().all(|p| p.chars().all(|c| c.is_ascii_hexdigit())) {
+    if !parts
+        .iter()
+        .all(|p| p.chars().all(|c| c.is_ascii_hexdigit()))
+    {
         return None;
     }
     if parts.iter().all(|p| *p == "00") {

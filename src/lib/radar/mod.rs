@@ -316,12 +316,12 @@ pub struct RadarInfo {
     legend: Legend,                      // What pixel values mean
     pub controls: SharedControls,        // Which controls there are, not complete in beginning
     pub ranges: Ranges,                  // Ranges for this radar, empty in beginning
-    pub doppler: bool,      // Does it support Doppler?
-    doppler_levels: u8,     // Intensity sub-levels per direction (0, 1, or 4)
-    has_rain_class: bool,   // Radar classifies rain on the wire (Furuno NXT)
-    pub dual_range: bool,                               // Is it dual range capable?
-    pub sparse_spokes: bool, // Does it produce fewer spokes than spokes_per_revolution?
-    pub stationary: bool,    // Is radar stationary (shore-based)?
+    pub doppler: bool,                   // Does it support Doppler?
+    doppler_levels: u8,                  // Intensity sub-levels per direction (0, 1, or 4)
+    has_rain_class: bool,                // Radar classifies rain on the wire (Furuno NXT)
+    pub dual_range: bool,                // Is it dual range capable?
+    pub sparse_spokes: bool,             // Does it produce fewer spokes than spokes_per_revolution?
+    pub stationary: bool,                // Is radar stationary (shore-based)?
     rotation_timestamp: Instant,
 
     // Channels
@@ -364,13 +364,8 @@ impl RadarInfo {
     {
         let (message_tx, _message_rx) = tokio::sync::broadcast::channel(32);
 
-        let (targets, replay, output) = {
-            (
-                args.targets.clone(),
-                args.is_replay(),
-                args.output.clone(),
-            )
-        };
+        let (targets, replay, output) =
+            { (args.targets.clone(), args.is_replay(), args.output.clone()) };
         let doppler_levels = if doppler { 1 } else { 0 };
         let has_rain_class = false;
         let legend = default_legend(&targets, doppler_levels, has_rain_class, pixel_values);
@@ -1508,10 +1503,7 @@ impl CommonRadar {
                         self.update();
                         // Send to hardware if the brand supports it (e.g. Furuno)
                         if let Some(command_sender) = command_sender {
-                            match command_sender
-                                .set_control(&cv, &self.info.controls)
-                                .await
-                            {
+                            match command_sender.set_control(&cv, &self.info.controls).await {
                                 Ok(()) => {}
                                 Err(RadarError::CannotSetControlId(_)) => {}
                                 Err(e) => {
@@ -2008,8 +2000,8 @@ fn apply_antenna_offset(
     // Prefer the spoke's own heading over the global navdata heading to avoid
     // a one-spoke lag on startup or when heading only comes from the radar feed.
     let heading = if let Some(bearing) = spoke.bearing {
-        let heading_spokes = (bearing as i32 - spoke.angle as i32)
-            .rem_euclid(spokes_per_revolution as i32) as f64;
+        let heading_spokes =
+            (bearing as i32 - spoke.angle as i32).rem_euclid(spokes_per_revolution as i32) as f64;
         heading_spokes / spokes_per_revolution as f64 * std::f64::consts::TAU
     } else if let Some(h) = crate::navdata::get_heading_true() {
         h

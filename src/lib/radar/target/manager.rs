@@ -203,10 +203,7 @@ impl TrackerManager {
         message: String,
     ) {
         use crate::stream::{NotificationMethod, NotificationValue};
-        let path = format!(
-            "notifications.radar.{}.guardZone.{}",
-            radar_key, zone
-        );
+        let path = format!("notifications.radar.{}.guardZone.{}", radar_key, zone);
         let method = match state {
             crate::stream::NotificationState::Normal => Vec::new(),
             _ => vec![NotificationMethod::Visual, NotificationMethod::Sound],
@@ -817,12 +814,7 @@ fn compute_danger(
     let target_pos = target.predict_position(target.last_update);
 
     match calculate_cpa_from_motion(
-        *own_pos,
-        own_sog,
-        own_cog,
-        target_pos,
-        target_sog,
-        target_cog,
+        *own_pos, own_sog, own_cog, target_pos, target_sog, target_cog,
     ) {
         Some(result) => TargetDangerApi::new(result.cpa, result.tcpa),
         None => TargetDangerApi::unknown(),
@@ -1082,7 +1074,10 @@ mod tests {
         out
     }
 
-    fn make_test_manager_with_rx() -> (TrackerManager, tokio::sync::broadcast::Receiver<SignalKDelta>) {
+    fn make_test_manager_with_rx() -> (
+        TrackerManager,
+        tokio::sync::broadcast::Receiver<SignalKDelta>,
+    ) {
         let (sk_tx, sk_rx) = broadcast::channel(16);
         let (manager, _command_tx) = TrackerManager::new(false, sk_tx);
         (manager, sk_rx)

@@ -23,12 +23,12 @@ use super::protocol::{
 use super::settings;
 use crate::Cli;
 use crate::network;
-use crate::replay::RadarSocket;
 use crate::radar::CommonRadar;
 use crate::radar::SharedRadars;
 use crate::radar::SpokeBearing;
 use crate::radar::settings::ControlId;
 use crate::radar::{Power, RadarError, RadarInfo};
+use crate::replay::RadarSocket;
 use crate::util::PrintableSpoke;
 
 /// TCP keepalive timing for the Furuno control socket. Tunes how quickly the
@@ -128,8 +128,7 @@ impl FurunoReportReceiver {
             .map(RadarModel::from_model_name)
             .unwrap_or(RadarModel::Unknown);
         let low_power = model.is_low_power();
-        let initial_lut =
-            Self::wire_to_legend(&info.get_legend(), DopplerWireMode::Off, low_power);
+        let initial_lut = Self::wire_to_legend(&info.get_legend(), DopplerWireMode::Off, low_power);
         let wire_to_legend = [initial_lut, initial_lut];
 
         let control_update_rx = info.control_update_subscribe();
@@ -782,19 +781,18 @@ impl FurunoReportReceiver {
                 }
                 let wire_index = numbers[0] as i32;
                 let wire_unit = numbers[1] as i32;
-                let range_meters =
-                    wire_index_to_meters_for_unit(wire_index, wire_unit)
-                        .with_context(|| {
-                            format!(
-                                "Unknown wire index {} (unit {}) from radar range response",
-                                wire_index, wire_unit
-                            )
-                        })?;
+                let range_meters = wire_index_to_meters_for_unit(wire_index, wire_unit)
+                    .with_context(|| {
+                        format!(
+                            "Unknown wire index {} (unit {}) from radar range response",
+                            wire_index, wire_unit
+                        )
+                    })?;
 
                 let drid = self.extract_drid(&command_id, &numbers);
                 let range_units_value = match wire_unit {
                     WIRE_UNIT_KM => 1.0, // Metric
-                    _ => 0.0,                            // Nautical
+                    _ => 0.0,            // Nautical
                 };
                 let target = self.common_for_range(drid);
                 target.set_value(&ControlId::Range, range_meters as f64);
@@ -941,11 +939,7 @@ impl FurunoReportReceiver {
                     } else {
                         &self.common.key
                     };
-                    log::debug!(
-                        "{}: Doppler wire mode changed to {:?}",
-                        key,
-                        new_mode
-                    );
+                    log::debug!("{}: Doppler wire mode changed to {:?}", key, new_mode);
                 }
                 // First `$NEF` for this range confirms the TA state, so the
                 // LUT is now trustworthy and spoke emission can resume.
@@ -1132,12 +1126,7 @@ impl FurunoReportReceiver {
             settings::update_when_model_known(&mut self.common.info, model, version);
             // Models without a Doppler control will never send `$NEF`, so the
             // initial TA-Off LUT is correct for them and we can lift the gate.
-            if !self
-                .common
-                .info
-                .controls
-                .contains_key(&ControlId::Doppler)
-            {
+            if !self.common.info.controls.contains_key(&ControlId::Doppler) {
                 self.target_analyzer_known[0] = true;
             }
             self.wire_to_legend[0] = Self::wire_to_legend(
@@ -1146,7 +1135,10 @@ impl FurunoReportReceiver {
                 low_power,
             );
             if low_power {
-                log::info!("{}: using gamma echo curve for low-power radar", self.common.key);
+                log::info!(
+                    "{}: using gamma echo curve for low-power radar",
+                    self.common.key
+                );
             }
             if let Some(cs) = &mut self.command_sender {
                 cs.set_ranges(self.common.info.ranges.clone());
@@ -1979,8 +1971,7 @@ impl FurunoReportReceiver {
             (data[8] as u32 + (data[9] as u32 & FRAME_SPOKE_DATA_LEN_HIGH_BIT as u32) * 256) * 4
                 + 4;
         let sweep_count = (data[9] >> 1) as u32;
-        let sweep_len =
-            ((data[11] & FRAME_SWEEP_LEN_HIGH_MASK) as u32) << 8 | data[10] as u32;
+        let sweep_len = ((data[11] & FRAME_SWEEP_LEN_HIGH_MASK) as u32) << 8 | data[10] as u32;
         let encoding = (data[11] & FRAME_ENCODING_MASK) >> FRAME_ENCODING_SHIFT;
         let have_heading = (data[11] & FRAME_HEADING_VALID_BIT) >> 5;
         let radar_no = (data[15] & FRAME_DUAL_RANGE_BIT) >> 6;
@@ -2010,16 +2001,15 @@ impl FurunoReportReceiver {
                 }
             })
             .unwrap_or(WIRE_UNIT_NM);
-        let range = wire_index_to_meters_for_unit(wire_index, wire_unit)
-            .unwrap_or_else(|| {
-                log::warn!(
-                    "Unknown wire index {} (unit {}) in spoke header: {:?}",
-                    wire_index,
-                    wire_unit,
-                    &data[0..16]
-                );
-                0
-            });
+        let range = wire_index_to_meters_for_unit(wire_index, wire_unit).unwrap_or_else(|| {
+            log::warn!(
+                "Unknown wire index {} (unit {}) in spoke header: {:?}",
+                wire_index,
+                wire_unit,
+                &data[0..16]
+            );
+            0
+        });
         let range = range as u32;
 
         // scale = effective sample count for the configured display range.
@@ -2105,8 +2095,7 @@ mod tests {
     #[test]
     fn wire_to_legend_off_nxt_is_linear() {
         let legend = nxt_ta_legend();
-        let lut =
-            FurunoReportReceiver::wire_to_legend(&legend, DopplerWireMode::Off, false);
+        let lut = FurunoReportReceiver::wire_to_legend(&legend, DopplerWireMode::Off, false);
         assert_eq!(lut[0], 0, "raw 0 must be transparent");
         // raw 252 (PIXEL_VALUES) should reach the top of the intensity ramp.
         assert_eq!(lut[PIXEL_VALUES as usize], legend.pixel_colors - 1);
@@ -2115,10 +2104,8 @@ mod tests {
     #[test]
     fn wire_to_legend_off_drs4w_is_nonlinear() {
         let legend = nxt_ta_legend();
-        let lut_linear =
-            FurunoReportReceiver::wire_to_legend(&legend, DopplerWireMode::Off, false);
-        let lut_gamma =
-            FurunoReportReceiver::wire_to_legend(&legend, DopplerWireMode::Off, true);
+        let lut_linear = FurunoReportReceiver::wire_to_legend(&legend, DopplerWireMode::Off, false);
+        let lut_gamma = FurunoReportReceiver::wire_to_legend(&legend, DopplerWireMode::Off, true);
         // 18th-root curve must lift low raw values above the linear mapping.
         assert!(lut_gamma[4] > lut_linear[4]);
     }
@@ -2126,8 +2113,7 @@ mod tests {
     #[test]
     fn wire_to_legend_on_maps_three_bands() {
         let legend = nxt_ta_legend();
-        let lut =
-            FurunoReportReceiver::wire_to_legend(&legend, DopplerWireMode::On, false);
+        let lut = FurunoReportReceiver::wire_to_legend(&legend, DopplerWireMode::On, false);
 
         let rain_start = legend.doppler_rain.unwrap().0;
         let appr_start = legend.doppler_approaching.unwrap().0;
@@ -2173,8 +2159,7 @@ mod tests {
             low_return: 0,
             static_background: None,
         };
-        let lut =
-            FurunoReportReceiver::wire_to_legend(&legend, DopplerWireMode::On, false);
+        let lut = FurunoReportReceiver::wire_to_legend(&legend, DopplerWireMode::On, false);
         // Each step of 4 in the raw byte moves one slot in the legend.
         assert_eq!(lut[0x80], 120, "approaching lowest intensity");
         assert_eq!(lut[0x84], 121);
@@ -2188,8 +2173,7 @@ mod tests {
     fn wire_to_legend_on_without_rain_slot_falls_back_to_intensity() {
         let mut legend = nxt_ta_legend();
         legend.doppler_rain = None;
-        let lut =
-            FurunoReportReceiver::wire_to_legend(&legend, DopplerWireMode::On, false);
+        let lut = FurunoReportReceiver::wire_to_legend(&legend, DopplerWireMode::On, false);
         let off = FurunoReportReceiver::wire_to_legend(&legend, DopplerWireMode::Off, false);
         // Without a rain slot, rain-range bytes reuse the stationary
         // intensity mapping at (b + 0x40).
@@ -2220,8 +2204,7 @@ mod tests {
         ];
         let prev: Vec<u8> = vec![0; SPOKE_LEN];
         let sweep_len = 884;
-        let (spoke, used) =
-            FurunoReportReceiver::decode_sweep_encoding_3(&sweep, &prev, sweep_len);
+        let (spoke, used) = FurunoReportReceiver::decode_sweep_encoding_3(&sweep, &prev, sweep_len);
         assert_eq!(spoke.len(), sweep_len);
         assert!(
             used > sweep.len(),
@@ -2240,8 +2223,7 @@ mod tests {
         // configured range. Renderer-side machinery uses the widened value to
         // scale the polar texture past the outer ring.
         let src = vec![7u8; 8];
-        let (spoke, spoke_range) =
-            FurunoReportReceiver::map_with_overshoot(&src, 4, 8, 1000);
+        let (spoke, spoke_range) = FurunoReportReceiver::map_with_overshoot(&src, 4, 8, 1000);
         assert_eq!(spoke.len(), SPOKE_LEN);
         assert_eq!(spoke_range, 2000);
     }
@@ -2250,8 +2232,7 @@ mod tests {
     fn map_with_overshoot_falls_back_when_scale_covers_whole_sweep() {
         // scale == usable: no overshoot exists, range stays as configured.
         let src = vec![7u8; 8];
-        let (_, same_range) =
-            FurunoReportReceiver::map_with_overshoot(&src, 8, 8, 1000);
+        let (_, same_range) = FurunoReportReceiver::map_with_overshoot(&src, 8, 8, 1000);
         assert_eq!(same_range, 1000);
     }
 
@@ -2260,8 +2241,7 @@ mod tests {
         // range_meters == 0 happens when the radar hasn't reported a range
         // yet; widening would multiply zero by a fraction, so preserve zero.
         let src = vec![7u8; 8];
-        let (_, zero_range) =
-            FurunoReportReceiver::map_with_overshoot(&src, 4, 8, 0);
+        let (_, zero_range) = FurunoReportReceiver::map_with_overshoot(&src, 4, 8, 0);
         assert_eq!(zero_range, 0);
     }
 
@@ -2270,9 +2250,7 @@ mod tests {
         // scale == 0 means metadata didn't carry a usable scale field; the
         // safe default is to map the whole spoke 1:1 with the reported range.
         let src = vec![7u8; 8];
-        let (_, same_range) =
-            FurunoReportReceiver::map_with_overshoot(&src, 0, 8, 1000);
+        let (_, same_range) = FurunoReportReceiver::map_with_overshoot(&src, 0, 8, 1000);
         assert_eq!(same_range, 1000);
     }
-
 }

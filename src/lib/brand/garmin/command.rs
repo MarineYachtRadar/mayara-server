@@ -99,12 +99,12 @@ impl Command {
     }
 
     async fn set_transmit_hd(&mut self, on: bool) -> io::Result<()> {
-        self.send_10(CMD_HD_SET_TRANSMIT, if on { 2 } else { 1 }).await
+        self.send_10(CMD_HD_SET_TRANSMIT, if on { 2 } else { 1 })
+            .await
     }
 
     async fn set_transmit(&mut self, on: bool) -> io::Result<()> {
-        self.send_9(MSG_TRANSMIT_MODE, if on { 1 } else { 0 })
-            .await
+        self.send_9(MSG_TRANSMIT_MODE, if on { 1 } else { 0 }).await
     }
 
     async fn set_range_hd(&mut self, meters: u32) -> io::Result<()> {
@@ -115,7 +115,11 @@ impl Command {
 
     async fn set_range(&mut self, meters: u32) -> io::Result<()> {
         // Enhanced protocol encodes meters directly.
-        let msg = if self.range_b { MSG_RANGE_B } else { MSG_RANGE_A };
+        let msg = if self.range_b {
+            MSG_RANGE_B
+        } else {
+            MSG_RANGE_A
+        };
         self.send_12(msg, meters).await
     }
 
@@ -131,9 +135,17 @@ impl Command {
 
     async fn set_gain(&mut self, auto: bool, auto_high: bool, value: u32) -> io::Result<()> {
         let (mode_msg, gain_msg, auto_level_msg) = if self.range_b {
-            (MSG_RANGE_B_GAIN_MODE, MSG_RANGE_B_GAIN, MSG_RANGE_B_RADAR_MODE)
+            (
+                MSG_RANGE_B_GAIN_MODE,
+                MSG_RANGE_B_GAIN,
+                MSG_RANGE_B_RADAR_MODE,
+            )
         } else {
-            (MSG_RANGE_A_GAIN_MODE, MSG_RANGE_A_GAIN, MSG_RANGE_A_AUTO_LEVEL)
+            (
+                MSG_RANGE_A_GAIN_MODE,
+                MSG_RANGE_A_GAIN,
+                MSG_RANGE_A_AUTO_LEVEL,
+            )
         };
         if auto {
             self.send_9(mode_msg, 2).await?;
@@ -205,9 +217,17 @@ impl Command {
 
     async fn set_sea(&mut self, auto: bool, auto_level: u8, value: u8) -> io::Result<()> {
         let (mode_msg, gain_msg, state_msg) = if self.range_b {
-            (MSG_RANGE_B_SEA_MODE, MSG_RANGE_B_SEA_GAIN, MSG_RANGE_B_SEA_STATE)
+            (
+                MSG_RANGE_B_SEA_MODE,
+                MSG_RANGE_B_SEA_GAIN,
+                MSG_RANGE_B_SEA_STATE,
+            )
         } else {
-            (MSG_RANGE_A_SEA_MODE, MSG_RANGE_A_SEA_GAIN, MSG_RANGE_A_SEA_STATE)
+            (
+                MSG_RANGE_A_SEA_MODE,
+                MSG_RANGE_A_SEA_GAIN,
+                MSG_RANGE_A_SEA_STATE,
+            )
         };
         if auto {
             self.send_9(mode_msg, 2).await?;
@@ -241,17 +261,12 @@ impl Command {
         buf[8] = 50; // gain
         buf[9] = if on { 1 } else { 0 };
         socket.send(&buf).await?;
-        log::debug!(
-            "Garmin {}: sent FTC command on={}",
-            self.radar_type,
-            on
-        );
+        log::debug!("Garmin {}: sent FTC command on={}", self.radar_type, on);
         Ok(())
     }
 
     async fn set_sentry_mode(&mut self, on: bool) -> io::Result<()> {
-        self.send_9(MSG_SENTRY_MODE, if on { 1 } else { 0 })
-            .await
+        self.send_9(MSG_SENTRY_MODE, if on { 1 } else { 0 }).await
     }
 
     async fn set_sentry_transmit_time(&mut self, seconds: u16) -> io::Result<()> {
@@ -268,7 +283,11 @@ impl Command {
             DopplerMode::Approaching => 1,
             DopplerMode::Both => 2,
         };
-        let msg = if self.range_b { MSG_RANGE_B_DOPPLER_MODE } else { MSG_RANGE_A_DOPPLER_MODE };
+        let msg = if self.range_b {
+            MSG_RANGE_B_DOPPLER_MODE
+        } else {
+            MSG_RANGE_A_DOPPLER_MODE
+        };
         self.send_9(msg, value).await
     }
 
@@ -277,10 +296,8 @@ impl Command {
     /// port 50101 — so we use a separate one-shot socket.
     async fn set_device_alias(&self, alias: &str) -> io::Result<()> {
         let packet = super::discovery::build_set_alias(alias);
-        let dest = std::net::SocketAddrV4::new(
-            *self.send_addr.ip(),
-            super::discovery::CDM_CONTROL_PORT,
-        );
+        let dest =
+            std::net::SocketAddrV4::new(*self.send_addr.ip(), super::discovery::CDM_CONTROL_PORT);
         let sock = tokio::net::UdpSocket::bind("0.0.0.0:0").await?;
         sock.send_to(&packet, dest).await?;
         log::info!(
@@ -405,9 +422,7 @@ impl CommandSender for Command {
                 self.set_interference(value as u8).await
             }
             (ControlId::Rain, GarminRadarType::HD) => self.set_rain_hd(value as u8).await,
-            (ControlId::Rain, GarminRadarType::XHD) => {
-                self.set_rain(enabled, value as u8).await
-            }
+            (ControlId::Rain, GarminRadarType::XHD) => self.set_rain(enabled, value as u8).await,
             (ControlId::Sea, GarminRadarType::HD) => self.set_sea_hd(auto, value as u8).await,
             (ControlId::Sea, GarminRadarType::XHD) => {
                 let auto_level = auto_value as u8;
@@ -416,9 +431,7 @@ impl CommandSender for Command {
             (ControlId::ScanSpeed, GarminRadarType::HD) => {
                 self.set_scan_speed_hd(value as u8).await
             }
-            (ControlId::ScanSpeed, GarminRadarType::XHD) => {
-                self.set_scan_speed(value as u8).await
-            }
+            (ControlId::ScanSpeed, GarminRadarType::XHD) => self.set_scan_speed(value as u8).await,
             (ControlId::NoTransmitSector1, GarminRadarType::XHD) => {
                 let start_rad = cv.as_f64().unwrap_or(0.0);
                 let end_rad = cv.end_as_f64().unwrap_or(0.0);
@@ -469,9 +482,7 @@ impl CommandSender for Command {
                 let scaled = (value as u16 * GAIN_SCALE).min(10000);
                 self.send_10(msg, scaled).await
             }
-            (ControlId::TimedIdle, GarminRadarType::XHD) => {
-                self.set_sentry_mode(value != 0).await
-            }
+            (ControlId::TimedIdle, GarminRadarType::XHD) => self.set_sentry_mode(value != 0).await,
             (ControlId::TimedRun, GarminRadarType::XHD) => {
                 let seconds = (value as u16).max(1);
                 self.set_sentry_transmit_time(seconds).await

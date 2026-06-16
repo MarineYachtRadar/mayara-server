@@ -410,8 +410,8 @@ impl TargetTracker {
     /// Returns `true` if a revolution just completed.
     pub fn check_revolution(&mut self, angle: u16, time: u64) -> bool {
         // Detect revolution boundary (angle wraps from high to low)
-        let is_boundary = angle < self.last_angle
-            && (self.last_angle - angle) > (self.spokes_per_revolution / 2);
+        let is_boundary =
+            angle < self.last_angle && (self.last_angle - angle) > (self.spokes_per_revolution / 2);
         if is_boundary {
             self.on_revolution_complete(time);
         }
@@ -522,7 +522,11 @@ impl TargetTracker {
                 // a is young; keep whichever has more updates (b wins ties since a is young)
                 let updates_a = self.active_targets[&a].update_count;
                 let updates_b = self.active_targets[&b].update_count;
-                let (keep, discard) = if updates_b >= updates_a { (b, a) } else { (a, b) };
+                let (keep, discard) = if updates_b >= updates_a {
+                    (b, a)
+                } else {
+                    (a, b)
+                };
                 // discard must be young — skip if the merge would remove an established target
                 if self.active_targets[&discard].update_count >= 4 {
                     continue;
@@ -1485,8 +1489,12 @@ mod tests {
 
         // First 4 detections are in guard zone (target gets acquired and promoted)
         let (lat0, lon0) = position_at_angle(0.0);
-        let result0 =
-            tracker.process_candidate(make_candidate_with_source(lat0, lon0, 0, CandidateSource::GuardZone(1)));
+        let result0 = tracker.process_candidate(make_candidate_with_source(
+            lat0,
+            lon0,
+            0,
+            CandidateSource::GuardZone(1),
+        ));
         let target_id = match result0 {
             ProcessResult::NewAcquiring(id) => id,
             _ => panic!("Expected NewAcquiring"),
@@ -1496,7 +1504,10 @@ mod tests {
             let angle = angular_velocity * (i as f64 * 3.0);
             let (lat, lon) = position_at_angle(angle);
             tracker.process_candidate(make_candidate_with_source(
-                lat, lon, i * revolution_ms, CandidateSource::GuardZone(1),
+                lat,
+                lon,
+                i * revolution_ms,
+                CandidateSource::GuardZone(1),
             ));
         }
         let target = tracker.get_target(target_id).unwrap();
@@ -1941,10 +1952,7 @@ mod tests {
         // pairwise separation across however many targets the tracker
         // ended up with, so the test doesn't depend on the internal ID
         // numbering or on which candidate became which id.
-        let positions: Vec<_> = tracker
-            .get_active_targets()
-            .map(|t| t.position)
-            .collect();
+        let positions: Vec<_> = tracker.get_active_targets().map(|t| t.position).collect();
         assert_eq!(positions.len(), 2, "expected 2 candidate targets pre-dedup");
         let separation = calculate_distance(&positions[0], &positions[1]);
         assert!(
