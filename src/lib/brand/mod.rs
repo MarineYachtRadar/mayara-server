@@ -75,8 +75,6 @@ pub(crate) fn create_brand_listeners(
     }
 }
 
-// All brand specific code should implement the following traits, in order to be complete
-
 /// Every brand must try to create a self-organizing locator of any radars.
 /// It receives information about the ethernet card and any radars already found.
 pub(crate) trait RadarLocator: Send {

@@ -550,8 +550,12 @@ impl TrailBuffer {
     // zoom_factor > 1 -> zoom in, enlarge image
     fn zoom_relative_trails(&mut self, zoom_factor: f64) {
         let mut new_trail = vec![0; self.max_spoke_len];
-        let mut index_prev = 0;
         for spoke in 0..self.spokes_per_revolution {
+            // Reset the interpolation start-of-run cursor on every spoke;
+            // letting it carry over across spokes lets a later spoke's
+            // first `index_new` end up less than `index_prev`, which the
+            // `.fill(...)` slice would panic on.
+            let mut index_prev = 0;
             {
                 let trail = &self.relative_trails
                     [spoke * self.max_spoke_len..(spoke + 1) * self.max_spoke_len];
@@ -561,7 +565,7 @@ impl TrailBuffer {
                     if index_new >= self.max_spoke_len {
                         break;
                     }
-                    if t != 0 {
+                    if t != 0 && index_prev <= index_new {
                         new_trail[index_prev..=index_new].fill(t);
                     }
                     index_prev = index_new + 1;
