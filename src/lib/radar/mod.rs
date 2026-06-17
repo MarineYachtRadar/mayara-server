@@ -933,12 +933,13 @@ struct Radars {
     tracker_command_tx: Option<mpsc::Sender<TrackerCommand>>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Power {
     Off,
     Standby,
     Transmit,
     Preparing,
+    Fault,
 }
 
 impl fmt::Display for Power {
@@ -955,11 +956,13 @@ impl Power {
                 Some(1) => Ok(Power::Standby),
                 Some(2) => Ok(Power::Transmit),
                 Some(3) => Ok(Power::Preparing),
+                Some(4) => Ok(Power::Fault),
                 _ => match n.as_f64() {
                     Some(0.) => Ok(Power::Off),
                     Some(1.) => Ok(Power::Standby),
                     Some(2.) => Ok(Power::Transmit),
                     Some(3.) => Ok(Power::Preparing),
+                    Some(4.) => Ok(Power::Fault),
                     _ => Err(RadarError::ParseJson(format!("Unknown status: {}", s))),
                 },
             },
@@ -968,6 +971,7 @@ impl Power {
                 "1" | "standby" => Ok(Power::Standby),
                 "2" | "transmit" => Ok(Power::Transmit),
                 "3" | "preparing" => Ok(Power::Preparing),
+                "4" | "fault" => Ok(Power::Fault),
                 _ => Err(RadarError::ParseJson(format!("Unknown status: {}", s))),
             },
             _ => Err(RadarError::ParseJson(format!("Unknown status: {}", s))),
@@ -2049,5 +2053,40 @@ mod tests {
         pub(super) fn dummy_is_idle_field() -> Arc<AtomicBool> {
             Arc::new(AtomicBool::new(false))
         }
+    }
+
+    // ----- Power::from_value -----
+
+    #[test]
+    fn power_from_value_parses_fault_variants() {
+        assert_eq!(
+            Power::from_value(&serde_json::json!(4)).unwrap(),
+            Power::Fault
+        );
+        assert_eq!(
+            Power::from_value(&serde_json::json!(4.0)).unwrap(),
+            Power::Fault
+        );
+        assert_eq!(
+            Power::from_value(&serde_json::json!("fault")).unwrap(),
+            Power::Fault
+        );
+        // Case-insensitive matching.
+        assert_eq!(
+            Power::from_value(&serde_json::json!("Fault")).unwrap(),
+            Power::Fault
+        );
+        // Numeric string form, same as the non-Fault states.
+        assert_eq!(
+            Power::from_value(&serde_json::json!("4")).unwrap(),
+            Power::Fault
+        );
+    }
+
+    #[test]
+    fn power_from_value_rejects_unknown_status() {
+        assert!(Power::from_value(&serde_json::json!("faulty")).is_err());
+        assert!(Power::from_value(&serde_json::json!(5)).is_err());
+        assert!(Power::from_value(&serde_json::json!(-1)).is_err());
     }
 }

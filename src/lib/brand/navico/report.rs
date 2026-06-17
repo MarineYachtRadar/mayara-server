@@ -2,6 +2,7 @@ use anyhow::{Error, bail};
 use num_traits::FromPrimitive;
 use serde::Deserialize;
 use std::cmp::min;
+use std::collections::BTreeSet;
 use std::io;
 use std::mem::transmute;
 use std::net::SocketAddr;
@@ -185,6 +186,13 @@ pub(crate) struct NavicoReportReceiver {
     reported_unknown: [bool; 256],
     reported_setup_ext_oversize: bool,
     has_use_mode_from_ext: bool,
+
+    /// Active radar error codes (NRP eRadarErrorType) from the 0xC611 report.
+    active_errors: BTreeSet<u32>,
+    /// Power state last reported via the 0xC4xx state-mode report, kept so the
+    /// fault override (active errors -> [`Power::Fault`]) can be lifted once the
+    /// errors clear without waiting for the next state-mode report.
+    reported_power: Power,
 
     // For data (spokes)
     data_buf: Vec<u8>,
@@ -416,6 +424,8 @@ impl NavicoReportReceiver {
             reported_unknown: [false; 256],
             reported_setup_ext_oversize: false,
             has_use_mode_from_ext: false,
+            active_errors: BTreeSet::new(),
+            reported_power: Power::Standby,
             data_buf: Vec::with_capacity(size_of::<RadarFramePkt>()),
             data_socket: None,
             doppler: DopplerMode::None,
@@ -762,11 +772,7 @@ impl NavicoReportReceiver {
             if data[1] == 0xc6 {
                 match data[0] {
                     0x11 => {
-                        if data.len() != 3 || data[2] != 0 {
-                            bail!("Strange content of report 0x0a 0xc6: {:02X?}", data);
-                        }
-                        // this is just a response to the MFD sending 0x0a 0xc2,
-                        // not sure what purpose it serves.
+                        return self.process_radar_errors();
                     }
                     _ => {
                         log::trace!("Unknown report 0x{:02x} 0xc6: {:02X?}", data[0], data);
@@ -828,7 +834,7 @@ impl NavicoReportReceiver {
     }
 
     fn set_status(&mut self, status: u8) -> Result<(), Error> {
-        let status = match status {
+        let power = match status {
             0 => Power::Off,
             1 => Power::Standby,
             2 => Power::Transmit,
@@ -837,9 +843,61 @@ impl NavicoReportReceiver {
                 bail!("{}: Unknown radar status {}", self.common.key, status);
             }
         };
-        self.common
-            .set_value(&ControlId::Power, status as i32 as f64);
+        self.reported_power = power;
+        self.publish_power();
         Ok(())
+    }
+
+    /// Publish the effective power state: [`Power::Fault`] while any radar
+    /// error is active, otherwise the last state reported by the radar.
+    fn publish_power(&mut self) {
+        let power = if self.active_errors.is_empty() {
+            self.reported_power
+        } else {
+            Power::Fault
+        };
+        self.common
+            .set_value(&ControlId::Power, power as i32 as f64);
+    }
+
+    /// Process the 0xC611 active-error list report. An empty list means
+    /// "no active errors".
+    fn process_radar_errors(&mut self) -> Result<(), Error> {
+        let active = parse_radar_errors(&self.report_buf)
+            .map_err(|e| anyhow::anyhow!("{}: {}", self.common.key, e))?;
+        self.apply_radar_errors(active);
+        Ok(())
+    }
+
+    /// Diff the newly reported active-error set against the previous one,
+    /// raise/clear a Signal K notification per changed error, and refresh the
+    /// power state so it reflects [`Power::Fault`] while any error is active.
+    fn apply_radar_errors(&mut self, active: BTreeSet<u32>) {
+        if active == self.active_errors {
+            return;
+        }
+        let controls = &self.common.info.controls;
+        for code in active.difference(&self.active_errors) {
+            let name = error_name(*code);
+            match name {
+                Some(name) => {
+                    log::warn!(
+                        "{}: radar error active: {} ({:#x})",
+                        self.common.key,
+                        name,
+                        code
+                    )
+                }
+                None => log::warn!("{}: radar error active: code {:#x}", self.common.key, code),
+            }
+            controls.send_radar_error_notification(*code, name, true);
+        }
+        for code in self.active_errors.difference(&active) {
+            log::info!("{}: radar error cleared: {:#x}", self.common.key, code);
+            controls.send_radar_error_notification(*code, error_name(*code), false);
+        }
+        self.active_errors = active;
+        self.publish_power();
     }
 
     async fn process_state_setup(&mut self) -> Result<(), Error> {
@@ -1370,5 +1428,114 @@ impl NavicoReportReceiver {
         let heading = extract_heading_value(heading).map(|h| h / 2);
 
         Some((range, angle, heading))
+    }
+}
+
+/// Parse the body of a 0xC611 active-error list report into the set of active
+/// NRP `eRadarErrorType` codes. Layout:
+/// `[0x11 0xc6][u8 count][count x u32 errorType (little-endian)]`.
+fn parse_radar_errors(data: &[u8]) -> Result<BTreeSet<u32>, Error> {
+    if data.len() < 3 {
+        bail!("radar error list too short: {:02X?}", data);
+    }
+    let count = data[2] as usize;
+    let expected = 3 + count * 4;
+    if data.len() != expected {
+        bail!(
+            "bad radar error list (count {}, expected len {}, got {}): {:02X?}",
+            count,
+            expected,
+            data.len(),
+            data
+        );
+    }
+    Ok((0..count)
+        .map(|i| {
+            let off = 3 + i * 4;
+            u32::from_le_bytes(data[off..off + 4].try_into().unwrap())
+        })
+        .collect())
+}
+
+/// Human-readable name for an NRP `eRadarErrorType` code, or `None` when the
+/// code is unrecognised. The enum grows in newer firmware and not every code's
+/// name is known, so callers must handle `None` (the raw code is still
+/// surfaced). See `research/navico/radar-error-reporting.md`.
+fn error_name(code: u32) -> Option<&'static str> {
+    Some(match code {
+        0x0_0001 => "Persistence corrupt",
+        0x1_0001 => "Zero bearing fault",
+        0x1_0002 => "Bearing pulse fault",
+        0x1_0003 => "Motor not running",
+        0x1_0004 => "Comms not active",
+        0x1_0005 => "Magnetron heater voltage",
+        0x1_0006 => "Modulation voltage",
+        0x1_0007 => "Trigger fault",
+        0x1_0008 => "Video fault",
+        0x1_0009 => "Fan fault",
+        0x1_000A => "Scanner config fault",
+        0x1_000B => "Power supply transient",
+        0x1_000C => "Scanner detect fail",
+        0x1_000D => "PA soft overheat",
+        0x1_000E => "PA hard overheat",
+        0x1_000F => "Gateway datapath error",
+        0x1_0010 => "PSU overheat",
+        0x1_0011 => "PSU voltage",
+        0x1_0012 => "PSU power",
+        0x1_0013 => "PSU hardware fault",
+        0x1_0014 => "PSU comms fault",
+        0x1_0015 => "Mechanical fault",
+        0x1_0016 => "LED fault",
+        0x1_0017 => "Scanner fail",
+        0x1_0018 => "Radar interface fault",
+        0x1_0019 => "Low battery",
+        0x1_001A => "Motor stall",
+        0x1_001B => "Safety switch",
+        0x1_001C => "Doppler fail",
+        0x1_001D => "Install cache mismatch",
+        0x1_001E => "Tracking unavailable",
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{error_name, parse_radar_errors};
+
+    #[test]
+    fn empty_error_list_is_all_clear() {
+        // The healthy steady state seen in every capture: 0xC611 count 0.
+        let active = parse_radar_errors(&[0x11, 0xc6, 0x00]).unwrap();
+        assert!(active.is_empty());
+    }
+
+    #[test]
+    fn parses_active_error_codes() {
+        // count 2: MotorNotRunning (0x10003) and PSUVoltage (0x10011), LE.
+        let data = [
+            0x11, 0xc6, 0x02, 0x03, 0x00, 0x01, 0x00, 0x11, 0x00, 0x01, 0x00,
+        ];
+        let active = parse_radar_errors(&data).unwrap();
+        assert_eq!(active.len(), 2);
+        assert!(active.contains(&0x1_0003));
+        assert!(active.contains(&0x1_0011));
+    }
+
+    #[test]
+    fn rejects_length_mismatch() {
+        // count says 1 but no record bytes follow.
+        assert!(parse_radar_errors(&[0x11, 0xc6, 0x01]).is_err());
+        // truncated below the count byte.
+        assert!(parse_radar_errors(&[0x11, 0xc6]).is_err());
+    }
+
+    #[test]
+    fn known_and_unknown_error_names() {
+        assert_eq!(error_name(0x1_0003), Some("Motor not running"));
+        assert_eq!(error_name(0x0_0001), Some("Persistence corrupt"));
+        assert_eq!(error_name(0x1_001E), Some("Tracking unavailable"));
+        // Codes beyond the known enum (newer firmware) have no name.
+        assert_eq!(error_name(0x1_001F), None);
+        assert_eq!(error_name(0xDEAD), None);
     }
 }
