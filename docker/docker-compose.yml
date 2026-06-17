@@ -17,6 +17,32 @@ services:
       - ALL
     restart: unless-stopped
 
+  # Real-radar deployment. Gated by the `radar` profile so a bare
+  # `docker compose up` (no args / no profile) does not start it — keep
+  # the emulator service as the default zero-config experience and have
+  # operators opt into the radar service explicitly:
+  #
+  #     docker compose --profile radar pull mayara
+  #     docker compose --profile radar up -d mayara
+  #
+  # No `restart` policy: the operator manages lifecycle. Override the
+  # image with `MAYARA_IMAGE=<tag>` when running a locally built image
+  # (e.g. for dev iteration).
+  mayara:
+    profiles: ["radar"]
+    image: ${MAYARA_IMAGE:-ghcr.io/marineyachtradar/mayara-server:latest}
+    network_mode: host
+    command: ["mayara-server", "-v", "--transmit"]
+    tmpfs:
+      - /home/mayara/.config/mayara
+      - /home/mayara/.local/share/mayara
+      - /tmp
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
   # Example: real radar with persistent config and recordings
   # mayara-radar:
   #   image: ghcr.io/marineyachtradar/mayara-server:latest
