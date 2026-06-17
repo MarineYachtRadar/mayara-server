@@ -1,8 +1,8 @@
 use anyhow::{Error, bail};
 use std::collections::HashMap;
-use std::io;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::net::UdpSocket;
 use tokio::time::{Instant, sleep, sleep_until};
 use tokio_graceful_shutdown::SubsystemHandle;
 
@@ -142,7 +142,13 @@ impl FeatureFlags {
 
 pub(crate) struct RaymarineReportReceiver {
     common: CommonRadar,
+    unicast_mode: bool,
     report_socket: Option<RadarSocket>,
+    // When the radar streams unicast back to the command source port (MFD
+    // acting as WiFi AP, report address unspecified), this is the single
+    // connected socket shared with the command sender. The report loop
+    // listens on it; `None` for the normal multicast topology.
+    unicast_socket: Option<Arc<UdpSocket>>,
     state: ReceiverState,
     model: Option<RaymarineModel>,
     base_model: BaseModel,
@@ -190,14 +196,30 @@ impl RaymarineReportReceiver {
             args
         );
 
+        // Quantum WiFi:
+        // When the radar advertised no report multicast group, the locator
+        // set report_addr to an unspecified unicast address (MFD-as-WiFi-AP
+        // topology). The radar streams reports/spokes unicast back to the
+        // command source port, so a single connected socket must both send
+        // commands and receive replies — otherwise a separate connected
+        // command socket wins delivery of the replies and starves the listen
+        // socket (same host:port). start_report_socket() creates that shared
+        // socket (with retry) and hands it to the command sender.
+        let unicast_mode = !replay && !info.report_addr.ip().is_multicast();
+
         // Quantum wired radars (and some RD variants) won't send the
         // 0x280001 info-report until they have received a host keep-alive
         // first — see issue #228. Create the command_sender now with the
         // base model the locator already determined, so the heartbeat loop
         // starts priming the radar immediately. process_info_report() will
         // not overwrite this once the radar replies.
+        //
+        // In the unicast topology the command sender must never open its own
+        // socket (that is the collision this fixes); it stays socketless until
+        // start_report_socket() supplies the shared one. The normal multicast
+        // topology lets it open its own socket as usual.
         let command_sender = if !replay {
-            Some(Command::new(info.clone(), base_model))
+            Some(Command::new(info.clone(), base_model, unicast_mode))
         } else {
             None
         };
@@ -212,7 +234,9 @@ impl RaymarineReportReceiver {
         let now = Instant::now();
         RaymarineReportReceiver {
             common,
+            unicast_mode,
             report_socket: None,
+            unicast_socket: None,
             state: ReceiverState::Initial,
             model: None, // We don't know this yet, it will be set when we receive the first info report
             base_model,
@@ -232,32 +256,75 @@ impl RaymarineReportReceiver {
         }
     }
 
-    async fn start_report_socket(&mut self) -> io::Result<()> {
-        match network::create_udp_listen(
-            &self.common.info.report_addr,
-            &self.common.info.nic_addr,
-            network::SocketType::Multicast,
-        ) {
-            Ok(socket) => {
-                self.report_socket = Some(socket);
-                log::debug!(
-                    "{}: {} via {}: listening for reports",
-                    self.common.key,
-                    &self.common.info.report_addr,
-                    &self.common.info.nic_addr
-                );
-                Ok(())
-            }
-            Err(e) => {
-                sleep(Duration::from_millis(1000)).await;
-                log::debug!(
-                    "{}: {} via {}: create multicast failed: {}",
-                    self.common.key,
-                    &self.common.info.report_addr,
+    async fn start_report_socket(&mut self) {
+        // Unicast topology (report address non-multicast): the report loop and
+        // the command sender share one connected socket. Create it on demand
+        // here — this is the receiver's retry point — and hand a clone to the
+        // command sender so it stops dropping commands.
+        if self.unicast_mode {
+            if self.unicast_socket.is_none() {
+                match network::create_connected_unicast(
                     &self.common.info.nic_addr,
-                    e
-                );
-                Ok(())
+                    self.common.info.report_addr.port(),
+                    &self.common.info.send_command_addr,
+                ) {
+                    Ok(sock) => {
+                        let sock = Arc::new(sock);
+                        if let Some(cs) = &mut self.command_sender {
+                            cs.set_shared_socket(sock.clone());
+                        }
+                        self.unicast_socket = Some(sock);
+                    }
+                    Err(e) => {
+                        // Leave report_socket None so run() retries (it
+                        // owns the back-off and observes shutdown while
+                        // sleeping); never fall back to a separate command
+                        // socket (collision).
+                        log::debug!(
+                            "{}: {} via {}: unicast report socket failed: {}",
+                            self.common.key,
+                            &self.common.info.report_addr,
+                            &self.common.info.nic_addr,
+                            e
+                        );
+                        return;
+                    }
+                }
+            }
+            let sock = self.unicast_socket.as_ref().unwrap().clone();
+            self.report_socket = Some(RadarSocket::SharedUdp(sock));
+            log::debug!(
+                "{}: {} via {}: listening for unicast reports",
+                self.common.key,
+                &self.common.info.report_addr,
+                &self.common.info.nic_addr
+            );
+        } else {
+            // Multicast mode
+            match network::create_udp_listen(
+                &self.common.info.report_addr,
+                &self.common.info.nic_addr,
+                network::SocketType::Any,
+            ) {
+                Ok(socket) => {
+                    self.report_socket = Some(socket);
+                    log::debug!(
+                        "{}: {} via {}: listening for reports",
+                        self.common.key,
+                        &self.common.info.report_addr,
+                        &self.common.info.nic_addr
+                    );
+                }
+                Err(e) => {
+                    // Back-off and shutdown observation live in run().
+                    log::debug!(
+                        "{}: {} via {}: create UDP listen socket failed: {}",
+                        self.common.key,
+                        &self.common.info.report_addr,
+                        &self.common.info.nic_addr,
+                        e
+                    );
+                }
             }
         }
     }
@@ -279,7 +346,16 @@ impl RaymarineReportReceiver {
                     return Err(RadarError::Shutdown);
                 },
                 _ = sleep_until(heartbeat_deadline) => {
-                    self.send_heartbeat().await?;
+                    // A heartbeat send failure must not tear down the report
+                    // loop. With the unicast (MFD-as-AP) topology the command
+                    // socket is connected to the radar, so a send can fail with
+                    // a routing error (e.g. the radar briefly unreachable);
+                    // killing the loop here would drop the report socket and
+                    // busy-respin once per second, never recovering. Log and
+                    // keep listening; the next heartbeat retries.
+                    if let Err(e) = self.send_heartbeat().await {
+                        log::debug!("{}: heartbeat send failed: {}", self.common.key, e);
+                    }
                 },
                 _ = sleep_until(wake_deadline) => {
                     self.maybe_send_wake_nudge().await?;
@@ -345,6 +421,10 @@ impl RaymarineReportReceiver {
     }
 
     async fn send_heartbeat(&mut self) -> Result<(), RadarError> {
+        // Advance the deadline first so a send failure below can't leave it in
+        // the past — otherwise the caller's sleep_until fires immediately and
+        // busy-loops. The next tick retries the heartbeat a second later.
+        self.heartbeat_deadline += HEARTBEAT_INTERVAL;
         if let Some(ref mut cs) = self.command_sender {
             cs.send_heartbeat().await?;
 
@@ -355,26 +435,24 @@ impl RaymarineReportReceiver {
                 cs.send_heartbeat_5s().await?;
             }
         }
-        self.heartbeat_deadline += HEARTBEAT_INTERVAL;
         Ok(())
     }
 
     pub(super) async fn run(mut self, subsys: &mut SubsystemHandle) -> Result<(), RadarError> {
-        self.start_report_socket().await?;
         loop {
-            if self.report_socket.is_some() {
-                match self.socket_loop(subsys).await {
-                    Err(RadarError::Shutdown) => {
-                        return Ok(());
-                    }
-                    _ => {
-                        // Ignore, reopen socket
-                    }
+            self.start_report_socket().await;
+            if self.report_socket.is_none() {
+                // Bind keeps failing: back off, but race the sleep against
+                // a shutdown request so a graceful shutdown can't hang on
+                // a long network outage.
+                tokio::select! {
+                    _ = sleep(Duration::from_millis(1000)) => continue,
+                    _ = subsys.on_shutdown_requested() => return Ok(()),
                 }
-                self.report_socket = None;
-            } else {
-                sleep(Duration::from_millis(1000)).await;
-                self.start_report_socket().await?;
+            }
+            match self.socket_loop(subsys).await {
+                Err(RadarError::Shutdown) => return Ok(()),
+                _ => self.report_socket = None,
             }
         }
     }

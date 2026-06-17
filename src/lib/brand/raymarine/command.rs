@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use std::sync::Arc;
 use tokio::net::UdpSocket;
 
 use super::BaseModel;
@@ -15,17 +16,32 @@ pub(crate) struct Command {
     key: String,
     info: RadarInfo,
     model: BaseModel,
-    sock: Option<UdpSocket>,
+    sock: Option<Arc<UdpSocket>>,
+    /// Whether this sender is in the unicast-stream topology, where it must
+    /// share the report socket. True means the sender must not open its own
+    /// command socket — doing so would bind the same host:port as the report
+    /// socket and steal the radar's replies. False is the normal multicast
+    /// topology, where this sender owns its command socket.
+    unicast_mode: bool,
 }
 
 impl Command {
-    pub(crate) fn new(info: RadarInfo, model: BaseModel) -> Self {
+    pub(crate) fn new(info: RadarInfo, model: BaseModel, unicast: bool) -> Self {
         Command {
             key: info.key(),
             info,
             model,
             sock: None,
+            unicast_mode: unicast,
         }
+    }
+
+    /// Use a caller-provided, already-connected socket for sending instead
+    /// of opening our own. Used by the unicast-stream topology so commands
+    /// and the radar's replies share one socket (and one source port).
+    pub(crate) fn set_shared_socket(&mut self, sock: Arc<UdpSocket>) {
+        assert!(self.unicast_mode);
+        self.sock = Some(sock);
     }
 
     pub(crate) fn set_ranges(&mut self, ranges: Ranges) {
@@ -33,6 +49,7 @@ impl Command {
     }
 
     async fn start_socket(&mut self) -> Result<(), RadarError> {
+        assert!(!self.unicast_mode);
         match create_multicast_send(&self.info.send_command_addr, &self.info.nic_addr) {
             Ok(sock) => {
                 log::debug!(
@@ -41,7 +58,7 @@ impl Command {
                     &self.info.send_command_addr,
                     &self.info.nic_addr
                 );
-                self.sock = Some(sock);
+                self.sock = Some(Arc::new(sock));
 
                 Ok(())
             }
@@ -60,6 +77,16 @@ impl Command {
 
     pub async fn send(&mut self, message: &[u8]) -> Result<(), RadarError> {
         if self.sock.is_none() {
+            if self.unicast_mode {
+                // Unicast topology, shared socket not yet available: drop the
+                // command rather than open a colliding own socket. The report
+                // loop retries socket creation and will supply the shared one.
+                log::warn!(
+                    "{}: Dropping command in unicast mode when shared socket is not available",
+                    self.key
+                );
+                return Ok(());
+            }
             self.start_socket().await?;
         }
         if let Some(sock) = &self.sock {

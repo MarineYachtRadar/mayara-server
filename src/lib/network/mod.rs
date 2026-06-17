@@ -273,6 +273,33 @@ pub(crate) fn create_udp_listen(
     Ok(crate::replay::RadarSocket::Udp(socket))
 }
 
+/// Create a unicast UDP socket bound to `nic_addr` on `port` and connected to
+/// `peer`. A single connected socket both sends commands to the radar and
+/// receives the radar's unicast replies on the same source port.
+///
+/// This exists for the Raymarine "MFD as WiFi AP" topology, where the radar
+/// streams reports/spokes unicast back to the command source port. Sharing one
+/// connected socket avoids a same-port collision between a separate listen and
+/// command socket (the connected command socket would otherwise win delivery
+/// of the replies, starving the listen socket).
+pub(crate) fn create_connected_unicast(
+    nic_addr: &Ipv4Addr,
+    port: u16,
+    peer: &SocketAddrV4,
+) -> io::Result<UdpSocket> {
+    let socket: socket2::Socket = new_socket()?;
+    let bind_addr = SocketAddr::new(IpAddr::V4(*nic_addr), port);
+    socket.bind(&socket2::SockAddr::from(bind_addr))?;
+    socket.connect(&socket2::SockAddr::from(SocketAddr::V4(*peer)))?;
+    log::debug!(
+        "Binding unicast socket to {} connected to {}",
+        bind_addr,
+        peer
+    );
+
+    UdpSocket::from_std(socket.into())
+}
+
 pub(crate) fn create_multicast_send(
     addr: &SocketAddrV4,
     nic_addr: &Ipv4Addr,
