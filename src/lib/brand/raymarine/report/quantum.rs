@@ -470,10 +470,218 @@ pub(super) fn process_doppler_report(receiver: &mut RaymarineReportReceiver, dat
         .set_value(&ControlId::Doppler, doppler as f64);
 }
 
+// ---------------------------------------------------------------------------
+// SelfTestResults — wire id `0a 08 28 00` (LE u32 `0x0028080a`).
+//
+// The radar pushes this unsolicited on the report multicast channel; no
+// request is needed. Payload is `SELF_TEST_ITEM_COUNT` bytes after the
+// 4-byte id. Item layout was confirmed by cross-referencing the Pelagia
+// Quantum 2 capture against the Axiom MFD's Radar diagnostics → Self-test
+// results screen (recording IMG_1045.MOV):
+//
+// * Bytes  0..12 — 13 enum items shown by the MFD (Pass / Fail / Not Tested
+//   / Did not run). Wire encoding: `0x01` = Pass; `0xff` = Did not run (or
+//   still pending — flips to `0x01` as warm-up completes); any other value
+//   is treated conservatively as a failure (the exact Fail wire byte is
+//   unconfirmed without a faulting-unit capture).
+// * Bytes 13..15 — 3 internal items the Axiom MFD does not display. Byte 13
+//   was observed transitioning `0xff`→`0x01` during warm-up on the healthy
+//   Pelagia unit, so these are enum-style results, just hidden from the
+//   user. Logged but never alarmed.
+// * Bytes 16..23 — 8 boolean items shown by the MFD. Wire encoding: `0x00`
+//   = False; non-zero = True. Item index 22 ("Main enable initial state")
+//   is steady False on the healthy Pelagia unit, so it's treated as
+//   informational (no alarm) — the other 7 should be True and raise an
+//   alarm if False.
+//
+// See research/raymarine/radar-error-reporting.md for the full table.
+// ---------------------------------------------------------------------------
+
+pub(crate) const SELF_TEST_RESULTS_ID: u32 = 0x0028080a;
+pub(crate) const SELF_TEST_ITEM_COUNT: usize = 24;
+
+const SELF_TEST_PASS: u8 = 0x01;
+const SELF_TEST_PENDING: u8 = 0xff;
+
+/// High-byte tag for per-item self-test SK notifications. The full code is
+/// `SELF_TEST_ERROR_CODE_BASE | item_index`, which yields a distinct path
+/// per item (`notifications.radar.<id>.error.0xa00`..`0xa17`) and stays
+/// out of the way of the Layer-1 self-test fault code (`0x0a`) raised from
+/// the status byte.
+const SELF_TEST_ERROR_CODE_BASE: u32 = 0x0a00;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SelfTestKind {
+    /// Pass / Fail / Did not run enum. Alarm if value is not Pass or
+    /// Did-not-run/Pending.
+    Enum,
+    /// Boolean (True/False) that should be True on a healthy radar; alarm
+    /// if False.
+    Bool,
+    /// Boolean that is expected to vary even on a healthy radar
+    /// (informational, never alarmed).
+    BoolInfo,
+    /// Wire byte present in the message but not surfaced by the Axiom MFD.
+    /// Logged on change but never alarmed.
+    Reserved,
+}
+
+const SELF_TEST_LAYOUT: [(SelfTestKind, &str); SELF_TEST_ITEM_COUNT] = [
+    // Bytes 0..12 — 13 enum items shown by the Axiom MFD, in display order.
+    (SelfTestKind::Enum, "Power-up self Test Gpio"),
+    (SelfTestKind::Enum, "Power-up self Test AD9963"),
+    (SelfTestKind::Enum, "Power-up self Test ADF4159"),
+    (SelfTestKind::Enum, "Power-up self Test DspBlock"),
+    (SelfTestKind::Enum, "Power-up self Test Fpga"),
+    (SelfTestKind::Enum, "Power-up self Test I2C"),
+    (SelfTestKind::Enum, "Power-up self Test Uart"),
+    (SelfTestKind::Enum, "Power-up self Test WiFi"),
+    (SelfTestKind::Enum, "Runtime self Test WiFi Spi"),
+    (SelfTestKind::Enum, "Runtime self Test AD9963 Data Lines"),
+    (SelfTestKind::Enum, "Runtime self Test Psu Comms"),
+    (SelfTestKind::Enum, "Runtime self Test Limiter Detect"),
+    (SelfTestKind::Enum, "Runtime self Test Power Detect"),
+    // Bytes 13..15 — internal results not shown by the MFD.
+    (SelfTestKind::Reserved, "(internal self-test 13)"),
+    (SelfTestKind::Reserved, "(internal self-test 14)"),
+    (SelfTestKind::Reserved, "(internal self-test 15)"),
+    // Bytes 16..23 — 8 boolean items shown by the Axiom MFD, in display order.
+    (SelfTestKind::Bool, "Power in good"),
+    (SelfTestKind::Bool, "Standby current good"),
+    (SelfTestKind::Bool, "Main board connected"),
+    (SelfTestKind::Bool, "Main EEPROM connection good"),
+    (SelfTestKind::Bool, "Main supply on voltages good"),
+    (SelfTestKind::Bool, "Main supply on current good"),
+    // Steady False on the healthy Pelagia unit — treat as informational.
+    (SelfTestKind::BoolInfo, "Main enable initial state"),
+    (SelfTestKind::Bool, "POST run"),
+];
+
+fn item_is_failing(kind: SelfTestKind, value: u8) -> bool {
+    match kind {
+        SelfTestKind::Enum => !matches!(value, SELF_TEST_PASS | SELF_TEST_PENDING),
+        SelfTestKind::Bool => value == 0,
+        SelfTestKind::BoolInfo | SelfTestKind::Reserved => false,
+    }
+}
+
+fn format_value(kind: SelfTestKind, value: u8) -> String {
+    match (kind, value) {
+        (SelfTestKind::Enum, SELF_TEST_PASS) => "Pass".to_string(),
+        (SelfTestKind::Enum, SELF_TEST_PENDING) => "Did not run".to_string(),
+        (SelfTestKind::Enum, v) => format!("Fail(0x{v:02x})"),
+        (SelfTestKind::Bool | SelfTestKind::BoolInfo, 0) => "False".to_string(),
+        (SelfTestKind::Bool | SelfTestKind::BoolInfo, _) => "True".to_string(),
+        (SelfTestKind::Reserved, v) => format!("0x{v:02x}"),
+    }
+}
+
+pub(super) fn process_self_test_results(receiver: &mut RaymarineReportReceiver, data: &[u8]) {
+    let body = match data.get(4..4 + SELF_TEST_ITEM_COUNT) {
+        Some(b) => b,
+        None => {
+            log::warn!(
+                "{}: SelfTestResults too short: len={}",
+                receiver.common.key,
+                data.len()
+            );
+            return;
+        }
+    };
+    let mut items = [0u8; SELF_TEST_ITEM_COUNT];
+    items.copy_from_slice(body);
+
+    let prev = receiver.self_test_results;
+    let key = receiver.common.key.clone();
+    for (i, &(kind, label)) in SELF_TEST_LAYOUT.iter().enumerate() {
+        let curr = items[i];
+        let prev_val = prev.map(|p| p[i]);
+
+        if prev_val != Some(curr) {
+            match prev_val {
+                Some(p) => log::info!(
+                    "{}: SelfTest [{}] {}: {} (was {})",
+                    key,
+                    i,
+                    label,
+                    format_value(kind, curr),
+                    format_value(kind, p)
+                ),
+                None => log::info!(
+                    "{}: SelfTest [{}] {}: {}",
+                    key,
+                    i,
+                    label,
+                    format_value(kind, curr)
+                ),
+            }
+        }
+
+        let was_failing = prev_val.is_some_and(|v| item_is_failing(kind, v));
+        let now_failing = item_is_failing(kind, curr);
+        if was_failing != now_failing {
+            receiver.common.info.controls.send_radar_error_notification(
+                SELF_TEST_ERROR_CODE_BASE | (i as u32),
+                Some(label),
+                now_failing,
+            );
+        }
+    }
+
+    receiver.self_test_results = Some(items);
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{process_spoke, status_to_power};
+    use super::{
+        SELF_TEST_ITEM_COUNT, SELF_TEST_LAYOUT, SelfTestKind, item_is_failing, process_spoke,
+        status_to_power,
+    };
     use crate::radar::{BYTE_LOOKUP_LENGTH, Power};
+
+    #[test]
+    fn self_test_layout_has_one_label_per_wire_byte() {
+        assert_eq!(SELF_TEST_LAYOUT.len(), SELF_TEST_ITEM_COUNT);
+    }
+
+    #[test]
+    fn self_test_failure_classifier_silent_on_pelagia_capture() {
+        // Pelagia Quantum 2, "running" snapshot, 24 wire bytes:
+        //   01 01 01 01 01 01 01 01 01 ff 01 ff ff 01 01 ff 01 01 01 01 01 01 00 01
+        // None of the items should fire an alarm on this healthy radar.
+        let pelagia_running: [u8; SELF_TEST_ITEM_COUNT] = [
+            0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0xff, 0x01, 0xff, 0xff, 0x01,
+            0x01, 0xff, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x01,
+        ];
+        for (i, &(kind, _)) in SELF_TEST_LAYOUT.iter().enumerate() {
+            assert!(
+                !item_is_failing(kind, pelagia_running[i]),
+                "item {} ({:?} = 0x{:02x}) should not flag as failing on a healthy radar",
+                i,
+                kind,
+                pelagia_running[i]
+            );
+        }
+    }
+
+    #[test]
+    fn self_test_failure_classifier_flags_fail_and_false_states() {
+        // Enum: any byte outside {Pass=0x01, Pending=0xff} is conservatively
+        // treated as a failure (the exact wire byte for Fail is unconfirmed).
+        assert!(!item_is_failing(SelfTestKind::Enum, 0x01));
+        assert!(!item_is_failing(SelfTestKind::Enum, 0xff));
+        assert!(item_is_failing(SelfTestKind::Enum, 0x00));
+        assert!(item_is_failing(SelfTestKind::Enum, 0x02));
+
+        // Bool: 0 = False = alarm; any non-zero = True = silent.
+        assert!(item_is_failing(SelfTestKind::Bool, 0x00));
+        assert!(!item_is_failing(SelfTestKind::Bool, 0x01));
+        assert!(!item_is_failing(SelfTestKind::Bool, 0xff));
+
+        // BoolInfo and Reserved never alarm.
+        assert!(!item_is_failing(SelfTestKind::BoolInfo, 0x00));
+        assert!(!item_is_failing(SelfTestKind::Reserved, 0x00));
+    }
 
     use crate::brand::raymarine::report::{LOOKUP_DOPPLER_LENGTH, WireToLegendTable};
 

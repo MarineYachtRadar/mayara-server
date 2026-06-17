@@ -158,6 +158,11 @@ pub(crate) struct RaymarineReportReceiver {
     /// (Quantum status byte 0x0A). Used to edge-trigger the Signal K alarm
     /// so it raises once on entry and clears once on exit.
     pub(super) self_test_fault: bool,
+    /// Most recent per-item Quantum self-test results (24 items, wire
+    /// id `0x28080a`). `None` until the first packet arrives — captured
+    /// so transitions can be edge-logged instead of spamming once per
+    /// broadcast.
+    pub(super) self_test_results: Option<[u8; quantum::SELF_TEST_ITEM_COUNT]>,
 
     // For data (spokes)
     range_meters: u32,
@@ -220,6 +225,7 @@ impl RaymarineReportReceiver {
             features: FeatureFlags::default(),
             features_seen: false,
             self_test_fault: false,
+            self_test_results: None,
             range_meters: 0,
             wire_to_legend,
             doppler: false,
@@ -427,7 +433,12 @@ impl RaymarineReportReceiver {
             0x280030 => {
                 quantum::process_doppler_report(self, data);
             }
-            // Guard zone, alarm, MARPA, self-test, etc. — logged but not acted on
+            // SelfTestResults — radar pushes 24 per-item results unsolicited;
+            // see research/raymarine/radar-error-reporting.md.
+            quantum::SELF_TEST_RESULTS_ID => {
+                quantum::process_self_test_results(self, data);
+            }
+            // Guard zone, alarm, MARPA, etc. — logged but not acted on
             id if (id & 0xFFFF0000 == 0x28000000 || id & 0xFFFF0000 == 0x01000000) => {
                 if !self.reported_unknown.contains_key(&id) {
                     log::debug!(
