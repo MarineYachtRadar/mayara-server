@@ -229,6 +229,12 @@ const STATUS_STANDBY: u8 = 0x00;
 const STATUS_TRANSMIT: u8 = 0x01;
 const STATUS_PREPARING: u8 = 0x02;
 const STATUS_OFF: u8 = 0x03;
+// 0x04 = "transmitting but no display consuming the image" — observed on
+// healthy Quantum 2 captures when the operator is on a non-radar MFD page.
+// The antenna parks itself after a ~30 s grace, but mayara has no display
+// concept, so we treat it as a normal Transmit state.
+// See research/raymarine/radar-error-reporting.md (Pelagia capture analysis).
+const STATUS_TRANSMIT_DISPLAY_INACTIVE: u8 = 0x04;
 const STATUS_FAULT_SELF_TEST: u8 = 0x0a;
 
 /// Map a Quantum status-report byte to a `Power` state. The self-test fault
@@ -239,7 +245,7 @@ const STATUS_FAULT_SELF_TEST: u8 = 0x0a;
 fn status_to_power(status: u8, key: &str) -> Power {
     match status {
         STATUS_STANDBY => Power::Standby,
-        STATUS_TRANSMIT => Power::Transmit,
+        STATUS_TRANSMIT | STATUS_TRANSMIT_DISPLAY_INACTIVE => Power::Transmit,
         STATUS_PREPARING => Power::Preparing,
         STATUS_OFF => Power::Off,
         STATUS_FAULT_SELF_TEST => Power::Fault,
@@ -477,6 +483,14 @@ mod tests {
         assert_eq!(status_to_power(0x01, "k"), Power::Transmit);
         assert_eq!(status_to_power(0x02, "k"), Power::Preparing);
         assert_eq!(status_to_power(0x03, "k"), Power::Off);
+    }
+
+    #[test]
+    fn transmit_display_inactive_maps_to_transmit() {
+        // 0x04 is a wire-confirmed "transmit-but-no-display-consuming" state
+        // (Pelagia Q2 healthy capture, 361 occurrences). Mayara has no display
+        // concept, so it folds onto the normal Transmit state.
+        assert_eq!(status_to_power(0x04, "k"), Power::Transmit);
     }
 
     #[test]
