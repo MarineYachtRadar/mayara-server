@@ -154,6 +154,10 @@ pub(crate) struct RaymarineReportReceiver {
     reported_unknown: HashMap<u32, bool>,
     features: FeatureFlags,
     features_seen: bool,
+    /// True while the radar's last status report indicated a self-test fault
+    /// (Quantum status byte 0x0A). Used to edge-trigger the Signal K alarm
+    /// so it raises once on entry and clears once on exit.
+    pub(super) self_test_fault: bool,
 
     // For data (spokes)
     range_meters: u32,
@@ -215,6 +219,7 @@ impl RaymarineReportReceiver {
             reported_unknown: HashMap::new(),
             features: FeatureFlags::default(),
             features_seen: false,
+            self_test_fault: false,
             range_meters: 0,
             wire_to_legend,
             doppler: false,

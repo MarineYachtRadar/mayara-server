@@ -231,23 +231,18 @@ const STATUS_PREPARING: u8 = 0x02;
 const STATUS_OFF: u8 = 0x03;
 const STATUS_FAULT_SELF_TEST: u8 = 0x0a;
 
-/// Map a Quantum status-report byte to a `Power` state, logging anything
-/// outside the normal set. The self-test fault is surfaced distinctly rather
-/// than masked as "unknown" (observed on a faulty unit asked to transmit),
-/// though it still maps to Standby since the Power control has no fault state.
-/// `key` is only used for the log line.
+/// Map a Quantum status-report byte to a `Power` state. The self-test fault
+/// (observed on a faulty unit asked to transmit) maps to `Power::Fault` so
+/// the GUI and Signal K consumers can distinguish it from a routine standby;
+/// other out-of-range values fall back to Standby with a warning.
+/// `key` is only used for the log line on unknown values.
 fn status_to_power(status: u8, key: &str) -> Power {
     match status {
         STATUS_STANDBY => Power::Standby,
         STATUS_TRANSMIT => Power::Transmit,
         STATUS_PREPARING => Power::Preparing,
         STATUS_OFF => Power::Off,
-        STATUS_FAULT_SELF_TEST => {
-            log::warn!(
-                "{key}: radar reported FAULT status {STATUS_FAULT_SELF_TEST:#x} (self-test failure); no image will appear until it clears"
-            );
-            Power::Standby
-        }
+        STATUS_FAULT_SELF_TEST => Power::Fault,
         other => {
             log::warn!("{key}: unknown status 0x{other:02x}");
             Power::Standby
@@ -268,6 +263,24 @@ pub(super) fn process_status_report(receiver: &mut RaymarineReportReceiver, data
 
     // Update controls based on the report
     let status = status_to_power(report.status, &receiver.common.key);
+    let in_fault = status == Power::Fault;
+    if in_fault != receiver.self_test_fault {
+        if in_fault {
+            log::warn!(
+                "{}: radar reported FAULT status {:#x} (self-test failure); no image will appear until it clears",
+                receiver.common.key,
+                STATUS_FAULT_SELF_TEST
+            );
+        } else {
+            log::info!("{}: self-test fault cleared", receiver.common.key);
+        }
+        receiver.common.info.controls.send_radar_error_notification(
+            STATUS_FAULT_SELF_TEST as u32,
+            Some("Self-test failure"),
+            in_fault,
+        );
+        receiver.self_test_fault = in_fault;
+    }
     receiver
         .common
         .set_value(&ControlId::Power, status as i32 as f64);
@@ -467,11 +480,16 @@ mod tests {
     }
 
     #[test]
-    fn fault_and_unknown_fall_back_to_standby() {
-        // 0x0a is the self-test fault; other out-of-range values are unknown.
-        // Both map to Standby (the Power control has no fault state) but are
-        // logged distinctly.
-        assert_eq!(status_to_power(0x0a, "k"), Power::Standby);
+    fn self_test_fault_maps_to_fault_state() {
+        // 0x0a is the documented self-test fault; surface it on the Power
+        // control so consumers can distinguish it from a routine standby.
+        assert_eq!(status_to_power(0x0a, "k"), Power::Fault);
+    }
+
+    #[test]
+    fn unknown_status_falls_back_to_standby() {
+        // Anything outside the documented set is treated as standby (with a
+        // warning) rather than mis-claimed as a fault.
         assert_eq!(status_to_power(0xff, "k"), Power::Standby);
     }
 
