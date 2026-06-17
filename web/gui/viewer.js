@@ -244,6 +244,9 @@ window.onload = async function () {
   // Create power lozenge
   createPowerLozenge();
 
+  // Create the notification banner (radar errors, guard-zone alarms)
+  createNotificationBanner();
+
   // Create speaker lozenge (audio alerts toggle)
   createSpeakerLozenge();
 
@@ -1114,6 +1117,7 @@ function updatePowerLozenge(powerState, userName) {
       "myr_power_standby",
       "myr_power_off",
       "myr_power_disconnected",
+      "myr_power_fault",
     );
     if (powerState === "transmit") {
       lozenge.classList.add("myr_power_transmit");
@@ -1121,6 +1125,8 @@ function updatePowerLozenge(powerState, userName) {
       lozenge.classList.add("myr_power_standby");
     } else if (powerState === "disconnected") {
       lozenge.classList.add("myr_power_disconnected");
+    } else if (powerState === "fault") {
+      lozenge.classList.add("myr_power_fault");
     } else {
       lozenge.classList.add("myr_power_off");
     }
@@ -1131,6 +1137,63 @@ function updatePowerLozenge(powerState, userName) {
     if (nameDisplay) {
       nameDisplay.textContent = userName || "Radar";
     }
+  }
+}
+
+// Active Signal K notifications, keyed by their full path. Each value is
+// { state, message }; an entry exists only while the alarm is active.
+const activeNotifications = new Map();
+
+// Create the notification banner (top-centre of the viewer).
+function createNotificationBanner() {
+  const container = document.querySelector(".myr_ppi");
+  if (!container) return;
+
+  const banner = document.createElement("div");
+  banner.id = "myr_notification_banner";
+  banner.className = "myr_notification_banner";
+  banner.style.display = "none";
+  container.appendChild(banner);
+}
+
+// Drop every active notification and hide the banner. Called on disconnect
+// and on radar (re)selection so stale alarms from a prior context never
+// leak into a fresh one.
+function clearNotifications() {
+  activeNotifications.clear();
+  updateNotificationBanner();
+}
+
+// Update the active-notification set from a Signal K notification delta and
+// redraw the banner. A missing value or `state === "normal"` clears the entry.
+function handleNotification(path, value) {
+  if (!value || value.state === undefined || value.state === "normal") {
+    activeNotifications.delete(path);
+  } else {
+    activeNotifications.set(path, {
+      state: value.state,
+      message: value.message || path,
+    });
+  }
+  updateNotificationBanner();
+}
+
+function updateNotificationBanner() {
+  const banner = document.getElementById("myr_notification_banner");
+  if (!banner) return;
+
+  banner.replaceChildren();
+  if (activeNotifications.size === 0) {
+    banner.style.display = "none";
+    return;
+  }
+
+  banner.style.display = "flex";
+  for (const { state, message } of activeNotifications.values()) {
+    const item = document.createElement("div");
+    item.className = `myr_notification myr_notification_${state}`;
+    item.textContent = message;
+    banner.appendChild(item);
   }
 }
 
@@ -1534,6 +1597,7 @@ var pendingRadarData = null;
 
 // r contains id, name, capabilities and spokeDataUrl
 function radarLoaded(r) {
+  clearNotifications();
   capabilities = r.capabilities;
   let maxSpokeLength = capabilities.maxSpokeLength;
   let spokesPerRevolution = capabilities.spokesPerRevolution;
@@ -1662,6 +1726,7 @@ function controlUpdate(controlId, value) {
     let powerState;
     if (value.value === "disconnected") {
       powerState = "disconnected";
+      clearNotifications();
       for (const targetId of knownTargets) {
         ppi.removeTarget(targetId);
       }
@@ -1718,6 +1783,13 @@ const knownTargets = new Set();
 
 // Handle stream messages (targets, navigation, etc.)
 function handleStreamMessage(path, value) {
+  // Handle Signal K notifications: notifications.radar.{id}.{kind}.{n}
+  // (radar errors, guard-zone alarms). state "normal" clears the entry.
+  if (path.startsWith("notifications.")) {
+    handleNotification(path, value);
+    return;
+  }
+
   // Handle target updates: radars.{id}.targets.{targetId}
   if (path.includes(".targets.")) {
     const parts = path.split(".");

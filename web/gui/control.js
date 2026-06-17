@@ -1730,10 +1730,14 @@ function connectStateStream(streamUrl, radarIdParam) {
               path: `radars.${radarIdParam}.targets.*`,
               policy: "instant",
             },
+            {
+              path: `notifications.radar.${radarIdParam}.*`,
+              policy: "instant",
+            },
           ],
         };
 
-        console.log("Subscribing to radar controls and targets:", subscription);
+        console.log("Subscribing to radar controls, targets and notifications:", subscription);
         ws.send(JSON.stringify(subscription));
       }
     } catch (err) {
