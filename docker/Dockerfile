@@ -1,5 +1,8 @@
 FROM rust:1.94-alpine AS builder
-RUN apk add --no-cache build-base perl
+# `curl` is needed at build time by utoipa-swagger-ui's build.rs to fetch
+# the Swagger UI bundle; without it the build fails with `curl command not
+# found`. `perl` is required by openssl-sys.
+RUN apk add --no-cache build-base curl perl
 
 WORKDIR /usr/src/mayara-server
 
@@ -11,6 +14,11 @@ RUN mkdir src && echo "fn main() {}" > src/main.rs \
     && rm -rf src
 
 COPY src src/
+# Cargo parses the whole manifest (including `[[example]]` blocks) on every
+# build. The generate-fixtures example is gated by `required-features =
+# ["pcap-replay"]` and is never built here, but the manifest is invalid
+# unless its source file is present.
+COPY examples examples/
 COPY web web/
 RUN cargo build --release
 
