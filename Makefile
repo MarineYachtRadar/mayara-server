@@ -7,7 +7,6 @@
 #   make test     - Build and run tests
 #   make docs     - Generate rustdoc only
 #   make run      - Build and run server
-#   make mpi      - Build for linux and deploy and run on merrimac-pi
 #   make docker   - Build the Docker image
 #   make demo     - Rebuild the docker demo image
 #   make clean    - Clean build artifacts
@@ -38,28 +37,6 @@ debug: docs
 	@echo ""
 	@echo "Build complete: target/debug/mayara-server"
 	@echo "Rustdoc available at: http://localhost:6502/rustdoc/mayara_core/"
-
-# Build release binary with docs embedded
-mpi: 
-	@echo "Building and running on merrimac-pi..."
-	cargo build --release --target aarch64-unknown-linux-musl
-	ssh merrimac-pi killall -9 mayara-server || :
-	scp target/aarch64-unknown-linux-musl/release/mayara-server merrimac-pi:
-	ssh -L 6502:localhost:6502 merrimac-pi RUST_BACKTRACE=full ./mayara-server
-
-mpid:
-	@echo "Building and running with debug log on merrimac-pi..."
-	cargo build --release --target aarch64-unknown-linux-musl
-	ssh merrimac-pi killall -9 mayara-server || :
-	scp target/aarch64-unknown-linux-musl/release/mayara-server merrimac-pi:
-	ssh -L 6502:localhost:6502 merrimac-pi RUST_BACKTRACE=full ./mayara-server -v --transmit
-
-mpit:
-	@echo "Building and running with trace log on merrimac-pi..."
-	cargo build --release --target aarch64-unknown-linux-musl
-	ssh merrimac-pi killall -9 mayara-server || :
-	scp target/aarch64-unknown-linux-musl/release/mayara-server merrimac-pi:
-	ssh -L 6502:localhost:6502 merrimac-pi RUST_BACKTRACE=full ./mayara-server -v -v --transmit
 
 # Build and run the server
 run: release
@@ -102,3 +79,9 @@ changelog:
 # Clean build artifacts
 clean:
 	cargo clean
+
+# Optional per-developer extensions: targets that should never be committed
+# (deploy shortcuts to your own boxes, scratch experiments, etc.). The leading
+# dash makes the include silent when the file is absent, so a fresh clone
+# behaves identically to having no file. `Makefile.local` is gitignored.
+-include Makefile.local
