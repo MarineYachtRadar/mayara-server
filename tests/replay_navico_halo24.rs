@@ -37,6 +37,7 @@ fn test_args() -> Cli {
         signalk_token_file: None,
         emulator: false,
         merge_targets: false,
+        no_websocket_compression: false,
     }
 }
 
