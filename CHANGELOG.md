@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **navico:** surface radar errors and a Fault power state (#346) ([PR #346](https://github.com/MarineYachtRadar/mayara-server/pull/346))
 - **gui:** show radar notifications and a fault power state (#347) ([PR #347](https://github.com/MarineYachtRadar/mayara-server/pull/347))
 - **raymarine:** surface Quantum self-test faults and decode per-item results (#385) ([PR #385](https://github.com/MarineYachtRadar/mayara-server/pull/385))
+- **garmin:** send CDM V2 heartbeat to wake Fantom radars (#156) (#267) ([PR #267](https://github.com/MarineYachtRadar/mayara-server/pull/267))
 
 ### Changed
 
