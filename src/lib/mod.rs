@@ -116,6 +116,18 @@ pub struct Cli {
     #[arg(long, default_value_t = false, requires = "pcap")]
     pub repeat: bool,
 
+    /// Replay at most this many seconds of pcap content, then exit (only
+    /// with --pcap, conflicts with --repeat). Useful for time-bounded
+    /// reproducible profiling. Exits earlier if the file ends first.
+    #[cfg(feature = "pcap-replay")]
+    #[arg(
+        long,
+        value_name = "SECONDS",
+        requires = "pcap",
+        conflicts_with = "repeat"
+    )]
+    pub pcap_max_time: Option<u32>,
+
     /// Fake error mode, see below
     #[arg(long, default_value_t = false)]
     pub fake_errors: bool,
@@ -638,6 +650,7 @@ pub async fn start_session(
     #[cfg(feature = "pcap-replay")]
     if replay::is_active() {
         let repeat = args.repeat;
+        let max_time = args.pcap_max_time;
         subsystem.start(SubsystemBuilder::new(
             "PcapReplay",
             async move |subsys: &mut SubsystemHandle| {
@@ -645,7 +658,12 @@ pub async fn start_session(
                     _ = subsys.on_shutdown_requested() => {
                         log::debug!("PcapReplay shutdown requested");
                     },
-                    _ = replay::run(true, repeat) => {}
+                    _ = replay::run(true, repeat, max_time) => {
+                        if max_time.is_some() {
+                            log::info!("Replay complete, requesting shutdown");
+                            subsys.request_shutdown();
+                        }
+                    }
                 }
                 Ok::<(), miette::Report>(())
             },

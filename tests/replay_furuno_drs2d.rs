@@ -41,6 +41,7 @@ fn test_args() -> Cli {
         emulator: false,
         merge_targets: false,
         no_websocket_compression: false,
+        pcap_max_time: None,
     }
 }
 
