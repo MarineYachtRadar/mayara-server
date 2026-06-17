@@ -36,12 +36,12 @@
 
 use super::protocol::{
     CDM_OFFSET_PRODUCT_ID, CDM_OFFSET_PRODUCT_SUBTYPE, CDM_OFFSET_SIMULATOR_MODE,
-    CDM_OFFSET_VERSION_MARKER,
+    CDM_OFFSET_SYC_GROUP_ID, CDM_OFFSET_VERSION_MARKER,
 };
 
 /// Minimum number of bytes the CDM heartbeat body must contain (i.e.
 /// after the 8-byte GMN header has been stripped) for us to extract
-/// the product_id and subtype.
+/// the product_id, subtype, and syc_group_id.
 const MIN_CDM_BODY_LEN: usize = 12;
 
 /// Decoded fields from a `0x038e` CDM heartbeat.
@@ -56,6 +56,10 @@ pub(crate) struct CdmHeartbeat {
     pub simulator_mode: u8,
     /// `product_subtype` byte (e.g. 5 for the captured GMR xHD).
     pub product_subtype: u8,
+    /// SYC ("Synchronised Yacht Control") group ID — the boat-local
+    /// network group. Devices on the same boat share the same value.
+    /// Read from gmcfg `"syc.group_id"` in the firmware; default 6.
+    pub syc_group_id: u8,
 }
 
 /// Parse the body of a `0x038e` heartbeat. `payload` must be the slice
@@ -82,6 +86,7 @@ pub(crate) fn parse(payload: &[u8]) -> Option<CdmHeartbeat> {
         product_id,
         simulator_mode: payload[CDM_OFFSET_SIMULATOR_MODE],
         product_subtype: payload[CDM_OFFSET_PRODUCT_SUBTYPE],
+        syc_group_id: payload[CDM_OFFSET_SYC_GROUP_ID],
     })
 }
 
@@ -194,6 +199,7 @@ mod tests {
         assert_eq!(hb.product_id, 0x06d0);
         assert_eq!(hb.simulator_mode, 0);
         assert_eq!(hb.product_subtype, 5);
+        assert_eq!(hb.syc_group_id, 2);
         assert_eq!(product_name(hb.product_id), Some("GMR xHD"));
     }
 

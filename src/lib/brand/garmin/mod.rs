@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fmt::{self, Display};
 use std::io;
 use std::net::{Ipv4Addr, SocketAddrV4};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio_graceful_shutdown::{SubsystemBuilder, SubsystemHandle};
 
@@ -12,6 +13,7 @@ use crate::radar::{RadarInfo, SharedRadars};
 use crate::{Brand, Cli};
 
 mod capabilities;
+mod cdm_heartbeat;
 mod command;
 mod discovery;
 mod protocol;
@@ -156,13 +158,18 @@ struct LocatorShared {
 struct GarminLocator {
     args: Cli,
     state: Arc<Mutex<LocatorShared>>,
+    /// `syc_group_id` mayara puts in its outbound CDM heartbeats.
+    /// Updated on first observation of a real radar's heartbeat so we
+    /// join the same boat-local CDM group.
+    syc_group_id: Arc<AtomicU8>,
 }
 
 impl GarminLocator {
-    fn new(args: Cli) -> Self {
+    fn new(args: Cli, syc_group_id: Arc<AtomicU8>) -> Self {
         GarminLocator {
             args,
             state: Arc::new(Mutex::new(LocatorShared::default())),
+            syc_group_id,
         }
     }
 
@@ -337,6 +344,20 @@ impl GarminLocator {
             Some(h) => h,
             None => return,
         };
+
+        // Mirror the boat's SYC group so mayara's outbound heartbeat
+        // joins the same CDM peer set the radar already belongs to.
+        // We skip heartbeats that report our own outbound value to
+        // avoid feedback loops with packets we sent.
+        let prev = self.syc_group_id.swap(hb.syc_group_id, Ordering::Relaxed);
+        if prev != hb.syc_group_id {
+            log::info!(
+                "{}: adopting SYC group_id={} from radar heartbeat",
+                from,
+                hb.syc_group_id
+            );
+        }
+
         let mut state = self.state.lock().unwrap();
         let already = state.product_ids.get(from).copied();
         if already != Some(hb.product_id) {
@@ -691,7 +712,14 @@ pub(super) fn new(args: &Cli, addresses: &mut Vec<LocatorAddress>) {
     // entries so the CDM listener and the report listener share the same
     // backing maps (radars + product_ids). The Arc<Mutex<...>> inside
     // makes the clones cheap and gives them a single source of truth.
-    let locator = GarminLocator::new(args.clone());
+    //
+    // The locator also holds an Arc<AtomicU8> that the CDM heartbeat
+    // sender (spawned below) reads to decide which SYC group_id to
+    // advertise. The receive path updates the atomic when it sees a
+    // real radar heartbeat, so within ~5 s of any radar broadcasting
+    // we are sending heartbeats in its boat-local group.
+    let syc_group_id = Arc::new(AtomicU8::new(cdm_heartbeat::DEFAULT_SYC_GROUP_ID));
+    let locator = GarminLocator::new(args.clone(), syc_group_id.clone());
 
     addresses.push(LocatorAddress::new(
         LocatorId::Garmin,
@@ -708,6 +736,22 @@ pub(super) fn new(args: &Cli, addresses: &mut Vec<LocatorAddress>) {
         vec![],
         Box::new(locator),
     ));
+
+    // Wake-up sender. Garmin Fantom-class radars gate their report
+    // stream on seeing a peer CDM device (an MFD) on the network.
+    // Legacy GMR HD/xHD radars use a hardwired Ethernet-cable pin for
+    // the same purpose. Without this loop, a Fantom never broadcasts
+    // anything for us to discover.
+    //
+    // Skip in replay mode (no network) and in emulator mode (no
+    // physical radar to wake).
+    if !args.is_replay() {
+        #[cfg(feature = "emulator")]
+        if args.emulator {
+            return;
+        }
+        tokio::spawn(cdm_heartbeat::run(syc_group_id));
+    }
 }
 
 #[cfg(test)]
