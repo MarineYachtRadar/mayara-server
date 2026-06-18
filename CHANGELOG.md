@@ -41,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **raymarine:** do not draw targets in doppler color when doppler is off (#379) ([PR #379](https://github.com/MarineYachtRadar/mayara-server/pull/379))
 - **raymarine:** Add support for Quantum via WiFi (#348) ([PR #348](https://github.com/MarineYachtRadar/mayara-server/pull/348))
 - **docker:** make docker/Dockerfile actually build (#391) ([PR #391](https://github.com/MarineYachtRadar/mayara-server/pull/391))
+- **navdata:** keep own ship out of the AIS overlay (#408) ([PR #408](https://github.com/MarineYachtRadar/mayara-server/pull/408))
 
 ## [3.5.4] - 2026-06-02
 
