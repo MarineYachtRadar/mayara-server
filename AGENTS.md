@@ -1,10 +1,15 @@
 # Mayara Server
 
-Mayara Server is the reference implementation of a [Signal K](https://signalk.org/) radar API server. 
+Mayara Server is the reference implementation of a [Signal K](https://signalk.org/) radar API server.
+
+It is a Rust HTTP/WebSocket server that discovers marine radars (e.g. Navico, Furuno, Raymarine,
+Garmin, Koden) on the network, decodes their proprietary protocols, and exposes them through the Signal K Radar API
+(`/signalk/v2/api/vessels/self/radars/*`), a binary spoke WebSocket per radar, and an embedded
+hand-written JS GUI.
 
 Key components:
 
-- **Core server**: Express-based HTTP/WebSocket server (Rust and JS for the GUI)
+- **Core server**: multi-brand radar discovery and Signal K API exposure (Rust HTTP/WebSocket), with the embedded JS GUI
 
 ## Web GUI (`web/gui/`)
 
