@@ -177,7 +177,34 @@ def format_position(lat, lon):
 # Main spoke viewer
 # ---------------------------------------------------------------------------
 
-async def view_spokes(base_url, ws_url, insecure):
+async def consume_for_duration(spoke_url, ws_ssl, duration):
+    """Subscribe and discard frames for `duration` seconds (load driver
+    for profiling — exercises the server's spoke send / compress path
+    without doing any per-spoke work on the client side)."""
+    print(f"  URL: {spoke_url}")
+    print(f"  Reading for {duration}s, discarding spokes...")
+    print()
+    deadline = time.monotonic() + duration
+    bytes_in = 0
+    frames = 0
+    # Disable client-side keepalive so a momentarily slow server (e.g.
+    # under compression load) doesn't trigger a ping-timeout disconnect.
+    async with websockets.connect(spoke_url, ssl=ws_ssl, ping_interval=None) as ws:
+        while time.monotonic() < deadline:
+            try:
+                msg = await asyncio.wait_for(
+                    ws.recv(), timeout=max(0.1, deadline - time.monotonic())
+                )
+            except asyncio.TimeoutError:
+                break
+            if isinstance(msg, (bytes, bytearray)):
+                bytes_in += len(msg)
+                frames += 1
+    print(f"  Received {frames} frames, {bytes_in / 1024:.1f} KiB total"
+          f" (avg {bytes_in / max(1, frames):.0f} bytes/frame)")
+
+
+async def view_spokes(base_url, ws_url, insecure, duration=0):
     # Discover radar
     radar_id, radar_info = discover_radar(base_url)
     caps = fetch_capabilities(base_url, radar_id)
@@ -221,6 +248,10 @@ async def view_spokes(base_url, ws_url, insecure):
         ssl_ctx.check_hostname = False
         ssl_ctx.verify_mode = ssl.CERT_NONE
         ws_ssl = ssl_ctx
+
+    if duration > 0:
+        await consume_for_duration(spoke_url, ws_ssl, duration)
+        return
 
     async with websockets.connect(spoke_url, ssl=ws_ssl) as ws:
         # Collect one revolution worth of spokes
@@ -316,6 +347,9 @@ def main():
     parser.add_argument("--url", default="http://localhost:6502", help="Server base URL")
     parser.add_argument("--insecure", "-k", action="store_true",
                         help="Allow insecure TLS connections (self-signed certificates)")
+    parser.add_argument("--duration", type=float, default=0,
+                        help="Run as a load driver: subscribe and discard frames for N seconds, "
+                             "then exit. Skips per-revolution sampling and printing.")
     args = parser.parse_args()
 
     global verify_tls
@@ -325,7 +359,7 @@ def main():
     ws_url = args.url.replace("http://", "ws://").replace("https://", "wss://")
 
     try:
-        asyncio.run(view_spokes(args.url, ws_url, args.insecure))
+        asyncio.run(view_spokes(args.url, ws_url, args.insecure, args.duration))
     except KeyboardInterrupt:
         print("\nInterrupted.")
     except requests.ConnectionError:
