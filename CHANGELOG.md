@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **raymarine:** surface Quantum self-test faults and decode per-item results (#385) ([PR #385](https://github.com/MarineYachtRadar/mayara-server/pull/385))
 - **garmin:** send CDM V2 heartbeat to wake Fantom radars (#156) (#267) ([PR #267](https://github.com/MarineYachtRadar/mayara-server/pull/267))
 - **web:** add --no-websocket-compression flag (#393) ([PR #393](https://github.com/MarineYachtRadar/mayara-server/pull/393))
+- **replay:** add --pcap-max-time flag (#395) ([PR #395](https://github.com/MarineYachtRadar/mayara-server/pull/395))
 
 ### Changed
 
