@@ -215,14 +215,23 @@ impl<F> WebSocketUpgrade<F> {
         self
     }
 
-    /// Enable per-message deflate compression with default settings.
+    /// Enable per-message deflate compression tuned for low CPU cost.
     ///
-    /// Only takes effect if the client offered `permessage-deflate` in its
-    /// `Sec-WebSocket-Extensions` request header.
+    /// Drops the zlib level from the default (6) to fast (1). The window
+    /// stays at the protocol default (32 KB) — a smaller window means
+    /// zlib has to slide its hash table more often per message, and on
+    /// the ~40 KB serialized RadarMessage payloads measured on a Pi
+    /// that slide cost dominates the actual compression work.
+    ///
+    /// Only takes effect if the client offered `permessage-deflate` in
+    /// its `Sec-WebSocket-Extensions` request header.
     pub fn permessage_deflate(mut self) -> Self {
         if self.client_offers_deflate {
+            use ts::extensions::compression::deflate::DeflateConfig;
+            let mut deflate = DeflateConfig::new();
+            deflate.compression = flate2::Compression::fast();
             let mut extensions = ExtensionsConfig::default();
-            extensions.permessage_deflate = Some(Default::default());
+            extensions.permessage_deflate = Some(deflate);
             self.config.extensions = extensions;
             self.permessage_deflate = true;
         }

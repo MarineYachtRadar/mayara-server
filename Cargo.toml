@@ -44,7 +44,12 @@ crossbeam = "0.8.4"
 directories = "6.0.0"
 enum-primitive-derive = "0.3.0"
 env_logger = { version = "0.11", default-features = false, features = ["humantime", "auto-color"] }
-flate2 = "1"
+# `zlib-ng-compat` makes libz-sys build zlib-ng instead of plain zlib while
+# keeping the zlib API tungstenite expects. zlib-ng has SIMD-accelerated
+# `longest_match` / `crc32` on aarch64 (NEON) and ~1.5-2× faster compression
+# at the same level. Feature unification routes WebSocket permessage-deflate
+# through this backend as well.
+flate2 = { version = "1", features = ["zlib-ng-compat"] }
 futures = "0.3.32"
 futures-util = "0.3.32"
 headers = "0.4.1"
