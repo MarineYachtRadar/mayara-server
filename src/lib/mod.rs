@@ -561,18 +561,32 @@ pub async fn start_session(
     // soon as discovery resolves an HTTP URL. Polls until either shutdown
     // or discovery resolves; the WS task and discovery race startup and
     // discovery may take arbitrarily long on a quiet network.
+    //
+    // Once the HTTP base is known, wait a bounded extra window for the WS
+    // task to latch `OWN_SHIP_CONTEXT` from the `vessels.self` subscription
+    // before seeding. The REST tree contains the operator's own ship under
+    // its MMSI URN just like any other vessel, and the seed function uses
+    // the latched context to skip it. If the operator runs without an
+    // upstream Signal K (no own-ship will ever latch), the timeout still
+    // lets the seed proceed so an offline GUI overlay isn't blocked.
     let accept_invalid_certs = args.accept_invalid_certs;
     subsystem.start(SubsystemBuilder::new(
         "AIS Seed",
         async move |subsys: &mut SubsystemHandle| {
+            let own_ship_wait_deadline =
+                tokio::time::Instant::now() + std::time::Duration::from_secs(30);
             loop {
                 tokio::select! { biased;
                     _ = subsys.on_shutdown_requested() => break,
                     _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {},
                 }
                 if crate::signalk::get_upstream_http_base().is_some() {
-                    navdata::seed_ais_from_upstream(accept_invalid_certs).await;
-                    break;
+                    let own_ship_latched = navdata::get_own_ship_context().is_some();
+                    let deadline_passed = tokio::time::Instant::now() >= own_ship_wait_deadline;
+                    if own_ship_latched || deadline_passed {
+                        navdata::seed_ais_from_upstream(accept_invalid_certs).await;
+                        break;
+                    }
                 }
             }
             Ok::<(), miette::Report>(())
