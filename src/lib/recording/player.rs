@@ -407,7 +407,7 @@ pub async fn load_recording(
 #[allow(clippy::too_many_arguments)] // playback config + 3 shared flags + 3 channels — bundling adds indirection without reuse
 async fn playback_task(
     path: PathBuf,
-    message_tx: broadcast::Sender<Vec<u8>>,
+    message_tx: broadcast::Sender<bytes::Bytes>,
     stop_flag: Arc<AtomicBool>,
     pause_flag: Arc<AtomicBool>,
     position_ms: Arc<AtomicU64>,
@@ -538,7 +538,7 @@ async fn playback_task(
                 tokio::time::sleep(wait_time).await;
             }
 
-            if let Err(e) = message_tx.send(frame.data) {
+            if let Err(e) = message_tx.send(bytes::Bytes::from(frame.data)) {
                 log::trace!("No receivers for playback frame: {}", e);
             }
 

@@ -37,6 +37,7 @@ axum-embed = "0.1.0"
 base64 = "0.22.1"
 bincode = { version = "2.0.1", features = ["serde"] }
 bitflags = "2.11.1"
+bytes = "1"
 chrono = { version = "0.4.44", features = ["serde"] }
 clap = { version = "4.6.1", features = ["derive"] }
 clap-verbosity-flag = "3.0.4"
