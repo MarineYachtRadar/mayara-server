@@ -170,6 +170,12 @@ pub struct Cli {
     /// Merge targets from multiple radars into a single shared target list
     #[arg(long, default_value_t = false)]
     pub merge_targets: bool,
+
+    /// Disable permessage-deflate compression on outbound WebSocket streams
+    /// (spoke and Signal K delta). Trades bandwidth for CPU — useful on LAN
+    /// deployments where compression cost exceeds the bandwidth benefit.
+    #[arg(long, default_value_t = false)]
+    pub no_websocket_compression: bool,
 }
 
 /// Static position data (latitude, longitude, heading)

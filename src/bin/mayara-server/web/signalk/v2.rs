@@ -1132,7 +1132,12 @@ async fn control_stream_handler(
 
     // finalize the upgrade process by returning upgrade callback.
     // we can customize the callback by sending additional info such as address.
-    ws.permessage_deflate().on_upgrade(move |socket| {
+    let ws = if state.args.no_websocket_compression {
+        ws
+    } else {
+        ws.permessage_deflate()
+    };
+    ws.on_upgrade(move |socket| {
         ws_signalk_delta_shim(socket, subscribe, send_cached_values, radars, shutdown_tx)
     })
 }

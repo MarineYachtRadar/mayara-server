@@ -580,8 +580,12 @@ async fn spokes_handler(
             radar.wake_up();
             // finalize the upgrade process by returning upgrade callback.
             // we can customize the callback by sending additional info such as address.
-            ws.permessage_deflate()
-                .on_upgrade(move |socket| spokes_stream(socket, radar_message_rx, shutdown_rx))
+            let ws = if state.args.no_websocket_compression {
+                ws
+            } else {
+                ws.permessage_deflate()
+            };
+            ws.on_upgrade(move |socket| spokes_stream(socket, radar_message_rx, shutdown_rx))
         }
         None => RadarError::NoSuchRadar(params.id).into_response(),
     }
