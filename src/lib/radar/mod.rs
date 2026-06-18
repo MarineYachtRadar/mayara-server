@@ -1233,6 +1233,21 @@ pub(crate) struct CommonRadar {
     spoke_count: u32,
     max_spoke_length: u32,
 
+    /// Minimum spoke count before `send_spoke_message` actually broadcasts
+    /// the accumulated batch. `0` disables batching (the default) so brands
+    /// that already emit a reasonable number of spokes per UDP frame —
+    /// Navico's 32, Furuno's variable, etc. — are unchanged. Brands that
+    /// emit 1 spoke per UDP packet (Raymarine Quantum / Garmin Fantom) set
+    /// this higher so each broadcast carries roughly 1/32 of a revolution,
+    /// amortising the per-message compression / WebSocket framing cost.
+    /// Set via `set_spoke_batch_threshold()` at receiver construction.
+    spoke_batch_threshold: usize,
+
+    /// Range of the spokes currently sitting in the un-flushed batch. Used
+    /// in `add_spoke` to detect a mid-batch range change and force-flush
+    /// before mixing two ranges into one broadcast message.
+    batch_range: Option<u32>,
+
     // Exclusion zones (stationary installations only)
     exclusion_zones: [Option<crate::config::ExclusionZone>; 4],
     exclusion_rects: [Option<crate::config::ExclusionRect>; 4],
@@ -1305,6 +1320,8 @@ impl CommonRadar {
             prev_angle: 0,
             spoke_count: 0,
             max_spoke_length: 0,
+            spoke_batch_threshold: 0,
+            batch_range: None,
             exclusion_zones,
             exclusion_rects,
             exclusion_mask: None,
@@ -1531,12 +1548,39 @@ impl CommonRadar {
         Ok(())
     }
 
+    /// Begin (or continue) a spoke-batch. Idempotent: if a batch is already
+    /// open it stays open so the next `add_spoke` call appends to it. Brands
+    /// call this once at the start of each UDP frame just like before — the
+    /// idempotence is what lets `spoke_batch_threshold > 0` accumulate
+    /// across multiple frames without losing the partial batch.
     pub fn new_spoke_message(&mut self) {
-        self.spoke_message = Some(RadarMessage::new());
-        self.spoke_time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap();
+        if self.spoke_message.is_none() {
+            self.spoke_message = Some(RadarMessage::new());
+            self.spoke_time = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap();
+        }
+    }
+
+    /// Set the minimum spokes per broadcast message. `0` (the default)
+    /// means every `send_spoke_message` flushes — original behaviour.
+    /// Larger values batch spokes across UDP frames; the batch is also
+    /// force-flushed on revolution wrap or range change in `add_spoke`,
+    /// so the trailing partial batch of each revolution is shipped as-is.
+    pub fn set_spoke_batch_threshold(&mut self, threshold: usize) {
+        self.spoke_batch_threshold = threshold;
+    }
+
+    /// Drop the current batch onto the broadcast channel and reset the
+    /// batch-range tracker. No-op if there's no active batch.
+    fn flush_spoke_message(&mut self) {
+        if let Some(message) = self.spoke_message.take()
+            && !message.spokes.is_empty()
+        {
+            self.info.broadcast_radar_message(message);
+        }
+        self.batch_range = None;
     }
 
     /// Refresh exclusion mask when range or spoke length changes.
@@ -1611,6 +1655,42 @@ impl CommonRadar {
         if self.info.stationary {
             self.refresh_exclusion_mask(range, generic_spoke.len());
         }
+
+        // End the current batch BEFORE pushing this spoke if:
+        //   - range changed (would mix two ranges into one broadcast), or
+        //   - the revolution wrapped (would mix end-of-old and start-of-new
+        //     revolution into one broadcast).
+        // In both cases this spoke belongs to a fresh batch.
+        let range_changed = self.batch_range.is_some_and(|r| r != range);
+        let rev_wrapped = angle < self.prev_angle && self.spoke_message.is_some();
+        if rev_wrapped {
+            // Publish per-revolution stats describing the rev that just
+            // finished, before the batch carrying them is flushed.
+            let ms = self.info.full_rotation();
+            self.trails.set_rotation_speed(ms);
+            log::debug!("spoke_count = {}", self.spoke_count);
+            self.info
+                .controls
+                .set_value(&ControlId::Spokes, Value::Number(self.spoke_count.into()))
+                .unwrap();
+            self.info
+                .controls
+                .set_value(
+                    &ControlId::SpokeLength,
+                    Value::Number(self.max_spoke_length.into()),
+                )
+                .unwrap();
+            self.spoke_count = 0;
+            self.max_spoke_length = 0;
+        }
+        if range_changed || rev_wrapped {
+            self.flush_spoke_message();
+        }
+
+        // Ensure a batch exists for the spoke we're about to push (creates
+        // a fresh one if we just flushed, or reuses the existing one).
+        self.new_spoke_message();
+        self.batch_range = Some(range);
 
         if let Some(message) = &mut self.spoke_message {
             // In replay mode, draw a circle at extreme range for visual indication
@@ -1709,25 +1789,6 @@ impl CommonRadar {
                 .update_trails(&mut spoke, &self.info.legend, &self.info.controls);
             message.spokes.push(spoke);
 
-            if angle < self.prev_angle {
-                let ms = self.info.full_rotation();
-                self.trails.set_rotation_speed(ms);
-
-                log::debug!("spoke_count = {}", self.spoke_count);
-                self.info
-                    .controls
-                    .set_value(&ControlId::Spokes, Value::Number(self.spoke_count.into()))
-                    .unwrap();
-                self.info
-                    .controls
-                    .set_value(
-                        &ControlId::SpokeLength,
-                        Value::Number(self.max_spoke_length.into()),
-                    )
-                    .unwrap();
-                self.spoke_count = 0;
-                self.max_spoke_length = 0;
-            }
             if ((self.prev_angle + 1) % self.info.spokes_per_revolution) != angle {
                 let missing_spokes = ((angle as u32 + self.info.spokes_per_revolution as u32)
                     - self.prev_angle as u32
@@ -1746,10 +1807,16 @@ impl CommonRadar {
     }
 
     pub(crate) fn send_spoke_message(&mut self) {
-        if let Some(message) = self.spoke_message.take()
-            && !message.spokes.is_empty()
-        {
-            self.info.broadcast_radar_message(message);
+        // Flush only when the batch is large enough; otherwise the partial
+        // batch stays open and the next UDP frame's `add_spoke` calls
+        // append to it. add_spoke force-flushes on revolution wrap or
+        // range change, so a stalled batch is never held forever.
+        let ready = self
+            .spoke_message
+            .as_ref()
+            .is_some_and(|m| m.spokes.len() >= self.spoke_batch_threshold);
+        if ready {
+            self.flush_spoke_message();
         }
     }
 

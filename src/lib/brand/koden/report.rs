@@ -30,7 +30,7 @@ impl KodenReportReceiver {
         let control_update_rx = info.control_update_subscribe();
         let blob_tx = radars.get_blob_tx();
 
-        let common = CommonRadar::new(
+        let mut common = CommonRadar::new(
             args,
             key,
             info,
@@ -39,6 +39,11 @@ impl KodenReportReceiver {
             args.is_replay(),
             blob_tx,
         );
+        // Coalesce ~1/32 of a revolution of spokes per broadcast so each
+        // compression / WebSocket-framing cycle amortises across the
+        // batch instead of firing per spoke.
+        let target = common.info.spokes_per_revolution.div_ceil(32) as usize;
+        common.set_spoke_batch_threshold(target);
 
         KodenReportReceiver {
             common,
