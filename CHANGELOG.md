@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **agents:** require user-facing description first in issues and PRs (#373) ([PR #373](https://github.com/MarineYachtRadar/mayara-server/pull/373))
 - drop magic numbers when sending Power control values (#377) ([PR #377](https://github.com/MarineYachtRadar/mayara-server/pull/377))
 - consolidate NM and knot conversion constants (#381) ([PR #381](https://github.com/MarineYachtRadar/mayara-server/pull/381))
+- **radar:** pre-size serialization buffer for spoke broadcasts (#394) ([PR #394](https://github.com/MarineYachtRadar/mayara-server/pull/394))
 
 ### Fixed
 
