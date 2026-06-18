@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **radar:** pre-size serialization buffer for spoke broadcasts (#394) ([PR #394](https://github.com/MarineYachtRadar/mayara-server/pull/394))
 - **web:** tune permessage-deflate for radar streams (#398) ([PR #398](https://github.com/MarineYachtRadar/mayara-server/pull/398))
 - **radar:** broadcast serialized spokes as Bytes, not Vec<u8> (#399) ([PR #399](https://github.com/MarineYachtRadar/mayara-server/pull/399))
+- **radar:** coalesce spokes into ~1/32-revolution batches (#400) ([PR #400](https://github.com/MarineYachtRadar/mayara-server/pull/400))
 
 ### Fixed
 
