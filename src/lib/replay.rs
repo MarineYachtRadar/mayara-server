@@ -173,7 +173,10 @@ pub(crate) fn create_listen(addr: &SocketAddrV4) -> Option<ReplayReceiver> {
 /// `realistic_timing`: if true, sleep between packets to match pcap
 /// timestamps. If false, send all packets as fast as possible.
 /// `repeat`: if true, loop the pcap file indefinitely.
-pub async fn run(realistic_timing: bool, repeat: bool) {
+/// `max_time`: if `Some(n)`, stop replay after `n` seconds of pcap
+/// content (whichever comes first: max_time elapsed or end of file),
+/// then return. Caller is expected to trigger shutdown.
+pub async fn run(realistic_timing: bool, repeat: bool, max_time: Option<u32>) {
     let state = match REPLAY.get() {
         Some(s) => s.clone(),
         None => return,
@@ -223,7 +226,20 @@ pub async fn run(realistic_timing: bool, repeat: bool) {
         let mut sent = 0u64;
         let mut unrouted = 0u64;
 
+        let first_ts = state
+            .packets
+            .first()
+            .map(|p| p.timestamp)
+            .unwrap_or_default();
+        let max_pcap_ts = max_time.map(|n| first_ts + Duration::from_secs(n.into()));
+
         for pkt in &state.packets {
+            if let Some(limit) = max_pcap_ts
+                && pkt.timestamp > limit
+            {
+                log::info!("Replay: reached --pcap-max-time, stopping");
+                break;
+            }
             if realistic_timing && pkt.timestamp > prev_ts {
                 let delay = pkt.timestamp - prev_ts;
                 sleep(delay).await;
@@ -302,6 +318,13 @@ pub async fn run(realistic_timing: bool, repeat: bool) {
             break;
         }
         log::info!("Replay: restarting from beginning");
+    }
+
+    if max_time.is_some() {
+        // Give receivers a moment to process the last dispatched packets
+        // before returning to the caller (which will request shutdown).
+        sleep(Duration::from_secs(1)).await;
+        return;
     }
 
     // Keep running so the program doesn't exit immediately
