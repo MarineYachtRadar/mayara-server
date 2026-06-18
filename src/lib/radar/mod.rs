@@ -607,10 +607,12 @@ impl RadarInfo {
     }
 
     pub(super) fn broadcast_radar_message(&self, message: RadarMessage) {
-        let mut bytes = Vec::new();
-        message
-            .write_to_vec(&mut bytes)
-            .expect("Cannot write RadarMessage to vec");
+        // write_to_bytes() pre-sizes the Vec via compute_size(), avoiding the
+        // ~16 doublings a fresh Vec::new() would do for a ~40 KB serialized
+        // batch of spokes (the dominant per-frame allocator churn).
+        let bytes = message
+            .write_to_bytes()
+            .expect("Cannot write RadarMessage to bytes");
 
         // Send the message to all receivers, normally the web client(s)
         // We send raw bytes to avoid encoding overhead in each web client.
