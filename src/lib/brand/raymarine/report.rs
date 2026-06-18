@@ -229,7 +229,18 @@ impl RaymarineReportReceiver {
 
         let wire_to_legend = wire_to_legend(&info.get_legend());
 
-        let common = CommonRadar::new(args, key, info, radars, control_update_rx, replay, blob_tx);
+        let mut common =
+            CommonRadar::new(args, key, info, radars, control_update_rx, replay, blob_tx);
+
+        // Coalesce roughly 1/32 of a revolution of spokes into each
+        // broadcast — Quantum (250 spokes/rev) → batches of 8, RD/HD
+        // (2048 spokes/rev) → batches of 64. Both brands emit one or a
+        // handful of spokes per UDP frame, so without batching every
+        // spoke pays a full compression / WebSocket-framing cycle.
+        // `add_spoke` force-flushes on revolution wrap or range change,
+        // so trailing partial batches still ship as-is.
+        let target = common.info.spokes_per_revolution.div_ceil(32) as usize;
+        common.set_spoke_batch_threshold(target);
 
         let now = Instant::now();
         RaymarineReportReceiver {

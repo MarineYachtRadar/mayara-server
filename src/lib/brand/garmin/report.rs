@@ -176,7 +176,14 @@ impl GarminReportReceiver {
             false,
         );
 
-        let common = CommonRadar::new(args, key, info, radars, control_update_rx, replay, blob_tx);
+        let mut common =
+            CommonRadar::new(args, key, info, radars, control_update_rx, replay, blob_tx);
+        // Coalesce ~1/32 of a revolution of spokes per broadcast.
+        // Garmin Fantom is 1 spoke / UDP and xHD is 4 spokes / UDP, so
+        // batching cuts compression / WebSocket-framing cycles by a
+        // factor matching `spokes_per_revolution.div_ceil(32)`.
+        let target = common.info.spokes_per_revolution.div_ceil(32) as usize;
+        common.set_spoke_batch_threshold(target);
 
         let capabilities = match radar_type {
             GarminRadarType::HD => GarminCapabilities::for_legacy_hd(),
@@ -225,15 +232,11 @@ impl GarminReportReceiver {
             info.send_command_addr,
         ));
 
-        self.common_b = Some(CommonRadar::new(
-            args,
-            key,
-            info,
-            radars,
-            control_update_rx,
-            replay,
-            blob_tx,
-        ));
+        let mut common_b =
+            CommonRadar::new(args, key, info, radars, control_update_rx, replay, blob_tx);
+        let target = common_b.info.spokes_per_revolution.div_ceil(32) as usize;
+        common_b.set_spoke_batch_threshold(target);
+        self.common_b = Some(common_b);
         self.command_sender_b = command_sender_b;
         self.range_b = Some(RangeState {
             range_meters: 0,

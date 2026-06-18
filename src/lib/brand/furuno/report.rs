@@ -134,7 +134,7 @@ impl FurunoReportReceiver {
         let control_update_rx = info.control_update_subscribe();
         let blob_tx = radars.get_blob_tx();
 
-        let common = CommonRadar::new(
+        let mut common = CommonRadar::new(
             args,
             key,
             info,
@@ -143,6 +143,12 @@ impl FurunoReportReceiver {
             args.is_replay(),
             blob_tx,
         );
+        // Coalesce ~1/32 of a revolution of spokes per broadcast. Furuno's
+        // per-UDP sweep_count is wire-driven (variable), so batching pulls
+        // the per-broadcast spoke count up to a consistent ~1/32 rev and
+        // amortises one compression/WebSocket-framing cycle across it.
+        let target = common.info.spokes_per_revolution.div_ceil(32) as usize;
+        common.set_spoke_batch_threshold(target);
 
         // In replay mode the saved control state already drives the LUT, so
         // treat TA state as known from the start. In live mode we wait for
@@ -176,7 +182,7 @@ impl FurunoReportReceiver {
         let control_update_rx_b = info_b.control_update_subscribe();
         let blob_tx_b = radars.get_blob_tx();
 
-        self.common_b = Some(CommonRadar::new(
+        let mut common_b = CommonRadar::new(
             args,
             key_b,
             info_b,
@@ -184,7 +190,10 @@ impl FurunoReportReceiver {
             control_update_rx_b,
             args.is_replay(),
             blob_tx_b,
-        ));
+        );
+        let target = common_b.info.spokes_per_revolution.div_ceil(32) as usize;
+        common_b.set_spoke_batch_threshold(target);
+        self.common_b = Some(common_b);
 
         if let Some(ref mut cs) = self.command_sender {
             cs.has_dual_range = true;
