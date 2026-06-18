@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - drop magic numbers when sending Power control values (#377) ([PR #377](https://github.com/MarineYachtRadar/mayara-server/pull/377))
 - consolidate NM and knot conversion constants (#381) ([PR #381](https://github.com/MarineYachtRadar/mayara-server/pull/381))
 - **radar:** pre-size serialization buffer for spoke broadcasts (#394) ([PR #394](https://github.com/MarineYachtRadar/mayara-server/pull/394))
+- **web:** tune permessage-deflate for radar streams (#398) ([PR #398](https://github.com/MarineYachtRadar/mayara-server/pull/398))
+- **radar:** broadcast serialized spokes as Bytes, not Vec<u8> (#399) ([PR #399](https://github.com/MarineYachtRadar/mayara-server/pull/399))
 
 ### Fixed
 
