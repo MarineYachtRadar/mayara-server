@@ -214,7 +214,7 @@ pub async fn start_recording(
 
 async fn recording_task(
     mut writer: MrrWriter<BufWriter<File>>,
-    mut message_rx: broadcast::Receiver<Vec<u8>>,
+    mut message_rx: broadcast::Receiver<bytes::Bytes>,
     stop_flag: Arc<AtomicBool>,
     frame_count: Arc<AtomicU32>,
     duration_ms: Arc<AtomicU64>,
@@ -239,7 +239,10 @@ async fn recording_task(
         match result {
             Ok(Ok(data)) => {
                 let timestamp_ms = start.elapsed().as_millis() as u64;
-                let frame = MrrFrame::new(timestamp_ms, data);
+                // MrrFrame owns its data Vec; the broadcast channel hands us
+                // a refcounted Bytes, so we have to materialise one copy here
+                // to hand the recording task its own buffer.
+                let frame = MrrFrame::new(timestamp_ms, data.to_vec());
 
                 approx_size += frame.size() as u64;
 

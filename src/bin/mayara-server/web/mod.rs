@@ -594,7 +594,7 @@ async fn spokes_handler(
 /// Actual websocket statemachine (one will be spawned per connection)
 async fn spokes_stream(
     mut socket: WebSocket,
-    mut radar_message_rx: tokio::sync::broadcast::Receiver<Vec<u8>>,
+    mut radar_message_rx: tokio::sync::broadcast::Receiver<bytes::Bytes>,
     mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
 ) {
     loop {
@@ -607,7 +607,9 @@ async fn spokes_stream(
                 match r {
                     Ok(message) => {
                         let len = message.len();
-                        let ws_message = Message::Binary(message.into());
+                        // `Message::Binary` already takes `Bytes`, so this is
+                        // a refcount bump rather than a memcpy of `len` bytes.
+                        let ws_message = Message::Binary(message);
                         if let Err(e) = socket.send(ws_message).await {
                             debug!("Error on send to websocket: {}", e);
                             break;

@@ -1645,6 +1645,7 @@ dependencies = [
  "base64",
  "bincode",
  "bitflags",
+ "bytes",
  "chrono",
  "clap",
  "clap-verbosity-flag",
