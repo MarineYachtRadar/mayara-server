@@ -1,5 +1,6 @@
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use bytes::Bytes;
 use enum_primitive_derive::Primitive;
 use protobuf::Message;
 use serde::Serialize;
@@ -342,7 +343,12 @@ pub struct RadarInfo {
     rotation_timestamp: Instant,
 
     // Channels
-    pub message_tx: tokio::sync::broadcast::Sender<Vec<u8>>, // Serialized RadarMessage
+    /// Serialized RadarMessage broadcast to subscribers (spoke WS clients,
+    /// `--output` stdout forwarder, recording manager). Carried as `Bytes`
+    /// so receivers share one underlying buffer instead of each cloning
+    /// the full payload — fan-out cost goes from `N × memcpy(message)` to
+    /// `N × refcount-bump` per send.
+    pub message_tx: tokio::sync::broadcast::Sender<Bytes>,
 
     /// Soft idle flag. When `true`, the radar's data_loop drains the spoke
     /// multicast/broadcast socket but skips frame decoding and blob detection
@@ -614,10 +620,10 @@ impl RadarInfo {
             .write_to_bytes()
             .expect("Cannot write RadarMessage to bytes");
 
-        // Send the message to all receivers, normally the web client(s)
-        // We send raw bytes to avoid encoding overhead in each web client.
-        // This strategy will change when clients want different protocols.
-        match self.message_tx.send(bytes) {
+        // Send the message to all receivers, normally the web client(s).
+        // `Bytes::from(Vec)` is zero-copy; receivers will share this single
+        // buffer via refcount instead of each cloning ~40 KB on recv().
+        match self.message_tx.send(Bytes::from(bytes)) {
             Err(e) => {
                 log::trace!("{}: Dropping received spoke: {}", self.key, e);
             }
@@ -651,7 +657,7 @@ impl RadarInfo {
                 r = rx.recv() => {
                     match r {
                         Ok(r) => {
-                            std::io::stdout().write_all(&r).unwrap_or_else(|_| { subsys.request_shutdown(); });
+                            std::io::stdout().write_all(r.as_ref()).unwrap_or_else(|_| { subsys.request_shutdown(); });
                         },
                         Err(_) => {
                             subsys.request_shutdown();
