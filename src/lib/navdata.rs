@@ -99,7 +99,7 @@ static OWN_SHIP_CONTEXT: OnceLock<RwLock<Option<String>>> = OnceLock::new();
 static AIS_STORE: OnceLock<std::sync::Arc<AisVesselStore>> = OnceLock::new();
 
 /// Get the own-ship context if detected
-fn get_own_ship_context() -> Option<String> {
+pub(crate) fn get_own_ship_context() -> Option<String> {
     OWN_SHIP_CONTEXT
         .get()
         .and_then(|lock| lock.read().ok())
@@ -123,6 +123,16 @@ fn set_own_ship_context(context: &str) {
         if should_set {
             log::info!("Own-ship context set to: {}", context);
             *guard = Some(context.to_string());
+            // Drop the write guard before calling into AIS_STORE so the
+            // store's own locks can be taken without holding ours.
+            drop(guard);
+            // If the REST seed already loaded our own ship as an AIS
+            // target (the seed runs in parallel with this latch — see the
+            // AIS Seed subsystem in lib/mod.rs), remove it now so the GUI
+            // overlay doesn't render the operator's own boat as a target.
+            if let Some(store) = AIS_STORE.get() {
+                store.evict(context);
+            }
         }
     }
 }
@@ -282,7 +292,12 @@ pub(crate) async fn seed_ais_from_upstream(accept_invalid_certs: bool) {
     let Some(tree_obj) = tree.as_object() else {
         return;
     };
+    // Skip own-ship's MMSI context — it shows up in the REST tree just like
+    // any other vessel, and without this guard the GUI would render the
+    // operator's own boat as a moving AIS target on the PPI.
+    let own_ship = get_own_ship_context();
     let mut seeded = 0;
+    let mut skipped_own_ship = false;
     for (ctx_key, vessel) in tree_obj {
         // Skip `urn:mrn:signalk:uuid:*` entries — those are own-ship or
         // local-without-MMSI vessels; the GUI filters them too.
@@ -290,6 +305,10 @@ pub(crate) async fn seed_ais_from_upstream(accept_invalid_certs: bool) {
             continue;
         }
         let context = format!("vessels.{}", ctx_key);
+        if own_ship.as_deref() == Some(context.as_str()) {
+            skipped_own_ship = true;
+            continue;
+        }
         let Some(updates) = build_seed_updates(vessel) else {
             continue;
         };
@@ -297,7 +316,15 @@ pub(crate) async fn seed_ais_from_upstream(accept_invalid_certs: bool) {
             seeded += 1;
         }
     }
-    log::info!("Seeded {} AIS vessels from upstream snapshot", seeded);
+    log::info!(
+        "Seeded {} AIS vessels from upstream snapshot{}",
+        seeded,
+        if skipped_own_ship {
+            " (own ship skipped)"
+        } else {
+            ""
+        }
+    );
 }
 
 /// Flatten a Signal K vessel REST node `{ navigation: { position: {value: ...},

@@ -240,6 +240,24 @@ impl AisVesselStore {
         })
     }
 
+    /// Remove a vessel from the store. Used when the own-ship context is
+    /// established after the REST seed has already loaded the operator's
+    /// own boat as if it were an AIS target — otherwise the PPI overlay
+    /// would render own-ship on top of itself.
+    pub fn evict(&self, context: &str) -> bool {
+        let Some(mmsi) = Self::extract_mmsi(context) else {
+            return false;
+        };
+        let Ok(mut vessels) = self.vessels.write() else {
+            return false;
+        };
+        let removed = vessels.remove(&mmsi).is_some();
+        if removed {
+            log::info!("Evicted MMSI {} from AIS store (own ship)", mmsi);
+        }
+        removed
+    }
+
     /// Extract MMSI from context like "vessels.urn:mrn:imo:mmsi:227334400"
     fn extract_mmsi(context: &str) -> Option<String> {
         // Look for pattern "mmsi:" followed by digits
