@@ -171,4 +171,5 @@ Integration tests in `tests/replay_*.rs` replay brand-specific pcap fixtures and
 - [Adding a New Radar Brand](new_radar_brand.md) — full guide with checklist
 - [Capturing Radar Traffic](../capturing-traffic.md) — pcap capture for bug reports and new-brand fixtures
 - [ARPA Target Tracking](arpa.md) — IMM filtering and blob detection
+- [Radar Status Model](radar-status.md) — design intent for lifecycle/health status vs. idle, and the ARPA/idle interaction
 - [Mayara Server for radar_pi Developers](radar_pi_comparison.md) — concept map for developers coming from the radar_pi OpenCPN plugin
