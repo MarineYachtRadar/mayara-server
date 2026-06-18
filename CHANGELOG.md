@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **garmin:** send CDM V2 heartbeat to wake Fantom radars (#156) (#267) ([PR #267](https://github.com/MarineYachtRadar/mayara-server/pull/267))
 - **web:** add --no-websocket-compression flag (#393) ([PR #393](https://github.com/MarineYachtRadar/mayara-server/pull/393))
 - **replay:** add --pcap-max-time flag (#395) ([PR #395](https://github.com/MarineYachtRadar/mayara-server/pull/395))
+- **client-examples:** add --duration load-driver mode to spoke_viewer (#396) ([PR #396](https://github.com/MarineYachtRadar/mayara-server/pull/396))
 
 ### Changed
 
