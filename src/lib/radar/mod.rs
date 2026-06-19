@@ -998,6 +998,14 @@ impl Power {
 /// gate its decode on [`RadarInfo::is_idle`] and refresh it via
 /// [`RadarInfo::refresh_idle_flag`]. If a radar simply stops emitting in
 /// Standby, the gate never triggers and is a harmless no-op.
+///
+/// CARE: `spoke_receiver_count` is the spoke-broadcast WebSocket subscriber
+/// count only. ARPA does not subscribe to that broadcast — it consumes blobs
+/// over a separate mpsc channel, and idle skips the blob detection that feeds
+/// it. So a radar tracking ARPA targets with no GUI viewer counts as zero here
+/// and would idle, silently killing tracking. Before widening this predicate to
+/// the transmit-but-unwatched case, fold in an active-tracker signal so an
+/// ARPA-tracked radar stays awake. See docs/internals/radar-status.md.
 pub(crate) fn should_idle(power: Option<i32>, spoke_receiver_count: usize) -> bool {
     let standby = power.map(|p| p == Power::Standby as i32).unwrap_or(false);
     standby && spoke_receiver_count == 0
