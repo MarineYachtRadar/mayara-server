@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.6.0] - 2026-06-19
 
 ### Added
 
@@ -291,7 +291,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **ci:** use PR for changelog commit to respect branch protection (#73) ([PR #73](https://github.com/MarineYachtRadar/mayara-server/pull/73))
 - **ci:** fall back to immediate merge when auto-merge not needed (#77) ([PR #77](https://github.com/MarineYachtRadar/mayara-server/pull/77))
 
-[Unreleased]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.5.4...HEAD
+[3.6.0]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.5.4...v3.6.0
 [3.5.4]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.5.3...v3.5.4
 [3.5.3]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.5.2...v3.5.3
 [3.5.2]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.5.1...v3.5.2
