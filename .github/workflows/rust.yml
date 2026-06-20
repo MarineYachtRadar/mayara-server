@@ -14,7 +14,7 @@ jobs:
     name: cargo fmt --check
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     - uses: dtolnay/rust-toolchain@stable
       with:
         components: rustfmt
@@ -26,7 +26,7 @@ jobs:
     permissions:
       contents: read
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     - uses: dtolnay/rust-toolchain@stable
       with:
         components: clippy
@@ -48,7 +48,7 @@ jobs:
     steps:
 
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
 
@@ -71,7 +71,7 @@ jobs:
   windows:
     runs-on: windows-latest
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     - uses: swatinem/rust-cache@v2
     - name: Run tests
       run: cargo test --features pcap-replay --release
@@ -87,7 +87,7 @@ jobs:
     name: Build macOS
     runs-on: macos-latest
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     - uses: swatinem/rust-cache@v2
     - uses: taiki-e/install-action@v2
       with:
