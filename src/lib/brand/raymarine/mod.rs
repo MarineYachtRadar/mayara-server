@@ -61,14 +61,14 @@ impl RaymarineModel {
                 true,
                 protocol::QUANTUM_MAX_SPOKE_LEN,
                 false,
-                "Quantum Q24",
+                "Quantum Q24C",
             ),
             "E70344" => (
                 BaseModel::Quantum,
                 true,
                 protocol::QUANTUM_MAX_SPOKE_LEN,
                 false,
-                "Quantum Q24C",
+                "Quantum Q24W",
             ),
             "E70498" => (
                 BaseModel::Quantum,
