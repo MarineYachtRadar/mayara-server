@@ -225,7 +225,7 @@ async fn get_radars(State(state): State<Web>, headers: hyper::header::HeaderMap)
 
     log::debug!("Radar state request, target host = '{}'", host);
     let mut api: HashMap<String, RadarApiV3> = HashMap::new();
-    for info in state.radars.get_active() {
+    for info in state.radars.get_discovered() {
         let spoke_data_uri = SPOKES_URI.replace("{id}", &info.key());
         let v = RadarApiV3 {
             name: info.controls.user_name(),

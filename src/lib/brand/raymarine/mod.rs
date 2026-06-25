@@ -1067,6 +1067,66 @@ mod tests {
     }
 
     #[test]
+    fn discovered_quantum_without_ranges_is_visible_but_not_active() {
+        // A Quantum that has been located via beacon but is still asleep has
+        // no ranges yet. It must still surface from get_discovered()/
+        // have_discovered() (so the /radars listing shows it and the locator
+        // stops hunting), while get_active()/have_active() stay empty until a
+        // status report fills the ranges. The locator relying on
+        // have_discovered() is what lets the external-controller witness fall
+        // quiet so the WiFi wake nudge can eventually fire — see report.rs.
+        let args = Cli::parse_from(["mayara-server"]);
+        let mut locator = RaymarineLocator::new(args);
+        let radars = &SharedRadars::new();
+        const SRC: Ipv4Addr = Ipv4Addr::new(198, 18, 0, 31);
+
+        // 56-byte identity beacon: subtype 0x66, model "QuantumRadar".
+        const BEACON_56: [u8; 56] = [
+            0x01, 0x00, 0x00, 0x00, 0x66, 0x00, 0x00, 0x00, 0x48, 0x81, 0x81, 0xD6, 0x03, 0x01,
+            0x00, 0x00, 0x13, 0x2B, 0xA8, 0xC0, 0x51, 0x75, 0x61, 0x6E, 0x74, 0x75, 0x6D, 0x52,
+            0x61, 0x64, 0x61, 0x72, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+        ];
+        // 36-byte address beacon with a real MULTICAST report group
+        // (report=232.1.19.1:2574, command=198.18.2.59:2575) — the topology
+        // from the field capture, distinct from the MFD-as-AP unicast case.
+        const BEACON_36: [u8; 36] = [
+            0x00, 0x00, 0x00, 0x00, 0x48, 0x81, 0x81, 0xD6, 0x28, 0x00, 0x00, 0x00, 0x03, 0x00,
+            0x64, 0x00, 0x06, 0x08, 0x10, 0x00, 0x01, 0x13, 0x01, 0xE8, 0x0E, 0x0A, 0x00, 0x20,
+            0x3B, 0x02, 0x12, 0xC6, 0x0F, 0x0A, 0x00, 0x00,
+        ];
+
+        locator.process_beacon_56_report(&BEACON_56, &SRC).unwrap();
+        let (info, model) = locator
+            .process_beacon_36_report(&BEACON_36, &SRC, radars)
+            .unwrap()
+            .expect("radar should be created");
+        assert_eq!(model, BaseModel::Quantum);
+        assert!(
+            info.ranges.is_empty(),
+            "a freshly located radar has no ranges yet"
+        );
+
+        // Register it the way the locator's found() does.
+        radars.add(info);
+
+        assert!(
+            radars.have_discovered(),
+            "a located radar must count as discovered even without ranges"
+        );
+        assert_eq!(
+            radars.get_discovered().len(),
+            1,
+            "the rangeless radar must surface from get_discovered()"
+        );
+        assert!(!radars.have_active(), "a rangeless radar is not yet active");
+        assert!(
+            radars.get_active().is_empty(),
+            "get_active() stays empty until ranges arrive"
+        );
+    }
+
+    #[test]
     fn features_flags_parsed() {
         let packets = parse_fixture(PELAGIA_FIXTURE);
         let features_pkt = packets
