@@ -793,6 +793,29 @@ impl SharedRadars {
             > 0
     }
 
+    ///
+    /// Return every radar that has been discovered, including those that have
+    /// not yet reported their ranges. Use this where a radar should surface as
+    /// soon as it is found (e.g. the `/radars` listing) rather than only once
+    /// it is fully usable — see [`get_active`](Self::get_active) for the
+    /// range-filtered set used by the spoke/data paths.
+    ///
+    pub fn get_discovered(&self) -> Vec<RadarInfo> {
+        let radars = self.radars.read().unwrap();
+        radars.info.values().cloned().collect()
+    }
+
+    /// True once any radar has been discovered, regardless of whether its
+    /// ranges have arrived. The locator uses this (not `have_active`) to decide
+    /// when to stop hunting for beacons: a Quantum that is discovered but still
+    /// asleep keeps `have_active` false forever, which would otherwise keep the
+    /// locator marking the external-controller witness and starve the wake
+    /// nudge that is meant to wake it.
+    pub fn have_discovered(&self) -> bool {
+        let radars = self.radars.read().unwrap();
+        !radars.info.is_empty()
+    }
+
     #[allow(dead_code)]
     pub fn get_by_key(&self, key: &str) -> Option<RadarInfo> {
         let radars = self.radars.read().unwrap();

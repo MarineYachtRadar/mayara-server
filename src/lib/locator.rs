@@ -137,7 +137,7 @@ impl Locator {
             let mut set = JoinSet::new();
             let cancellation_token = cancellation_token.clone();
 
-            if self.args.multiple_radar || !radars.have_active() {
+            if self.args.multiple_radar || !radars.have_discovered() {
                 // actively listening for new radars
                 // create a list of sockets for all listen addresses
                 for socket in
@@ -200,7 +200,7 @@ impl Locator {
                                     radars,
                                     subsys,
                                 );
-                                if self.args.multiple_radar || !radars.have_active() {
+                                if self.args.multiple_radar || !radars.have_discovered() {
                                     // Respawn this task
                                     spawn_receive(&mut set, locator_socket);
                                 } else {
