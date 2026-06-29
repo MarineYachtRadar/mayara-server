@@ -698,19 +698,25 @@ const BEACONS: [&[u8]; 3] = [
 
 pub(super) fn new(args: &Cli, addresses: &mut Vec<LocatorAddress>) {
     if !addresses.iter().any(|i| i.id == LocatorId::Raymarine) {
-        let beacon_address = if args.allow_wifi {
-            &RAYMARINE_QUANTUM_WIFI_ADDRESS
-        } else {
-            &RAYMARINE_BEACON_ADDRESS
-        };
+        // The wired/RayNet beacon group is always needed — radomes and MFDs on
+        // RayNet announce and listen on 224.0.0.1:5800. `--allow-wifi`
+        // additionally enables the WiFi discovery group (232.1.1.1:5800); it
+        // must *add* that group, not replace the wired one, or enabling WiFi
+        // support would silently stop wired/RayNet discovery and wake.
+        let mut beacon_addresses = vec![&RAYMARINE_BEACON_ADDRESS];
+        if args.allow_wifi {
+            beacon_addresses.push(&RAYMARINE_QUANTUM_WIFI_ADDRESS);
+        }
 
-        addresses.push(LocatorAddress::new(
-            LocatorId::Raymarine,
-            beacon_address,
-            Brand::Raymarine,
-            BEACONS.to_vec(),
-            Box::new(RaymarineLocator::new(args.clone())),
-        ));
+        for beacon_address in beacon_addresses {
+            addresses.push(LocatorAddress::new(
+                LocatorId::Raymarine,
+                beacon_address,
+                Brand::Raymarine,
+                BEACONS.to_vec(),
+                Box::new(RaymarineLocator::new(args.clone())),
+            ));
+        }
     }
 }
 
@@ -720,8 +726,45 @@ mod tests {
 
     use clap::Parser;
 
-    use super::{BaseModel, protocol};
+    use super::{BaseModel, RAYMARINE_BEACON_ADDRESS, RAYMARINE_QUANTUM_WIFI_ADDRESS, protocol};
+    use crate::brand::LocatorId;
+    use crate::locator::LocatorAddress;
     use crate::{Cli, brand::raymarine::RaymarineLocator, radar::SharedRadars};
+
+    fn raymarine_beacon_groups(extra_args: &[&str]) -> Vec<std::net::SocketAddr> {
+        let mut argv = vec!["mayara-server"];
+        argv.extend_from_slice(extra_args);
+        let args = Cli::parse_from(argv);
+        let mut addresses: Vec<LocatorAddress> = Vec::new();
+        super::new(&args, &mut addresses);
+        addresses
+            .iter()
+            .filter(|a| a.id == LocatorId::Raymarine)
+            .map(|a| a.address)
+            .collect()
+    }
+
+    #[test]
+    fn default_beacons_to_wired_group_only() {
+        let groups = raymarine_beacon_groups(&[]);
+        assert_eq!(groups, vec![RAYMARINE_BEACON_ADDRESS]);
+    }
+
+    #[test]
+    fn allow_wifi_adds_wifi_group_without_dropping_wired() {
+        // --allow-wifi must *add* the WiFi discovery group, not replace the
+        // wired/RayNet one — otherwise enabling WiFi support silently stops
+        // wired discovery and wake (the radar/MFD listen on 224.0.0.1:5800).
+        let groups = raymarine_beacon_groups(&["--allow-wifi"]);
+        assert!(
+            groups.contains(&RAYMARINE_BEACON_ADDRESS),
+            "wired group 224.0.0.1:5800 must still be registered with --allow-wifi"
+        );
+        assert!(
+            groups.contains(&RAYMARINE_QUANTUM_WIFI_ADDRESS),
+            "WiFi group 232.1.1.1:5800 must be registered with --allow-wifi"
+        );
+    }
 
     #[test]
     fn decode_raymarine_locator_beacon() {
