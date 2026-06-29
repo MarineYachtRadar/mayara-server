@@ -696,6 +696,11 @@ const BEACONS: [&[u8]; 3] = [
     &RAYMARINE_WOL_RADAR,
 ];
 
+/// Register the Raymarine locator's beacon/wake multicast groups.
+///
+/// The wired/RayNet group (`224.0.0.1:5800`) is always registered; the WiFi
+/// group (`232.1.1.1:5800`) is added on top when `--allow-wifi` is set. No-op
+/// if a Raymarine locator is already registered.
 pub(super) fn new(args: &Cli, addresses: &mut Vec<LocatorAddress>) {
     if !addresses.iter().any(|i| i.id == LocatorId::Raymarine) {
         // The wired/RayNet beacon group is always needed — radomes and MFDs on
@@ -756,13 +761,10 @@ mod tests {
         // wired/RayNet one — otherwise enabling WiFi support silently stops
         // wired discovery and wake (the radar/MFD listen on 224.0.0.1:5800).
         let groups = raymarine_beacon_groups(&["--allow-wifi"]);
-        assert!(
-            groups.contains(&RAYMARINE_BEACON_ADDRESS),
-            "wired group 224.0.0.1:5800 must still be registered with --allow-wifi"
-        );
-        assert!(
-            groups.contains(&RAYMARINE_QUANTUM_WIFI_ADDRESS),
-            "WiFi group 232.1.1.1:5800 must be registered with --allow-wifi"
+        assert_eq!(
+            groups,
+            vec![RAYMARINE_BEACON_ADDRESS, RAYMARINE_QUANTUM_WIFI_ADDRESS],
+            "--allow-wifi must register exactly the wired group plus the WiFi group, with no duplicates or extra groups"
         );
     }
 
