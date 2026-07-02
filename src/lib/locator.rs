@@ -24,14 +24,6 @@ use crate::{Brand, Cli, InterfaceApi, InterfaceId, InterfaceStatus, RadarInterfa
 
 const LOCATOR_PACKET_BUFFER_LEN: usize = 300; // Long enough for any location packet
 
-// Raymarine MFDs emit the radar wake/WOL with IP TTL 10, and an Axiom acting
-// as a radar's WiFi access point only relays wake packets whose TTL is > 1
-// (router semantics: TTL 1 means link-local only). Send our beacon requests
-// with the same TTL so they are eligible for that relay — on the local link a
-// larger TTL changes nothing. Wire-confirmed against a live Axiom in
-// MarineYachtRadar/mayara-server#160.
-const BEACON_MULTICAST_TTL: u32 = 10;
-
 // An Axiom wakes a radar with a burst of WOL packets roughly 20 ms apart, not
 // a single datagram — multicast to a dozing WiFi radar is lossy, so singles
 // are routinely missed. Space consecutive beacon-request packets the same way.
@@ -42,6 +34,10 @@ pub(crate) struct LocatorAddress {
     pub address: SocketAddr,
     pub brand: Brand,
     pub beacon_request_packets: Vec<&'static [u8]>, // Optional messages to send to ask radar for address
+    // Multicast TTL for the beacon requests; None keeps the OS default (1,
+    // link-local). Brands whose wake must be relayed across segments set this
+    // per locator so the workaround doesn't leak into other brands' discovery.
+    pub beacon_multicast_ttl: Option<u32>,
     pub locator: Box<dyn RadarLocator>,
 }
 
@@ -62,9 +58,24 @@ impl LocatorAddress {
             address: *address,
             brand,
             beacon_request_packets,
+            beacon_multicast_ttl: None,
             locator,
         }
     }
+
+    pub(crate) fn with_beacon_multicast_ttl(mut self, ttl: u32) -> Self {
+        self.beacon_multicast_ttl = Some(ttl);
+        self
+    }
+}
+
+/// A beacon destination plus its request packets and optional multicast TTL,
+/// extracted from [`LocatorAddress`] for the periodic send loop.
+#[derive(Debug)]
+struct BeaconRequests {
+    address: SocketAddr,
+    packets: Vec<&'static [u8]>,
+    multicast_ttl: Option<u32>,
 }
 
 struct LocatorSocket {
@@ -138,8 +149,12 @@ impl Locator {
         let beacon_messages = listen_addresses
             .iter()
             .filter(|x| !x.beacon_request_packets.is_empty())
-            .map(|x| (x.address, x.beacon_request_packets.clone()))
-            .collect::<Vec<(SocketAddr, Vec<&[u8]>)>>();
+            .map(|x| BeaconRequests {
+                address: x.address,
+                packets: x.beacon_request_packets.clone(),
+                multicast_ttl: x.beacon_multicast_ttl,
+            })
+            .collect::<Vec<BeaconRequests>>();
         log::debug!("beacon_messages = {:?}", beacon_messages);
 
         let cancellation_token = subsys.create_cancellation_token();
@@ -592,13 +607,20 @@ fn spawn_receive(set: &mut JoinSet<Result<ResultType, RadarError>>, mut socket: 
 }
 
 async fn send_beacon_requests(
-    beacon_messages: &Vec<(SocketAddr, Vec<&[u8]>)>,
+    beacon_messages: &Vec<BeaconRequests>,
     interface_addresses: &Vec<Ipv4Addr>,
 ) -> io::Result<()> {
     for x in beacon_messages {
-        for beacon_request in &x.1 {
-            if let Err(e) = send_beacon_request(interface_addresses, &x.0, beacon_request).await {
-                log::warn!("Failed to send beacon request to {}: {}", x.0, e);
+        for beacon_request in &x.packets {
+            if let Err(e) = send_beacon_request(
+                interface_addresses,
+                &x.address,
+                beacon_request,
+                x.multicast_ttl,
+            )
+            .await
+            {
+                log::warn!("Failed to send beacon request to {}: {}", x.address, e);
             }
             sleep(BEACON_PACKET_SPACING).await;
         }
@@ -611,6 +633,7 @@ async fn send_beacon_request(
     interface_addresses: &Vec<Ipv4Addr>,
     addr: &SocketAddr,
     msg: &[u8],
+    multicast_ttl: Option<u32>,
 ) -> io::Result<()> {
     if let SocketAddr::V4(addr) = addr {
         if addr.ip().is_multicast() {
@@ -622,7 +645,9 @@ async fn send_beacon_request(
                 match network::create_multicast_send(addr, nic_addr) {
                     Ok(sock) => {
                         sock.set_broadcast(true)?;
-                        sock.set_multicast_ttl_v4(BEACON_MULTICAST_TTL)?;
+                        if let Some(ttl) = multicast_ttl {
+                            sock.set_multicast_ttl_v4(ttl)?;
+                        }
                         match sock.send(msg).await {
                             Ok(_) => {
                                 log::debug!(

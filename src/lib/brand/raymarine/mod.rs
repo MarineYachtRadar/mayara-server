@@ -696,6 +696,15 @@ const RAYMARINE_WOL_RADAR: [u8; 102] = [
 /// MarineYachtRadar/mayara-server#160.
 const WOL_WAKE_BURST: usize = 8;
 
+/// Raymarine MFDs emit the radar wake/WOL with IP TTL 10, and an Axiom acting
+/// as a radar's WiFi access point only relays wake packets whose TTL is > 1
+/// (router semantics: TTL 1 means link-local only). Send our beacon requests
+/// with the same TTL so they are eligible for that relay — on the local link
+/// a larger TTL changes nothing. Wire-confirmed against a live Axiom in
+/// MarineYachtRadar/mayara-server#160. Raymarine-specific: other brands keep
+/// the OS default.
+const RAYMARINE_BEACON_TTL: u32 = 10;
+
 /// The discovery/wake packets sent to a beacon group each locator cycle:
 /// the MFD announce, the wake literal, then the WOL magic packet as a burst.
 fn beacon_request_packets() -> Vec<&'static [u8]> {
@@ -724,13 +733,16 @@ pub(super) fn new(args: &Cli, addresses: &mut Vec<LocatorAddress>) {
         }
 
         for beacon_address in beacon_addresses {
-            addresses.push(LocatorAddress::new(
-                LocatorId::Raymarine,
-                beacon_address,
-                Brand::Raymarine,
-                beacon_request_packets(),
-                Box::new(RaymarineLocator::new(args.clone())),
-            ));
+            addresses.push(
+                LocatorAddress::new(
+                    LocatorId::Raymarine,
+                    beacon_address,
+                    Brand::Raymarine,
+                    beacon_request_packets(),
+                    Box::new(RaymarineLocator::new(args.clone())),
+                )
+                .with_beacon_multicast_ttl(RAYMARINE_BEACON_TTL),
+            );
         }
     }
 }
@@ -803,6 +815,11 @@ mod tests {
                 a.beacon_request_packets.len(),
                 super::WOL_WAKE_BURST + 2,
                 "expected MFD announce + wake literal + WOL burst"
+            );
+            assert_eq!(
+                a.beacon_multicast_ttl,
+                Some(super::RAYMARINE_BEACON_TTL),
+                "Raymarine beacons must carry the relay-eligible TTL"
             );
         }
     }
