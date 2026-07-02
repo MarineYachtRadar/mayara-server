@@ -24,6 +24,19 @@ use crate::{Brand, Cli, InterfaceApi, InterfaceId, InterfaceStatus, RadarInterfa
 
 const LOCATOR_PACKET_BUFFER_LEN: usize = 300; // Long enough for any location packet
 
+// Raymarine MFDs emit the radar wake/WOL with IP TTL 10, and an Axiom acting
+// as a radar's WiFi access point only relays wake packets whose TTL is > 1
+// (router semantics: TTL 1 means link-local only). Send our beacon requests
+// with the same TTL so they are eligible for that relay — on the local link a
+// larger TTL changes nothing. Wire-confirmed against a live Axiom in
+// MarineYachtRadar/mayara-server#160.
+const BEACON_MULTICAST_TTL: u32 = 10;
+
+// An Axiom wakes a radar with a burst of WOL packets roughly 20 ms apart, not
+// a single datagram — multicast to a dozing WiFi radar is lossy, so singles
+// are routinely missed. Space consecutive beacon-request packets the same way.
+const BEACON_PACKET_SPACING: Duration = Duration::from_millis(20);
+
 pub(crate) struct LocatorAddress {
     pub id: LocatorId,
     pub address: SocketAddr,
@@ -587,6 +600,7 @@ async fn send_beacon_requests(
             if let Err(e) = send_beacon_request(interface_addresses, &x.0, beacon_request).await {
                 log::warn!("Failed to send beacon request to {}: {}", x.0, e);
             }
+            sleep(BEACON_PACKET_SPACING).await;
         }
     }
 
@@ -608,6 +622,7 @@ async fn send_beacon_request(
                 match network::create_multicast_send(addr, nic_addr) {
                     Ok(sock) => {
                         sock.set_broadcast(true)?;
+                        sock.set_multicast_ttl_v4(BEACON_MULTICAST_TTL)?;
                         match sock.send(msg).await {
                             Ok(_) => {
                                 log::debug!(

@@ -690,11 +690,21 @@ const RAYMARINE_WOL_RADAR: [u8; 102] = [
     0xc7, 0xd, 0xef, 0xa0,
 ];
 
-const BEACONS: [&[u8]; 3] = [
-    &RAYMARINE_MFD_BEACON,
-    &RAYMARINE_WAKE_RADAR,
-    &RAYMARINE_WOL_RADAR,
-];
+/// How many WOL magic packets to send per beacon cycle. An Axiom wakes a
+/// radar with a burst of 7–10 WOLs, never a single one — a lone multicast
+/// datagram to a dozing WiFi radar is routinely lost. Wire-confirmed in
+/// MarineYachtRadar/mayara-server#160.
+const WOL_WAKE_BURST: usize = 8;
+
+/// The discovery/wake packets sent to a beacon group each locator cycle:
+/// the MFD announce, the wake literal, then the WOL magic packet as a burst.
+fn beacon_request_packets() -> Vec<&'static [u8]> {
+    let mut packets: Vec<&'static [u8]> = vec![&RAYMARINE_MFD_BEACON, &RAYMARINE_WAKE_RADAR];
+    for _ in 0..WOL_WAKE_BURST {
+        packets.push(&RAYMARINE_WOL_RADAR);
+    }
+    packets
+}
 
 /// Register the Raymarine locator's beacon/wake multicast groups.
 ///
@@ -718,7 +728,7 @@ pub(super) fn new(args: &Cli, addresses: &mut Vec<LocatorAddress>) {
                 LocatorId::Raymarine,
                 beacon_address,
                 Brand::Raymarine,
-                BEACONS.to_vec(),
+                beacon_request_packets(),
                 Box::new(RaymarineLocator::new(args.clone())),
             ));
         }
@@ -766,6 +776,35 @@ mod tests {
             vec![RAYMARINE_BEACON_ADDRESS, RAYMARINE_QUANTUM_WIFI_ADDRESS],
             "--allow-wifi must register exactly the wired group plus the WiFi group, with no duplicates or extra groups"
         );
+    }
+
+    #[test]
+    fn wol_wake_is_sent_as_burst() {
+        // An Axiom wakes a radar with a burst of WOLs, never a single one —
+        // a lone multicast datagram to a dozing WiFi radar is routinely lost.
+        // Every Raymarine beacon group must get the MFD announce and wake
+        // literal once each, and the WOL magic packet repeated as a burst.
+        let args = Cli::parse_from(["mayara-server"]);
+        let mut addresses: Vec<LocatorAddress> = Vec::new();
+        super::new(&args, &mut addresses);
+        let raymarine: Vec<_> = addresses
+            .iter()
+            .filter(|a| a.id == LocatorId::Raymarine)
+            .collect();
+        assert!(!raymarine.is_empty());
+        for a in raymarine {
+            let wols = a
+                .beacon_request_packets
+                .iter()
+                .filter(|p| **p == super::RAYMARINE_WOL_RADAR)
+                .count();
+            assert_eq!(wols, super::WOL_WAKE_BURST);
+            assert_eq!(
+                a.beacon_request_packets.len(),
+                super::WOL_WAKE_BURST + 2,
+                "expected MFD announce + wake literal + WOL burst"
+            );
+        }
     }
 
     #[test]
