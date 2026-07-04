@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **raymarine:** surface discovered radars so an asleep Quantum is visible (#422) ([PR #422](https://github.com/MarineYachtRadar/mayara-server/pull/422))
 - **raymarine:** correct Quantum model names for E70210 and E70344 (#420) ([PR #420](https://github.com/MarineYachtRadar/mayara-server/pull/420))
+- **gui:** stabilize north-up to true north via per-spoke bearing (#429) ([PR #429](https://github.com/MarineYachtRadar/mayara-server/pull/429))
 
 ## [3.6.0] - 2026-06-19
 
