@@ -1069,23 +1069,28 @@ function onHeadingLost() {
   lastLoggedHeading = null;
 
   // Invalidate BOTH Signal K headings — true and magnetic arrive on this
-  // same socket — so the PPI and the readout stop trusting stale values;
-  // the radar-derived heading (if any) remains.
+  // same socket — so the PPI and the readout stop trusting stale values.
   haveSignalKHeading = false;
   trueHeading = null;
   haveMagneticHeading = false;
   magneticHeading = 0;
   updateHeadingDisplayToggle();
 
-  if (headingMode !== "headingUp") {
+  // The radar-derived heading may still be live (boats that feed heading
+  // to the radar over N2K, with no Signal K heading at all). It is a
+  // first-class heading source for North-Up — the raster is placed with
+  // it — so only force head-up and disable the toggle when NO heading
+  // remains. Otherwise keep the current mode; just push the invalidated
+  // Signal K heading into the PPI so it falls back to the radar heading.
+  const stillHasHeading = ppi ? ppi.hasHeading() : false;
+
+  if (headingMode !== "headingUp" && !stillHasHeading) {
     headingMode = "headingUp";
     updateHeadingDisplay(headingMode);
     if (ppi) {
       ppi.redrawCanvas();
     }
   } else {
-    // Still push the invalidated heading into the PPI even when no mode
-    // revert is needed.
     updateHeadingDisplay();
   }
   // updateHeadingDisplay(mode) returns before the readout refresh, so
@@ -1093,7 +1098,7 @@ function onHeadingLost() {
   refreshPositionBoxHeading();
 
   const toggleBtn = document.getElementById("myr_heading_toggle");
-  if (toggleBtn) {
+  if (toggleBtn && !stillHasHeading) {
     toggleBtn.classList.add("myr_heading_disabled");
     toggleBtn.innerHTML = "H Up";
     toggleBtn.title = "Heading data required for North Up mode";
