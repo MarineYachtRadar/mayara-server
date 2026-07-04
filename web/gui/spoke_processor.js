@@ -1,5 +1,12 @@
 export { SpokeProcessorFactory, SpokeProcessingMode };
 
+// Largest fraction of a revolution the Fill processor treats as a real
+// sweep gap to interpolate across. A larger jump is a duplicate angle, a
+// backward step, or a discontinuity (mode switch, heading-source change),
+// not a gap — filling it would repaint most of the PPI with one spoke.
+// Mirrors NORTH_UP_MAX_FILL_FRACTION in ppi.js.
+const MAX_GAP_FRACTION = 1 / 32;
+
 /**
  * Spoke processing modes - use these constants instead of string literals.
  * Order matches server-side enum: 0=Clean, 1=Fill, 2=Reduce, 3=Smooth
@@ -72,13 +79,28 @@ class SpokeProcessor {
   }
 
   /**
+   * Drop any state tracked in the write-angle (display) space. Called by
+   * the PPI when the write frame changes without a full reset — e.g. a
+   * head-up/north-up switch remaps the raster rows, so display-space
+   * tracking from the old frame (like Fill's gap anchor) is meaningless.
+   */
+  resetWriteTracking() {}
+
+  /**
    * Process spoke data into the buffer
    * @param {Uint8Array} buffer - Output buffer
    * @param {Object} spoke - Spoke data with angle and data
    * @param {number} spokesPerRevolution - Total spokes per revolution
    * @param {number} maxSpokeLength - Maximum spoke length
+   * @param {number} [writeAngle] - Display row to write instead of
+   *   spoke.angle (same units as spoke.angle). Used by north-up mode to
+   *   place the spoke at its geographic bearing. All buffer indexing
+   *   (row offset, neighbor rows, gap fill) must use this; per-sweep
+   *   bookkeeping (reduce calibration, rotation tracking) must stay on
+   *   the relative spoke.angle, which is monotonic while writeAngle is
+   *   not when the boat yaws.
    */
-  processSpoke(buffer, spoke, spokesPerRevolution, maxSpokeLength) {
+  processSpoke(buffer, spoke, spokesPerRevolution, maxSpokeLength, writeAngle) {
     throw new Error("processSpoke must be implemented by subclass");
   }
 }
@@ -87,8 +109,9 @@ class SpokeProcessor {
  * Clean processor - no smoothing, displays spokes as-is immediately
  */
 class CleanSpokeProcessor extends SpokeProcessor {
-  processSpoke(buffer, spoke, spokesPerRevolution, maxSpokeLength) {
-    const offset = spoke.angle * maxSpokeLength;
+  processSpoke(buffer, spoke, spokesPerRevolution, maxSpokeLength, writeAngle) {
+    const angle = writeAngle ?? spoke.angle;
+    const offset = angle * maxSpokeLength;
     const spokeLen = spoke.data.length;
 
     // Bounds check
@@ -126,14 +149,21 @@ class FillSpokeProcessor extends SpokeProcessor {
     this.lastProcessedAngle = -1;
   }
 
-  processSpoke(buffer, spoke, spokesPerRevolution, maxSpokeLength) {
+  resetWriteTracking() {
+    this.lastProcessedAngle = -1;
+  }
+
+  processSpoke(buffer, spoke, spokesPerRevolution, maxSpokeLength, writeAngle) {
+    const angle = writeAngle ?? spoke.angle;
     const spokeLen = spoke.data.length;
 
-    // Fill gaps by repeating spoke data for missing angles
+    // Fill gaps by repeating spoke data for missing angles. Tracked in
+    // the same (display) space the rows are written in, or the gap math
+    // would fill the wrong rows in north-up mode.
     if (this.lastProcessedAngle >= 0) {
       const gap = this.#calculateGap(
         this.lastProcessedAngle,
-        spoke.angle,
+        angle,
         spokesPerRevolution
       );
       if (gap > 1) {
@@ -147,10 +177,10 @@ class FillSpokeProcessor extends SpokeProcessor {
         );
       }
     }
-    this.lastProcessedAngle = spoke.angle;
+    this.lastProcessedAngle = angle;
 
     // Write the actual spoke
-    const offset = spoke.angle * maxSpokeLength;
+    const offset = angle * maxSpokeLength;
 
     // Bounds check
     if (offset + spokeLen > buffer.length) {
@@ -170,12 +200,18 @@ class FillSpokeProcessor extends SpokeProcessor {
   }
 
   #calculateGap(lastAngle, currentAngle, spokesPerRevolution) {
-    if (currentAngle > lastAngle) {
-      return currentAngle - lastAngle;
-    } else {
-      // Wrapped around
-      return spokesPerRevolution - lastAngle + currentAngle;
+    // Forward distance around the circle. Anything beyond the clamp is
+    // not a sweep gap: a duplicate angle (DRS4D sends each angle twice),
+    // a backward step (north-up display angle moves against the sweep
+    // while the boat yaws), or a discontinuity (mode switch, heading
+    // source change). Filling those would repaint up to the whole PPI
+    // with one spoke's data, so report "no gap" instead.
+    const gap =
+      (currentAngle - lastAngle + spokesPerRevolution) % spokesPerRevolution;
+    if (gap >= spokesPerRevolution * MAX_GAP_FRACTION) {
+      return 0;
     }
+    return gap;
   }
 
   #fillGap(buffer, spoke, lastAngle, gap, spokesPerRevolution, maxSpokeLength) {
@@ -255,8 +291,11 @@ class ReduceSpokeProcessor extends SpokeProcessor {
     this.onCalibrationComplete = callback;
   }
 
-  processSpoke(buffer, spoke, spokesPerRevolution, maxSpokeLength) {
-    // Track calibration during first 2 revolutions
+  processSpoke(buffer, spoke, spokesPerRevolution, maxSpokeLength, writeAngle) {
+    // Track calibration during first 2 revolutions. Calibration must see
+    // the relative spoke.angle, never the display writeAngle: heading
+    // motion would fire false wrap detections and skew the spoke count,
+    // and a miscalibration is sticky across range changes.
     if (!this.calibrated) {
       this.#updateCalibration(spoke.angle, spokesPerRevolution);
       // During calibration, don't draw (wait for buffer resize)
@@ -264,9 +303,11 @@ class ReduceSpokeProcessor extends SpokeProcessor {
     }
 
     // After calibration, scale angle from reported range to actual buffer size
-    // e.g., if reported=8192, actual=2048, angle 4096 -> 1024
+    // e.g., if reported=8192, actual=2048, angle 4096 -> 1024.
+    // writeAngle is in the same reported units, so it scales identically.
     const scaledAngle = Math.floor(
-      (spoke.angle * this.actualSpokesPerRevolution) / this.reportedSpokesPerRevolution
+      ((writeAngle ?? spoke.angle) * this.actualSpokesPerRevolution) /
+        this.reportedSpokesPerRevolution
     );
 
     if (scaledAngle >= this.actualSpokesPerRevolution) {
@@ -364,8 +405,12 @@ class SmoothingSpokeProcessor extends SpokeProcessor {
     return true;
   }
 
-  processSpoke(buffer, spoke, spokesPerRevolution, maxSpokeLength) {
-    const offset = spoke.angle * maxSpokeLength;
+  processSpoke(buffer, spoke, spokesPerRevolution, maxSpokeLength, writeAngle) {
+    // Center row and all neighbor rows must come from the same (display)
+    // angle, or the smoothing would deposit energy `heading` rows away
+    // from the spoke in north-up mode.
+    const angle = writeAngle ?? spoke.angle;
+    const offset = angle * maxSpokeLength;
     const spokeLen = spoke.data.length;
 
     // Bounds check
@@ -387,6 +432,7 @@ class SmoothingSpokeProcessor extends SpokeProcessor {
       this.#neighborEnhancement(
         buffer,
         spoke,
+        angle,
         spokesPerRevolution,
         maxSpokeLength,
         offset,
@@ -399,6 +445,7 @@ class SmoothingSpokeProcessor extends SpokeProcessor {
       this.#smartFiltering(
         buffer,
         spoke,
+        angle,
         spokesPerRevolution,
         maxSpokeLength,
         offset,
@@ -420,6 +467,7 @@ class SmoothingSpokeProcessor extends SpokeProcessor {
   #neighborEnhancement(
     buffer,
     spoke,
+    angle,
     spokesPerRevolution,
     maxSpokeLength,
     offset,
@@ -460,9 +508,8 @@ class SmoothingSpokeProcessor extends SpokeProcessor {
 
         // Spread to neighboring spokes (both directions)
         for (let d = 1; d <= spreadWidth; d++) {
-          const prev =
-            (spoke.angle + spokesPerRevolution - d) % spokesPerRevolution;
-          const next = (spoke.angle + d) % spokesPerRevolution;
+          const prev = (angle + spokesPerRevolution - d) % spokesPerRevolution;
+          const next = (angle + d) % spokesPerRevolution;
           const prevOffset = prev * maxSpokeLength;
           const nextOffset = next * maxSpokeLength;
           const blendVal = Math.floor(val * blendFactors[d - 1]);
@@ -481,6 +528,7 @@ class SmoothingSpokeProcessor extends SpokeProcessor {
   #smartFiltering(
     buffer,
     spoke,
+    angle,
     spokesPerRevolution,
     maxSpokeLength,
     offset,
@@ -497,25 +545,21 @@ class SmoothingSpokeProcessor extends SpokeProcessor {
 
     // Wide neighbor check for strong signals: ±4 spokes
     const prev1Offset =
-      ((spoke.angle + spokesPerRevolution - 1) % spokesPerRevolution) *
+      ((angle + spokesPerRevolution - 1) % spokesPerRevolution) *
       maxSpokeLength;
     const prev2Offset =
-      ((spoke.angle + spokesPerRevolution - 2) % spokesPerRevolution) *
+      ((angle + spokesPerRevolution - 2) % spokesPerRevolution) *
       maxSpokeLength;
     const prev3Offset =
-      ((spoke.angle + spokesPerRevolution - 3) % spokesPerRevolution) *
+      ((angle + spokesPerRevolution - 3) % spokesPerRevolution) *
       maxSpokeLength;
     const prev4Offset =
-      ((spoke.angle + spokesPerRevolution - 4) % spokesPerRevolution) *
+      ((angle + spokesPerRevolution - 4) % spokesPerRevolution) *
       maxSpokeLength;
-    const next1Offset =
-      ((spoke.angle + 1) % spokesPerRevolution) * maxSpokeLength;
-    const next2Offset =
-      ((spoke.angle + 2) % spokesPerRevolution) * maxSpokeLength;
-    const next3Offset =
-      ((spoke.angle + 3) % spokesPerRevolution) * maxSpokeLength;
-    const next4Offset =
-      ((spoke.angle + 4) % spokesPerRevolution) * maxSpokeLength;
+    const next1Offset = ((angle + 1) % spokesPerRevolution) * maxSpokeLength;
+    const next2Offset = ((angle + 2) % spokesPerRevolution) * maxSpokeLength;
+    const next3Offset = ((angle + 3) % spokesPerRevolution) * maxSpokeLength;
+    const next4Offset = ((angle + 4) % spokesPerRevolution) * maxSpokeLength;
 
     for (let i = 0; i < spokeLen; i++) {
       const val = spoke.data[i];
