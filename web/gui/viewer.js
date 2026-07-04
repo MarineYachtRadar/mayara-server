@@ -67,7 +67,10 @@ var renderMethod = "webgpu"; // "webgpu" or "webgl"
 
 // Heading mode: "headingUp" or "northUp"
 var headingMode = "headingUp";
-var trueHeading = 0; // in radians
+// Signal K true heading in radians; null until the first delta arrives so a
+// missing heading is never mistaken for "due north" (the PPI treats null as
+// "no Signal K heading" and falls back to the radar-derived heading).
+var trueHeading = null;
 var haveSignalKHeading = false; // true once a navigation.headingTrue delta lands
 var magneticHeading = 0; // in radians, for the readout toggle only
 var haveMagneticHeading = false; // true once a navigation.headingMagnetic delta lands
@@ -837,9 +840,15 @@ function refreshPositionBoxHeading() {
   const box = document.getElementById("myr_position_box");
   if (!box) return;
   const hdgEl = box.querySelector(".myr_pos_heading");
+  if (!hdgEl) return;
   const hdg = positionBoxHeadingDeg();
-  if (hdgEl && hdg != null) {
+  if (hdg != null) {
     hdgEl.textContent = `${hdg.label}: ${hdg.deg.toFixed(1)}°`;
+  } else {
+    // All heading sources invalidated (e.g. Signal K socket lost): show
+    // that explicitly instead of leaving the last value painted as if it
+    // were still live.
+    hdgEl.textContent = "HdgT: --°";
   }
 }
 
@@ -1059,13 +1068,29 @@ function onHeadingLost() {
   console.log("Heading source lost");
   lastLoggedHeading = null;
 
+  // Invalidate BOTH Signal K headings — true and magnetic arrive on this
+  // same socket — so the PPI and the readout stop trusting stale values;
+  // the radar-derived heading (if any) remains.
+  haveSignalKHeading = false;
+  trueHeading = null;
+  haveMagneticHeading = false;
+  magneticHeading = 0;
+  updateHeadingDisplayToggle();
+
   if (headingMode !== "headingUp") {
     headingMode = "headingUp";
     updateHeadingDisplay(headingMode);
     if (ppi) {
       ppi.redrawCanvas();
     }
+  } else {
+    // Still push the invalidated heading into the PPI even when no mode
+    // revert is needed.
+    updateHeadingDisplay();
   }
+  // updateHeadingDisplay(mode) returns before the readout refresh, so
+  // repaint it explicitly — no further deltas will arrive to do it.
+  refreshPositionBoxHeading();
 
   const toggleBtn = document.getElementById("myr_heading_toggle");
   if (toggleBtn) {
@@ -1713,6 +1738,18 @@ function radarLoaded(r) {
           headingToggle?.classList.contains("myr_heading_disabled")
         ) {
           onHeadingReceived();
+        }
+        // The PPI auto-reverts to head-up when north-up loses every
+        // heading source (it cannot place spokes geographically). Keep
+        // the viewer's mode state and the toggle label in sync.
+        if (
+          headingMode !== "headingUp" &&
+          ppi.getHeadingMode() === "headingUp"
+        ) {
+          headingMode = "headingUp";
+          if (headingToggle) {
+            headingToggle.innerHTML = "H Up";
+          }
         }
       }
     } catch (err) {

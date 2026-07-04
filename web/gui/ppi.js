@@ -12,13 +12,44 @@ const NAUTICAL_MILE = 1852.0;
 // Exponential-smoothing factor for the radar-derived heading. The bearing
 // field on each spoke is quantized, so the per-spoke `bearing - angle` heading
 // wobbles by a fraction of a degree frame to frame even with a steady boat.
-// In head-up mode the AIS/ARPA overlay subtracts this heading to place
-// geographic targets bow-up (the spoke raster is drawn bow-up and does NOT
-// subtract it), so the wobble shows up as targets jumping. Smoothing the
-// heading on its unit vector (circular-mean safe across the 360->0 wrap) kills
-// the jitter while staying responsive: at typical spoke rates the time
-// constant is well under the timescale of a real turn.
+// The overlay (AIS/ARPA/zones/rose) uses this smoothed heading to convert
+// between geographic and bow-relative angles, so the wobble would show up as
+// targets jumping. Smoothing the heading on its unit vector (circular-mean
+// safe across the 360->0 wrap) kills the jitter while staying responsive: at
+// typical spoke rates the time constant is well under the timescale of a real
+// turn. The north-up raster itself does NOT use the smoothed value — each
+// spoke is written at its own raw `spoke.bearing`, which is exact per spoke.
 const HEADING_SMOOTH_ALPHA = 0.1;
+
+// Overlay redraw threshold for live heading motion, in radians (~0.5°).
+// Below this the overlay keeps its last paint; above it a redraw is
+// scheduled so head-up AIS/ARPA placement and north-up zones/rose track
+// the boat's yaw even when no other repaint trigger fires (e.g. standby).
+const HEADING_REDRAW_EPSILON = (0.5 * Math.PI) / 180;
+
+// In north-up mode spokes are written at their geographic bearing, so the
+// display row can skip forward beyond the sweep's own step when the heading
+// steps between spokes (SK heading arrives at a few Hz). Skipped rows would
+// keep one-rotation-stale pixels; heading-induced forward gaps up to this
+// fraction of a revolution are filled with the current spoke. Only the gap
+// in EXCESS of the relative-angle step counts — radars like Furuno report
+// 8192 angles but send every 4th-14th, and that natural stride must not be
+// filled (it isn't in head-up either; it would multiply processing cost per
+// spoke by the stride). Larger jumps mean a heading-source change, not yaw.
+const NORTH_UP_MAX_FILL_FRACTION = 1 / 32;
+
+// How long the radar-derived heading stays authoritative after the last
+// bearing-carrying spoke. lastHeading is only updated by drawSpoke, so when
+// spokes stop (standby, disconnect) it freezes; past this age a live Signal
+// K heading takes over so overlays keep tracking the boat's yaw.
+const RADAR_HEADING_FRESH_MS = 5000;
+
+// Consecutive spokes without any usable heading before north-up gives up
+// and auto-reverts to head-up. In north-up a heading-less spoke cannot be
+// placed (writing it at its relative angle would corrupt the geographic
+// raster), so such spokes are dropped; a sustained run means the heading
+// source died and a frozen geographic image would just get staler.
+const NORTH_UP_HEADINGLESS_REVERT_SPOKES = 32;
 
 function divides_near(a, b) {
   let remainder = a % b;
@@ -117,9 +148,23 @@ class PPI {
     // than pulling toward an arbitrary north.
     this.headingSin = null;
     this.headingCos = null;
-    this.headingRotation = 0;
     this.headingMode = "headingUp";
     this.trueHeading = null;
+    // Last display row written in north-up mode and the relative angle it
+    // belonged to (both reported-spoke units); used to fill the
+    // heading-induced part of forward display gaps.
+    this.lastWriteAngle = null;
+    this.lastRelAngle = null;
+    // Timestamp of the last radar-derived heading update, for the
+    // freshness window that decides whether it may outrank Signal K.
+    this.lastHeadingAt = 0;
+    // Run length of heading-less spokes dropped in north-up, for the
+    // auto-revert to head-up.
+    this.headinglessSpokeCount = 0;
+    // Heading the overlay was last painted with, and the pending-redraw
+    // latch for the rAF-throttled heading-motion refresh.
+    this.lastOverlayHeading = null;
+    this._overlayRedrawPending = false;
 
     // Spoke data
     this.data = null;
@@ -282,6 +327,7 @@ class PPI {
     this.reportedSpokesPerRevolution = spokesPerRevolution; // Store original for mode switching
     this.maxspokelength = maxspokelength;
     this.data = new Uint8Array(spokesPerRevolution * maxspokelength);
+    this.#resetWriteTracking();
 
     // Create spoke processor if legend is available
     if (this.legend) {
@@ -294,6 +340,7 @@ class PPI {
     if (this.data) {
       this.data.fill(0);
     }
+    this.#resetWriteTracking();
     // Update renderer scale when control range changes
     if (this.renderer && this.renderer.setRangeScale) {
       this.renderer.setRangeScale(this.range, this.spoke_range || this.range);
@@ -302,30 +349,138 @@ class PPI {
   }
 
   setHeadingMode(mode) {
-    if (this.lastHeading || this.trueHeading) {
-      this.headingMode = mode;
+    if (mode === this.headingMode) {
       return mode;
     }
-    return "headingUp";
+    // North-up needs a heading; reverting to head-up must always work
+    // (it is the forced fallback when the heading source dies).
+    if (mode === "northUp" && !this.hasHeading()) {
+      return "headingUp";
+    }
+    // The raster write frame changes with the mode (relative angle vs
+    // geographic bearing), so rotate the existing rows by the raster
+    // frame's heading to keep the image continuous instead of blanking it
+    // for a full sweep. All write tracking is in the old frame — drop it.
+    const heading = this.#displayHeadingRad();
+    this.headingMode = mode;
+    if (heading !== null) {
+      this.#remapRaster(mode === "northUp" ? heading : -heading);
+    } else if (this.data) {
+      // No heading to re-base with (source just died): the old rows'
+      // frame is unknowable, so clear rather than show a mixed frame.
+      this.data.fill(0);
+    }
+    this.#resetWriteTracking();
+    // redrawCanvas re-uploads the (remapped) raster after the renderer
+    // transform update, so the switch repaints without a blank frame.
+    this.redrawCanvas();
+    return mode;
   }
 
   setTrueHeading(heading) {
     this.trueHeading = heading;
+    this.#maybeRefreshOverlayForHeading();
   }
 
   getTrueHeading() {
     return this.trueHeading;
   }
 
-  // Heading in radians for overlay placement, preferring the Signal K
-  // true heading and falling back to the radar-derived heading
-  // (`lastHeading`, stored in degrees). Mirrors the source preference the
-  // radar image already uses so AIS plots whenever the sweep can rotate.
-  // Returns null when no heading source is available.
-  #effectiveHeadingRad() {
+  // True while the radar-derived heading is recent enough to describe the
+  // boat's current attitude. It only updates while bearing-carrying
+  // spokes arrive, so it freezes in standby/disconnect and must then
+  // yield to a live Signal K heading.
+  #radarHeadingFresh() {
+    return (
+      this.lastHeading !== null &&
+      performance.now() - this.lastHeadingAt < RADAR_HEADING_FRESH_MS
+    );
+  }
+
+  // Heading of the raster's write frame, in radians. The spoke raster is
+  // placed with the radar's own heading (per-spoke `bearing - angle`), so
+  // anything that must stay glued to the echoes — display rotation of
+  // relative geometry, ARPA targets (server-computed in spoke-bearing
+  // frame), MARPA acquire clicks — uses this. Preference: fresh
+  // radar-derived, then live Signal K, then a stale radar-derived value
+  // (better than nothing on boats with no other source). Null when no
+  // source exists.
+  #displayHeadingRad() {
+    if (this.#radarHeadingFresh()) return (this.lastHeading * Math.PI) / 180;
     if (this.trueHeading !== null) return this.trueHeading;
     if (this.lastHeading !== null) return (this.lastHeading * Math.PI) / 180;
     return null;
+  }
+
+  // The boat's true heading, in radians, for converting TRUE-frame data
+  // (AIS bearings computed from lat/lon, vessel COG/heading) into the
+  // relative frame. Prefers the live Signal K true heading; falls back to
+  // the radar-derived heading. Distinct from #displayHeadingRad so a
+  // radar fed a magnetic or misaligned heading doesn't drag the AIS
+  // overlay with it. Null when no source is available.
+  #trueHeadingRad() {
+    if (this.trueHeading !== null) return this.trueHeading;
+    return this.#displayHeadingRad();
+  }
+
+  // Screen rotation applied to bow-relative angles, evaluated live at
+  // draw/hit-test time. In north-up mode the raster rows are geographic,
+  // so relative geometry (guard zones, sectors, VRM/EBL) rotates by the
+  // current heading; in head-up mode the raster is bow-up and nothing
+  // rotates. This replaces the old frozen `headingRotation` field that
+  // was only refreshed on redrawCanvas and made the display drift.
+  #displayRotation() {
+    if (this.headingMode !== "northUp") return 0;
+    return this.#displayHeadingRad() ?? 0;
+  }
+
+  // Drop all write-frame tracking (PPI-side and processor-side). Call
+  // whenever the raster is cleared, reallocated, or its frame changes.
+  #resetWriteTracking() {
+    this.lastWriteAngle = null;
+    this.lastRelAngle = null;
+    this.headinglessSpokeCount = 0;
+    if (this.spokeProcessor) {
+      this.spokeProcessor.resetWriteTracking();
+    }
+  }
+
+  // Rotate every raster row by the given angle (radians clockwise) so a
+  // heading-mode switch re-bases the existing image into the new write
+  // frame in place. The renderers re-upload the full buffer on the next
+  // draw, so no renderer-side support is needed.
+  #remapRaster(offsetRad) {
+    if (!this.data || !this.spokesPerRevolution || !this.maxspokelength) return;
+    const rows = this.spokesPerRevolution;
+    const len = this.maxspokelength;
+    let shift = Math.round((offsetRad / (2 * Math.PI)) * rows) % rows;
+    if (shift < 0) shift += rows;
+    if (shift === 0) return;
+    const src = this.data.slice();
+    for (let i = 0; i < rows; i++) {
+      const dst = ((i + shift) % rows) * len;
+      this.data.set(src.subarray(i * len, i * len + len), dst);
+    }
+  }
+
+  // Repaint the overlay when the live heading has moved materially since
+  // the overlay was last painted, or when heading availability flipped
+  // (AIS/ARPA drawing is gated on having one). rAF-throttled: drawSpoke
+  // calls this at spoke rate and Signal K heading deltas at a few Hz.
+  #maybeRefreshOverlayForHeading() {
+    const h = this.#displayHeadingRad();
+    if (h === null && this.lastOverlayHeading === null) return;
+    if (h !== null && this.lastOverlayHeading !== null) {
+      let diff = Math.abs(h - this.lastOverlayHeading) % (2 * Math.PI);
+      if (diff > Math.PI) diff = 2 * Math.PI - diff;
+      if (diff < HEADING_REDRAW_EPSILON) return;
+    }
+    if (this._overlayRedrawPending) return;
+    this._overlayRedrawPending = true;
+    requestAnimationFrame(() => {
+      this._overlayRedrawPending = false;
+      this.#drawOverlay();
+    });
   }
 
   // True when any heading reference is available — the SignalK true
@@ -372,6 +527,7 @@ class PPI {
     if (this.data) {
       this.data.fill(0);
     }
+    this.#resetWriteTracking();
     if (this.spokeProcessor) {
       this.spokeProcessor.reset();
     }
@@ -669,6 +825,7 @@ class PPI {
 
     // Resize data buffer
     this.data = new Uint8Array(actualSpokes * this.maxspokelength);
+    this.#resetWriteTracking();
 
     // Notify renderer of new dimensions
     if (this.renderer && this.renderer.setSpokes) {
@@ -691,11 +848,12 @@ class PPI {
 
     // Extract heading from spoke if available
     // Heading = bearing - angle (geographic bearing minus relative angle)
+    // angle/bearing stay in the radar's reported units even after the
+    // reduce processor shrinks the buffer, so use the reported count here.
+    const angleUnits = this.reportedSpokesPerRevolution || this.spokesPerRevolution;
     if (spoke.bearing !== undefined && spoke.angle !== undefined) {
-      const heading =
-        (spoke.bearing + this.spokesPerRevolution - spoke.angle) %
-        this.spokesPerRevolution;
-      const headingRad = (heading * 2 * Math.PI) / this.spokesPerRevolution;
+      const heading = (spoke.bearing + angleUnits - spoke.angle) % angleUnits;
+      const headingRad = (heading * 2 * Math.PI) / angleUnits;
       const sin = Math.sin(headingRad);
       const cos = Math.cos(headingRad);
       if (this.headingSin === null) {
@@ -709,11 +867,17 @@ class PPI {
       }
       const smoothed = Math.atan2(this.headingSin, this.headingCos);
       this.lastHeading = ((smoothed * 180) / Math.PI + 360) % 360;
-    } else {
+      this.lastHeadingAt = performance.now();
+    } else if (!this.#radarHeadingFresh()) {
+      // Only drop the radar-derived heading once it has gone stale: a
+      // marginal heading feed can flap bearing present/absent between
+      // spokes, and nulling immediately would bounce every consumer
+      // (and the north-up write frame) to another source mid-rotation.
       this.lastHeading = null;
       this.headingSin = null;
       this.headingCos = null;
     }
+    this.#maybeRefreshOverlayForHeading();
 
     // Don't draw spokes in standby mode
     if (this.powerMode !== "transmit") {
@@ -757,6 +921,7 @@ class PPI {
           this.spokeProcessor.reset();
         }
         if (this.data) this.data.fill(0);
+        this.#resetWriteTracking();
         if (this.renderer && this.renderer.clearDisplay) {
           this.renderer.clearDisplay(this.data, this.spokesPerRevolution, this.maxspokelength);
         }
@@ -771,6 +936,7 @@ class PPI {
       const wasInitialRange = this.spoke_range === 0;
       this.spoke_range = spoke.range;
       this.data.fill(0);
+      this.#resetWriteTracking();
       if (this.spokeProcessor) {
         this.spokeProcessor.reset();
       }
@@ -791,15 +957,82 @@ class PPI {
       }
     }
 
-    // Update rotation tracking
+    // Update rotation tracking — always on the relative spoke.angle: the
+    // physical sweep is monotonic while the geographic bearing is not.
     this.spokeProcessor.updateRotationTracking(spoke.angle, this.spokesPerRevolution);
+
+    // North-up: write the spoke at its geographic bearing so every echo
+    // lands (and stays) at its true direction regardless of yaw. The
+    // per-spoke `bearing` from the radar is exact; fall back to rotating
+    // the relative angle by the raster-frame heading when a spoke lacks
+    // it (same frame as the bearing, so a flapping bearing feed doesn't
+    // double-expose the image). writeAngle stays in reported units — the
+    // reduce processor scales it to its shrunken buffer the same way it
+    // scales spoke.angle.
+    let writeAngle = null;
+    if (this.headingMode === "northUp") {
+      if (spoke.bearing !== undefined) {
+        writeAngle = spoke.bearing % angleUnits;
+      } else {
+        const headingRad = this.#displayHeadingRad();
+        if (headingRad !== null) {
+          const headingSpokes = Math.round(
+            (headingRad / (2 * Math.PI)) * angleUnits
+          );
+          writeAngle = (spoke.angle + headingSpokes + angleUnits) % angleUnits;
+        }
+      }
+
+      if (writeAngle === null) {
+        // No usable heading: this spoke cannot be placed geographically.
+        // Writing it at its relative angle would mix write frames in one
+        // raster, so drop it — and if the heading source stays dead,
+        // revert to head-up rather than freeze under a "N Up" label.
+        // (setHeadingMode with no heading clears the raster; the viewer
+        // re-syncs its toggle from getHeadingMode() on spoke batches.)
+        this.headinglessSpokeCount++;
+        if (this.headinglessSpokeCount >= NORTH_UP_HEADINGLESS_REVERT_SPOKES) {
+          this.setHeadingMode("headingUp");
+        }
+        return;
+      }
+      this.headinglessSpokeCount = 0;
+
+      // Fill the heading-induced part of a forward display gap with this
+      // spoke so no row keeps stale pixels when the boat yaws. The
+      // sweep's own step (relStep — >1 on radars that report more angles
+      // than they send, e.g. Furuno's 4-14 stride) is NOT a gap: those
+      // rows aren't written in head-up either, and filling them would
+      // multiply processing cost per spoke by the stride.
+      if (this.lastWriteAngle !== null && this.lastRelAngle !== null) {
+        const relStep =
+          (spoke.angle - this.lastRelAngle + angleUnits) % angleUnits;
+        const expected = (this.lastWriteAngle + relStep) % angleUnits;
+        const gap = (writeAngle - expected + angleUnits) % angleUnits;
+        const maxFill = angleUnits * NORTH_UP_MAX_FILL_FRACTION;
+        if (gap > 0 && gap <= maxFill && relStep <= maxFill) {
+          for (let a = 0; a < gap; a++) {
+            this.spokeProcessor.processSpoke(
+              this.data,
+              spoke,
+              this.spokesPerRevolution,
+              this.maxspokelength,
+              (expected + a) % angleUnits
+            );
+          }
+        }
+      }
+      this.lastWriteAngle = writeAngle;
+      this.lastRelAngle = spoke.angle;
+    }
 
     // Process spoke using current strategy
     this.spokeProcessor.processSpoke(
       this.data,
       spoke,
       this.spokesPerRevolution,
-      this.maxspokelength
+      this.maxspokelength,
+      writeAngle ?? undefined
     );
   }
 
@@ -831,8 +1064,8 @@ class PPI {
     // visible flash of "spokes disappear, then re-paint over the next
     // sweep". Only touch the canvas dimensions when the parent
     // actually resized. The renderer applies the same guard internally
-    // so transform-only updates (heading rotation, range scale, beam
-    // length) don't clear the spoke canvas either.
+    // so transform-only updates (range scale, beam length) don't clear
+    // the spoke canvas either.
     const sizeChanged = this.width !== w || this.height !== h;
 
     if (sizeChanged) {
@@ -852,23 +1085,26 @@ class PPI {
     this.center_y = h / 2;
     this.beam_length = Math.trunc(Math.min(this.center_x, this.center_y) * RANGE_SCALE * this.displayZoom);
 
-    // Update heading rotation
-    let trueHeadingDeg = this.lastHeading;
-    if (!trueHeadingDeg && this.trueHeading) {
-      trueHeadingDeg = (this.trueHeading * 180) / Math.PI;
-    }
-    if (trueHeadingDeg && this.headingMode === "northUp") {
-      this.headingRotation = (trueHeadingDeg * Math.PI) / 180;
-    } else {
-      this.headingRotation = 0;
-    }
-
     // Draw overlay
     this.#drawOverlay();
 
-    // Notify renderer of resize
+    // Notify renderer of resize. The shader rotation is permanently 0:
+    // north-up is achieved by writing spokes at their geographic bearing,
+    // not by rotating the whole (mixed-age) image, which drifted as the
+    // boat yawed between redraws.
     if (this.renderer && this.renderer.resize) {
-      this.renderer.resize(w, h, this.beam_length, this.headingRotation);
+      this.renderer.resize(w, h, this.beam_length, 0);
+      // WebGL's transform update clears its canvas without redrawing
+      // (WebGPU keeps the previous frame) — re-upload the current raster
+      // so a redraw never leaves a blank or stale spoke image behind,
+      // even when no spokes are flowing (standby, mode switch).
+      if (this.renderer.clearDisplay && this.data) {
+        this.renderer.clearDisplay(
+          this.data,
+          this.spokesPerRevolution,
+          this.maxspokelength
+        );
+      }
     }
   }
 
@@ -881,6 +1117,9 @@ class PPI {
 
     const ctx = this.overlay_ctx;
     const range = this.range;
+    // Remember the heading this paint used so the heading-motion refresh
+    // knows when the overlay is materially out of date.
+    this.lastOverlayHeading = this.#displayHeadingRad();
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, this.width, this.height);
@@ -998,9 +1237,10 @@ class PPI {
     const radius = this.beam_length * 3;
     if (radius <= 0) return;
 
-    // Apply heading rotation (positive = clockwise on screen, matching radar image rotation)
-    const startAngle = sector.startAngle + this.headingRotation - Math.PI / 2;
-    const endAngle = sector.endAngle + this.headingRotation - Math.PI / 2;
+    // Sector angles are bow-relative; rotate by the live heading in north-up
+    const rot = this.#displayRotation();
+    const startAngle = sector.startAngle + rot - Math.PI / 2;
+    const endAngle = sector.endAngle + rot - Math.PI / 2;
     const isCircle = Math.abs(sector.endAngle - sector.startAngle) < 0.001;
 
     ctx.beginPath();
@@ -1031,9 +1271,10 @@ class PPI {
 
     if (outerRadius <= 0) return;
 
-    // Apply heading rotation (positive = clockwise on screen, matching radar image rotation)
-    const startAngle = zone.startAngle + this.headingRotation - Math.PI / 2;
-    const endAngle = zone.endAngle + this.headingRotation - Math.PI / 2;
+    // Zone angles are bow-relative; rotate by the live heading in north-up
+    const rot = this.#displayRotation();
+    const startAngle = zone.startAngle + rot - Math.PI / 2;
+    const endAngle = zone.endAngle + rot - Math.PI / 2;
     const isCircle = Math.abs(zone.endAngle - zone.startAngle) < 0.001;
 
     ctx.beginPath();
@@ -1068,8 +1309,9 @@ class PPI {
     if (!this.range || this.range <= 0) return;
 
     const pixelsPerMeter = this.beam_length / this.range;
-    const cos_h = Math.cos(this.headingRotation);
-    const sin_h = Math.sin(this.headingRotation);
+    const rot = this.#displayRotation();
+    const cos_h = Math.cos(rot);
+    const sin_h = Math.sin(rot);
 
     // Collect all shapes to draw
     const shapes = [];
@@ -1082,8 +1324,8 @@ class PPI {
       const outerRadius = zone.endDistance * pixelsPerMeter;
       if (outerRadius <= 0) continue;
 
-      const startAngle = zone.startAngle + this.headingRotation - Math.PI / 2;
-      const endAngle = zone.endAngle + this.headingRotation - Math.PI / 2;
+      const startAngle = zone.startAngle + rot - Math.PI / 2;
+      const endAngle = zone.endAngle + rot - Math.PI / 2;
       const isCircle = Math.abs(zone.endAngle - zone.startAngle) < 0.001;
 
       shapes.push({ type: 'sector', innerRadius, outerRadius, startAngle, endAngle, isCircle });
@@ -1225,12 +1467,11 @@ class PPI {
 
   #drawTarget(ctx, id, target, pixelsPerMeter) {
     if (!target.position) return;
-    // Don't draw targets until we have a heading reference. Accept the
-    // radar-derived heading too, not just the SignalK true heading, so
-    // ARPA targets plot whenever the sweep rotates — mirroring the AIS
-    // overlay. (MARPA acquire still hard-requires trueHeading; that
-    // check lives in the click handler, not here.)
-    const heading = this.#effectiveHeadingRad();
+    // Don't draw targets until we have a heading reference. ARPA target
+    // bearings are computed server-side from spoke bearings, i.e. they
+    // live in the raster's write frame — use the same heading source as
+    // the raster so targets stay glued to their echoes.
+    const heading = this.#displayHeadingRad();
     if (heading === null) return;
 
     // Calculate screen position from bearing and distance
@@ -1239,12 +1480,12 @@ class PPI {
     const distance = target.position.distance;
     const pixelDist = distance * pixelsPerMeter;
 
-    // In North-Up mode (headingRotation = heading), geographic bearing is displayed directly
-    // In Heading-Up mode (headingRotation = 0), we need to convert geographic to relative
-    // by subtracting heading. The formula: screenAngle = geographicBearing - heading + headingRotation
-    // Simplifies to: screenAngle = geographicBearing - heading in HU mode
-    //                screenAngle = geographicBearing in NU mode
-    const adjustedBearing = bearingRad - heading + this.headingRotation;
+    // In North-Up mode the raster rows are geographic, so the geographic
+    // bearing is displayed directly (rot equals heading, same live source).
+    // In Heading-Up mode (rot = 0) convert geographic to relative by
+    // subtracting heading: screenAngle = geographicBearing - heading + rot.
+    const rot = this.#displayRotation();
+    const adjustedBearing = bearingRad - heading + rot;
 
     // Convert polar to cartesian (bearing is clockwise from north)
     const x = this.center_x + pixelDist * Math.sin(adjustedBearing);
@@ -1300,7 +1541,7 @@ class PPI {
     // Draw velocity vector if we have motion data
     if (target.motion && target.status === "tracking") {
       // Course is geographic (already in radians from API), apply same transformation as bearing
-      const courseRad = target.motion.course - heading + this.headingRotation;
+      const courseRad = target.motion.course - heading + rot;
       const speed = target.motion.speed; // m/s
 
       // Scale vector length: 1 minute of travel
@@ -1387,11 +1628,15 @@ class PPI {
 
   #drawAisVessel(ctx, mmsi, vessel, pixelsPerMeter) {
     if (!vessel.position) return;
-    // Don't draw vessels until we have a heading reference. Accept the
-    // radar-derived heading too, not just the Signal K true heading —
-    // otherwise AIS never plots in head-up mode without a SignalK
-    // heading subscription, even though the sweep rotates fine.
-    const heading = this.#effectiveHeadingRad();
+    // Don't draw vessels until we have a heading reference. An AIS target
+    // and its own radar echo are the same vessel, so the symbol must land
+    // on the echo — that means rotating the true geographic bearing into
+    // the raster's write frame with the SAME heading the raster uses
+    // (#displayHeadingRad, via #displayRotation below). Using true heading
+    // for the subtraction and display heading for the rotation would
+    // offset every AIS symbol from its echo by the difference between the
+    // two sources.
+    const heading = this.#displayHeadingRad();
     if (heading === null) return;
 
     // Calculate screen position from lat/lon
@@ -1437,8 +1682,11 @@ class PPI {
     // Don't draw if outside display range
     if (pixelDist > this.beam_length * 1.5) return;
 
-    // Apply heading rotation for display mode (heading resolved above)
-    const adjustedBearing = bearingRad - heading + this.headingRotation;
+    // Apply heading rotation for display mode (heading resolved above);
+    // in north-up rot equals heading so this collapses to the geographic
+    // bearing, matching the geographically-placed raster.
+    const rot = this.#displayRotation();
+    const adjustedBearing = bearingRad - heading + rot;
 
     // Convert polar to cartesian (bearing is clockwise from north)
     const screenX = this.center_x + pixelDist * Math.sin(adjustedBearing);
@@ -1452,7 +1700,7 @@ class PPI {
       vesselOrientation = 0;
     }
     // Adjust for heading mode
-    const displayOrientation = vesselOrientation - heading + this.headingRotation;
+    const displayOrientation = vesselOrientation - heading + rot;
 
     // Draw IMO-style vessel symbol
     this.#drawImoVesselSymbol(ctx, screenX, screenY, displayOrientation, vessel);
@@ -1465,7 +1713,7 @@ class PPI {
       const scaledVectorLength = Math.min(vectorLengthPixels, maxVectorLength);
 
       if (scaledVectorLength > 5) {
-        const cogDisplay = vessel.cog - heading + this.headingRotation;
+        const cogDisplay = vessel.cog - heading + rot;
         const vx = screenX + scaledVectorLength * Math.sin(cogDisplay);
         const vy = screenY - scaledVectorLength * Math.cos(cogDisplay);
 
@@ -1542,15 +1790,16 @@ class PPI {
     ctx.strokeStyle = "#00ff00";
     ctx.fillStyle = "#00ff00";
 
-    let trueHeadingDeg = this.lastHeading;
-    if (!trueHeadingDeg && this.trueHeading) {
-      trueHeadingDeg = (this.trueHeading * 180) / Math.PI;
-    }
-    if (!trueHeadingDeg) {
-      trueHeadingDeg = 0;
-    }
-
-    const roseRotationDeg = this.headingMode === "headingUp" ? -trueHeadingDeg : 0;
+    // Head-up: rose counter-rotates by the live heading so its labels stay
+    // geographic. North-up: rose is fixed with N at the top (the raster is
+    // already geographic). Uses the raster frame's heading so rose bearings
+    // line up with the echoes. Strict null check — 0° due north is a valid
+    // heading, not a missing one.
+    const headingRad = this.#displayHeadingRad();
+    const roseRotationDeg =
+      this.headingMode === "headingUp" && headingRad !== null
+        ? -(headingRad * 180) / Math.PI
+        : 0;
 
     for (let deg = 0; deg < 360; deg += 10) {
       const displayDeg = deg + roseRotationDeg;
@@ -1612,7 +1861,7 @@ class PPI {
 
   #drawVrmEblMarker(ctx, index, marker, pixelsPerMeter, range) {
     const color = PPI.VRM_EBL_COLORS[index];
-    const screenAngle = marker.bearing + this.headingRotation;
+    const screenAngle = marker.bearing + this.#displayRotation();
     const radius = marker.distance * pixelsPerMeter;
     // Line extends to the edge of the PPI so it's always visible even when the
     // VRM is outside the displayed range.
@@ -1668,8 +1917,9 @@ class PPI {
     const ay = this.center_y - anchorRadius * Math.cos(screenAngle);
 
     let bearingText;
-    if (this.trueHeading !== null && this.trueHeading !== undefined) {
-      let trueBearing = marker.bearing + this.trueHeading;
+    const headingRad = this.#trueHeadingRad();
+    if (headingRad !== null) {
+      let trueBearing = marker.bearing + headingRad;
       while (trueBearing < 0) trueBearing += 2 * Math.PI;
       while (trueBearing >= 2 * Math.PI) trueBearing -= 2 * Math.PI;
       bearingText = `${((trueBearing * 180) / Math.PI).toFixed(1)}° T`;
@@ -1800,9 +2050,11 @@ class PPI {
     const dy = y - this.center_y;
     // Calculate angle in screen coordinates
     let angle = Math.atan2(dx, -dy);
-    // Subtract heading rotation to convert from screen to radar coordinates
-    // (screen angle = radar angle + headingRotation, so radar angle = screen angle - headingRotation)
-    angle -= this.headingRotation;
+    // Subtract the live display rotation to convert from screen to radar
+    // coordinates (screen angle = radar angle + rotation). Evaluated live
+    // so clicks/drags in north-up land where the user sees them even
+    // while the boat yaws.
+    angle -= this.#displayRotation();
     // Normalize angle to [-PI, PI]
     while (angle > Math.PI) angle -= 2 * Math.PI;
     while (angle < -Math.PI) angle += 2 * Math.PI;
@@ -1824,16 +2076,19 @@ class PPI {
     const outerRadius = zone.endDistance * pixelsPerMeter;
     const midRadius = (innerRadius + outerRadius) / 2;
 
-    // Apply heading rotation (positive = clockwise on screen, matching radar image rotation)
-    const rotatedStartAngle = zone.startAngle + this.headingRotation;
-    const rotatedEndAngle = zone.endAngle + this.headingRotation;
+    // Rotate bow-relative zone angles by the live display rotation — must
+    // match #drawGuardZone and #pixelToRadarCoords or the handles detach
+    // from the drawn zone.
+    const rot = this.#displayRotation();
+    const rotatedStartAngle = zone.startAngle + rot;
+    const rotatedEndAngle = zone.endAngle + rot;
 
     let midAngle = (zone.startAngle + zone.endAngle) / 2;
     if (zone.endAngle < zone.startAngle) {
       midAngle = (zone.startAngle + zone.endAngle + 2 * Math.PI) / 2;
       if (midAngle > Math.PI) midAngle -= 2 * Math.PI;
     }
-    const rotatedMidAngle = midAngle + this.headingRotation;
+    const rotatedMidAngle = midAngle + rot;
 
     const startAngleX = this.center_x + midRadius * Math.sin(rotatedStartAngle);
     const startAngleY = this.center_y - midRadius * Math.cos(rotatedStartAngle);
@@ -1859,9 +2114,10 @@ class PPI {
     const handleRadius = this.beam_length * 0.5;
     if (handleRadius <= 0) return null;
 
-    // Apply heading rotation (positive = clockwise on screen, matching radar image rotation)
-    const rotatedStartAngle = sector.startAngle + this.headingRotation;
-    const rotatedEndAngle = sector.endAngle + this.headingRotation;
+    // Rotate bow-relative sector angles by the live display rotation
+    const rot = this.#displayRotation();
+    const rotatedStartAngle = sector.startAngle + rot;
+    const rotatedEndAngle = sector.endAngle + rot;
 
     const startAngleX = this.center_x + handleRadius * Math.sin(rotatedStartAngle);
     const startAngleY = this.center_y - handleRadius * Math.cos(rotatedStartAngle);
@@ -1919,12 +2175,16 @@ class PPI {
     const ringTolerance = 8;    // px from ring to grab range
     const lineTolerance = 8;    // px from line to grab bearing
 
+    // Live display rotation — must match #drawVrmEblMarker so the grab
+    // areas sit on the drawn marker.
+    const rot = this.#displayRotation();
+
     // Check intersection handles first (highest priority)
     let best = null;
     for (let i = 0; i < this.vrmEbl.length; i++) {
       const m = this.vrmEbl[i];
       if (!m.enabled) continue;
-      const screenAngle = m.bearing + this.headingRotation;
+      const screenAngle = m.bearing + rot;
       const radius = m.distance * pixelsPerMeter;
       const px = this.center_x + radius * Math.sin(screenAngle);
       const py = this.center_y - radius * Math.cos(screenAngle);
@@ -1957,7 +2217,7 @@ class PPI {
     for (let i = 0; i < this.vrmEbl.length; i++) {
       const m = this.vrmEbl[i];
       if (!m.enabled) continue;
-      const screenAngle = m.bearing + this.headingRotation;
+      const screenAngle = m.bearing + rot;
       const dirX = Math.sin(screenAngle);
       const dirY = -Math.cos(screenAngle);
       const dx = x - this.center_x;
@@ -2171,8 +2431,13 @@ class PPI {
       // Only treat as click if mouse didn't move much (not a drag)
       if (clickDistance < 5) {
         const status = document.getElementById("myr_acquire_target_status");
-        // MARPA requires true bearing, which needs ship heading
-        if (this.trueHeading === null) {
+        // MARPA acquire targets the server's blob detector, which works
+        // in the spoke-bearing frame — use the raster frame's heading:
+        // #pixelToRadarCoords subtracts #displayRotation() (same source)
+        // in north-up, so the click round-trips exactly to the bearing
+        // frame the server tracks in.
+        const headingRad = this.#displayHeadingRad();
+        if (headingRad === null) {
           console.warn("Acquire target: no heading data, cannot compute true bearing");
           if (status) {
             status.textContent = "No heading data, cannot acquire";
@@ -2186,7 +2451,7 @@ class PPI {
           }
           const radarCoords = this.#pixelToRadarCoords(coords.x, coords.y);
           // Keep bearing in radians, add true heading to get bearing true
-          let bearingRad = radarCoords.angle + this.trueHeading;
+          let bearingRad = radarCoords.angle + headingRad;
           // Normalize to [0, 2π)
           while (bearingRad < 0) bearingRad += 2 * Math.PI;
           while (bearingRad >= 2 * Math.PI) bearingRad -= 2 * Math.PI;
