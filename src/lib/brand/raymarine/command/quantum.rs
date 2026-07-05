@@ -7,6 +7,18 @@ fn one_byte_command(cmd: &mut Vec<u8>, lead: &[u8], value: u8) {
     two_byte_command(cmd, lead, (value as u16) << 8);
 }
 
+/// Quantum `SetRadarMode` code for a power state (`10 00 28 00 <code>`),
+/// wire-confirmed from issue #160 captures: standby 0, transmit 1, off 3.
+/// Preparing/Fault are radar-reported states, not commands — treat them as
+/// standby if ever passed in.
+fn power_mode_code(power: Power) -> u8 {
+    match power {
+        Power::Transmit => 1,
+        Power::Off => 3,
+        _ => 0,
+    }
+}
+
 fn two_byte_command(cmd: &mut Vec<u8>, lead: &[u8], value: u16) {
     two_value_command(cmd, lead, value, 0);
 }
@@ -32,15 +44,16 @@ pub async fn set_control(
 
     match cv.id {
         ControlId::Power => {
-            let value = match Power::from_value(&cv.as_value()?).unwrap_or(Power::Standby) {
-                Power::Transmit => 1,
-                _ => 0,
-            };
-            // A sleeping radar ignores the mode command; an Axiom precedes
-            // its power-on with a WOL burst, so do the same. Harmless when
+            let power = Power::from_value(&cv.as_value()?).unwrap_or(Power::Standby);
+            // A sleeping radar ignores the mode command; an Axiom precedes a
+            // power-on with a WOL burst, so do the same. Only when actually
+            // waking it — never when we are putting it to sleep. Harmless when
             // the radar is already awake.
-            super::super::send_wake_burst(&command.info.nic_addr).await;
-            cmd.extend_from_slice(&[0x10, 0x00, 0x28, 0x00, value, 0x00, 0x00, 0x00]);
+            if power != Power::Off {
+                super::super::send_wake_burst(&command.info.nic_addr).await;
+            }
+            let code = power_mode_code(power);
+            cmd.extend_from_slice(&[0x10, 0x00, 0x28, 0x00, code, 0x00, 0x00, 0x00]);
         }
 
         ControlId::Range => {
@@ -184,7 +197,17 @@ async fn send_no_transmit_cmd(
 
 #[cfg(test)]
 mod tests {
-    use super::{one_byte_command, two_byte_command};
+    use super::{one_byte_command, power_mode_code, two_byte_command};
+    use crate::radar::Power;
+
+    // Wire-confirmed Quantum SetRadarMode codes (issue #160): standby 0,
+    // transmit 1, off 3. Off must not collapse into standby.
+    #[test]
+    fn power_mode_codes_match_the_wire() {
+        assert_eq!(power_mode_code(Power::Standby), 0);
+        assert_eq!(power_mode_code(Power::Transmit), 1);
+        assert_eq!(power_mode_code(Power::Off), 3);
+    }
 
     // Channel commands (gain, sea, rain, range, ...) carry channel in wire byte 4
     // and the value in byte 5. `one_byte_command` must therefore place the value
