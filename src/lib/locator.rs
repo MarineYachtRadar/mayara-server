@@ -258,7 +258,17 @@ impl Locator {
                                         break;
                                     }
                                     RadarError::Timeout => {
-                                        if !self.args.is_replay() {
+                                        // Only ask for radars while we are still hunting for
+                                        // them. The Raymarine beacon set contains the WOL wake
+                                        // burst, and repeating that every cycle would re-wake a
+                                        // radar the user deliberately powered off from an MFD —
+                                        // an Axiom sends one burst when "On" is pressed, then
+                                        // stays silent. Waking an already-discovered radar is
+                                        // done on demand from the power command instead.
+                                        if !self.args.is_replay()
+                                            && (self.args.multiple_radar
+                                                || !radars.have_discovered())
+                                        {
                                             let _ = send_beacon_requests(
                                                 &beacon_messages,
                                                 &interface_state.active_nic_addresses,

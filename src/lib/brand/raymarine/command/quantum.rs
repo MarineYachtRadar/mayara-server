@@ -36,6 +36,10 @@ pub async fn set_control(
                 Power::Transmit => 1,
                 _ => 0,
             };
+            // A sleeping radar ignores the mode command; an Axiom precedes
+            // its power-on with a WOL burst, so do the same. Harmless when
+            // the radar is already awake.
+            super::super::send_wake_burst(&command.info.nic_addr).await;
             cmd.extend_from_slice(&[0x10, 0x00, 0x28, 0x00, value, 0x00, 0x00, 0x00]);
         }
 

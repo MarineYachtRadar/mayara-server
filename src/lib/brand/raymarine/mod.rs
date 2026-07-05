@@ -705,6 +705,37 @@ const WOL_WAKE_BURST: usize = 8;
 /// the OS default.
 const RAYMARINE_BEACON_TTL: u32 = 10;
 
+/// Gap between the packets of an on-demand wake burst, matching the ~20 ms
+/// spacing observed from an Axiom.
+const WAKE_BURST_SPACING: Duration = Duration::from_millis(20);
+
+/// Send the WOL wake burst the way an Axiom does when the user presses "On":
+/// [`WOL_WAKE_BURST`] magic packets [`WAKE_BURST_SPACING`] apart to the wired
+/// beacon group, with [`RAYMARINE_BEACON_TTL`] so an Axiom relaying to a WiFi
+/// radar forwards them. Failures are logged, not returned — the caller's mode
+/// command should still go out.
+async fn send_wake_burst(nic_addr: &Ipv4Addr) {
+    let SocketAddr::V4(addr) = RAYMARINE_BEACON_ADDRESS else {
+        return;
+    };
+    match crate::network::create_multicast_send(&addr, nic_addr) {
+        Ok(sock) => {
+            if let Err(e) = sock.set_multicast_ttl_v4(RAYMARINE_BEACON_TTL) {
+                log::warn!("via {}: wake burst TTL: {}", nic_addr, e);
+            }
+            for _ in 0..WOL_WAKE_BURST {
+                if let Err(e) = sock.send(&RAYMARINE_WOL_RADAR).await {
+                    log::warn!("via {}: wake burst send failed: {}", nic_addr, e);
+                    return;
+                }
+                tokio::time::sleep(WAKE_BURST_SPACING).await;
+            }
+            log::info!("via {}: sent WOL wake burst", nic_addr);
+        }
+        Err(e) => log::warn!("via {}: wake burst socket: {}", nic_addr, e),
+    }
+}
+
 /// The discovery/wake packets sent to a beacon group each locator cycle:
 /// the MFD announce, the wake literal, then the WOL magic packet as a burst.
 fn beacon_request_packets() -> Vec<&'static [u8]> {
