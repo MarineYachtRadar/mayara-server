@@ -1333,9 +1333,6 @@ impl SharedControls {
         }
     }
 
-    /// Update the valid values of a list control from a bitmask.
-    /// Set bits indicate which values the radar accepts. Descriptions are
-    /// left as-is (set when the control was created).
     /// Add `value` to a control's set of valid values if it is not already
     /// present, keeping the list sorted. Used to widen a control beyond the
     /// generic default for a brand that supports the extra value — e.g. the
@@ -1352,6 +1349,9 @@ impl SharedControls {
         }
     }
 
+    /// Update the valid values of a list control from a bitmask.
+    /// Set bits indicate which values the radar accepts. Descriptions are
+    /// left as-is (set when the control was created).
     pub fn set_valid_values_bitmask(&self, control_id: &ControlId, mask: u8) {
         if mask == 0 {
             return;
