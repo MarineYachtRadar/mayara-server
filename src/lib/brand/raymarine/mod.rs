@@ -825,33 +825,38 @@ mod tests {
     fn wol_wake_is_sent_as_burst() {
         // An Axiom wakes a radar with a burst of WOLs, never a single one —
         // a lone multicast datagram to a dozing WiFi radar is routinely lost.
-        // Every Raymarine beacon group must get the MFD announce and wake
-        // literal once each, and the WOL magic packet repeated as a burst.
-        let args = Cli::parse_from(["mayara-server"]);
-        let mut addresses: Vec<LocatorAddress> = Vec::new();
-        super::new(&args, &mut addresses);
-        let raymarine: Vec<_> = addresses
-            .iter()
-            .filter(|a| a.id == LocatorId::Raymarine)
-            .collect();
-        assert!(!raymarine.is_empty());
-        for a in raymarine {
-            let wols = a
-                .beacon_request_packets
+        // Every Raymarine beacon group (wired, and the WiFi group added by
+        // --allow-wifi) must get the MFD announce and wake literal once each,
+        // the WOL magic packet repeated as a burst, and the relay TTL.
+        for extra_args in [&[][..], &["--allow-wifi"][..]] {
+            let args = Cli::parse_from(std::iter::once("mayara-server").chain(extra_args.to_vec()));
+            let mut addresses: Vec<LocatorAddress> = Vec::new();
+            super::new(&args, &mut addresses);
+            let raymarine: Vec<_> = addresses
                 .iter()
-                .filter(|p| **p == super::RAYMARINE_WOL_RADAR)
-                .count();
-            assert_eq!(wols, super::WOL_WAKE_BURST);
-            assert_eq!(
-                a.beacon_request_packets.len(),
-                super::WOL_WAKE_BURST + 2,
-                "expected MFD announce + wake literal + WOL burst"
-            );
-            assert_eq!(
-                a.beacon_multicast_ttl,
-                Some(super::RAYMARINE_RELAY_TTL),
-                "Raymarine beacons must carry the relay-eligible TTL"
-            );
+                .filter(|a| a.id == LocatorId::Raymarine)
+                .collect();
+            assert!(!raymarine.is_empty());
+            for a in raymarine {
+                let wols = a
+                    .beacon_request_packets
+                    .iter()
+                    .filter(|p| **p == super::RAYMARINE_WOL_RADAR)
+                    .count();
+                assert_eq!(wols, super::WOL_WAKE_BURST, "group {}", a.address);
+                assert_eq!(
+                    a.beacon_request_packets.len(),
+                    super::WOL_WAKE_BURST + 2,
+                    "group {}: expected MFD announce + wake literal + WOL burst",
+                    a.address
+                );
+                assert_eq!(
+                    a.beacon_multicast_ttl,
+                    Some(super::RAYMARINE_RELAY_TTL),
+                    "group {}: Raymarine beacons must carry the relay-eligible TTL",
+                    a.address
+                );
+            }
         }
     }
 
