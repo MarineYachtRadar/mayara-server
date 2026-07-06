@@ -696,14 +696,14 @@ const RAYMARINE_WOL_RADAR: [u8; 102] = [
 /// MarineYachtRadar/mayara-server#160.
 const WOL_WAKE_BURST: usize = 8;
 
-/// Raymarine MFDs emit the radar wake/WOL with IP TTL 10, and an Axiom acting
-/// as a radar's WiFi access point only relays wake packets whose TTL is > 1
-/// (router semantics: TTL 1 means link-local only). Send our beacon requests
-/// with the same TTL so they are eligible for that relay — on the local link
-/// a larger TTL changes nothing. Wire-confirmed against a live Axiom in
-/// MarineYachtRadar/mayara-server#160. Raymarine-specific: other brands keep
-/// the OS default.
-const RAYMARINE_BEACON_TTL: u32 = 10;
+/// Raymarine MFDs emit their radar traffic with IP TTL 10, and an Axiom acting
+/// as a radar's WiFi access point only relays packets whose TTL is > 1 (router
+/// semantics: TTL 1 means link-local only). Send our wake bursts *and* our
+/// command traffic with the same TTL so they are eligible for that relay — on
+/// the local link a larger TTL changes nothing. Wire-confirmed against a live
+/// Axiom in MarineYachtRadar/mayara-server#160. Raymarine-specific: other
+/// brands keep the OS default.
+pub(super) const RAYMARINE_RELAY_TTL: u32 = 10;
 
 /// Gap between the packets of an on-demand wake burst, matching the ~20 ms
 /// spacing observed from an Axiom.
@@ -711,7 +711,7 @@ const WAKE_BURST_SPACING: Duration = Duration::from_millis(20);
 
 /// Send the WOL wake burst the way an Axiom does when the user presses "On":
 /// [`WOL_WAKE_BURST`] magic packets [`WAKE_BURST_SPACING`] apart to the wired
-/// beacon group, with [`RAYMARINE_BEACON_TTL`] so an Axiom relaying to a WiFi
+/// beacon group, with [`RAYMARINE_RELAY_TTL`] so an Axiom relaying to a WiFi
 /// radar forwards them. Failures are logged, not returned — the caller's mode
 /// command should still go out.
 async fn send_wake_burst(nic_addr: &Ipv4Addr) {
@@ -720,7 +720,7 @@ async fn send_wake_burst(nic_addr: &Ipv4Addr) {
     };
     match crate::network::create_multicast_send(&addr, nic_addr) {
         Ok(sock) => {
-            if let Err(e) = sock.set_multicast_ttl_v4(RAYMARINE_BEACON_TTL) {
+            if let Err(e) = sock.set_multicast_ttl_v4(RAYMARINE_RELAY_TTL) {
                 log::warn!("via {}: wake burst TTL: {}", nic_addr, e);
             }
             for _ in 0..WOL_WAKE_BURST {
@@ -772,7 +772,7 @@ pub(super) fn new(args: &Cli, addresses: &mut Vec<LocatorAddress>) {
                     beacon_request_packets(),
                     Box::new(RaymarineLocator::new(args.clone())),
                 )
-                .with_beacon_multicast_ttl(RAYMARINE_BEACON_TTL),
+                .with_beacon_multicast_ttl(RAYMARINE_RELAY_TTL),
             );
         }
     }
@@ -849,7 +849,7 @@ mod tests {
             );
             assert_eq!(
                 a.beacon_multicast_ttl,
-                Some(super::RAYMARINE_BEACON_TTL),
+                Some(super::RAYMARINE_RELAY_TTL),
                 "Raymarine beacons must carry the relay-eligible TTL"
             );
         }

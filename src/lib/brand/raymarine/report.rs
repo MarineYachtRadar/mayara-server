@@ -280,6 +280,12 @@ impl RaymarineReportReceiver {
                     &self.common.info.send_command_addr,
                 ) {
                     Ok(sock) => {
+                        // Commands/replies on this socket may cross an Axiom
+                        // relay to a WiFi radar, which drops TTL-1 packets
+                        // (issue #160). Match the wake burst's TTL.
+                        if let Err(e) = sock.set_ttl(super::RAYMARINE_RELAY_TTL) {
+                            log::debug!("{}: unicast socket TTL: {}", self.common.key, e);
+                        }
                         let sock = Arc::new(sock);
                         if let Some(cs) = &mut self.command_sender {
                             cs.set_shared_socket(sock.clone());

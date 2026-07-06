@@ -52,6 +52,16 @@ impl Command {
         assert!(!self.unicast_mode);
         match create_multicast_send(&self.info.send_command_addr, &self.info.nic_addr) {
             Ok(sock) => {
+                // The command address is often an Axiom that relays to a WiFi
+                // radar; like the wake burst, commands must carry TTL > 1 or
+                // the relay drops them (issue #160). Set both the multicast
+                // and unicast TTL since send_command_addr may be either.
+                if let Err(e) = sock.set_multicast_ttl_v4(super::RAYMARINE_RELAY_TTL) {
+                    log::debug!("{}: command socket multicast TTL: {}", self.key, e);
+                }
+                if let Err(e) = sock.set_ttl(super::RAYMARINE_RELAY_TTL) {
+                    log::debug!("{}: command socket TTL: {}", self.key, e);
+                }
                 log::debug!(
                     "{} {} via {}: sending commands",
                     self.key,
