@@ -1946,45 +1946,19 @@ function getUserName() {
   return myr_control_values.userName?.value || "";
 }
 
-function nextValidValue(controlId, currentValue) {
-  const control = getControl(controlId);
-  if (!control) return currentValue;
-
-  // If control has explicit validValues, cycle through those
-  if (control.validValues && control.validValues.length > 0) {
-    const validValues = control.validValues;
-
-    // Find the index of current value in validValues (handle type mismatch by comparing as numbers)
-    const currentIndex = validValues.findIndex(
-      (v) => Number(v) === Number(currentValue)
-    );
-
-    // Cycle to next value in validValues
-    // If current value is not in validValues, start at first valid value
-    const nextIndex =
-      currentIndex < 0 ? 0 : (currentIndex + 1) % validValues.length;
-
-    return validValues[nextIndex];
-  }
-
-  // Otherwise use minValue/maxValue/stepValue
-  const min = control.minValue ?? 0;
-  const max = control.maxValue ?? 1;
-  const step = control.stepValue ?? 1;
-
-  let nextValue = Number(currentValue) + step;
-  if (nextValue > max) {
-    nextValue = min;
-  }
-
-  return nextValue;
-}
+// Power states: 0 = off, 1 = standby, 2 = transmit.
+const POWER_STANDBY = 1;
+const POWER_TRANSMIT = 2;
 
 function togglePower() {
-  const currentValue = myr_control_values.power?.value ?? 0;
-  const nextValue = nextValidValue("power", currentValue);
+  // The power icon is a transmit toggle: transmit <-> standby. It must not
+  // cycle into Off even when the radar advertises Off as a valid value
+  // (Quantum does) — powering a radar down is a deliberate action done via
+  // the API, not something a single click should do by accident.
+  const currentValue = Number(myr_control_values.power?.value ?? 0);
+  const nextValue =
+    currentValue === POWER_TRANSMIT ? POWER_STANDBY : POWER_TRANSMIT;
 
-  // Send the control update
   sendControlToServer("power", { value: nextValue });
 }
 
