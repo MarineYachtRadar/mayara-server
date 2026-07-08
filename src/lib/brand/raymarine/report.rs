@@ -62,6 +62,13 @@ fn transmit_should_defer(requested: Power, reported: Option<Power>) -> Option<bo
     }
 }
 
+/// Whether to re-send the transmit command now: only when a transmit is
+/// pending and the radar has just reported it reached Standby (i.e. it has
+/// finished booting and will now accept the mode change).
+fn should_reapply_transmit(pending: bool, reported: Option<Power>) -> bool {
+    pending && reported == Some(Power::Standby)
+}
+
 // The LookupSpokeEnum is an index into an array, really. `process_frame`
 // picks the row based on whether the radar currently reports Doppler on
 // (see `process_doppler_report`).
@@ -462,10 +469,10 @@ impl RaymarineReportReceiver {
     /// booting). One shot: the flag is cleared whether or not this send
     /// succeeds — if it is lost too, the user can ask again.
     async fn maybe_reapply_transmit(&mut self) {
-        if !self.pending_transmit {
-            return;
-        }
-        if self.common.info.controls.get_status() != Some(Power::Standby) {
+        if !should_reapply_transmit(
+            self.pending_transmit,
+            self.common.info.controls.get_status(),
+        ) {
             return;
         }
         self.pending_transmit = false;
@@ -675,8 +682,69 @@ impl RaymarineReportReceiver {
 
 #[cfg(test)]
 mod tests {
-    use super::transmit_should_defer;
+    use super::{should_reapply_transmit, transmit_should_defer};
     use crate::radar::Power;
+
+    /// Drive a `pending_transmit` flag through the same two decisions the
+    /// receiver applies — arm on a Power request (`note_power_request`), and
+    /// re-send on a status report (`maybe_reapply_transmit`, which clears the
+    /// flag once it fires). Returns (final pending flag, number of transmit
+    /// re-sends) for a sequence of (power request, reported status) steps.
+    fn run_flow(steps: &[(Option<Power>, Option<Power>)]) -> (bool, u32) {
+        let mut pending = false;
+        let mut resends = 0;
+        for &(request, reported) in steps {
+            if let Some(req) = request
+                && let Some(p) = transmit_should_defer(req, reported)
+            {
+                pending = p;
+            }
+            if should_reapply_transmit(pending, reported) {
+                pending = false;
+                resends += 1;
+            }
+        }
+        (pending, resends)
+    }
+
+    #[test]
+    fn off_to_transmit_reapplies_once_at_standby() {
+        // Ask for transmit while off, radar stays off/preparing for a while,
+        // then reports standby -> exactly one re-send, flag cleared.
+        let (pending, resends) = run_flow(&[
+            (Some(Power::Transmit), Some(Power::Off)),
+            (None, Some(Power::Off)),
+            (None, Some(Power::Preparing)),
+            (None, Some(Power::Standby)),
+            (None, Some(Power::Standby)),
+        ]);
+        assert!(!pending);
+        assert_eq!(resends, 1);
+    }
+
+    #[test]
+    fn standby_request_cancels_pending_reapply() {
+        // Transmit-from-off arms it, but the user then asks for standby before
+        // the radar boots -> no re-send when standby finally arrives.
+        let (pending, resends) = run_flow(&[
+            (Some(Power::Transmit), Some(Power::Off)),
+            (Some(Power::Standby), Some(Power::Off)),
+            (None, Some(Power::Standby)),
+        ]);
+        assert!(!pending);
+        assert_eq!(resends, 0);
+    }
+
+    #[test]
+    fn standby_to_transmit_does_not_reapply() {
+        // Standby -> transmit is honoured immediately; nothing is deferred.
+        let (pending, resends) = run_flow(&[
+            (Some(Power::Transmit), Some(Power::Standby)),
+            (None, Some(Power::Standby)),
+        ]);
+        assert!(!pending);
+        assert_eq!(resends, 0);
+    }
 
     #[test]
     fn transmit_from_off_or_unknown_defers() {
