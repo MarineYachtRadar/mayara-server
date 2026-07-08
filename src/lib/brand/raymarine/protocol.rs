@@ -209,6 +209,12 @@ pub(crate) const HEARTBEAT_QUANTUM_5S: [u8; 36] = [
 /// that's already in standby. Must NOT be sent to a transmitting radar.
 pub(crate) const WAKE_WIFI: [u8; 8] = [0x10, 0x00, 0x28, 0x00, 0x00, 0x00, 0x00, 0x00];
 
+/// Quantum `SetRadarMode` → Transmit (`10 00 28 00 01 …`), mode code 1. Used to
+/// re-apply a transmit request once a cold radar has reached Standby (see
+/// `pending_transmit`), matching the byte the command path sends for
+/// `ControlId::Power` → Transmit.
+pub(crate) const SET_TRANSMIT_QUANTUM: [u8; 8] = [0x10, 0x00, 0x28, 0x00, 0x01, 0x00, 0x00, 0x00];
+
 /// 1-second keep-alive for RD/E120 (12 bytes, contains "RADAR").
 pub(crate) const HEARTBEAT_RD_1S: [u8; 12] = [
     0x00, 0x80, 0x01, 0x00, 0x52, 0x41, 0x44, 0x41, 0x52, 0x00, 0x00, 0x00,

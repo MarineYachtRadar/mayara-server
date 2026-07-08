@@ -10,7 +10,10 @@ use crate::Cli;
 use crate::brand::raymarine::RaymarineModel;
 use crate::network;
 use crate::radar::range::Ranges;
-use crate::radar::{BYTE_LOOKUP_LENGTH, CommonRadar, Legend, RadarError, RadarInfo, SharedRadars};
+use crate::radar::settings::{ControlId, ControlValue};
+use crate::radar::{
+    BYTE_LOOKUP_LENGTH, CommonRadar, Legend, Power, RadarError, RadarInfo, SharedRadars,
+};
 use crate::replay::RadarSocket;
 
 // use super::command::Command;
@@ -39,6 +42,25 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(1000);
 const WAKE_INTERVAL: Duration = Duration::from_secs(3);
 const OBSERVATION_WINDOW: Duration = Duration::from_secs(5);
 const EXTERNAL_QUIET_WINDOW: Duration = Duration::from_secs(60);
+
+/// Decide how a Power request affects the "re-apply transmit once the radar
+/// reaches standby" flag, given the radar's last reported power state.
+/// Returns `Some(new_flag)` when the request changes it, `None` to leave it.
+///
+/// A cold Quantum drops a transmit command while it boots (~25-30 s), so a
+/// transmit requested while it is off/unknown must be re-applied once it
+/// reports standby. Standby->transmit is honoured immediately (no deferral);
+/// a standby/off request cancels any pending transmit.
+fn transmit_should_defer(requested: Power, reported: Option<Power>) -> Option<bool> {
+    match requested {
+        Power::Transmit => {
+            let awake = matches!(reported, Some(Power::Standby) | Some(Power::Transmit));
+            Some(!awake)
+        }
+        Power::Standby | Power::Off => Some(false),
+        _ => None,
+    }
+}
 
 // The LookupSpokeEnum is an index into an array, really. `process_frame`
 // picks the row based on whether the radar currently reports Doppler on
@@ -170,6 +192,14 @@ pub(crate) struct RaymarineReportReceiver {
     /// broadcast.
     pub(super) self_test_results: Option<[u8; quantum::SELF_TEST_ITEM_COUNT]>,
 
+    /// True when the user asked for Transmit while the radar was not yet
+    /// awake/transmitting. A cold Quantum takes ~25-30 s to boot to Standby
+    /// before it accepts a mode change, so the transmit command sent alongside
+    /// the wake is lost. We re-send it once the radar reports Standby, then
+    /// clear this — so off->transmit is a single user action. Cleared if the
+    /// user asks for Standby/Off in the meantime.
+    pub(super) pending_transmit: bool,
+
     // For data (spokes)
     range_meters: u32,
     wire_to_legend: WireToLegendTable,
@@ -261,6 +291,7 @@ impl RaymarineReportReceiver {
             features_seen: false,
             self_test_fault: false,
             self_test_results: None,
+            pending_transmit: false,
             range_meters: 0,
             wire_to_legend,
             doppler: false,
@@ -400,10 +431,50 @@ impl RaymarineReportReceiver {
                 r = self.common.control_update_rx.recv() => {
                     match r {
                         Err(_) => {},
-                        Ok(cv) => {let _ = self.common.process_control_update(cv, &mut self.command_sender).await;},
+                        Ok(cv) => {
+                            self.note_power_request(&cv.control_value);
+                            let _ = self.common.process_control_update(cv, &mut self.command_sender).await;
+                        },
                     }
                 }
             }
+        }
+    }
+
+    /// Observe a Power control request so a Transmit asked for while the radar
+    /// is not yet transmitting can be re-applied once it reports Standby (see
+    /// `pending_transmit`). A Standby/Off request clears any pending transmit.
+    fn note_power_request(&mut self, cv: &ControlValue) {
+        if cv.id != ControlId::Power {
+            return;
+        }
+        let Some(power) = cv.value.as_ref().and_then(|v| Power::from_value(v).ok()) else {
+            return;
+        };
+        if let Some(pending) = transmit_should_defer(power, self.common.info.controls.get_status())
+        {
+            self.pending_transmit = pending;
+        }
+    }
+
+    /// If the user asked for Transmit while the radar was waking, re-send the
+    /// transmit command once it reports Standby (it ignored the first one while
+    /// booting). One shot: the flag is cleared whether or not this send
+    /// succeeds — if it is lost too, the user can ask again.
+    async fn maybe_reapply_transmit(&mut self) {
+        if !self.pending_transmit {
+            return;
+        }
+        if self.common.info.controls.get_status() != Some(Power::Standby) {
+            return;
+        }
+        self.pending_transmit = false;
+        if let Some(ref mut cs) = self.command_sender {
+            log::info!(
+                "{}: radar reached standby, re-applying transmit",
+                self.common.key
+            );
+            let _ = cs.send(&super::protocol::SET_TRANSMIT_QUANTUM).await;
         }
     }
 
@@ -501,6 +572,7 @@ impl RaymarineReportReceiver {
             }
             0x280002 => {
                 quantum::process_status_report(self, data);
+                self.maybe_reapply_transmit().await;
             }
             0x280003 => {
                 quantum::process_frame(self, data);
@@ -598,5 +670,48 @@ impl RaymarineReportReceiver {
             command_sender.set_ranges(ranges.clone());
         }
         self.common.set_ranges(ranges);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::transmit_should_defer;
+    use crate::radar::Power;
+
+    #[test]
+    fn transmit_from_off_or_unknown_defers() {
+        // Off or not-yet-reported: the radar is booting, so a transmit
+        // request must be re-applied once it reaches standby.
+        assert_eq!(transmit_should_defer(Power::Transmit, None), Some(true));
+        assert_eq!(
+            transmit_should_defer(Power::Transmit, Some(Power::Off)),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn transmit_while_awake_is_not_deferred() {
+        // Standby -> transmit is honoured immediately; transmit while already
+        // transmitting is a no-op — neither should arm the pending flag.
+        assert_eq!(
+            transmit_should_defer(Power::Transmit, Some(Power::Standby)),
+            Some(false)
+        );
+        assert_eq!(
+            transmit_should_defer(Power::Transmit, Some(Power::Transmit)),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn standby_or_off_cancels_pending_transmit() {
+        assert_eq!(transmit_should_defer(Power::Standby, None), Some(false));
+        assert_eq!(transmit_should_defer(Power::Off, None), Some(false));
+    }
+
+    #[test]
+    fn other_states_leave_pending_unchanged() {
+        assert_eq!(transmit_should_defer(Power::Preparing, None), None);
+        assert_eq!(transmit_should_defer(Power::Fault, None), None);
     }
 }
