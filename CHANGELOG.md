@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **gui:** stabilize north-up to true north via per-spoke bearing (#429) ([PR #429](https://github.com/MarineYachtRadar/mayara-server/pull/429))
 - **clippy:** resolve new lints from Rust 1.97 clippy (#437) ([PR #437](https://github.com/MarineYachtRadar/mayara-server/pull/437))
 - **clippy:** clean up 79 warnings from clippy 1.97 (#438) ([PR #438](https://github.com/MarineYachtRadar/mayara-server/pull/438))
+- **target:** bound blob detector memory for never-completing blobs (#435) ([PR #435](https://github.com/MarineYachtRadar/mayara-server/pull/435))
 
 ## [3.6.0] - 2026-06-19
 
