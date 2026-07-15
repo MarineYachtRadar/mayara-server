@@ -535,19 +535,19 @@ impl BlobDetector {
                 .expect("target blob must exist");
             blob.has_doppler_approaching |= is_doppler_approaching;
             let key = (pixel.spoke, pixel.pixel);
-            let oversized = if self.pixel_index.get(&key).copied() == Some(target_id) {
+            if self.pixel_index.get(&key).copied() == Some(target_id) {
                 // The pixel already belongs to this blob from an earlier
                 // revolution — possible only for a blob that never completes,
                 // e.g. a clutter ring touching every bearing. Re-pushing it
                 // would grow `pixels` without bound; just refresh liveness.
                 blob.last_spoke_with_addition = spoke_angle;
-                false
             } else {
                 blob.add_pixel(pixel, spoke_angle);
                 self.pixel_index.insert(key, target_id);
-                blob.pixels.len() > MAX_BLOB_PIXELS
-            };
-            if oversized {
+            }
+            // Checked on both paths: a merge can push the blob over the cap
+            // even when the current pixel is a duplicate.
+            if blob.pixels.len() > MAX_BLOB_PIXELS {
                 let blob = self
                     .active_blobs
                     .remove(&target_id)
