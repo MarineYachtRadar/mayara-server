@@ -154,7 +154,7 @@ impl Persistence {
 
         panic!(
             "Cannot check file modification of '{}' on this platform",
-            &self.path.display()
+            self.path.display()
         );
     }
 
@@ -163,7 +163,7 @@ impl Persistence {
             Err(e) => {
                 warn!(
                     "no config '{}' yet; starting fresh: {}",
-                    &self.path.display(),
+                    self.path.display(),
                     e
                 );
 
@@ -178,12 +178,12 @@ impl Persistence {
         match serde_json::from_reader(reader) {
             Ok(u) => {
                 self.config = u;
-                info!("Loaded config from '{}'", &self.path.display());
+                info!("Loaded config from '{}'", self.path.display());
             }
             Err(e) => {
                 warn!(
                     "Config '{}' corrupted; starting fresh: {}",
-                    &self.path.display(),
+                    self.path.display(),
                     e
                 );
             }
@@ -201,14 +201,14 @@ impl Persistence {
         writeln!(writer)?;
         writer.flush()?;
 
-        info!("Written config file '{}'", &self.path.display());
+        info!("Written config file '{}'", self.path.display());
         self.timestamp = self.get_file_time();
         Ok(())
     }
 
     fn save(&mut self) {
         if let Err(e) = self.saver() {
-            warn!("cannot store config '{}': {}", &self.path.display(), e);
+            warn!("cannot store config '{}': {}", self.path.display(), e);
         }
     }
 

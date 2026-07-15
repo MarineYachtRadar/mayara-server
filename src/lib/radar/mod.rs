@@ -675,7 +675,7 @@ impl RadarInfo {
 
 impl Display for RadarInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Radar {} brand {}", &self.key, &self.brand)?;
+        write!(f, "Radar {} brand {}", self.key, self.brand)?;
         if let Some(which) = &self.dual {
             write!(f, " {}", which)?;
         }
@@ -685,11 +685,11 @@ impl Display for RadarInfo {
         write!(
             f,
             " at {} via {} data {} report {} send {}",
-            &self.addr.ip(),
-            &self.nic_addr,
-            &self.spoke_data_addr,
-            &self.report_addr,
-            &self.send_command_addr
+            self.addr.ip(),
+            self.nic_addr,
+            self.spoke_data_addr,
+            self.report_addr,
+            self.send_command_addr
         )
     }
 }
@@ -746,7 +746,7 @@ impl SharedRadars {
 
             log::info!(
                 "Found radar: key '{}' name '{}' with {} ranges",
-                &new_info.key,
+                new_info.key,
                 new_info.controls.user_name(),
                 new_info.ranges.len()
             );

@@ -216,9 +216,9 @@ impl Locator {
                             Ok(ResultType::Locator(mut locator_socket, addr, buf)) => {
                                 log::trace!(
                                     "{} via {} -> {:02X?}",
-                                    &addr,
-                                    &locator_socket.nic_addr,
-                                    &buf
+                                    addr,
+                                    locator_socket.nic_addr,
+                                    buf
                                 );
 
                                 let _ = locator_socket.state.process(
@@ -391,13 +391,13 @@ impl Locator {
                                             log::info!(
                                                 "Searching for radars on interface '{}' address {} (added/modified)",
                                                 itf.name,
-                                                &nic_ip,
+                                                nic_ip,
                                             );
                                         } else {
                                             log::info!(
                                                 "Searching for radars on interface '{}' address {}",
                                                 itf.name,
-                                                &nic_ip,
+                                                nic_ip,
                                             );
                                         }
                                         interface_state.active_nic_addresses.push(nic_ip);
@@ -459,7 +459,7 @@ impl Locator {
                                         } else {
                                             log::trace!(
                                                 "Ignoring IPv6 address {:?}",
-                                                &radar_listen_address.address
+                                                radar_listen_address.address
                                             );
                                         }
                                     }

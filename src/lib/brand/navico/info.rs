@@ -140,8 +140,8 @@ impl Information {
                 log::debug!(
                     "{} {} via {}: sending info",
                     self.key,
-                    &SOCKET_ADDRESS[index],
-                    &self.nic_addr
+                    SOCKET_ADDRESS[index],
+                    self.nic_addr
                 );
                 self.sock[index] = Some(sock);
                 Ok(())
@@ -150,8 +150,8 @@ impl Information {
                 log::debug!(
                     "{} {} via {}: create multicast failed: {}",
                     self.key,
-                    &SOCKET_ADDRESS[index],
-                    &self.nic_addr,
+                    SOCKET_ADDRESS[index],
+                    self.nic_addr,
                     e
                 );
                 Err(RadarError::Io(e))
