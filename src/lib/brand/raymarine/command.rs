@@ -65,8 +65,8 @@ impl Command {
                 log::debug!(
                     "{} {} via {}: sending commands",
                     self.key,
-                    &self.info.send_command_addr,
-                    &self.info.nic_addr
+                    self.info.send_command_addr,
+                    self.info.nic_addr
                 );
                 self.sock = Some(Arc::new(sock));
 
@@ -76,8 +76,8 @@ impl Command {
                 log::debug!(
                     "{} {} via {}: create multicast failed: {}",
                     self.key,
-                    &self.info.send_command_addr,
-                    &self.info.nic_addr,
+                    self.info.send_command_addr,
+                    self.info.nic_addr,
                     e
                 );
                 Err(RadarError::Io(e))

@@ -459,8 +459,8 @@ impl NavicoReportReceiver {
                 log::debug!(
                     "{}: {} via {}: listening for reports",
                     self.common.key,
-                    &self.common.info.report_addr,
-                    &self.common.info.nic_addr
+                    self.common.info.report_addr,
+                    self.common.info.nic_addr
                 );
                 Ok(())
             }
@@ -468,8 +468,8 @@ impl NavicoReportReceiver {
                 log::debug!(
                     "{}: {} via {}: create multicast failed: {}",
                     self.common.key,
-                    &self.common.info.report_addr,
-                    &self.common.info.nic_addr,
+                    self.common.info.report_addr,
+                    self.common.info.nic_addr,
                     e
                 );
                 Err(e)
@@ -491,8 +491,8 @@ impl NavicoReportReceiver {
                 log::debug!(
                     "{}: {} via {}: listening for info reports",
                     self.common.key,
-                    &self.common.info.report_addr,
-                    &self.common.info.nic_addr
+                    self.common.info.report_addr,
+                    self.common.info.nic_addr
                 );
                 Ok(())
             }
@@ -500,8 +500,8 @@ impl NavicoReportReceiver {
                 log::debug!(
                     "{}: {} via {}: create multicast failed: {}",
                     self.common.key,
-                    &self.common.info.report_addr,
-                    &self.common.info.nic_addr,
+                    self.common.info.report_addr,
+                    self.common.info.nic_addr,
                     e
                 );
                 Err(e)
@@ -522,16 +522,16 @@ impl NavicoReportReceiver {
                 self.data_socket = Some(sock);
                 log::debug!(
                     "{} via {}: listening for spoke data",
-                    &self.common.info.spoke_data_addr,
-                    &self.common.info.nic_addr
+                    self.common.info.spoke_data_addr,
+                    self.common.info.nic_addr
                 );
                 Ok(())
             }
             Err(e) => {
                 log::debug!(
                     "{} via {}: create multicast failed: {}",
-                    &self.common.info.spoke_data_addr,
-                    &self.common.info.nic_addr,
+                    self.common.info.spoke_data_addr,
+                    self.common.info.nic_addr,
                     e
                 );
                 Err(e)
@@ -642,7 +642,7 @@ impl NavicoReportReceiver {
 
         let spokes_in_frame = (self.data_buf.len() - FRAME_HEADER_LENGTH) / RADAR_LINE_LENGTH;
 
-        log::trace!("Received UDP frame with {} spokes", &spokes_in_frame);
+        log::trace!("Received UDP frame with {} spokes", spokes_in_frame);
 
         self.common.new_spoke_message();
 
@@ -663,7 +663,7 @@ impl NavicoReportReceiver {
                 self.common
                     .add_spoke(range, angle, heading, self.process_spoke(spoke_slice));
             } else {
-                log::warn!("Invalid spoke: header {:02X?}", &header_slice);
+                log::warn!("Invalid spoke: header {:02X?}", header_slice);
             }
 
             offset += RADAR_LINE_LENGTH;
@@ -1344,7 +1344,7 @@ impl NavicoReportReceiver {
                     Self::validate_br24_header(&header)
                 }
                 Err(e) => {
-                    log::warn!("Illegible spoke: {} header {:02X?}", e, &header_slice);
+                    log::warn!("Illegible spoke: {} header {:02X?}", e, header_slice);
                     None
                 }
             },
@@ -1355,7 +1355,7 @@ impl NavicoReportReceiver {
                     Self::validate_4g_header(&header)
                 }
                 Err(e) => {
-                    log::warn!("Illegible spoke: {} header {:02X?}", e, &header_slice);
+                    log::warn!("Illegible spoke: {} header {:02X?}", e, header_slice);
                     None
                 }
             },

@@ -1207,7 +1207,7 @@ impl SharedControls {
 
         log::debug!(
             "Sending reply {:?} to requesting JSON client",
-            &control_value,
+            control_value,
         );
 
         reply_tx

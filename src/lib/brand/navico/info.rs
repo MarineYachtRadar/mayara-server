@@ -140,8 +140,8 @@ impl Information {
                 log::debug!(
                     "{} {} via {}: sending info",
                     self.key,
-                    &SOCKET_ADDRESS[index],
-                    &self.nic_addr
+                    SOCKET_ADDRESS[index],
+                    self.nic_addr
                 );
                 self.sock[index] = Some(sock);
                 Ok(())
@@ -150,8 +150,8 @@ impl Information {
                 log::debug!(
                     "{} {} via {}: create multicast failed: {}",
                     self.key,
-                    &SOCKET_ADDRESS[index],
-                    &self.nic_addr,
+                    SOCKET_ADDRESS[index],
+                    self.nic_addr,
                     e
                 );
                 Err(RadarError::Io(e))
@@ -174,7 +174,7 @@ impl Information {
             let heading = (heading * HEADING_SCALE / TAU) as u16;
             let epoch = chrono::Utc::now().timestamp_millis().to_le_bytes();
             let packet = HaloHeadingPacket {
-                marker: [b'N', b'K', b'O', b'E'],
+                marker: *b"NKOE",
                 preamble: [0, 1, 0x90, 0x02],
                 counter: self.counter.to_be_bytes(),
                 u01: U01_DEFAULT,
@@ -205,7 +205,7 @@ impl Information {
             let sog = (sog * 100.0) as u16;
             let epoch = chrono::Utc::now().timestamp_millis().to_le_bytes();
             let packet = HaloNavigationPacket {
-                marker: [b'N', b'K', b'O', b'E'],
+                marker: *b"NKOE",
                 preamble: [0, 1, 0x90, 0x02],
                 counter: self.counter.to_be_bytes(),
                 u01: U01_DEFAULT,

@@ -259,16 +259,16 @@ impl GarminReportReceiver {
                 log::debug!(
                     "{}: {} via {}: listening for reports",
                     self.common.key,
-                    &self.common.info.report_addr,
-                    &self.common.info.nic_addr
+                    self.common.info.report_addr,
+                    self.common.info.nic_addr
                 );
             }
             Err(e) => {
                 log::debug!(
                     "{}: {} via {}: create multicast failed: {}",
                     self.common.key,
-                    &self.common.info.report_addr,
-                    &self.common.info.nic_addr,
+                    self.common.info.report_addr,
+                    self.common.info.nic_addr,
                     e
                 );
                 return Err(e);
@@ -287,16 +287,16 @@ impl GarminReportReceiver {
                     log::debug!(
                         "{}: {} via {}: listening for data",
                         self.common.key,
-                        &self.common.info.spoke_data_addr,
-                        &self.common.info.nic_addr
+                        self.common.info.spoke_data_addr,
+                        self.common.info.nic_addr
                     );
                 }
                 Err(e) => {
                     log::debug!(
                         "{}: {} via {}: create data multicast failed: {}",
                         self.common.key,
-                        &self.common.info.spoke_data_addr,
-                        &self.common.info.nic_addr,
+                        self.common.info.spoke_data_addr,
+                        self.common.info.nic_addr,
                         e
                     );
                     return Err(e);
