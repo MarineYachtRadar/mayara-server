@@ -24,6 +24,14 @@ const DEFAULT_BLOB_THRESHOLD: u8 = 10;
 /// bounding-box sizes; real vessels at this range produce dense clusters of 50+ pixels.
 const MIN_TARGET_PIXELS: usize = 25;
 
+/// Hard cap on the pixels retained by one in-progress blob. A blob that is
+/// extended on every spoke (e.g. a saturated clutter disk around own ship)
+/// never satisfies the completion check, so without a cap it would hold pixels
+/// for as long as the return persists. No plausible vessel return comes
+/// anywhere near this count (a valid target has at most a few thousand
+/// pixels); oversized blobs are discarded outright.
+const MAX_BLOB_PIXELS: usize = 100_000;
+
 /// Minimum ship size in meters
 pub const MIN_TARGET_SIZE_M: f64 = 5.0;
 
@@ -526,10 +534,32 @@ impl BlobDetector {
                 .get_mut(&target_id)
                 .expect("target blob must exist");
             blob.has_doppler_approaching |= is_doppler_approaching;
-            let spoke = pixel.spoke;
-            let pixel_idx = pixel.pixel;
-            blob.add_pixel(pixel, spoke_angle);
-            self.pixel_index.insert((spoke, pixel_idx), target_id);
+            let key = (pixel.spoke, pixel.pixel);
+            if self.pixel_index.get(&key).copied() == Some(target_id) {
+                // The pixel already belongs to this blob from an earlier
+                // revolution — possible only for a blob that never completes,
+                // e.g. a clutter ring touching every bearing. Re-pushing it
+                // would grow `pixels` without bound; just refresh liveness.
+                blob.last_spoke_with_addition = spoke_angle;
+            } else {
+                blob.add_pixel(pixel, spoke_angle);
+                self.pixel_index.insert(key, target_id);
+            }
+            // Checked on both paths: a merge can push the blob over the cap
+            // even when the current pixel is a duplicate.
+            if blob.pixels.len() > MAX_BLOB_PIXELS {
+                let blob = self
+                    .active_blobs
+                    .remove(&target_id)
+                    .expect("oversized blob must exist");
+                for p in &blob.pixels {
+                    self.pixel_index.remove(&(p.spoke, p.pixel));
+                }
+                log::debug!(
+                    "BlobDetector: discarded oversized blob with {} pixels",
+                    blob.pixels.len()
+                );
+            }
         }
 
         // Check for completed blobs (not extended on this spoke nor the previous one)
@@ -717,6 +747,95 @@ mod tests {
         // 0 forward to 8191, which is 8190 empty slots). Center =
         // (8191 + 1) % 8192 = 0.
         assert_eq!(arc.center, 0);
+    }
+
+    /// Maximum return intensity for a 4-bit pixel, well above the test
+    /// detector's threshold of 10.
+    const STRONG_RETURN: u8 = 15;
+    /// Range in meters for synthetic test spokes.
+    const TEST_RANGE_M: u32 = 1000;
+
+    fn spoke_with(angle: u16, len: usize, strong: &[usize]) -> Spoke {
+        let mut data = vec![0u8; len];
+        for &p in strong {
+            data[p] = STRONG_RETURN;
+        }
+        let mut spoke = Spoke::new();
+        spoke.angle = angle as u32;
+        spoke.range = TEST_RANGE_M;
+        spoke.data = data;
+        spoke
+    }
+
+    #[test]
+    fn ring_blob_does_not_accumulate_duplicate_pixels() {
+        // A return present at every bearing (near-range clutter ring) is
+        // extended on every spoke, so it never satisfies the completion
+        // check. Its retained pixels must stay bounded by its geometric
+        // extent instead of growing every revolution (issue #434).
+        const SPOKES: u16 = 64;
+        let mut detector = BlobDetector::new(SPOKES, 10, None);
+
+        let mut completed = Vec::new();
+        for _rev in 0..4 {
+            for angle in 0..SPOKES {
+                completed.extend(detector.process_spoke(&spoke_with(angle, 512, &[5])));
+            }
+        }
+
+        assert!(completed.is_empty());
+        assert_eq!(detector.active_blobs.len(), 1);
+        let ring = detector.active_blobs.values().next().unwrap();
+        assert_eq!(ring.pixels.len(), SPOKES as usize);
+        assert_eq!(detector.pixel_index.len(), SPOKES as usize);
+    }
+
+    #[test]
+    fn discrete_blob_still_completes_alongside_ring() {
+        // A normal discrete target must keep completing once per revolution
+        // even while an immortal ring blob is active.
+        const SPOKES: u16 = 64;
+        let mut detector = BlobDetector::new(SPOKES, 10, None);
+
+        let mut completions = 0;
+        for _rev in 0..3 {
+            for angle in 0..SPOKES {
+                let strong: Vec<usize> = if (10..13).contains(&angle) {
+                    std::iter::once(5).chain(100..111).collect()
+                } else {
+                    vec![5]
+                };
+                completions += detector
+                    .process_spoke(&spoke_with(angle, 512, &strong))
+                    .len();
+            }
+        }
+
+        assert_eq!(completions, 3);
+        assert_eq!(detector.pixel_index.len(), SPOKES as usize);
+    }
+
+    #[test]
+    fn oversized_blob_is_discarded() {
+        // A fully saturated disk merges into one blob that never completes;
+        // the pixel cap must keep the detector's retained state bounded.
+        const SPOKES: u16 = 64;
+        let mut detector = BlobDetector::new(SPOKES, 10, None);
+        let all: Vec<usize> = (0..2048).collect();
+
+        let mut completed = Vec::new();
+        for angle in 0..SPOKES {
+            completed.extend(detector.process_spoke(&spoke_with(angle, 2048, &all)));
+        }
+
+        assert!(completed.is_empty());
+        assert!(
+            detector
+                .active_blobs
+                .values()
+                .all(|b| b.pixels.len() <= MAX_BLOB_PIXELS)
+        );
+        assert!(detector.pixel_index.len() <= MAX_BLOB_PIXELS + 1);
     }
 
     #[test]
