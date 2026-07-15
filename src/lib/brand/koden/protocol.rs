@@ -69,7 +69,7 @@ pub(crate) const RADAR_LOST_TIMEOUT_SECS: u64 = 15;
 
 pub(crate) const CONTROL_PREFIX: u8 = b'&'; // 0x26
 pub(crate) const STATUS_PREFIX: u8 = b'#'; // 0x23
-pub(crate) const IMAGE_MARKER: [u8; 4] = [b'{', b'{', b'{', b'{'];
+pub(crate) const IMAGE_MARKER: [u8; 4] = *b"{{{{";
 pub(crate) const PACKET_END: u8 = b'\r'; // 0x0D
 
 // =============================================================================
