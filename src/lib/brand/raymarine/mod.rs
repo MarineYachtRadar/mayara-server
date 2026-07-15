@@ -690,27 +690,91 @@ const RAYMARINE_WOL_RADAR: [u8; 102] = [
     0xc7, 0xd, 0xef, 0xa0,
 ];
 
-const BEACONS: [&[u8]; 3] = [
-    &RAYMARINE_MFD_BEACON,
-    &RAYMARINE_WAKE_RADAR,
-    &RAYMARINE_WOL_RADAR,
-];
+/// How many WOL magic packets to send per beacon cycle. An Axiom wakes a
+/// radar with a burst of 7–10 WOLs, never a single one — a lone multicast
+/// datagram to a dozing WiFi radar is routinely lost. Wire-confirmed in
+/// MarineYachtRadar/mayara-server#160.
+const WOL_WAKE_BURST: usize = 8;
 
+/// Raymarine MFDs emit their radar traffic with IP TTL 10, and an Axiom acting
+/// as a radar's WiFi access point only relays packets whose TTL is > 1 (router
+/// semantics: TTL 1 means link-local only). Send our wake bursts *and* our
+/// command traffic with the same TTL so they are eligible for that relay — on
+/// the local link a larger TTL changes nothing. Wire-confirmed against a live
+/// Axiom in MarineYachtRadar/mayara-server#160. Raymarine-specific: other
+/// brands keep the OS default.
+pub(super) const RAYMARINE_RELAY_TTL: u32 = 10;
+
+/// Gap between the packets of an on-demand wake burst, matching the ~20 ms
+/// spacing observed from an Axiom.
+const WAKE_BURST_SPACING: Duration = Duration::from_millis(20);
+
+/// Send the WOL wake burst the way an Axiom does when the user presses "On":
+/// [`WOL_WAKE_BURST`] magic packets [`WAKE_BURST_SPACING`] apart to the wired
+/// beacon group, with [`RAYMARINE_RELAY_TTL`] so an Axiom relaying to a WiFi
+/// radar forwards them. Failures are logged, not returned — the caller's mode
+/// command should still go out.
+async fn send_wake_burst(nic_addr: &Ipv4Addr) {
+    let SocketAddr::V4(addr) = RAYMARINE_BEACON_ADDRESS else {
+        return;
+    };
+    match crate::network::create_multicast_send(&addr, nic_addr) {
+        Ok(sock) => {
+            if let Err(e) = sock.set_multicast_ttl_v4(RAYMARINE_RELAY_TTL) {
+                log::warn!("via {}: wake burst TTL: {}", nic_addr, e);
+            }
+            for _ in 0..WOL_WAKE_BURST {
+                if let Err(e) = sock.send(&RAYMARINE_WOL_RADAR).await {
+                    log::warn!("via {}: wake burst send failed: {}", nic_addr, e);
+                    return;
+                }
+                tokio::time::sleep(WAKE_BURST_SPACING).await;
+            }
+            log::info!("via {}: sent WOL wake burst", nic_addr);
+        }
+        Err(e) => log::warn!("via {}: wake burst socket: {}", nic_addr, e),
+    }
+}
+
+/// The discovery/wake packets sent to a beacon group each locator cycle:
+/// the MFD announce, the wake literal, then the WOL magic packet as a burst.
+fn beacon_request_packets() -> Vec<&'static [u8]> {
+    let mut packets: Vec<&'static [u8]> = vec![&RAYMARINE_MFD_BEACON, &RAYMARINE_WAKE_RADAR];
+    for _ in 0..WOL_WAKE_BURST {
+        packets.push(&RAYMARINE_WOL_RADAR);
+    }
+    packets
+}
+
+/// Register the Raymarine locator's beacon/wake multicast groups.
+///
+/// The wired/RayNet group (`224.0.0.1:5800`) is always registered; the WiFi
+/// group (`232.1.1.1:5800`) is added on top when `--allow-wifi` is set. No-op
+/// if a Raymarine locator is already registered.
 pub(super) fn new(args: &Cli, addresses: &mut Vec<LocatorAddress>) {
     if !addresses.iter().any(|i| i.id == LocatorId::Raymarine) {
-        let beacon_address = if args.allow_wifi {
-            &RAYMARINE_QUANTUM_WIFI_ADDRESS
-        } else {
-            &RAYMARINE_BEACON_ADDRESS
-        };
+        // The wired/RayNet beacon group is always needed — radomes and MFDs on
+        // RayNet announce and listen on 224.0.0.1:5800. `--allow-wifi`
+        // additionally enables the WiFi discovery group (232.1.1.1:5800); it
+        // must *add* that group, not replace the wired one, or enabling WiFi
+        // support would silently stop wired/RayNet discovery and wake.
+        let mut beacon_addresses = vec![&RAYMARINE_BEACON_ADDRESS];
+        if args.allow_wifi {
+            beacon_addresses.push(&RAYMARINE_QUANTUM_WIFI_ADDRESS);
+        }
 
-        addresses.push(LocatorAddress::new(
-            LocatorId::Raymarine,
-            beacon_address,
-            Brand::Raymarine,
-            BEACONS.to_vec(),
-            Box::new(RaymarineLocator::new(args.clone())),
-        ));
+        for beacon_address in beacon_addresses {
+            addresses.push(
+                LocatorAddress::new(
+                    LocatorId::Raymarine,
+                    beacon_address,
+                    Brand::Raymarine,
+                    beacon_request_packets(),
+                    Box::new(RaymarineLocator::new(args.clone())),
+                )
+                .with_beacon_multicast_ttl(RAYMARINE_RELAY_TTL),
+            );
+        }
     }
 }
 
@@ -720,8 +784,81 @@ mod tests {
 
     use clap::Parser;
 
-    use super::{BaseModel, protocol};
+    use super::{BaseModel, RAYMARINE_BEACON_ADDRESS, RAYMARINE_QUANTUM_WIFI_ADDRESS, protocol};
+    use crate::brand::LocatorId;
+    use crate::locator::LocatorAddress;
     use crate::{Cli, brand::raymarine::RaymarineLocator, radar::SharedRadars};
+
+    fn raymarine_beacon_groups(extra_args: &[&str]) -> Vec<std::net::SocketAddr> {
+        let mut argv = vec!["mayara-server"];
+        argv.extend_from_slice(extra_args);
+        let args = Cli::parse_from(argv);
+        let mut addresses: Vec<LocatorAddress> = Vec::new();
+        super::new(&args, &mut addresses);
+        addresses
+            .iter()
+            .filter(|a| a.id == LocatorId::Raymarine)
+            .map(|a| a.address)
+            .collect()
+    }
+
+    #[test]
+    fn default_beacons_to_wired_group_only() {
+        let groups = raymarine_beacon_groups(&[]);
+        assert_eq!(groups, vec![RAYMARINE_BEACON_ADDRESS]);
+    }
+
+    #[test]
+    fn allow_wifi_adds_wifi_group_without_dropping_wired() {
+        // --allow-wifi must *add* the WiFi discovery group, not replace the
+        // wired/RayNet one — otherwise enabling WiFi support silently stops
+        // wired discovery and wake (the radar/MFD listen on 224.0.0.1:5800).
+        let groups = raymarine_beacon_groups(&["--allow-wifi"]);
+        assert_eq!(
+            groups,
+            vec![RAYMARINE_BEACON_ADDRESS, RAYMARINE_QUANTUM_WIFI_ADDRESS],
+            "--allow-wifi must register exactly the wired group plus the WiFi group, with no duplicates or extra groups"
+        );
+    }
+
+    #[test]
+    fn wol_wake_is_sent_as_burst() {
+        // An Axiom wakes a radar with a burst of WOLs, never a single one —
+        // a lone multicast datagram to a dozing WiFi radar is routinely lost.
+        // Every Raymarine beacon group (wired, and the WiFi group added by
+        // --allow-wifi) must get the MFD announce and wake literal once each,
+        // the WOL magic packet repeated as a burst, and the relay TTL.
+        for extra_args in [&[][..], &["--allow-wifi"][..]] {
+            let args = Cli::parse_from(std::iter::once("mayara-server").chain(extra_args.to_vec()));
+            let mut addresses: Vec<LocatorAddress> = Vec::new();
+            super::new(&args, &mut addresses);
+            let raymarine: Vec<_> = addresses
+                .iter()
+                .filter(|a| a.id == LocatorId::Raymarine)
+                .collect();
+            assert!(!raymarine.is_empty());
+            for a in raymarine {
+                let wols = a
+                    .beacon_request_packets
+                    .iter()
+                    .filter(|p| **p == super::RAYMARINE_WOL_RADAR)
+                    .count();
+                assert_eq!(wols, super::WOL_WAKE_BURST, "group {}", a.address);
+                assert_eq!(
+                    a.beacon_request_packets.len(),
+                    super::WOL_WAKE_BURST + 2,
+                    "group {}: expected MFD announce + wake literal + WOL burst",
+                    a.address
+                );
+                assert_eq!(
+                    a.beacon_multicast_ttl,
+                    Some(super::RAYMARINE_RELAY_TTL),
+                    "group {}: Raymarine beacons must carry the relay-eligible TTL",
+                    a.address
+                );
+            }
+        }
+    }
 
     #[test]
     fn decode_raymarine_locator_beacon() {

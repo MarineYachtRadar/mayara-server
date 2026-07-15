@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **raymarine:** wake, control and power radars behind an Axiom (#427) ([PR #427](https://github.com/MarineYachtRadar/mayara-server/pull/427))
+
 ### Fixed
 
 - **raymarine:** surface discovered radars so an asleep Quantum is visible (#422) ([PR #422](https://github.com/MarineYachtRadar/mayara-server/pull/422))

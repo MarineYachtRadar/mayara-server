@@ -52,6 +52,16 @@ impl Command {
         assert!(!self.unicast_mode);
         match create_multicast_send(&self.info.send_command_addr, &self.info.nic_addr) {
             Ok(sock) => {
+                // The command address is often an Axiom that relays to a WiFi
+                // radar; like the wake burst, commands must carry TTL > 1 or
+                // the relay drops them (issue #160). Set both the multicast
+                // and unicast TTL since send_command_addr may be either.
+                if let Err(e) = sock.set_multicast_ttl_v4(super::RAYMARINE_RELAY_TTL) {
+                    log::warn!("{}: command socket multicast TTL: {}", self.key, e);
+                }
+                if let Err(e) = sock.set_ttl(super::RAYMARINE_RELAY_TTL) {
+                    log::warn!("{}: command socket TTL: {}", self.key, e);
+                }
                 log::debug!(
                     "{} {} via {}: sending commands",
                     self.key,
@@ -136,5 +146,35 @@ impl CommandSender for Command {
             BaseModel::RD => rd::set_control(self, cv, value, controls).await,
             BaseModel::Quantum => quantum::set_control(self, cv, value, controls).await,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::{Ipv4Addr, SocketAddrV4};
+
+    use crate::network::create_multicast_send;
+
+    // The command socket (start_socket) relays through an Axiom to a WiFi
+    // radar, so it must carry TTL > 1 or the relay drops it (issue #160).
+    // start_socket needs a full RadarInfo to build, so exercise the socket
+    // configuration it performs directly: a create_multicast_send socket must
+    // accept both the multicast and unicast relay TTL and report them back.
+    #[tokio::test]
+    async fn command_socket_accepts_relay_ttl() {
+        let dst = SocketAddrV4::new(Ipv4Addr::new(224, 0, 0, 1), 5800);
+        let sock = create_multicast_send(&dst, &Ipv4Addr::UNSPECIFIED)
+            .expect("command send socket should be creatable");
+
+        sock.set_multicast_ttl_v4(super::super::RAYMARINE_RELAY_TTL)
+            .expect("multicast TTL settable");
+        sock.set_ttl(super::super::RAYMARINE_RELAY_TTL)
+            .expect("unicast TTL settable");
+
+        assert_eq!(
+            sock.multicast_ttl_v4().unwrap(),
+            super::super::RAYMARINE_RELAY_TTL
+        );
+        assert_eq!(sock.ttl().unwrap(), super::super::RAYMARINE_RELAY_TTL);
     }
 }
