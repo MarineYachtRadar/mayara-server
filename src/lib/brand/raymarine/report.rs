@@ -338,8 +338,8 @@ impl RaymarineReportReceiver {
                         log::debug!(
                             "{}: {} via {}: unicast report socket failed: {}",
                             self.common.key,
-                            &self.common.info.report_addr,
-                            &self.common.info.nic_addr,
+                            self.common.info.report_addr,
+                            self.common.info.nic_addr,
                             e
                         );
                         return;
@@ -351,8 +351,8 @@ impl RaymarineReportReceiver {
             log::debug!(
                 "{}: {} via {}: listening for unicast reports",
                 self.common.key,
-                &self.common.info.report_addr,
-                &self.common.info.nic_addr
+                self.common.info.report_addr,
+                self.common.info.nic_addr
             );
         } else {
             // Multicast mode
@@ -366,8 +366,8 @@ impl RaymarineReportReceiver {
                     log::debug!(
                         "{}: {} via {}: listening for reports",
                         self.common.key,
-                        &self.common.info.report_addr,
-                        &self.common.info.nic_addr
+                        self.common.info.report_addr,
+                        self.common.info.nic_addr
                     );
                 }
                 Err(e) => {
@@ -375,8 +375,8 @@ impl RaymarineReportReceiver {
                     log::debug!(
                         "{}: {} via {}: create UDP listen socket failed: {}",
                         self.common.key,
-                        &self.common.info.report_addr,
-                        &self.common.info.nic_addr,
+                        self.common.info.report_addr,
+                        self.common.info.nic_addr,
                         e
                     );
                 }

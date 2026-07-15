@@ -1187,16 +1187,16 @@ impl FurunoReportReceiver {
                 self.multicast_socket = Some(sock);
                 log::debug!(
                     "{} via {}: listening for spoke data",
-                    &self.common.info.spoke_data_addr,
-                    &self.common.info.nic_addr
+                    self.common.info.spoke_data_addr,
+                    self.common.info.nic_addr
                 );
                 Ok(())
             }
             Err(e) => {
                 log::warn!(
                     "{} via {}: listen multicast failed: {}",
-                    &self.common.info.spoke_data_addr,
-                    &self.common.info.nic_addr,
+                    self.common.info.spoke_data_addr,
+                    self.common.info.nic_addr,
                     e
                 );
                 Err(e)
@@ -1214,16 +1214,16 @@ impl FurunoReportReceiver {
                 self.broadcast_socket = Some(sock);
                 log::debug!(
                     "{} via {}: listening for spoke data",
-                    &DATA_BROADCAST_ADDRESS,
-                    &self.common.info.nic_addr
+                    DATA_BROADCAST_ADDRESS,
+                    self.common.info.nic_addr
                 );
                 Ok(())
             }
             Err(e) => {
                 log::warn!(
                     "{} via {}: listen broadcast failed: {}",
-                    &DATA_BROADCAST_ADDRESS,
-                    &self.common.info.nic_addr,
+                    DATA_BROADCAST_ADDRESS,
+                    self.common.info.nic_addr,
                     e
                 );
                 Err(e)
