@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::{
     Cli,
     brand::raymarine::RaymarineModel,
+    radar::Power,
     radar::RadarInfo,
     radar::settings::{
         ControlId, HAS_AUTO_NOT_ADJUSTABLE, SharedControls, new_auto, new_list, new_numeric,
@@ -145,4 +146,11 @@ pub(crate) fn update_when_model_known(
     );
 
     controls.add(new_list(ControlId::TargetExpansion, &["Off", "On"]));
+
+    // Quantum accepts a full power-off (mode 3, wire-confirmed in issue #160)
+    // in addition to the generic Standby/Transmit. Widen the Power control so
+    // the Radar API exposes and accepts Off for these radars.
+    if model.model == BaseModel::Quantum {
+        controls.add_valid_value(&ControlId::Power, Power::Off as i32);
+    }
 }

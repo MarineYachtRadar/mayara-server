@@ -1333,6 +1333,22 @@ impl SharedControls {
         }
     }
 
+    /// Add `value` to a control's set of valid values if it is not already
+    /// present, keeping the list sorted. Used to widen a control beyond the
+    /// generic default for a brand that supports the extra value — e.g. the
+    /// Power control defaults to Standby/Transmit, and Raymarine adds Off.
+    pub(crate) fn add_valid_value(&self, control_id: &ControlId, value: i32) {
+        let mut locked = self.controls.write().unwrap();
+        if let Some(control) = locked.controls.get_mut(control_id) {
+            let mut values = control.item.valid_values.clone().unwrap_or_default();
+            if !values.contains(&value) {
+                values.push(value);
+                values.sort_unstable();
+                control.item.valid_values = Some(values);
+            }
+        }
+    }
+
     /// Update the valid values of a list control from a bitmask.
     /// Set bits indicate which values the radar accepts. Descriptions are
     /// left as-is (set when the control was created).
@@ -3703,6 +3719,34 @@ mod test {
         assert_eq!(
             controls.get(&ControlId::TargetTrails).unwrap().value,
             Some(3.)
+        );
+    }
+
+    #[test]
+    fn add_valid_value_widens_power_and_is_idempotent() {
+        let args = Cli::parse_from(["my_program"]);
+        let tx = tokio::sync::broadcast::Sender::new(1);
+        let controls = SharedControls::new("nav1234".to_string(), tx, &args, HashMap::new());
+
+        // Power defaults to Standby(1)/Transmit(2); process_client_request
+        // rejects anything outside valid_values, so Off(0) is not accepted.
+        assert_eq!(
+            controls.get(&ControlId::Power).unwrap().item.valid_values,
+            Some(vec![1, 2])
+        );
+
+        controls.add_valid_value(&ControlId::Power, 0);
+        assert_eq!(
+            controls.get(&ControlId::Power).unwrap().item.valid_values,
+            Some(vec![0, 1, 2]),
+            "Off must be added and the list kept sorted"
+        );
+
+        // Adding again is a no-op.
+        controls.add_valid_value(&ControlId::Power, 0);
+        assert_eq!(
+            controls.get(&ControlId::Power).unwrap().item.valid_values,
+            Some(vec![0, 1, 2])
         );
     }
 }
