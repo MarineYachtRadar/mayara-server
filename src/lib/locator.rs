@@ -309,7 +309,7 @@ impl Locator {
     ) {
         let mut interface_api = interface_state.interface_api.clone();
 
-        for (_, radar_interface_api) in interface_api.interfaces.iter_mut() {
+        for radar_interface_api in interface_api.interfaces.values_mut() {
             if let (Some(listeners), Some(ip)) =
                 (&mut radar_interface_api.listeners, &radar_interface_api.ip)
             {

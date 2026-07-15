@@ -867,7 +867,7 @@ impl SharedRadars {
 
     pub fn is_radar_active_on_nic(&self, brand: &Brand, ip: &Ipv4Addr) -> bool {
         let radars = self.radars.read().unwrap();
-        for (_, info) in radars.info.iter() {
+        for info in radars.info.values() {
             log::trace!(
                 "is_active_radar: brand {}/{} ip {}/{}",
                 info.brand,
@@ -884,7 +884,7 @@ impl SharedRadars {
 
     pub fn is_radar_active_by_addr(&self, brand: &Brand, ip: &SocketAddrV4) -> bool {
         let radars = self.radars.read().unwrap();
-        for (_, info) in radars.info.iter() {
+        for info in radars.info.values() {
             log::trace!(
                 "is_active_radar: brand {}/{} ip {}/{}",
                 info.brand,
