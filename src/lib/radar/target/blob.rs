@@ -474,6 +474,22 @@ impl BlobDetector {
         }
     }
 
+    /// Allocate a blob id. Wraps on u32 exhaustion, skipping `UNOWNED` and
+    /// ids still present in `active_blobs`: a wrapped id that aliased a live
+    /// blob would overwrite its `active_blobs` entry and strand that blob's
+    /// `pixel_index` cells on a dead id. Long-lived blobs (a clutter ring
+    /// touching every bearing) can hold a low id indefinitely, so low ids
+    /// are not safe to reuse blindly.
+    fn alloc_blob_id(&mut self) -> u32 {
+        loop {
+            let id = self.next_blob_id;
+            self.next_blob_id = self.next_blob_id.wrapping_add(1);
+            if id != UNOWNED && !self.active_blobs.contains_key(&id) {
+                return id;
+            }
+        }
+    }
+
     /// Flat-array index for `(spoke, pixel)`. Callers guarantee both fit
     /// within `spokes_per_revolution` and `current_spoke_len`.
     fn idx(&self, spoke: u16, pixel: usize) -> usize {
@@ -556,8 +572,7 @@ impl BlobDetector {
 
             let target_id = match adjacent_ids.len() {
                 0 => {
-                    let id = self.next_blob_id;
-                    self.next_blob_id += 1;
+                    let id = self.alloc_blob_id();
                     let mut blob = BlobInProgress::new(id, pixel.clone());
                     blob.has_doppler_approaching = is_doppler_approaching;
                     self.active_blobs.insert(id, blob);
@@ -906,6 +921,39 @@ mod tests {
                 .all(|b| b.pixels.len() <= MAX_BLOB_PIXELS)
         );
         assert!(occupied_cells(&detector) <= MAX_BLOB_PIXELS + 1);
+    }
+
+    #[test]
+    fn blob_id_rollover_skips_unowned_and_active_ids() {
+        // After 2^32 allocations the id counter wraps. A wrapped id must not
+        // become UNOWNED (its cells would read as free) or alias a still-active
+        // blob (whose active_blobs entry would be overwritten, stranding its
+        // cells on a dead id and panicking the next adjacency hit).
+        const SPOKES: u16 = 64;
+        let mut detector = BlobDetector::new(SPOKES, 10, None);
+
+        // An immortal ring keeps one low blob id alive across the rollover.
+        for angle in 0..SPOKES {
+            let _ = detector.process_spoke(&spoke_with(angle, 512, &[5]));
+        }
+        let ring_id = *detector.active_blobs.keys().next().unwrap();
+
+        // Park the counter at the wrap point, then keep scanning with an
+        // isolated pixel that allocates a fresh blob each revolution.
+        detector.next_blob_id = u32::MAX;
+        for _rev in 0..3 {
+            for angle in 0..SPOKES {
+                let strong: &[usize] = if angle == 20 { &[5, 200] } else { &[5] };
+                let _ = detector.process_spoke(&spoke_with(angle, 512, strong));
+            }
+        }
+
+        // The ring survived the rollover and every owned cell still resolves
+        // to a live blob.
+        assert!(detector.active_blobs.contains_key(&ring_id));
+        for &id in detector.pixel_index.iter().filter(|&&id| id != UNOWNED) {
+            assert!(detector.active_blobs.contains_key(&id));
+        }
     }
 
     #[test]
