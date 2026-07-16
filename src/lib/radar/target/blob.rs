@@ -551,9 +551,8 @@ impl BlobDetector {
         let mut completed_ids = std::mem::take(&mut self.completed_ids_scratch);
         let mut spoke_arc_scratch = std::mem::take(&mut self.spoke_arc_scratch);
 
-        // Fused strong-pixel detection and processing: a single pass over
-        // spoke.data replaces the previous "build Vec<BlobPixel> then iterate"
-        // pattern, saving a per-spoke allocation.
+        // Strong/Doppler pixels are detected and processed in one pass over
+        // spoke.data so the hot path needs no intermediate pixel buffer.
         let doppler_range = self.doppler_approaching_range;
         for (pixel_idx, &intensity) in spoke.data.iter().enumerate() {
             let is_doppler_approaching = doppler_range
@@ -609,10 +608,11 @@ impl BlobDetector {
             let (pxl_spoke, pxl_pixel) = (pixel.spoke, pixel.pixel);
             let cell = pxl_spoke as usize * self.current_spoke_len + pxl_pixel;
             if self.pixel_index[cell] == target_id {
-                // The pixel already belongs to this blob from an earlier
-                // revolution — possible only for a blob that never completes,
-                // e.g. a clutter ring touching every bearing. Re-pushing it
-                // would grow `pixels` without bound; just refresh liveness.
+                // The pixel is already recorded in this blob: a long-lived
+                // blob re-touched on a later revolution (e.g. a clutter ring
+                // touching every bearing), or a merge above just reassigned
+                // this cell to the survivor. Re-pushing it would grow
+                // `pixels` without bound; just refresh liveness.
                 blob.last_spoke_with_addition = spoke_angle;
             } else {
                 blob.add_pixel(pixel, spoke_angle);
