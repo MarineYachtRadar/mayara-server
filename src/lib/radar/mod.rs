@@ -394,7 +394,7 @@ impl RadarInfo {
         let legend = default_legend(&targets, doppler_levels, has_rain_class, pixel_values);
 
         let mut key = brand.to_prefix().to_string();
-        if let Some(serial_no) = serial_no {
+        if let Some(serial_no) = serial_no.filter(|s| !s.is_empty()) {
             key.push_str(&serial_no[serial_no.len().saturating_sub(4)..]);
         } else {
             write!(key, "{:04x}", addr.ip().to_bits() & 0xffff).unwrap();
