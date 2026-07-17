@@ -11,6 +11,10 @@
 use std::collections::HashMap;
 use std::f64::consts::TAU;
 
+/// Sentinel in `pixel_index` meaning "no blob owns this pixel". Blob ids
+/// start at 1 so 0 is always available as the "unowned" marker.
+const UNOWNED: u32 = 0;
+
 use crate::config::GuardZone;
 use crate::protos::RadarMessage::radar_message::Spoke;
 
@@ -127,13 +131,19 @@ impl SpokeArc {
     /// is the wrap-around gap via spoke 0 and the arc is the linear
     /// [min..=max] range) and wrap-around blobs (where the largest gap sits
     /// in the middle of the uncovered region and the arc straddles spoke 0).
-    fn from_blob(blob: &BlobInProgress, spokes_per_revolution: u16) -> SpokeArc {
+    fn from_blob(
+        blob: &BlobInProgress,
+        spokes_per_revolution: u16,
+        scratch: &mut Vec<u16>,
+    ) -> SpokeArc {
         debug_assert!(!blob.pixels.is_empty(), "blob must have at least one pixel");
         debug_assert!(spokes_per_revolution > 0);
 
-        let mut spokes: Vec<u16> = blob.pixels.iter().map(|p| p.spoke).collect();
-        spokes.sort_unstable();
-        spokes.dedup();
+        scratch.clear();
+        scratch.extend(blob.pixels.iter().map(|p| p.spoke));
+        scratch.sort_unstable();
+        scratch.dedup();
+        let spokes: &[u16] = scratch;
 
         if spokes.len() == 1 {
             return SpokeArc {
@@ -225,9 +235,22 @@ pub struct BlobDetector {
     next_blob_id: u32,
     /// Active blobs keyed by stable blob id so merges/removals don't invalidate references.
     active_blobs: HashMap<u32, BlobInProgress>,
-    /// Detector-wide spatial index: (spoke, pixel) -> id of the blob that owns that pixel.
-    /// Enables O(1) adjacency lookup independent of the number of active blobs.
-    pixel_index: HashMap<(u16, usize), u32>,
+    /// Detector-wide spatial index sized `spokes_per_revolution * current_spoke_len`,
+    /// indexed as `spoke * current_spoke_len + pixel`. Each cell stores the id of
+    /// the blob that owns that pixel, or `UNOWNED` (0) if none.
+    ///
+    /// A flat `Vec<u32>` is right for this dense, bounded coordinate space:
+    /// lookups and inserts are pointer arithmetic instead of tuple hashing, and
+    /// the peak footprint is bounded by the radar's spoke geometry (a few tens
+    /// of MiB at most) instead of scaling with the number of live pixels.
+    pixel_index: Vec<u32>,
+    /// Scratch buffers reused across `process_spoke` calls to keep the hot
+    /// path allocation-free after warm-up. Each is taken out via `mem::take`
+    /// at the start of the call, mutated freely alongside `&mut self`, and
+    /// put back at the end so its capacity survives.
+    adjacent_ids_scratch: Vec<u32>,
+    completed_ids_scratch: Vec<u32>,
+    spoke_arc_scratch: Vec<u16>,
     current_range: u32,
     current_spoke_len: usize,
     /// Cached guard zone configs for refresh on range change
@@ -255,9 +278,12 @@ impl BlobDetector {
             spokes_per_revolution,
             threshold,
             doppler_approaching_range,
-            next_blob_id: 0,
+            next_blob_id: 1,
             active_blobs: HashMap::new(),
-            pixel_index: HashMap::new(),
+            pixel_index: Vec::new(),
+            adjacent_ids_scratch: Vec::new(),
+            completed_ids_scratch: Vec::new(),
+            spoke_arc_scratch: Vec::new(),
             current_range: 0,
             current_spoke_len: 0,
             guard_zone_1: None,
@@ -416,14 +442,17 @@ impl BlobDetector {
 
                 neighbors
                     .iter()
-                    .any(|key| self.pixel_index.get(key).copied() != Some(blob.id))
+                    .any(|&(s, p)| self.pixel_owner(s, p) != blob.id)
             })
             .map(|p| (p.spoke, p.pixel))
             .collect()
     }
 
-    /// Return the set of blob ids whose pixels are 8-neighbors of (spoke, pixel_idx).
-    fn adjacent_blob_ids(&self, spoke: u16, pixel_idx: usize) -> Vec<u32> {
+    /// Fill `out` with the distinct blob ids whose pixels are 8-neighbors of
+    /// (spoke, pixel_idx). Cleared on entry so callers can hand in a scratch
+    /// buffer with retained capacity.
+    fn adjacent_blob_ids_into(&self, spoke: u16, pixel_idx: usize, out: &mut Vec<u32>) {
+        out.clear();
         let prev_spoke = if spoke == 0 {
             self.spokes_per_revolution - 1
         } else {
@@ -431,21 +460,60 @@ impl BlobDetector {
         };
         let next_spoke = (spoke + 1) % self.spokes_per_revolution;
 
-        let mut ids: Vec<u32> = Vec::new();
         for &s in &[prev_spoke, spoke, next_spoke] {
             for dp in [-1i64, 0, 1] {
                 let p = pixel_idx as i64 + dp;
                 if p < 0 {
                     continue;
                 }
-                if let Some(&id) = self.pixel_index.get(&(s, p as usize))
-                    && !ids.contains(&id)
-                {
-                    ids.push(id);
+                let id = self.pixel_owner(s, p as usize);
+                if id != UNOWNED && !out.contains(&id) {
+                    out.push(id);
                 }
             }
         }
-        ids
+    }
+
+    /// Allocate a blob id. Wraps on u32 exhaustion, skipping `UNOWNED` and
+    /// ids still present in `active_blobs`: a wrapped id that aliased a live
+    /// blob would overwrite its `active_blobs` entry and strand that blob's
+    /// `pixel_index` cells on a dead id. Long-lived blobs (a clutter ring
+    /// touching every bearing) can hold a low id indefinitely, so low ids
+    /// are not safe to reuse blindly.
+    fn alloc_blob_id(&mut self) -> u32 {
+        loop {
+            let id = self.next_blob_id;
+            self.next_blob_id = self.next_blob_id.wrapping_add(1);
+            if id != UNOWNED && !self.active_blobs.contains_key(&id) {
+                return id;
+            }
+        }
+    }
+
+    /// Flat-array index for `(spoke, pixel)`. Callers guarantee both fit
+    /// within `spokes_per_revolution` and `current_spoke_len`.
+    fn idx(&self, spoke: u16, pixel: usize) -> usize {
+        spoke as usize * self.current_spoke_len + pixel
+    }
+
+    /// Blob id owning `(spoke, pixel)`, or `UNOWNED` if none. Returns
+    /// `UNOWNED` for out-of-range pixels so neighbour walks don't need to
+    /// bounds-check the pixel axis separately.
+    fn pixel_owner(&self, spoke: u16, pixel: usize) -> u32 {
+        if pixel >= self.current_spoke_len {
+            return UNOWNED;
+        }
+        self.pixel_index[self.idx(spoke, pixel)]
+    }
+
+    fn set_pixel_owner(&mut self, spoke: u16, pixel: usize, id: u32) {
+        let i = self.idx(spoke, pixel);
+        self.pixel_index[i] = id;
+    }
+
+    fn clear_pixel(&mut self, spoke: u16, pixel: usize) {
+        let i = self.idx(spoke, pixel);
+        self.pixel_index[i] = UNOWNED;
     }
 
     /// Process a single spoke and return any completed blobs
@@ -460,7 +528,13 @@ impl BlobDetector {
             log::debug!("BlobDetector: range updated to {}m", self.current_range);
         }
         if spoke_len_changed {
+            // Pixel coordinates now index a different physical distance, so
+            // any in-progress blob and its spatial-index entries no longer
+            // describe the same object. Discard both and reallocate the
+            // spatial index to the new dimensions.
             self.current_spoke_len = spoke_len;
+            self.active_blobs.clear();
+            self.pixel_index = vec![UNOWNED; self.spokes_per_revolution as usize * spoke_len];
         }
         if range_changed || spoke_len_changed {
             self.refresh_guard_zones();
@@ -470,41 +544,38 @@ impl BlobDetector {
         // are defined relative to boat heading, not true north
         let spoke_angle = spoke.angle as u16 % self.spokes_per_revolution;
 
-        // Find strong pixels (strong return) and Doppler-approaching pixels.
-        // Doppler pixels have a distinct intensity value outside the normal return scale
-        // so they are collected alongside strong pixels regardless of threshold.
-        let mut strong_pixels: Vec<BlobPixel> = Vec::new();
+        // Take scratch buffers out of self so they can be mutated freely
+        // alongside `&mut self` calls in the pixel and completion loops.
+        // Put back at the end so their capacity is preserved for next spoke.
+        let mut adjacent_ids = std::mem::take(&mut self.adjacent_ids_scratch);
+        let mut completed_ids = std::mem::take(&mut self.completed_ids_scratch);
+        let mut spoke_arc_scratch = std::mem::take(&mut self.spoke_arc_scratch);
+
+        // Strong/Doppler pixels are detected and processed in one pass over
+        // spoke.data so the hot path needs no intermediate pixel buffer.
+        let doppler_range = self.doppler_approaching_range;
         for (pixel_idx, &intensity) in spoke.data.iter().enumerate() {
-            let is_doppler_approaching = self
-                .doppler_approaching_range
+            let is_doppler_approaching = doppler_range
                 .map(|(lo, hi)| intensity >= lo && intensity <= hi)
                 .unwrap_or(false);
-            if intensity >= self.threshold || is_doppler_approaching {
-                strong_pixels.push(BlobPixel {
-                    spoke: spoke_angle,
-                    pixel: pixel_idx,
-                    intensity,
-                });
+            if intensity < self.threshold && !is_doppler_approaching {
+                continue;
             }
-        }
+            let pixel = BlobPixel {
+                spoke: spoke_angle,
+                pixel: pixel_idx,
+                intensity,
+            };
 
-        // Process each strong pixel using the detector-level spatial index.
-        for pixel in strong_pixels {
-            let is_doppler_approaching = self
-                .doppler_approaching_range
-                .map(|(lo, hi)| pixel.intensity >= lo && pixel.intensity <= hi)
-                .unwrap_or(false);
-
-            let adjacent_ids = self.adjacent_blob_ids(pixel.spoke, pixel.pixel);
+            self.adjacent_blob_ids_into(pixel.spoke, pixel.pixel, &mut adjacent_ids);
 
             let target_id = match adjacent_ids.len() {
                 0 => {
-                    let id = self.next_blob_id;
-                    self.next_blob_id += 1;
+                    let id = self.alloc_blob_id();
                     let mut blob = BlobInProgress::new(id, pixel.clone());
                     blob.has_doppler_approaching = is_doppler_approaching;
                     self.active_blobs.insert(id, blob);
-                    self.pixel_index.insert((pixel.spoke, pixel.pixel), id);
+                    self.set_pixel_owner(pixel.spoke, pixel.pixel, id);
                     continue;
                 }
                 1 => adjacent_ids[0],
@@ -518,7 +589,7 @@ impl BlobDetector {
                             .remove(&id)
                             .expect("absorbed blob must exist");
                         for p in &absorbed.pixels {
-                            self.pixel_index.insert((p.spoke, p.pixel), survivor);
+                            self.set_pixel_owner(p.spoke, p.pixel, survivor);
                         }
                         self.active_blobs
                             .get_mut(&survivor)
@@ -534,16 +605,18 @@ impl BlobDetector {
                 .get_mut(&target_id)
                 .expect("target blob must exist");
             blob.has_doppler_approaching |= is_doppler_approaching;
-            let key = (pixel.spoke, pixel.pixel);
-            if self.pixel_index.get(&key).copied() == Some(target_id) {
-                // The pixel already belongs to this blob from an earlier
-                // revolution — possible only for a blob that never completes,
-                // e.g. a clutter ring touching every bearing. Re-pushing it
-                // would grow `pixels` without bound; just refresh liveness.
+            let (pxl_spoke, pxl_pixel) = (pixel.spoke, pixel.pixel);
+            let cell = pxl_spoke as usize * self.current_spoke_len + pxl_pixel;
+            if self.pixel_index[cell] == target_id {
+                // The pixel is already recorded in this blob: a long-lived
+                // blob re-touched on a later revolution (e.g. a clutter ring
+                // touching every bearing), or a merge above just reassigned
+                // this cell to the survivor. Re-pushing it would grow
+                // `pixels` without bound; just refresh liveness.
                 blob.last_spoke_with_addition = spoke_angle;
             } else {
                 blob.add_pixel(pixel, spoke_angle);
-                self.pixel_index.insert(key, target_id);
+                self.pixel_index[cell] = target_id;
             }
             // Checked on both paths: a merge can push the blob over the cap
             // even when the current pixel is a duplicate.
@@ -553,7 +626,7 @@ impl BlobDetector {
                     .remove(&target_id)
                     .expect("oversized blob must exist");
                 for p in &blob.pixels {
-                    self.pixel_index.remove(&(p.spoke, p.pixel));
+                    self.clear_pixel(p.spoke, p.pixel);
                 }
                 log::debug!(
                     "BlobDetector: discarded oversized blob with {} pixels",
@@ -568,27 +641,25 @@ impl BlobDetector {
         } else {
             spoke_angle - 1
         };
-        let completed_ids: Vec<u32> = self
-            .active_blobs
-            .iter()
-            .filter_map(|(&id, blob)| {
-                if blob.last_spoke_with_addition != spoke_angle
-                    && blob.last_spoke_with_addition != prev_spoke
-                {
-                    Some(id)
-                } else {
-                    None
-                }
-            })
-            .collect();
+        completed_ids.clear();
+        completed_ids.extend(self.active_blobs.iter().filter_map(|(&id, blob)| {
+            if blob.last_spoke_with_addition != spoke_angle
+                && blob.last_spoke_with_addition != prev_spoke
+            {
+                Some(id)
+            } else {
+                None
+            }
+        }));
 
         let mut completed: Vec<CompletedBlob> = Vec::new();
-        for id in completed_ids {
+        for &id in completed_ids.iter() {
             let blob = self
                 .active_blobs
                 .remove(&id)
                 .expect("completed blob must exist");
-            let spoke_arc = SpokeArc::from_blob(&blob, self.spokes_per_revolution);
+            let spoke_arc =
+                SpokeArc::from_blob(&blob, self.spokes_per_revolution, &mut spoke_arc_scratch);
             let size = self.calculate_size(&blob, &spoke_arc);
             let pixel_count = blob.pixels.len();
             let valid = pixel_count >= MIN_TARGET_PIXELS
@@ -618,9 +689,14 @@ impl BlobDetector {
             }
             // Drop this blob's entries from the detector-level spatial index.
             for p in &blob.pixels {
-                self.pixel_index.remove(&(p.spoke, p.pixel));
+                self.clear_pixel(p.spoke, p.pixel);
             }
         }
+
+        // Put scratch buffers back so their capacity survives to the next call.
+        self.adjacent_ids_scratch = adjacent_ids;
+        self.completed_ids_scratch = completed_ids;
+        self.spoke_arc_scratch = spoke_arc_scratch;
 
         completed
     }
@@ -657,7 +733,7 @@ mod tests {
     #[test]
     fn spoke_arc_single_spoke() {
         let blob = blob_from_spokes(&[42]);
-        let arc = SpokeArc::from_blob(&blob, 1024);
+        let arc = SpokeArc::from_blob(&blob, 1024, &mut Vec::new());
         assert_eq!(arc.extent, 1);
         assert_eq!(arc.center, 42);
     }
@@ -665,7 +741,7 @@ mod tests {
     #[test]
     fn spoke_arc_contiguous_no_wrap() {
         let blob = blob_from_spokes(&[100, 101, 102, 103, 104, 105, 106, 107, 108, 109]);
-        let arc = SpokeArc::from_blob(&blob, 1024);
+        let arc = SpokeArc::from_blob(&blob, 1024, &mut Vec::new());
         assert_eq!(arc.extent, 10);
         assert_eq!(arc.center, 105);
     }
@@ -675,7 +751,7 @@ mod tests {
         // Blob spans spokes 1018..=1023, 0, 1, 2 in a 1024-spoke revolution.
         // Smallest covering arc is 9 spokes long, centered ~1022.
         let blob = blob_from_spokes(&[1018, 1019, 1020, 1021, 1022, 1023, 0, 1, 2]);
-        let arc = SpokeArc::from_blob(&blob, 1024);
+        let arc = SpokeArc::from_blob(&blob, 1024, &mut Vec::new());
         assert_eq!(arc.extent, 9);
         assert_eq!(arc.center, 1022);
     }
@@ -686,7 +762,7 @@ mod tests {
         // (spokes 1020..=1023, no spoke 0). This is still a non-wrapping
         // blob: the arc is [1020, 1023].
         let blob = blob_from_spokes(&[1020, 1021, 1022, 1023]);
-        let arc = SpokeArc::from_blob(&blob, 1024);
+        let arc = SpokeArc::from_blob(&blob, 1024, &mut Vec::new());
         assert_eq!(arc.extent, 4);
         assert_eq!(arc.center, 1022);
     }
@@ -695,7 +771,7 @@ mod tests {
     fn spoke_arc_starts_at_zero() {
         // Blob starts at spoke 0 going up. Non-wrapping: arc is [0, 3].
         let blob = blob_from_spokes(&[0, 1, 2, 3]);
-        let arc = SpokeArc::from_blob(&blob, 1024);
+        let arc = SpokeArc::from_blob(&blob, 1024, &mut Vec::new());
         assert_eq!(arc.extent, 4);
         assert_eq!(arc.center, 2);
     }
@@ -713,7 +789,7 @@ mod tests {
             },
             11,
         );
-        let arc = SpokeArc::from_blob(&blob, 1024);
+        let arc = SpokeArc::from_blob(&blob, 1024, &mut Vec::new());
         assert_eq!(arc.extent, 3);
         assert_eq!(arc.center, 11);
     }
@@ -731,7 +807,7 @@ mod tests {
         // 8192 - 8174 = 18, wrapping through 0 to 5. Center sits 9 spokes
         // forward of 8180, which is spoke 8189.
         let blob = blob_from_spokes(&[8180, 8185, 8190, 0, 5]);
-        let arc = SpokeArc::from_blob(&blob, 8192);
+        let arc = SpokeArc::from_blob(&blob, 8192, &mut Vec::new());
         assert_eq!(arc.extent, 18);
         assert_eq!(arc.center, 8189);
     }
@@ -741,7 +817,7 @@ mod tests {
         // Exactly the spokes 8191 and 0 in an 8192-spoke revolution. Arc
         // must be 2 spokes long, not 8192.
         let blob = blob_from_spokes(&[8191, 0]);
-        let arc = SpokeArc::from_blob(&blob, 8192);
+        let arc = SpokeArc::from_blob(&blob, 8192, &mut Vec::new());
         assert_eq!(arc.extent, 2);
         // Arc starts at 8191 (the spoke after the largest empty gap from
         // 0 forward to 8191, which is 8190 empty slots). Center =
@@ -754,6 +830,15 @@ mod tests {
     const STRONG_RETURN: u8 = 15;
     /// Range in meters for synthetic test spokes.
     const TEST_RANGE_M: u32 = 1000;
+
+    /// Number of pixel_index cells claimed by any blob.
+    fn occupied_cells(detector: &BlobDetector) -> usize {
+        detector
+            .pixel_index
+            .iter()
+            .filter(|&&id| id != UNOWNED)
+            .count()
+    }
 
     fn spoke_with(angle: u16, len: usize, strong: &[usize]) -> Spoke {
         let mut data = vec![0u8; len];
@@ -787,7 +872,7 @@ mod tests {
         assert_eq!(detector.active_blobs.len(), 1);
         let ring = detector.active_blobs.values().next().unwrap();
         assert_eq!(ring.pixels.len(), SPOKES as usize);
-        assert_eq!(detector.pixel_index.len(), SPOKES as usize);
+        assert_eq!(occupied_cells(&detector), SPOKES as usize);
     }
 
     #[test]
@@ -812,7 +897,7 @@ mod tests {
         }
 
         assert_eq!(completions, 3);
-        assert_eq!(detector.pixel_index.len(), SPOKES as usize);
+        assert_eq!(occupied_cells(&detector), SPOKES as usize);
     }
 
     #[test]
@@ -835,7 +920,69 @@ mod tests {
                 .values()
                 .all(|b| b.pixels.len() <= MAX_BLOB_PIXELS)
         );
-        assert!(detector.pixel_index.len() <= MAX_BLOB_PIXELS + 1);
+        assert!(occupied_cells(&detector) <= MAX_BLOB_PIXELS + 1);
+    }
+
+    #[test]
+    fn blob_id_rollover_skips_unowned_and_active_ids() {
+        // After 2^32 allocations the id counter wraps. A wrapped id must not
+        // become UNOWNED (its cells would read as free) or alias a still-active
+        // blob (whose active_blobs entry would be overwritten, stranding its
+        // cells on a dead id and panicking the next adjacency hit).
+        const SPOKES: u16 = 64;
+        let mut detector = BlobDetector::new(SPOKES, 10, None);
+
+        // An immortal ring keeps one low blob id alive across the rollover.
+        for angle in 0..SPOKES {
+            let _ = detector.process_spoke(&spoke_with(angle, 512, &[5]));
+        }
+        let ring_id = *detector.active_blobs.keys().next().unwrap();
+
+        // Park the counter at the wrap point, then keep scanning with an
+        // isolated pixel that allocates a fresh blob each revolution.
+        detector.next_blob_id = u32::MAX;
+        for _rev in 0..3 {
+            for angle in 0..SPOKES {
+                let strong: &[usize] = if angle == 20 { &[5, 200] } else { &[5] };
+                let _ = detector.process_spoke(&spoke_with(angle, 512, strong));
+            }
+        }
+
+        // The ring survived the rollover and every owned cell still resolves
+        // to a live blob.
+        assert!(detector.active_blobs.contains_key(&ring_id));
+        for &id in detector.pixel_index.iter().filter(|&&id| id != UNOWNED) {
+            assert!(detector.active_blobs.contains_key(&id));
+        }
+    }
+
+    #[test]
+    fn spoke_len_change_resets_spatial_state() {
+        // A range change that alters spoke length reshuffles what each
+        // (spoke, pixel) coordinate refers to physically. Any in-progress
+        // blob must be discarded so a subsequent adjacency check can't
+        // mis-associate a pixel with a blob from the previous range.
+        const SPOKES: u16 = 64;
+        let mut detector = BlobDetector::new(SPOKES, 10, None);
+
+        // Seed a persistent ring at spoke_len 512 so a blob is live in
+        // active_blobs and pixel_index.
+        for angle in 0..SPOKES {
+            let _ = detector.process_spoke(&spoke_with(angle, 512, &[5]));
+        }
+        assert!(!detector.active_blobs.is_empty());
+        assert!(occupied_cells(&detector) > 0);
+
+        // First spoke at a new spoke_len must trigger the reset.
+        let _ = detector.process_spoke(&spoke_with(0, 1024, &[]));
+
+        assert!(detector.active_blobs.is_empty());
+        assert_eq!(occupied_cells(&detector), 0);
+        assert_eq!(
+            detector.pixel_index.len(),
+            SPOKES as usize * 1024,
+            "spatial index must be sized for the new spoke length"
+        );
     }
 
     #[test]
