@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **raymarine:** wake, control and power radars behind an Axiom (#427) ([PR #427](https://github.com/MarineYachtRadar/mayara-server/pull/427))
 
+### Changed
+
+- **target:** reduce ARPA CPU usage ~3.5x (#444) ([PR #444](https://github.com/MarineYachtRadar/mayara-server/pull/444))
+
 ### Fixed
 
 - **raymarine:** surface discovered radars so an asleep Quantum is visible (#422) ([PR #422](https://github.com/MarineYachtRadar/mayara-server/pull/422))
