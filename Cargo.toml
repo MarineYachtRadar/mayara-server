@@ -117,7 +117,6 @@ windows = { version = "0.62.2", features = ["Win32_NetworkManagement_IpHelper", 
 
 [build-dependencies]
 protobuf-codegen = "3.7.2"
-openssl = { version = "0.10", features = ["vendored"] }
 reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls", "blocking"] }
 rust-embed = { version = "8.11.0", features = ["axum","interpolate-folder-path"] }
 
