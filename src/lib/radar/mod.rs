@@ -9,7 +9,7 @@ use serde_json::Value;
 use std::cmp::{max, min};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt::{self, Display, Write},
     net::{Ipv4Addr, SocketAddrV4},
     sync::{
@@ -342,6 +342,12 @@ pub struct RadarInfo {
     pub stationary: bool,                // Is radar stationary (shore-based)?
     rotation_timestamp: Instant,
 
+    /// Display name reported by the radar itself (Navico 0xC406 NAME tag), with
+    /// the trailing marker stripped. `None` until the radar reports one. Drives
+    /// [`SharedRadars::refresh_user_names`] so radars reporting the same name are
+    /// disambiguated by a minimal suffix of their technical key.
+    pub(crate) reported_name: Option<String>,
+
     // Channels
     /// Serialized RadarMessage broadcast to subscribers (spoke WS clients,
     /// `--output` stdout forwarder, recording manager). Carried as `Bytes`
@@ -414,6 +420,7 @@ impl RadarInfo {
             brand,
             serial_no: serial_no.map(String::from),
             dual: dual.map(String::from),
+            reported_name: None,
             pixel_values,
             spokes_per_revolution: spokes_per_revolution as u16,
             max_spoke_len: max_spoke_len as u16,
@@ -701,6 +708,26 @@ impl Display for RadarInfo {
 /// handler), but larger headroom reduces the chance of visible gaps.
 const SK_CLIENT_CHANNEL_CAPACITY: usize = 128;
 
+/// The last `n` characters of `s` (fewer if `s` is shorter).
+fn suffix_chars(s: &str, n: usize) -> String {
+    let count = s.chars().count();
+    s.chars().skip(count.saturating_sub(n)).collect()
+}
+
+/// Smallest `n` for which the `n`-character suffixes of all `keys` are
+/// distinct. Keys are globally unique, so a distinguishing length always
+/// exists within the longest key.
+fn distinguishing_suffix_len(keys: &[&str]) -> usize {
+    let max_len = keys.iter().map(|k| k.chars().count()).max().unwrap_or(1);
+    (1..=max_len)
+        .find(|&n| {
+            let mut seen = HashSet::new();
+            keys.iter().all(|k| seen.insert(suffix_chars(k, n)))
+        })
+        .unwrap_or(max_len)
+        .max(1)
+}
+
 #[derive(Clone)]
 pub struct SharedRadars {
     radars: Arc<RwLock<Radars>>,
@@ -814,6 +841,45 @@ impl SharedRadars {
     pub fn have_discovered(&self) -> bool {
         let radars = self.radars.read().unwrap();
         !radars.info.is_empty()
+    }
+
+    /// Recompute the `UserName` control for every radar that has reported a name
+    /// (see [`RadarInfo::reported_name`]). A radar whose reported name is unique
+    /// gets that name verbatim; radars sharing a reported name are disambiguated
+    /// by appending the shortest suffix of their technical key that tells them
+    /// apart (in practice a single character — "A"/"B" for a dual-range antenna
+    /// pair, or a serial digit when two separate radars carry the same name).
+    /// Radars that never report a name keep their existing `UserName`.
+    pub(crate) fn refresh_user_names(&self) {
+        let assignments: Vec<(SharedControls, String)> = {
+            let radars = self.radars.read().unwrap();
+
+            let mut groups: HashMap<&str, Vec<&RadarInfo>> = HashMap::new();
+            for info in radars.info.values() {
+                if let Some(base) = info.reported_name.as_deref() {
+                    groups.entry(base).or_default().push(info);
+                }
+            }
+
+            let mut assignments = Vec::new();
+            for (base, infos) in groups {
+                if infos.len() == 1 {
+                    assignments.push((infos[0].controls.clone(), base.to_string()));
+                    continue;
+                }
+                let keys: Vec<&str> = infos.iter().map(|i| i.key.as_str()).collect();
+                let suffix_len = distinguishing_suffix_len(&keys);
+                for info in infos {
+                    let suffix = suffix_chars(&info.key, suffix_len);
+                    assignments.push((info.controls.clone(), format!("{base} {suffix}")));
+                }
+            }
+            assignments
+        };
+
+        for (controls, name) in assignments {
+            let _ = controls.set_string(&ControlId::UserName, name);
+        }
     }
 
     #[allow(dead_code)]
@@ -1363,6 +1429,10 @@ impl CommonRadar {
 
     pub(crate) fn update(&mut self) {
         self.radars.update(&mut self.info);
+    }
+
+    pub(crate) fn refresh_user_names(&self) {
+        self.radars.refresh_user_names();
     }
 
     //
@@ -2063,6 +2133,36 @@ fn apply_antenna_offset(
 mod tests {
     use super::*;
     use axum::response::IntoResponse;
+
+    #[test]
+    fn suffix_chars_takes_tail() {
+        assert_eq!(suffix_chars("Navico1234A", 1), "A");
+        assert_eq!(suffix_chars("Navico1234A", 4), "234A");
+        assert_eq!(suffix_chars("AB", 5), "AB");
+        assert_eq!(suffix_chars("", 3), "");
+    }
+
+    #[test]
+    fn distinguishing_suffix_len_dual_range_pair() {
+        // A dual-range antenna pair differs only in the trailing A/B.
+        assert_eq!(
+            distinguishing_suffix_len(&["Navico1234A", "Navico1234B"]),
+            1
+        );
+    }
+
+    #[test]
+    fn distinguishing_suffix_len_separate_radars() {
+        // Two separate radars share the brand prefix but differ in serial.
+        assert_eq!(distinguishing_suffix_len(&["Navico1234", "Navico5678"]), 1);
+        // Serials that share their tail need a longer suffix to separate.
+        assert_eq!(distinguishing_suffix_len(&["Navico1234", "Navico5234"]), 4);
+    }
+
+    #[test]
+    fn distinguishing_suffix_len_single_key() {
+        assert_eq!(distinguishing_suffix_len(&["Navico1234"]), 1);
+    }
 
     #[test]
     fn legend() {

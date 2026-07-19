@@ -1164,14 +1164,18 @@ impl NavicoReportReceiver {
 
             match tag {
                 installation_tag::NAME => {
-                    if let Some(name) = c_string(payload)
-                        && !name.is_empty()
-                    {
-                        let _ = self
-                            .common
-                            .info
-                            .controls
-                            .set_string(&ControlId::UserName, name.to_string());
+                    // The radar reports its name with a trailing ';' marker; strip
+                    // it (and surrounding whitespace). Store the cleaned name so
+                    // radars sharing the same name can be disambiguated globally.
+                    if let Some(name) = c_string(payload) {
+                        let base = name.trim().trim_end_matches(';').trim();
+                        if !base.is_empty()
+                            && self.common.info.reported_name.as_deref() != Some(base)
+                        {
+                            self.common.info.reported_name = Some(base.to_string());
+                            self.common.update();
+                            self.common.refresh_user_names();
+                        }
                     }
                 }
                 installation_tag::ANTENNA_GEOMETRY if payload.len() >= 14 => {
