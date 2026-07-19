@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **clippy:** clean up 79 warnings from clippy 1.97 (#438) ([PR #438](https://github.com/MarineYachtRadar/mayara-server/pull/438))
 - **target:** bound blob detector memory for never-completing blobs (#435) ([PR #435](https://github.com/MarineYachtRadar/mayara-server/pull/435))
 - **navico:** clean and disambiguate radar names (#451) ([PR #451](https://github.com/MarineYachtRadar/mayara-server/pull/451))
+- **locator:** survive UDP recv errors on Windows (#449) ([PR #449](https://github.com/MarineYachtRadar/mayara-server/pull/449))
 
 ## [3.6.0] - 2026-06-19
 
