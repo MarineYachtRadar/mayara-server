@@ -28,6 +28,9 @@ use crate::{Brand, Cli, InterfaceApi, InterfaceId, InterfaceStatus, RadarInterfa
 // instead of being truncated.
 const LOCATOR_PACKET_BUFFER_LEN: usize = 2048;
 
+// Windows raw OS error for a datagram larger than the recv buffer.
+const WSAEMSGSIZE: i32 = 10040;
+
 // An Axiom wakes a radar with a burst of WOL packets roughly 20 ms apart, not
 // a single datagram — multicast to a dozing WiFi radar is lossy, so singles
 // are routinely missed. Space consecutive beacon-request packets the same way.
@@ -615,20 +618,22 @@ fn spawn_receive(set: &mut JoinSet<Result<ResultType, RadarError>>, mut socket: 
             match res {
                 Ok((_, addr)) => match addr {
                     SocketAddr::V4(addr) => return Ok(ResultType::Locator(socket, addr, buf)),
+                    // Radars are IPv4 only; ignore unrelated IPv6 traffic on the
+                    // port and keep receiving instead of dropping the socket.
                     SocketAddr::V6(addr) => {
-                        return Err(RadarError::InterfaceNoV4(format!("{}", addr)));
+                        log::debug!("{}: ignoring IPv6 packet from {}", socket.nic_addr, addr);
                     }
                 },
                 // Windows-specific recoverable UDP recv errors; the socket is
                 // still usable, so keep receiving instead of dropping it:
                 // - ConnectionReset (WSAECONNRESET): an earlier send from this
                 //   socket triggered an ICMP port unreachable.
-                // - WSAEMSGSIZE (10040): a datagram larger than the buffer,
-                //   e.g. unrelated traffic sharing the port; Unix truncates
+                // - WSAEMSGSIZE: a datagram larger than the buffer, e.g.
+                //   unrelated traffic sharing the port; Unix truncates
                 //   silently, Windows fails the recv.
                 Err(e)
                     if e.kind() == io::ErrorKind::ConnectionReset
-                        || e.raw_os_error() == Some(10040) =>
+                        || e.raw_os_error() == Some(WSAEMSGSIZE) =>
                 {
                     log::debug!(
                         "{}: ignoring recoverable UDP recv error: {}",
