@@ -419,6 +419,7 @@ impl RaymarineReportReceiver {
                 r = self.report_socket.as_mut().unwrap().recv_buf_from(&mut buf)  => {
                     match r {
                         Ok((_len, _addr)) => {
+                            self.common.info.mark_input();
                             if buf.len() == buf.capacity() {
                                 let old = buf.capacity();
                                 buf.reserve(1024);

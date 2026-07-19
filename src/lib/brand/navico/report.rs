@@ -575,6 +575,7 @@ impl NavicoReportReceiver {
                 r = self.report_socket.as_mut().unwrap().recv_buf_from(&mut self.report_buf)  => {
                     match r {
                         Ok((_len, _addr)) => {
+                            self.common.info.mark_input();
                             if let Err(e) = self.process_report().await {
                                 log::error!("{}: {}", self.common.key, e);
                             }

@@ -13,8 +13,8 @@ use std::{
     fmt::{self, Display, Write},
     net::{Ipv4Addr, SocketAddrV4},
     sync::{
-        Arc, RwLock,
-        atomic::{AtomicBool, Ordering},
+        Arc, LazyLock, RwLock,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
 use thiserror::Error;
@@ -311,6 +311,15 @@ impl fmt::Display for GeoPosition {
     }
 }
 
+/// Monotonic epoch for the cheap `AtomicU64` millisecond timestamps shared
+/// across `RadarInfo` clones (see [`RadarInfo::last_input`]). `Instant` is not
+/// itself storable in an atomic, so timestamps are milliseconds since this base.
+static RADAR_EPOCH: LazyLock<Instant> = LazyLock::new(Instant::now);
+
+fn now_millis() -> u64 {
+    RADAR_EPOCH.elapsed().as_millis() as u64
+}
+
 #[derive(Clone, Debug)]
 pub struct RadarInfo {
     key: String,
@@ -367,6 +376,14 @@ pub struct RadarInfo {
     /// load/store contract stays narrow; callers use `is_idle()` and
     /// `wake_up()` below.
     is_idle: Arc<AtomicBool>,
+
+    /// Milliseconds since [`RADAR_EPOCH`] of the last packet received from this
+    /// radar on its report socket. A powered-off radar stops sending, so the
+    /// central watchdog (`mark_silent_radars_off`) decays its power state to
+    /// `Off` after [`SharedRadars::RADAR_SILENCE_TIMEOUT`]. Shared via `Arc` so
+    /// brand receivers (which hold a clone) and the watchdog (reading the map)
+    /// observe the same value. Updated via `mark_input`, read via `input_silence`.
+    last_input: Arc<AtomicU64>,
 }
 
 impl RadarInfo {
@@ -444,6 +461,9 @@ impl RadarInfo {
             // frames; the data_loop's periodic re-check will flip it once
             // power and subscriber count have settled.
             is_idle: Arc::new(AtomicBool::new(false)),
+            // Seed with "now" so a freshly discovered radar isn't immediately
+            // considered silent before its first report arrives.
+            last_input: Arc::new(AtomicU64::new(now_millis())),
         };
 
         log::trace!("Created RadarInfo {:?}", info);
@@ -480,6 +500,18 @@ impl RadarInfo {
     /// periodic refresh; external callers should prefer `wake_up()`.
     pub(crate) fn set_idle(&self, idle: bool) {
         self.is_idle.store(idle, Ordering::Relaxed);
+    }
+
+    /// Record that a packet was just received from this radar. Brand report
+    /// receivers call this on every report-socket receive; the watchdog reads
+    /// [`input_silence`](Self::input_silence) to detect a radar gone silent.
+    pub(crate) fn mark_input(&self) {
+        self.last_input.store(now_millis(), Ordering::Relaxed);
+    }
+
+    /// How long it has been since the last packet was received from this radar.
+    pub(crate) fn input_silence(&self) -> Duration {
+        Duration::from_millis(now_millis().saturating_sub(self.last_input.load(Ordering::Relaxed)))
     }
 
     /// Recompute the idle flag from this radar's live power state and spoke
@@ -820,6 +852,38 @@ impl SharedRadars {
             > 0
     }
 
+    /// A radar is considered powered off once no packet has been received from
+    /// it for this long. A standby radar still emits periodic status reports, so
+    /// only a genuinely silent (powered-off or disconnected) radar decays to
+    /// [`Power::Off`]. See issue #432.
+    pub(crate) const RADAR_SILENCE_TIMEOUT: Duration = Duration::from_secs(30);
+
+    /// Decay the power state of any radar gone silent to [`Power::Off`], so the
+    /// GUI reflects a powered-off radar instead of holding its last reported
+    /// state. Called on a fixed cadence by the radar watchdog. The next report
+    /// from a radar that comes back overwrites this with its real state.
+    pub(crate) fn mark_silent_radars_off(&self) {
+        let radars = self.radars.read().unwrap();
+        for info in radars.info.values() {
+            let current = info
+                .controls
+                .get(&ControlId::Power)
+                .and_then(|c| c.value)
+                .map(|v| v as i32);
+            if !should_power_off(info.input_silence(), current) {
+                continue;
+            }
+            log::debug!(
+                "{}: no data for {}s, marking powered off",
+                info.key,
+                info.input_silence().as_secs()
+            );
+            let _ = info
+                .controls
+                .set_value(&ControlId::Power, Value::from(Power::Off as i32));
+        }
+    }
+
     ///
     /// Return every radar that has been discovered, including those that have
     /// not yet reported their ranges. Use this where a radar should surface as
@@ -1098,6 +1162,16 @@ impl Power {
 pub(crate) fn should_idle(power: Option<i32>, spoke_receiver_count: usize) -> bool {
     let standby = power.map(|p| p == Power::Standby as i32).unwrap_or(false);
     standby && spoke_receiver_count == 0
+}
+
+/// Decide whether a radar that has been silent for `silence` should have its
+/// power state forced to [`Power::Off`]. True once the silence reaches
+/// [`SharedRadars::RADAR_SILENCE_TIMEOUT`] and the radar is not already Off.
+/// `current_power` is `None` when the Power control has never been reported —
+/// still forced Off, since a radar that has said nothing at all for that long
+/// is powered off from the operator's point of view.
+fn should_power_off(silence: Duration, current_power: Option<i32>) -> bool {
+    silence >= SharedRadars::RADAR_SILENCE_TIMEOUT && current_power != Some(Power::Off as i32)
 }
 
 // The actual values are not arbitrary: these are the exact values as reported
@@ -2249,6 +2323,40 @@ mod tests {
         // know its state. Default to processing frames so we never blank
         // the PPI for a viewer that connects very early in startup.
         assert!(!should_idle(None, 0));
+    }
+
+    #[test]
+    fn should_power_off_no_before_timeout() {
+        let recent = SharedRadars::RADAR_SILENCE_TIMEOUT - Duration::from_secs(1);
+        assert!(!should_power_off(recent, Some(Power::Transmit as i32)));
+        assert!(!should_power_off(recent, Some(Power::Standby as i32)));
+    }
+
+    #[test]
+    fn should_power_off_yes_from_transmit_and_standby_after_timeout() {
+        // A silent radar decays to Off from any live state, including Standby.
+        assert!(should_power_off(
+            SharedRadars::RADAR_SILENCE_TIMEOUT,
+            Some(Power::Transmit as i32)
+        ));
+        assert!(should_power_off(
+            SharedRadars::RADAR_SILENCE_TIMEOUT,
+            Some(Power::Standby as i32)
+        ));
+    }
+
+    #[test]
+    fn should_power_off_no_when_already_off() {
+        assert!(!should_power_off(
+            SharedRadars::RADAR_SILENCE_TIMEOUT * 10,
+            Some(Power::Off as i32)
+        ));
+    }
+
+    #[test]
+    fn should_power_off_yes_when_power_never_reported() {
+        // A radar that has said nothing at all for the whole timeout is off.
+        assert!(should_power_off(SharedRadars::RADAR_SILENCE_TIMEOUT, None));
     }
 
     mod test_helpers {

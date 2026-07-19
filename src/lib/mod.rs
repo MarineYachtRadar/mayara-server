@@ -640,6 +640,29 @@ pub async fn start_session(
         },
     ));
 
+    // Decay a radar's power state to Off once it stops sending (issue #432): a
+    // powered-off radar goes silent, so without this its GUI icon would hold the
+    // last state it reported (standby/transmit) forever.
+    let watchdog_radars = radars.clone();
+    subsystem.start(SubsystemBuilder::new(
+        "Radar Watchdog",
+        async move |subsys: &mut SubsystemHandle| {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+            loop {
+                tokio::select! { biased;
+                    _ = subsys.on_shutdown_requested() => {
+                        log::debug!("Radar watchdog shutdown");
+                        break;
+                    },
+                    _ = interval.tick() => {
+                        watchdog_radars.mark_silent_radars_off();
+                    }
+                }
+            }
+            Ok::<(), miette::Report>(())
+        },
+    ));
+
     let locator = Locator::new(args.clone(), radars.clone());
 
     let (tx_ip_change, _rx_ip_change) = broadcast::channel(1);
