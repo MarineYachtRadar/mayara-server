@@ -22,7 +22,14 @@ use crate::brand::{LocatorId, RadarLocator, create_brand_listeners};
 use crate::radar::{RadarError, SharedRadars};
 use crate::{Brand, Cli, InterfaceApi, InterfaceId, InterfaceStatus, RadarInterfaceApi, network};
 
-const LOCATOR_PACKET_BUFFER_LEN: usize = 300; // Long enough for any location packet
+// Long enough for any locator packet, with headroom for unrelated traffic
+// sharing the port (e.g. nav data broadcasts on Furuno's UDP 10010): on
+// Windows a datagram larger than the buffer fails the recv with WSAEMSGSIZE
+// instead of being truncated.
+const LOCATOR_PACKET_BUFFER_LEN: usize = 2048;
+
+// Windows raw OS error for a datagram larger than the recv buffer.
+const WSAEMSGSIZE: i32 = 10040;
 
 // An Axiom wakes a radar with a burst of WOL packets roughly 20 ms apart, not
 // a single datagram — multicast to a dozing WiFi radar is lossy, so singles
@@ -604,14 +611,38 @@ fn spawn_interface_request_handler(
 fn spawn_receive(set: &mut JoinSet<Result<ResultType, RadarError>>, mut socket: LocatorSocket) {
     set.spawn(async move {
         let mut buf: Vec<u8> = Vec::with_capacity(LOCATOR_PACKET_BUFFER_LEN);
-        let res = socket.sock.recv_buf_from(&mut buf).await;
+        loop {
+            buf.clear();
+            let res = socket.sock.recv_buf_from(&mut buf).await;
 
-        match res {
-            Ok((_, addr)) => match addr {
-                SocketAddr::V4(addr) => Ok(ResultType::Locator(socket, addr, buf)),
-                SocketAddr::V6(addr) => Err(RadarError::InterfaceNoV4(format!("{}", addr))),
-            },
-            Err(e) => Err(RadarError::Io(e)),
+            match res {
+                Ok((_, addr)) => match addr {
+                    SocketAddr::V4(addr) => return Ok(ResultType::Locator(socket, addr, buf)),
+                    // Radars are IPv4 only; ignore unrelated IPv6 traffic on the
+                    // port and keep receiving instead of dropping the socket.
+                    SocketAddr::V6(addr) => {
+                        log::debug!("{}: ignoring IPv6 packet from {}", socket.nic_addr, addr);
+                    }
+                },
+                // Windows-specific recoverable UDP recv errors; the socket is
+                // still usable, so keep receiving instead of dropping it:
+                // - ConnectionReset (WSAECONNRESET): an earlier send from this
+                //   socket triggered an ICMP port unreachable.
+                // - WSAEMSGSIZE: a datagram larger than the buffer, e.g.
+                //   unrelated traffic sharing the port; Unix truncates
+                //   silently, Windows fails the recv.
+                Err(e)
+                    if e.kind() == io::ErrorKind::ConnectionReset
+                        || e.raw_os_error() == Some(WSAEMSGSIZE) =>
+                {
+                    log::debug!(
+                        "{}: ignoring recoverable UDP recv error: {}",
+                        socket.nic_addr,
+                        e
+                    );
+                }
+                Err(e) => return Err(RadarError::Io(e)),
+            }
         }
     });
 }
