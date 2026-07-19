@@ -369,6 +369,29 @@ pub struct RadarInfo {
     is_idle: Arc<AtomicBool>,
 }
 
+/// Build the stable per-radar key: the brand prefix, a four-character
+/// discriminator, and the optional dual-range suffix. The discriminator is the
+/// last four characters of the serial number, or the low 16 bits of the radar
+/// IP when the serial number is absent *or* empty — so radars reporting an
+/// all-zero serial (e.g. Furuno NavNet 3D DRS units) fall back to the IP and
+/// each gets a distinct key instead of colliding on the bare prefix.
+fn radar_key(
+    prefix: &str,
+    serial_no: Option<&str>,
+    dual: Option<&str>,
+    addr: &SocketAddrV4,
+) -> String {
+    let mut key = prefix.to_string();
+    match serial_no.filter(|s| !s.is_empty()) {
+        Some(serial_no) => key.push_str(&serial_no[serial_no.len().saturating_sub(4)..]),
+        None => write!(key, "{:04x}", addr.ip().to_bits() & 0xffff).unwrap(),
+    }
+    if let Some(dual) = dual {
+        key.push_str(dual);
+    }
+    key
+}
+
 impl RadarInfo {
     #[allow(clippy::too_many_arguments)] // every radar field comes flat from per-brand discovery; the brands are the only callers
     pub fn new<F>(
@@ -399,15 +422,11 @@ impl RadarInfo {
         let has_rain_class = false;
         let legend = default_legend(&targets, doppler_levels, has_rain_class, pixel_values);
 
-        let mut key = brand.to_prefix().to_string();
-        if let Some(serial_no) = serial_no {
-            key.push_str(&serial_no[serial_no.len().saturating_sub(4)..]);
-        } else {
-            write!(key, "{:04x}", addr.ip().to_bits() & 0xffff).unwrap();
-        }
-        if let Some(dual) = dual {
-            key.push_str(dual);
-        }
+        // Normalize an empty serial to absent so both the key and the stored
+        // `serial_no` field treat it the same way (avoids a `Some("")` that
+        // later code guards with `is_some()` would mishandle).
+        let serial_no = serial_no.filter(|s| !s.is_empty());
+        let key = radar_key(brand.to_prefix(), serial_no, dual, &addr);
 
         let sk_client_tx = radars.radars.read().unwrap().sk_client_tx.clone();
         let controls = controls_fn(key.clone(), sk_client_tx);
@@ -2133,6 +2152,45 @@ fn apply_antenna_offset(
 mod tests {
     use super::*;
     use axum::response::IntoResponse;
+
+    fn test_addr() -> SocketAddrV4 {
+        // 10.0.1.2 -> low 16 bits 0x0102
+        SocketAddrV4::new(Ipv4Addr::new(10, 0, 1, 2), 6878)
+    }
+
+    #[test]
+    fn radar_key_uses_serial_tail() {
+        assert_eq!(
+            radar_key("fur", Some("1403302452"), None, &test_addr()),
+            "fur2452"
+        );
+        // Serials shorter than four characters are used in full.
+        assert_eq!(radar_key("fur", Some("12"), None, &test_addr()), "fur12");
+    }
+
+    #[test]
+    fn radar_key_falls_back_to_ip_without_serial() {
+        // Both an absent and an empty serial derive the key from the IP.
+        assert_eq!(radar_key("fur", None, None, &test_addr()), "fur0102");
+        assert_eq!(radar_key("fur", Some(""), None, &test_addr()), "fur0102");
+    }
+
+    #[test]
+    fn radar_key_appends_dual_suffix() {
+        assert_eq!(
+            radar_key("nav", Some("1403302452"), Some("A"), &test_addr()),
+            "nav2452A"
+        );
+        // Two empty-serial radars on the same IP stay distinct via the suffix.
+        assert_eq!(
+            radar_key("fur", Some(""), Some("A"), &test_addr()),
+            "fur0102A"
+        );
+        assert_eq!(
+            radar_key("fur", Some(""), Some("B"), &test_addr()),
+            "fur0102B"
+        );
+    }
 
     #[test]
     fn suffix_chars_takes_tail() {
