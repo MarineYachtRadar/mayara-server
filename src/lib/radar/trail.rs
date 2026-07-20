@@ -51,13 +51,18 @@ impl TrailBuffer {
         );
 
         let legend = info.get_legend();
-        let mut minimal_legend_value = 0;
-        if let Some(control) = info.controls.get(&ControlId::DopplerTrailsOnly)
-            && let Some(value) = control.value
-        {
-            let value = value > 0.;
-            minimal_legend_value = Self::compute_minimal_legend_value(&legend, value);
-        }
+        // Lowest legend index that counts as an echo worth trailing: the
+        // strong-return threshold normally, or the first Doppler index when
+        // DopplerTrailsOnly is on. This must never be 0 — the transparent
+        // no-echo value (0) would then seed a trail on every empty pixel and
+        // paint the whole background with history colours.
+        let doppler_only = info
+            .controls
+            .get(&ControlId::DopplerTrailsOnly)
+            .and_then(|c| c.value)
+            .map(|value| value > 0.)
+            .unwrap_or(false);
+        let minimal_legend_value = Self::compute_minimal_legend_value(&legend, doppler_only);
 
         TrailBuffer {
             target_mode: TargetMode::Trails,
@@ -175,14 +180,24 @@ impl TrailBuffer {
         self.rotation_speed_ms = ms;
     }
 
-    pub fn update_trails(
-        &mut self,
-        spoke: &mut Spoke,
-        _legend: &Legend,
-        _controls: &SharedControls,
-    ) {
+    pub fn update_trails(&mut self, spoke: &mut Spoke, legend: &Legend, controls: &SharedControls) {
         if self.target_mode == TargetMode::None {
             return;
+        }
+
+        // The radar legend is rebuilt when Doppler (or rain/pixel depth) is
+        // detected after this buffer was created, which shifts history_start
+        // past the newly inserted Doppler entries. Refresh our cached copy, or
+        // trail history indices written at the old (lower) history_start would
+        // land on the Doppler colours and paint fresh trails purple/green.
+        if legend.history_start != self.legend.history_start {
+            let doppler_only = controls
+                .get(&ControlId::DopplerTrailsOnly)
+                .and_then(|c| c.value)
+                .map(|value| value > 0.)
+                .unwrap_or(false);
+            self.minimal_legend_value = Self::compute_minimal_legend_value(legend, doppler_only);
+            self.legend = legend.clone();
         }
 
         if spoke.range != self.previous_range && spoke.range != 0 {
@@ -242,7 +257,10 @@ impl TrailBuffer {
 
                 let trail = *trail;
                 if self.motion_true && data[radius] == 0 && trail > 0 && trail < max_trail_value {
-                    let index: u8 = (trail * BLOB_HISTORY_COLORS / max_trail_value)
+                    // Compute in u16: `trail * BLOB_HISTORY_COLORS` overflows u8
+                    // once trail >= 8.
+                    let index = ((trail as u16 * BLOB_HISTORY_COLORS as u16
+                        / max_trail_value as u16) as u8)
                         .clamp(1, BLOB_HISTORY_COLORS);
 
                     data[radius] = self.legend.history_start + index - 1;
@@ -584,14 +602,60 @@ impl TrailBuffer {
     }
 
     fn compute_minimal_legend_value(legend: &Legend, doppler_only: bool) -> u8 {
+        // Never 0: index 0 is the transparent no-echo value and must not be
+        // treated as an echo, or trails would paint the empty background.
         if doppler_only && let Some((start, _)) = legend.doppler_approaching {
             start
         } else {
-            legend.strong_return
+            legend.strong_return.max(1)
         }
     }
 
     fn set_doppler_trail_only(&mut self, v: bool) {
         self.minimal_legend_value = Self::compute_minimal_legend_value(&self.legend, v);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn legend() -> Legend {
+        Legend {
+            doppler_approaching: Some((17, 1)),
+            doppler_receding: Some((18, 1)),
+            doppler_rain: None,
+            history_start: 19,
+            low_return: 1,
+            medium_return: 5,
+            strong_return: 10,
+            pixel_colors: 16,
+            pixels: Vec::new(),
+            static_background: None,
+        }
+    }
+
+    #[test]
+    fn minimal_legend_value_is_never_zero() {
+        // A 0 threshold treats the transparent no-echo value as an echo and
+        // paints the whole background — it must never be produced.
+        assert!(TrailBuffer::compute_minimal_legend_value(&legend(), false) >= 1);
+
+        let mut degenerate = legend();
+        degenerate.strong_return = 0;
+        assert!(TrailBuffer::compute_minimal_legend_value(&degenerate, false) >= 1);
+    }
+
+    #[test]
+    fn minimal_legend_value_thresholds() {
+        // Normal trails: strong returns only. Doppler-only: first Doppler index.
+        assert_eq!(
+            TrailBuffer::compute_minimal_legend_value(&legend(), false),
+            10
+        );
+        assert_eq!(
+            TrailBuffer::compute_minimal_legend_value(&legend(), true),
+            17
+        );
     }
 }
