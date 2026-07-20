@@ -117,12 +117,13 @@ windows = { version = "0.62.2", features = ["Win32_NetworkManagement_IpHelper", 
 
 [build-dependencies]
 protobuf-codegen = "3.7.2"
-openssl = { version = "0.10", features = ["vendored"] }
 reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls", "blocking"] }
 rust-embed = { version = "8.11.0", features = ["axum","interpolate-folder-path"] }
 
 [dev-dependencies]
-reqwest = { version = "0.12.28", features = ["json"] }
+# Integration tests hit http://localhost, so no TLS backend is needed. Disabling
+# default features keeps native-tls/openssl-sys out of the tree entirely.
+reqwest = { version = "0.12.28", default-features = false, features = ["json"] }
 tokio-test = "0.4"
 tempfile = "3"
 
