@@ -38,12 +38,13 @@ fn main() {
         500,
     );
 
-    // Raymarine RD418D digital radome: beacons only (224.0.0.1:5800).
-    // Capture from MarineYachtRadar/mayara-server#419 — no report stream.
+    // Raymarine RD418D digital radome: beacons (224.0.0.1:5800) + report/spoke
+    // stream (226.77.83.98:2572). Captures from MarineYachtRadar/mayara-server#419,
+    // merged onto a common timeline.
     generate_fixture(
-        &base.join("raymarine/RD418D/schnitzel14/rd418d-beacons.pcap.gz"),
+        &base.join("raymarine/RD418D/schnitzel14/rd418d-full.pcap.gz"),
         &fixture_dir.join("raymarine-rd418d.pcap.gz"),
-        &|p| p.dst_addr.port() == 5800,
+        &|p| p.dst_addr.port() == 5800 || p.dst_addr.port() == 2572,
         500,
     );
 

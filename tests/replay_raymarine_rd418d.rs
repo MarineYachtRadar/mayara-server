@@ -2,11 +2,11 @@
 
 //! Integration test: replay Raymarine RD418D radome pcap fixture.
 //!
-//! The fixture (MarineYachtRadar/mayara-server#419) contains only the
-//! radome's discovery beacons — no report or spoke stream — so this test
-//! verifies discovery: the "Ethernet Dome" identity beacon plus the
-//! subtype-1 address beacon must produce an RD radar with the announced
-//! report and command addresses.
+//! The fixture (MarineYachtRadar/mayara-server#419) contains the radome's
+//! discovery beacons plus its report/spoke stream. Replaying it must
+//! discover the radar from the "Ethernet Dome" identity beacon, identify
+//! the model from the info report's concatenated model+serial field, and
+//! initialize the ranges from the status report.
 
 use mayara::{Cli, replay};
 use std::net::{Ipv4Addr, SocketAddrV4};
@@ -76,23 +76,32 @@ async fn replay_raymarine_rd418d() {
                         let key = &keys[0];
                         let info = radars.get_by_key(key).expect("radar info");
 
-                        assert!(
-                            key.starts_with("ray"),
-                            "expected Raymarine key, got: {}",
-                            key
-                        );
-                        assert_eq!(info.brand, mayara::Brand::Raymarine);
-                        assert_eq!(info.controls.model_name(), Some("RD".to_string()));
-                        assert_eq!(info.spokes_per_revolution, 2048);
-                        assert_eq!(
-                            info.report_addr,
-                            SocketAddrV4::new(Ipv4Addr::new(226, 77, 83, 98), 2572)
-                        );
-                        assert_eq!(
-                            info.send_command_addr,
-                            SocketAddrV4::new(Ipv4Addr::new(10, 18, 106, 155), 2573)
-                        );
-                        break;
+                        // Wait until the model has been identified
+                        if info.controls.model_name() == Some("RD418D".to_string())
+                            && !info.ranges.all.is_empty()
+                        {
+                            assert!(
+                                key.starts_with("ray"),
+                                "expected Raymarine key, got: {}",
+                                key
+                            );
+                            assert_eq!(info.brand, mayara::Brand::Raymarine);
+                            assert_eq!(info.serial_no.as_deref(), Some("9222176"));
+                            assert_eq!(
+                                info.spokes_per_revolution, 2048,
+                                "RD418D azimuths run 0..2047; the info report must not clobber the spoke count"
+                            );
+                            assert_eq!(info.max_spoke_len, 512);
+                            assert_eq!(
+                                info.report_addr,
+                                SocketAddrV4::new(Ipv4Addr::new(226, 77, 83, 98), 2572)
+                            );
+                            assert_eq!(
+                                info.send_command_addr,
+                                SocketAddrV4::new(Ipv4Addr::new(10, 18, 106, 155), 2573)
+                            );
+                            break;
+                        }
                     }
                     if tokio::time::Instant::now() > deadline {
                         panic!("Timeout: no radar detected within 5 seconds");
