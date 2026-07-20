@@ -332,8 +332,7 @@ impl RaymarineLocator {
                         BaseModel::RD => {
                             match subtype {
                                 protocol::beacon36::RD => {} // Continue
-                                8 | 21 | 26 | 27 | 30 | 35 | 36 => {
-                                    // Known unknowns
+                                s if protocol::beacon36::RD_IGNORED.contains(&s) => {
                                     return Ok(None);
                                 }
                                 _ => {

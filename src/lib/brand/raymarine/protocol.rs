@@ -64,6 +64,11 @@ pub(crate) mod beacon36 {
     /// W3 wireless bridge forwarding a Quantum (different link_id). Ignored.
     pub(crate) const W3: u32 = 0x29;
 
+    /// Subtypes observed on the wire from RD-family radars whose meaning is
+    /// unknown (0x24 is emitted by an "Ethernet Dome" radome every beacon
+    /// cycle). Ignored without warning.
+    pub(crate) const RD_IGNORED: [u32; 7] = [8, 21, 26, 27, 30, 35, 36];
+
     pub(crate) const LEN: usize = 36;
 }
 
