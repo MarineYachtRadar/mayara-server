@@ -57,6 +57,9 @@ pub(crate) const DISCOVERY_ADDRESS_WIFI: &str = "232.1.1.1:5800";
 
 /// Subtypes in the 36-byte beacon (beacon_type = 0).
 pub(crate) mod beacon36 {
+    /// beacon_type of the 36-byte address beacon.
+    pub(crate) const TYPE_ADDRESS: u32 = 0;
+
     /// Quantum radar — carries the multicast report and command addresses.
     pub(crate) const QUANTUM: u32 = 0x28;
     /// RD (magnetron) radar.
@@ -74,6 +77,12 @@ pub(crate) mod beacon36 {
 
 /// Subtypes in the 56-byte beacon (beacon_type = 1).
 pub(crate) mod beacon56 {
+    /// beacon_type of the 56-byte identity beacon.
+    pub(crate) const TYPE_IDENTITY: u32 = 1;
+    /// beacon_type of the secondary 56-byte announcement MFDs emit alongside
+    /// their type-1 MFD beacon (subtype 0x1e, empty model). Ignored.
+    pub(crate) const TYPE_MFD_SIDECAR: u32 = 2;
+
     /// Quantum radar identity — model name e.g. "QuantumRadar".
     pub(crate) const QUANTUM: u32 = 0x66;
     /// RD (magnetron) radar identity.
