@@ -45,6 +45,10 @@ pub(crate) const DISCOVERY_ADDRESS_WIFI: &str = "232.1.1.1:5800";
 //   Extended Quantum beacon with additional address fields. Not currently
 //   processed — the 56+36 byte pair is sufficient for discovery.
 //
+// MFDs additionally emit a 56-byte beacon with beacon_type = 2 (subtype
+// 0x1e, empty model string) alongside their type-1 MFD announcement. It is
+// not a radar identity and is ignored.
+//
 // A Quantum WiFi radar with a W3 wireless bridge sends both W3 beacons
 // (subtype 0x4d/0x29 with its own link_id) and direct Quantum beacons
 // (subtype 0x66/0x28 with the radar's link_id). The W3 beacons are
@@ -69,6 +73,9 @@ pub(crate) mod beacon56 {
     pub(crate) const QUANTUM: u32 = 0x66;
     /// RD (magnetron) radar identity.
     pub(crate) const RD: u32 = 0x01;
+    /// RD Ethernet radome identity — model name "Ethernet Dome".
+    /// Wire-observed from an RD418D in MarineYachtRadar/mayara-server#419.
+    pub(crate) const RD_DOME: u32 = 0x0b;
     /// W3 wireless bridge identity — model name "Quantum_W3". Ignored.
     pub(crate) const W3: u32 = 0x4d;
     /// MFD announcement. Ignored.
