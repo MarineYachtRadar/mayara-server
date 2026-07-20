@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **navico:** clean and disambiguate radar names (#451) ([PR #451](https://github.com/MarineYachtRadar/mayara-server/pull/451))
 - **locator:** survive UDP recv errors on Windows (#449) ([PR #449](https://github.com/MarineYachtRadar/mayara-server/pull/449))
 - **radar:** key by IP when serial number is empty (#448) ([PR #448](https://github.com/MarineYachtRadar/mayara-server/pull/448))
+- **navico:** correct Doppler-mode colour palette (#456) ([PR #456](https://github.com/MarineYachtRadar/mayara-server/pull/456))
 
 ## [3.6.0] - 2026-06-19
 
