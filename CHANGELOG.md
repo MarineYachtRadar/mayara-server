@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **raymarine:** wake, control and power radars behind an Axiom (#427) ([PR #427](https://github.com/MarineYachtRadar/mayara-server/pull/427))
+- **radar:** show powered-off radars as off when they go silent (#455) ([PR #455](https://github.com/MarineYachtRadar/mayara-server/pull/455))
 
 ### Changed
 
