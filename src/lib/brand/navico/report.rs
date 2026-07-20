@@ -125,6 +125,16 @@ enum LookupDoppler {
 }
 const LOOKUP_DOPPLER_LENGTH: usize = (LookupDoppler::HighApproaching as usize) + 1;
 
+// Navico spoke sample nibble values in Doppler mode: 0x00 is no echo,
+// 0x01..=0x0d are plain intensity, and the top two are stolen for Doppler.
+const WIRE_NO_ECHO: u8 = 0x00;
+const WIRE_INTENSITY_MAX: u8 = 0x0d;
+const WIRE_DOPPLER_RECEDING: u8 = 0x0e;
+const WIRE_DOPPLER_APPROACHING: u8 = 0x0f;
+// Intensities from here up take an extra +1 shift so the whole 0x01..=0x0d
+// range spreads onto legend indices 2..=15, keeping the strongest at red.
+const WIRE_INTENSITY_SPREAD_SPLIT: u8 = 0x08;
+
 type WireToLegendTable = [[u8; BYTE_LOOKUP_LENGTH]; LOOKUP_DOPPLER_LENGTH];
 
 fn wire_to_legend(legend: &Legend) -> WireToLegendTable {
@@ -145,29 +155,29 @@ fn wire_to_legend(legend: &Legend) -> WireToLegendTable {
                 // so strong returns still peak at red, but keep no-echo (0)
                 // transparent instead of bumping it onto a visible colour.
                 lookup[LookupDoppler::LowBoth as usize][j] = match low {
-                    0x0f => approaching_idx,
-                    0x0e => receding_idx,
-                    0 => 0,
-                    0x08..=0x0d => low + 2,
+                    WIRE_DOPPLER_APPROACHING => approaching_idx,
+                    WIRE_DOPPLER_RECEDING => receding_idx,
+                    WIRE_NO_ECHO => 0,
+                    WIRE_INTENSITY_SPREAD_SPLIT..=WIRE_INTENSITY_MAX => low + 2,
                     _ => low + 1,
                 };
                 lookup[LookupDoppler::HighBoth as usize][j] = match high {
-                    0x0f => approaching_idx,
-                    0x0e => receding_idx,
-                    0 => 0,
-                    0x08..=0x0d => high + 2,
+                    WIRE_DOPPLER_APPROACHING => approaching_idx,
+                    WIRE_DOPPLER_RECEDING => receding_idx,
+                    WIRE_NO_ECHO => 0,
+                    WIRE_INTENSITY_SPREAD_SPLIT..=WIRE_INTENSITY_MAX => high + 2,
                     _ => high + 1,
                 };
             }
             lookup[LookupDoppler::LowApproaching as usize][j] = match low {
-                0x0f => approaching_idx,
-                0 => 0,
+                WIRE_DOPPLER_APPROACHING => approaching_idx,
+                WIRE_NO_ECHO => 0,
                 _ => low + 1,
             };
 
             lookup[LookupDoppler::HighApproaching as usize][j] = match high {
-                0x0f => approaching_idx,
-                0 => 0,
+                WIRE_DOPPLER_APPROACHING => approaching_idx,
+                WIRE_NO_ECHO => 0,
                 _ => high + 1,
             };
         }
@@ -1558,6 +1568,13 @@ mod tests {
         assert_eq!(lut[LookupDoppler::HighBoth as usize][0xd0], 15);
         assert_eq!(lut[LookupDoppler::HighBoth as usize][0xe0], 21);
         assert_eq!(lut[LookupDoppler::HighBoth as usize][0xf0], 20);
+
+        // Approaching-only mode: 0x0f is approaching, and 0x0e (receding shown
+        // as plain intensity) is the strongest normal colour, index 15.
+        assert_eq!(lut[LookupDoppler::LowApproaching as usize][0x0f], 20);
+        assert_eq!(lut[LookupDoppler::LowApproaching as usize][0x0e], 15);
+        assert_eq!(lut[LookupDoppler::HighApproaching as usize][0xf0], 20);
+        assert_eq!(lut[LookupDoppler::HighApproaching as usize][0xe0], 15);
     }
 
     #[test]
