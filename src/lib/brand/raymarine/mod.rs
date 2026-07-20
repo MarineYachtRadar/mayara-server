@@ -294,7 +294,7 @@ impl RaymarineLocator {
                     Into::<SocketAddrV4>::into(data.report),
                     Into::<SocketAddrV4>::into(data.command),
                 );
-                if beacon_type != 0 {
+                if beacon_type != protocol::beacon36::TYPE_ADDRESS {
                     log::warn!(
                         "{}: Raymarine 36 report: unexpected beacon type {}",
                         from,
@@ -432,11 +432,11 @@ impl RaymarineLocator {
                     link_id,
                     c_string(&data.model_name),
                 );
-                if beacon_type != 0x01 {
+                if beacon_type != protocol::beacon56::TYPE_IDENTITY {
                     // MFDs emit a type-2 announcement alongside their type-1
                     // MFD beacon; it is not a radar identity, so don't warn
                     // about it on every beacon cycle.
-                    if beacon_type == 0x02 {
+                    if beacon_type == protocol::beacon56::TYPE_MFD_SIDECAR {
                         log::debug!("{}: ignoring type-2 MFD announcement", from);
                     } else {
                         log::warn!(
@@ -492,13 +492,18 @@ impl RaymarineLocator {
                     }
                     protocol::beacon56::RD | protocol::beacon56::RD_DOME => {
                         let model = BaseModel::RD;
-                        // Ethernet radomes carry a model string ("Ethernet
-                        // Dome"); the analog RD beacon's model field is
-                        // garbage, so fall back to the base model name.
-                        let model_name = c_string(&data.model_name)
-                            .filter(|s| !s.is_empty())
-                            .map(String::from)
-                            .or_else(|| Some(model.to_string()));
+                        // Only Ethernet radomes carry a model string
+                        // ("Ethernet Dome"); the analog RD beacon's model
+                        // field holds other data that may happen to decode
+                        // as a string.
+                        let model_name = Some(if subtype == protocol::beacon56::RD_DOME {
+                            c_string(&data.model_name)
+                                .filter(|s| !s.is_empty())
+                                .map(String::from)
+                                .unwrap_or_else(|| model.to_string())
+                        } else {
+                            model.to_string()
+                        });
 
                         if self
                             .ids
@@ -677,7 +682,7 @@ fn is_external_controller_signal(report: &[u8]) -> bool {
             // beacon_type at 0, subtype at 4 (both u32 LE)
             let beacon_type = u32::from_le_bytes(report[0..4].try_into().unwrap());
             let subtype = u32::from_le_bytes(report[4..8].try_into().unwrap());
-            beacon_type == 1 && subtype == protocol::beacon56::MFD
+            beacon_type == protocol::beacon56::TYPE_IDENTITY && subtype == protocol::beacon56::MFD
         }
         _ => false,
     }
@@ -1112,6 +1117,29 @@ mod tests {
             SocketAddrV4::new(Ipv4Addr::new(226, 77, 83, 98), 2572)
         );
         assert_eq!(info.spoke_data_addr, info.report_addr);
+    }
+
+    #[test]
+    fn analog_rd_model_field_is_not_a_model_name() {
+        // The model field of an analog RD identity beacon holds other data;
+        // even when its bytes happen to decode as a string they must not
+        // become the model name — only RD_DOME carries a real model string.
+        let args = Cli::parse_from(["mayara-server"]);
+        let mut locator = RaymarineLocator::new(args);
+
+        let mut beacon = [0u8; protocol::beacon56::LEN];
+        beacon[0..4].copy_from_slice(&protocol::beacon56::TYPE_IDENTITY.to_le_bytes());
+        beacon[4..8].copy_from_slice(&protocol::beacon56::RD.to_le_bytes());
+        beacon[8..12].copy_from_slice(&0x11223344u32.to_le_bytes());
+        beacon[20..26].copy_from_slice(b"133742");
+
+        let src = Ipv4Addr::new(10, 0, 234, 47);
+        locator.process_beacon_56_report(&beacon, &src).unwrap();
+        let state = locator
+            .ids
+            .get(&0x11223344)
+            .expect("RD identity beacon must register its link_id");
+        assert_eq!(state.model_name.as_deref(), Some("RD"));
     }
 
     #[test]
