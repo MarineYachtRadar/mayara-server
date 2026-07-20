@@ -125,6 +125,16 @@ enum LookupDoppler {
 }
 const LOOKUP_DOPPLER_LENGTH: usize = (LookupDoppler::HighApproaching as usize) + 1;
 
+// Navico spoke sample nibble values in Doppler mode: 0x00 is no echo,
+// 0x01..=0x0d are plain intensity, and the top two are stolen for Doppler.
+const WIRE_NO_ECHO: u8 = 0x00;
+const WIRE_INTENSITY_MAX: u8 = 0x0d;
+const WIRE_DOPPLER_RECEDING: u8 = 0x0e;
+const WIRE_DOPPLER_APPROACHING: u8 = 0x0f;
+// Intensities from here up take an extra +1 shift so the whole 0x01..=0x0d
+// range spreads onto legend indices 2..=15, keeping the strongest at red.
+const WIRE_INTENSITY_SPREAD_SPLIT: u8 = 0x08;
+
 type WireToLegendTable = [[u8; BYTE_LOOKUP_LENGTH]; LOOKUP_DOPPLER_LENGTH];
 
 fn wire_to_legend(legend: &Legend) -> WireToLegendTable {
@@ -140,26 +150,34 @@ fn wire_to_legend(legend: &Legend) -> WireToLegendTable {
 
         if let Some((approaching_idx, _)) = legend.doppler_approaching {
             if let Some((receding_idx, _)) = legend.doppler_receding {
+                // Doppler steals 0x0e/0x0f, so plain intensity only runs 0x00..0x0d.
+                // Spread those across the full colour ramp (0x0d -> top red index)
+                // so strong returns still peak at red, but keep no-echo (0)
+                // transparent instead of bumping it onto a visible colour.
                 lookup[LookupDoppler::LowBoth as usize][j] = match low {
-                    0x0f => approaching_idx,
-                    0x0e => receding_idx,
-                    0x08..=0x0d => low + 2,
+                    WIRE_DOPPLER_APPROACHING => approaching_idx,
+                    WIRE_DOPPLER_RECEDING => receding_idx,
+                    WIRE_NO_ECHO => 0,
+                    WIRE_INTENSITY_SPREAD_SPLIT..=WIRE_INTENSITY_MAX => low + 2,
                     _ => low + 1,
                 };
                 lookup[LookupDoppler::HighBoth as usize][j] = match high {
-                    0x0f => approaching_idx,
-                    0x0e => receding_idx,
-                    0x08..=0x0d => high + 2,
+                    WIRE_DOPPLER_APPROACHING => approaching_idx,
+                    WIRE_DOPPLER_RECEDING => receding_idx,
+                    WIRE_NO_ECHO => 0,
+                    WIRE_INTENSITY_SPREAD_SPLIT..=WIRE_INTENSITY_MAX => high + 2,
                     _ => high + 1,
                 };
             }
             lookup[LookupDoppler::LowApproaching as usize][j] = match low {
-                0x0f => approaching_idx,
+                WIRE_DOPPLER_APPROACHING => approaching_idx,
+                WIRE_NO_ECHO => 0,
                 _ => low + 1,
             };
 
             lookup[LookupDoppler::HighApproaching as usize][j] = match high {
-                0x0f => approaching_idx,
+                WIRE_DOPPLER_APPROACHING => approaching_idx,
+                WIRE_NO_ECHO => 0,
                 _ => high + 1,
             };
         }
@@ -1505,7 +1523,60 @@ fn error_name(code: u32) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{error_name, parse_radar_errors};
+    use super::{LookupDoppler, error_name, parse_radar_errors, wire_to_legend};
+    use crate::radar::Legend;
+
+    fn doppler_legend() -> Legend {
+        Legend {
+            doppler_approaching: Some((20, 1)),
+            doppler_receding: Some((21, 1)),
+            doppler_rain: None,
+            history_start: 22,
+            low_return: 1,
+            medium_return: 5,
+            strong_return: 10,
+            pixel_colors: 16,
+            pixels: Vec::new(),
+            static_background: None,
+        }
+    }
+
+    #[test]
+    fn doppler_wire_map_keeps_no_echo_transparent() {
+        let lut = wire_to_legend(&doppler_legend());
+
+        // No-echo (nibble 0) must map to legend index 0 (transparent), not a
+        // visible colour — otherwise the whole background is painted.
+        assert_eq!(lut[LookupDoppler::LowBoth as usize][0x00], 0);
+        assert_eq!(lut[LookupDoppler::HighBoth as usize][0x00], 0);
+        assert_eq!(lut[LookupDoppler::LowApproaching as usize][0x00], 0);
+        assert_eq!(lut[LookupDoppler::HighApproaching as usize][0x00], 0);
+    }
+
+    #[test]
+    fn doppler_wire_map_spreads_intensity_and_redirects_doppler() {
+        let lut = wire_to_legend(&doppler_legend());
+
+        // Intensities spread across the ramp so the strongest (0x0d) reaches
+        // the top normal colour (index 15 = red), not a mid-ramp olive.
+        assert_eq!(lut[LookupDoppler::LowBoth as usize][0x01], 2);
+        assert_eq!(lut[LookupDoppler::LowBoth as usize][0x0d], 15);
+        // 0x0e = receding, 0x0f = approaching, taken from the legend indices.
+        assert_eq!(lut[LookupDoppler::LowBoth as usize][0x0e], 21);
+        assert_eq!(lut[LookupDoppler::LowBoth as usize][0x0f], 20);
+        // The high nibble carries the value in the top four bits.
+        assert_eq!(lut[LookupDoppler::HighBoth as usize][0x10], 2);
+        assert_eq!(lut[LookupDoppler::HighBoth as usize][0xd0], 15);
+        assert_eq!(lut[LookupDoppler::HighBoth as usize][0xe0], 21);
+        assert_eq!(lut[LookupDoppler::HighBoth as usize][0xf0], 20);
+
+        // Approaching-only mode: 0x0f is approaching, and 0x0e (receding shown
+        // as plain intensity) is the strongest normal colour, index 15.
+        assert_eq!(lut[LookupDoppler::LowApproaching as usize][0x0f], 20);
+        assert_eq!(lut[LookupDoppler::LowApproaching as usize][0x0e], 15);
+        assert_eq!(lut[LookupDoppler::HighApproaching as usize][0xf0], 20);
+        assert_eq!(lut[LookupDoppler::HighApproaching as usize][0xe0], 15);
+    }
 
     #[test]
     fn empty_error_list_is_all_clear() {
