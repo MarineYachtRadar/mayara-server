@@ -310,6 +310,12 @@ impl FurunoReportReceiver {
                     match r {
                         Ok(len) => {
                             if len > 2 {
+                                // The report stream is shared by both ranges of a
+                                // dual-range radar, so a report keeps both alive.
+                                self.common.info.mark_input();
+                                if let Some(ref cb) = self.common_b {
+                                    cb.info.mark_input();
+                                }
                                 if let Err(e) = self.process_report(&line) {
                                     log::error!("{}: {}", self.common.key, e);
                                 } else if !first_report_received {

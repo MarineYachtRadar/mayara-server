@@ -333,6 +333,7 @@ impl GarminReportReceiver {
                 } => {
                     match r {
                         Ok((_len, _addr)) => {
+                            self.common.info.mark_input();
                             if let Err(e) = self.process_report(&report_buf) {
                                 log::error!("{}: {}", self.common.key, e);
                             }
