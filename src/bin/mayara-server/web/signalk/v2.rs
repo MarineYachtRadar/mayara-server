@@ -42,6 +42,7 @@ pub(crate) const BASE_URI: &str = "/signalk/v2/api/vessels/self/radars";
 pub(crate) const CONTROL_URI: &str = "/signalk/v1/stream";
 pub(crate) const SPOKES_URI: &str = "/signalk/v2/api/vessels/self/radars/{id}/spokes"; // plus radar_id
 const OPENAPI_URI: &str = "/signalk/v2/api/vessels/self/radars/resources/openapi.json";
+const RADAR_URI: &str = "/signalk/v2/api/vessels/self/radars/{radar_id}";
 const RADAR_CAPABILITIES_URI: &str = "/signalk/v2/api/vessels/self/radars/{radar_id}/capabilities";
 const INTERFACES_URI: &str = "/signalk/v2/api/vessels/self/radars/interfaces";
 const RADAR_CONTROLS_URI: &str = "/signalk/v2/api/vessels/self/radars/{radar_id}/controls";
@@ -68,6 +69,7 @@ const RADAR_TARGET_URI: &str = "/signalk/v2/api/vessels/self/radars/{radar_id}/t
     ),
     paths(
         get_radars,
+        get_radar_info,
         get_interfaces,
         diagnostics::get_diagnostics,
         get_radar,
@@ -107,6 +109,7 @@ pub(crate) fn routes(axum: axum::Router<Web>) -> axum::Router<Web> {
         )
         .route(CONTROL_URI, get(control_stream_handler))
         .route(SPOKES_URI, get(spokes_handler))
+        .route(RADAR_URI, get(get_radar_info))
         .route(RADAR_CAPABILITIES_URI, get(get_radar))
         .route(RADAR_CONTROLS_URI, get(get_control_values))
         .route(
@@ -260,6 +263,44 @@ async fn get_radars(State(state): State<Web>, headers: hyper::header::HeaderMap)
         radars,
     })
     .into_response()
+}
+
+#[utoipa::path(
+    get,
+    path = "/signalk/v2/api/vessels/self/radars/{radar_id}",
+    summary = "Get a single radar",
+    description = "Returns discovery information for one radar by ID (the same entry as in the list). \
+                   Live state is under /controls; static parameters under /capabilities.",
+    params(
+        ("radar_id" = String, Path, description = "Radar identifier", example = "nav1034A")
+    ),
+    responses(
+        (status = 200, body = RadarApiV3, description = "Radar discovery information"),
+        (status = 404, description = "Radar not found")
+    ),
+    tag = "Radars"
+)]
+async fn get_radar_info(
+    Path(radar_id): Path<String>,
+    State(state): State<Web>,
+    headers: hyper::header::HeaderMap,
+) -> Response {
+    let (host, _, ws_scheme) = derive_public_base(&headers, state.tls, state.args.port);
+    if let Some(info) = state.radars.get_by_key(&radar_id) {
+        let spoke_data_uri = SPOKES_URI.replace("{id}", &info.key());
+        let v = RadarApiV3 {
+            name: info.controls.user_name(),
+            brand: info.brand.to_string(),
+            model: info.controls.model_name(),
+            spoke_data_url: format!("{}://{}{}", ws_scheme, host, spoke_data_uri),
+            stream_url: format!("{}://{}{}", ws_scheme, host, CONTROL_URI),
+            radar_ip_address: *info.addr.ip(),
+            replay: info.replay(),
+        };
+        Json(v).into_response()
+    } else {
+        no_such_radar(&radar_id, &state.radars)
+    }
 }
 
 #[utoipa::path(
