@@ -106,13 +106,7 @@ async fn test_get_radars() {
     assert!(!radars.is_empty(), "No radars found");
 
     for (id, radar) in radars {
-        for field in [
-            "name",
-            "brand",
-            "spokeDataUrl",
-            "streamUrl",
-            "radarIpAddress",
-        ] {
+        for field in ["name", "brand", "radarIpAddress"] {
             assert!(
                 radar.get(field).is_some(),
                 "Radar {} missing '{}'",

@@ -23,7 +23,7 @@ use utoipa::OpenApi;
 use utoipa::ToSchema;
 use utoipa_swagger_ui::{Config as SwaggerConfig, SwaggerUi};
 
-use crate::web::{derive_public_base, signalk::diagnostics, spokes_handler};
+use crate::web::{signalk::diagnostics, spokes_handler};
 
 use super::super::{Message, Web, WebSocket, WebSocketUpgrade};
 use mayara::{
@@ -172,16 +172,20 @@ pub fn generate_openapi_json() -> String {
     serde_json::to_string_pretty(&openapi_spec()).unwrap()
 }
 
-/// Information about a detected radar, including WebSocket URLs for data streams
+/// Information about a detected radar.
+///
+/// The spoke and control-stream WebSockets are not listed here: they are always
+/// reached by convention from the host serving this response —
+/// `…/radars/{id}/spokes` and `/signalk/v1/stream` — so a client uses the same
+/// construction whether it talks to mayara directly or through a Signal K server.
 #[derive(Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 #[schema(as = RadarInfo, example = json!({
     "name": "HALO 034A",
     "brand": "Navico",
     "model": "HALO",
-    "spokeDataUrl": "ws://192.168.1.100:8080/signalk/v2/api/vessels/self/radars/nav1034A/spokes",
-    "streamUrl": "ws://192.168.1.100:8080/signalk/v1/stream",
-    "radarIpAddress": "192.168.1.50"
+    "radarIpAddress": "192.168.1.50",
+    "replay": false
 }))]
 struct RadarApiV3 {
     /// User-defined name or auto-detected model name
@@ -194,14 +198,6 @@ struct RadarApiV3 {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(example = "HALO")]
     model: Option<String>,
-    /// WebSocket URL for receiving raw radar spoke data (binary)
-    #[schema(
-        example = "ws://192.168.1.100:8080/signalk/v2/api/vessels/self/radars/nav1034A/spokes"
-    )]
-    spoke_data_url: String,
-    /// WebSocket URL for Signal K control stream (JSON)
-    #[schema(example = "ws://192.168.1.100:8080/signalk/v1/stream")]
-    stream_url: String,
     /// IP address of the radar unit on the network
     #[schema(value_type = String, example = "192.168.1.50")]
     radar_ip_address: Ipv4Addr,
@@ -239,19 +235,14 @@ struct RadarsResponse {
     ),
     tag = "Radars"
 )]
-async fn get_radars(State(state): State<Web>, headers: hyper::header::HeaderMap) -> Response {
-    let (host, _, ws_scheme) = derive_public_base(&headers, state.tls, state.args.port);
-
-    log::debug!("Radar state request, target host = '{}'", host);
+async fn get_radars(State(state): State<Web>) -> Response {
+    log::debug!("Radar list request");
     let mut radars: HashMap<String, RadarApiV3> = HashMap::new();
     for info in state.radars.get_discovered() {
-        let spoke_data_uri = SPOKES_URI.replace("{id}", &info.key());
         let v = RadarApiV3 {
             name: info.controls.user_name(),
             brand: info.brand.to_string(),
             model: info.controls.model_name(),
-            spoke_data_url: format!("{}://{}{}", ws_scheme, host, spoke_data_uri),
-            stream_url: format!("{}://{}{}", ws_scheme, host, CONTROL_URI),
             radar_ip_address: *info.addr.ip(),
             replay: info.replay(),
         };
@@ -280,20 +271,12 @@ async fn get_radars(State(state): State<Web>, headers: hyper::header::HeaderMap)
     ),
     tag = "Radars"
 )]
-async fn get_radar_info(
-    Path(radar_id): Path<String>,
-    State(state): State<Web>,
-    headers: hyper::header::HeaderMap,
-) -> Response {
-    let (host, _, ws_scheme) = derive_public_base(&headers, state.tls, state.args.port);
+async fn get_radar_info(Path(radar_id): Path<String>, State(state): State<Web>) -> Response {
     if let Some(info) = state.radars.get_by_key(&radar_id) {
-        let spoke_data_uri = SPOKES_URI.replace("{id}", &info.key());
         let v = RadarApiV3 {
             name: info.controls.user_name(),
             brand: info.brand.to_string(),
             model: info.controls.model_name(),
-            spoke_data_url: format!("{}://{}{}", ws_scheme, host, spoke_data_uri),
-            stream_url: format!("{}://{}{}", ws_scheme, host, CONTROL_URI),
             radar_ip_address: *info.addr.ip(),
             replay: info.replay(),
         };
