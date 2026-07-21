@@ -1535,6 +1535,11 @@ async fn send_all_ais_vessels(socket: &mut WebSocket) -> Result<(), RadarError> 
 struct SignalKHello {
     name: &'static str,
     version: &'static str,
+    /// The self vessel's context, per the Signal K hello. Detected from the
+    /// upstream server; falls back to `vessels.self` until a concrete URN
+    /// arrives.
+    #[serde(rename = "self")]
+    self_context: String,
     #[serde(serialize_with = "to_rfc3339")]
     timestamp: DateTime<Utc>,
     roles: Vec<&'static str>,
@@ -1552,6 +1557,7 @@ async fn send_hello(socket: &mut WebSocket) -> Result<(), Error> {
     let message = SignalKHello {
         name: PROVIDER,
         version: VERSION,
+        self_context: navdata::get_own_ship_context().unwrap_or_else(|| "vessels.self".to_string()),
         timestamp: Utc::now(),
         roles: vec!["master"],
     };

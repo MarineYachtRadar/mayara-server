@@ -12,10 +12,15 @@ use wildmatch::WildMatch;
 
 use crate::{
     PACKAGE,
+    navdata::get_own_ship_context,
     radar::settings::{BareControlValue, Control, ControlDefinition, ControlId, RadarControlValue},
     radar::target::ArpaTargetApi,
     radar::{RadarError, SharedRadars},
 };
+
+/// Signal K's self-reference context, used until a concrete own-ship URN
+/// (e.g. `vessels.urn:mrn:signalk:uuid:…`) is detected from the upstream.
+const SELF_CONTEXT: &str = "vessels.self";
 
 /// Server-to-client delta message containing control value updates
 #[derive(Serialize, Clone, Debug, ToSchema)]
@@ -30,6 +35,11 @@ use crate::{
     }]
 }))]
 pub struct SignalKDelta {
+    /// Signal K context this delta applies to (e.g. `vessels.self` or a concrete
+    /// own-ship URN; for AIS, the observed vessel's context). Serialized as
+    /// `context` per the Signal K delta spec; omitted only if unknown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context: Option<String>,
     /// Array of update batches, each containing changed control values
     updates: Vec<DeltaUpdate>,
 }
@@ -41,8 +51,13 @@ impl Default for SignalKDelta {
 }
 
 impl SignalKDelta {
+    /// A new delta for own-ship data (radar controls, navigation, targets,
+    /// notifications). Its context is the detected own-ship context, falling
+    /// back to `vessels.self` until a concrete URN arrives from the upstream.
+    /// AIS deltas override this via [`add_ais_vessel_update`].
     pub fn new() -> SignalKDelta {
         Self {
+            context: Some(get_own_ship_context().unwrap_or_else(|| SELF_CONTEXT.to_string())),
             updates: Vec::new(),
         }
     }
@@ -175,8 +190,13 @@ impl SignalKDelta {
         self.updates.push(delta_update);
     }
 
-    /// Add an AIS vessel update to the delta message.
+    /// Add an AIS vessel update to the delta message. Unlike own-ship data,
+    /// an AIS delta belongs to the observed vessel's own context, so this
+    /// overrides the own-ship context set by [`new`]. (The value shape itself
+    /// is still mayara-specific — normalising it to per-path Signal K deltas is
+    /// tracked separately.)
     pub fn add_ais_vessel_update(&mut self, path: &str, vessel: &crate::ais::AisVesselApi) {
+        self.context = Some(path.to_string());
         let value = serde_json::to_value(vessel).unwrap_or(serde_json::Value::Null);
         let delta_update = DeltaUpdate {
             timestamp: Some(Utc::now()),

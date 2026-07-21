@@ -99,7 +99,7 @@ static OWN_SHIP_CONTEXT: OnceLock<RwLock<Option<String>>> = OnceLock::new();
 static AIS_STORE: OnceLock<std::sync::Arc<AisVesselStore>> = OnceLock::new();
 
 /// Get the own-ship context if detected
-pub(crate) fn get_own_ship_context() -> Option<String> {
+pub fn get_own_ship_context() -> Option<String> {
     OWN_SHIP_CONTEXT
         .get()
         .and_then(|lock| lock.read().ok())
