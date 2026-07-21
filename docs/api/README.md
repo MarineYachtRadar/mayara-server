@@ -81,24 +81,42 @@ Endpoints under `/v2/api/vessels/self/radars/recordings`:
 ### Connecting
 
 ```
-ws://localhost:6502/signalk/v1/stream?subscribe=all&sendCachedValues=true
+ws://localhost:6502/signalk/v1/stream?subscribe=self&sendCachedValues=true
 ```
 
 Query parameters:
 
 | Parameter          | Values                | Default | Description                            |
 | ------------------ | --------------------- | ------- | -------------------------------------- |
-| `subscribe`        | `all`, `self`, `none` | `all`   | Initial subscription mode              |
+| `subscribe`        | `none`, `self`, `all` | `self`  | Baseline subscription (see below)      |
 | `sendCachedValues` | `true`, `false`       | `true`  | Send current control values on connect |
 
-You can also manage subscriptions after connecting by sending JSON messages — see [Subscribe](#client--server-subscribe) and [Unsubscribe](#client--server-unsubscribe) below.
+The `subscribe` parameter is a **baseline context filter**, matching Signal K's
+streaming model:
+
+| Value  | Streams                                                                                          |
+| ------ | ----------------------------------------------------------------------------------------------- |
+| `none` | nothing until you send explicit `subscribe` messages (below)                                     |
+| `self` | all **own-ship** data — radar controls/targets, `navigation.*`, `notifications.*` (the default)  |
+| `all`  | everything `self` streams **plus** other contexts (AIS vessels, `vessels.*`)                      |
+
+Explicit `subscribe` messages are **additive**: they add paths on top of the
+baseline without replacing it. To receive exactly one set of paths and nothing
+else, connect with `subscribe=none` and subscribe to just those paths (this is
+what the built-in GUI does, and what a Signal K server bridging mayara should do
+so it does not re-import its own navigation). See
+[Subscribe](#client--server-subscribe) / [Unsubscribe](#client--server-unsubscribe).
 
 ### Server → Client: Delta Updates
 
-Control value changes and target updates are sent as delta messages:
+Control value changes and target updates are sent as delta messages. Each delta
+carries a `context` (the Signal K vessel it applies to): own-ship data uses the
+detected own-ship context, falling back to `vessels.self`; AIS uses the observed
+vessel's context.
 
 ```json
 {
+  "context": "vessels.self",
   "updates": [{
     "$source": "mayara",
     "timestamp": "2024-01-15T10:30:00Z",
@@ -110,9 +128,23 @@ Control value changes and target updates are sent as delta messages:
 }
 ```
 
-Target updates use the same format with paths like `radars.{id}.targets.{tid}`. AIS vessel updates use `vessels.urn:mrn:imo:mmsi:{mmsi}`.
+Target updates use the same format with paths like `radars.{id}.targets.{tid}`.
+AIS vessel updates arrive under their own context, e.g. `"context":
+"vessels.urn:mrn:imo:mmsi:{mmsi}"`, and only when subscribed (baseline `all`, or
+an explicit `vessels.*` subscription).
 
-On first connection (when `sendCachedValues=true`), metadata describing each control is sent in a `meta` array.
+The stream opens with a hello carrying `name`, `version`, `roles`, and `self`
+(the own-ship context). On first connection (when `sendCachedValues=true`),
+metadata describing each control is sent in a `meta` array.
+
+**Subscribable path prefixes:**
+
+| Prefix           | Data                                    | Context   |
+| ---------------- | --------------------------------------- | --------- |
+| `radars.*`       | radar controls and ARPA targets         | own-ship  |
+| `navigation.*`   | own-ship heading, position, COG/SOG     | own-ship  |
+| `notifications.*`| radar alarms (e.g. guard zones)         | own-ship  |
+| `vessels.*`      | AIS vessels                             | other     |
 
 ### Client → Server: Set Control Value
 
