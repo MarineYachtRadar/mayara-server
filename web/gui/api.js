@@ -120,7 +120,7 @@ export async function fetchRadarIds() {
   const response = await fetch(getRadarsPath());
   const data = await response.json();
 
-  return Object.keys(data);
+  return Object.keys(radarsMap(data));
 }
 
 /**
@@ -131,7 +131,18 @@ export async function fetchRadars() {
   await detectMode();
 
   const response = await fetch(getRadarsPath());
-  return response.json();
+  return radarsMap(await response.json());
+}
+
+/**
+ * Unwrap the radar list to a plain `{ id: radar }` map. The Radar API response
+ * is the `{ version, radars }` envelope (both mayara and signalk-server return
+ * this); older/bare responses that are already a keyed map are passed through.
+ * @param {Object} data - Parsed radar-list response
+ * @returns {Object} Radars keyed by ID
+ */
+function radarsMap(data) {
+  return data && typeof data.radars === "object" ? data.radars : data;
 }
 
 /**

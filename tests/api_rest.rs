@@ -101,7 +101,8 @@ async fn test_signalk_endpoints() {
 async fn test_get_radars() {
     let json = get_json("/signalk/v2/api/vessels/self/radars").await;
 
-    let radars = json.as_object().unwrap();
+    assert!(json["version"].is_string(), "Missing 'version'");
+    let radars = json["radars"].as_object().unwrap();
     assert!(!radars.is_empty(), "No radars found");
 
     for (id, radar) in radars {
@@ -126,7 +127,7 @@ async fn test_get_radars() {
 #[ignore = "requires running server"]
 async fn test_get_radars_returns_emulator() {
     let json = get_json("/signalk/v2/api/vessels/self/radars").await;
-    let radars = json.as_object().unwrap();
+    let radars = json["radars"].as_object().unwrap();
 
     let (_, radar) = radars
         .iter()

@@ -82,6 +82,7 @@ const RADAR_TARGET_URI: &str = "/signalk/v2/api/vessels/self/radars/{radar_id}/t
     components(schemas(
         RadarControlIdParam,
         RadarApiV3,
+        RadarsResponse,
         Capabilities,
         BareControlValue,
         // Target types
@@ -209,14 +210,29 @@ struct RadarApiV3 {
     replay: bool,
 }
 
+/// The `GET /radars` response: the Radar API version plus the discovered radars
+/// keyed by radar ID. This envelope matches the signalk-server Radar API, so a
+/// client sees the same shape whether it talks to mayara directly or through a
+/// Signal K server.
+#[derive(Serialize, ToSchema)]
+#[schema(as = RadarsResponse)]
+struct RadarsResponse {
+    /// Radar API version (semver) this response conforms to.
+    #[schema(example = "3.4.0")]
+    version: String,
+    /// Discovered radars, keyed by radar ID.
+    radars: HashMap<String, RadarApiV3>,
+}
+
 #[utoipa::path(
     get,
     path = "/signalk/v2/api/vessels/self/radars",
     summary = "List all active radars",
-    description = "Returns all radars that have been detected on the network and are currently online. \
-                   Each radar entry includes WebSocket URLs for accessing spoke data and control streams.",
+    description = "Returns the Radar API version and all radars that have been detected on the network and \
+                   are currently online, keyed by radar ID. Each radar entry includes WebSocket URLs for \
+                   accessing spoke data and control streams.",
     responses(
-        (status = 200, body = HashMap<String, RadarApiV3>, description = "Map of radar IDs to radar information")
+        (status = 200, body = RadarsResponse, description = "API version and map of radar IDs to radar information")
     ),
     tag = "Radars"
 )]
@@ -224,7 +240,7 @@ async fn get_radars(State(state): State<Web>, headers: hyper::header::HeaderMap)
     let (host, _, ws_scheme) = derive_public_base(&headers, state.tls, state.args.port);
 
     log::debug!("Radar state request, target host = '{}'", host);
-    let mut api: HashMap<String, RadarApiV3> = HashMap::new();
+    let mut radars: HashMap<String, RadarApiV3> = HashMap::new();
     for info in state.radars.get_discovered() {
         let spoke_data_uri = SPOKES_URI.replace("{id}", &info.key());
         let v = RadarApiV3 {
@@ -237,9 +253,13 @@ async fn get_radars(State(state): State<Web>, headers: hyper::header::HeaderMap)
             replay: info.replay(),
         };
 
-        api.insert(info.key(), v);
+        radars.insert(info.key(), v);
     }
-    Json(api).into_response()
+    Json(RadarsResponse {
+        version: mayara::SIGNALK_RADAR_API_VERSION.to_string(),
+        radars,
+    })
+    .into_response()
 }
 
 #[utoipa::path(
