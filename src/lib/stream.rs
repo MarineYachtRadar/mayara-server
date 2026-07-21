@@ -429,10 +429,17 @@ fn get_meta_delta(radars: &SharedRadars, meta_sent: &mut HashSet<String>) -> Opt
 
 // ====== SELF ======= //
 
+/// Baseline context filter for a stream, from the `?subscribe=` query — matching
+/// Signal K's model. Explicit path subscriptions apply additively on top.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Subscribe {
+    /// `subscribe=none`: stream nothing until explicit path subscriptions arrive.
     None,
-    Some,
+    /// `subscribe=self` (the default): stream all own-ship-context data (radar,
+    /// navigation, notifications). Other contexts (AIS `vessels.*`) require an
+    /// explicit subscription.
+    SelfOnly,
+    /// `subscribe=all`: stream every context (own-ship + AIS).
     All,
 }
 pub struct ActiveSubscriptions {
@@ -479,9 +486,10 @@ impl ActiveSubscriptions {
         self.timeout
     }
 
-    /// Subscribe to paths. Returns true if a new AIS vessel subscription was added.
+    /// Subscribe to paths. Returns true if a new AIS vessel subscription was
+    /// added. Additive: it adds explicit path subscriptions without changing the
+    /// query baseline (`none`/`self`/`all`), matching Signal K semantics.
     pub fn subscribe(&mut self, subscription: Subscription) -> Result<bool, RadarError> {
-        self.mode = Subscribe::Some;
         let mut period = u64::MAX;
         let mut ais_subscribed = false;
         for path_subscription in subscription.subscribe {
@@ -586,7 +594,6 @@ impl ActiveSubscriptions {
     }
 
     pub fn desubscribe(&mut self, subscription: Desubscription) -> Result<(), RadarError> {
-        self.mode = Subscribe::Some;
         for path_desubscription in subscription.desubscribe {
             let path = &path_desubscription.path;
 
@@ -669,13 +676,12 @@ impl ActiveSubscriptions {
     //
     pub fn is_subscribed(&mut self, rcv: &RadarControlValue, full: bool) -> bool {
         match self.mode {
-            Subscribe::All => {
+            // Radar control values are own-ship data, so they are in the baseline
+            // for both `self` and `all`.
+            Subscribe::All | Subscribe::SelfOnly => {
                 return true;
             }
-            Subscribe::None => {
-                return false;
-            }
-            Subscribe::Some => {}
+            Subscribe::None => {}
         }
         if let (Some(radar_id), Some(control_id)) = (rcv.radar_id.as_deref(), &rcv.control_id) {
             for key in [radar_id, "*"] {
@@ -720,10 +726,17 @@ impl ActiveSubscriptions {
             Subscribe::All => {
                 return true;
             }
-            Subscribe::None => {
-                return false;
+            Subscribe::SelfOnly => {
+                // Own-ship data is in the `self` baseline; only AIS (`vessels.*`,
+                // another vessel's context) needs an explicit subscription. The
+                // path prefix is the context discriminator, so this stays correct
+                // even when navigation comes from NMEA 0183 (no upstream own-ship
+                // URN) — `navigation.*` is own-ship by path regardless.
+                if !path.starts_with("vessels.") {
+                    return true;
+                }
             }
-            Subscribe::Some => {}
+            Subscribe::None => {}
         }
 
         // Handle navigation paths (e.g., "navigation.headingTrue")
@@ -1074,7 +1087,7 @@ mod test {
 
     #[test]
     fn target_subscribe_dedupes_repeated_patterns() {
-        let mut subs = ActiveSubscriptions::new(Subscribe::Some);
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
         for _ in 0..100 {
             subs.subscribe(Subscription {
                 subscribe: vec![path("radars.nav1.targets.*")],
@@ -1088,7 +1101,7 @@ mod test {
 
     #[test]
     fn target_desubscribe_removes_pattern_and_empty_bucket() {
-        let mut subs = ActiveSubscriptions::new(Subscribe::Some);
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
         subs.subscribe(Subscription {
             subscribe: vec![path("radars.nav1.targets.*"), path("radars.nav1.targets.5")],
         })
@@ -1112,7 +1125,7 @@ mod test {
 
     #[test]
     fn navigation_desubscribe_removes_path() {
-        let mut subs = ActiveSubscriptions::new(Subscribe::Some);
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
         subs.subscribe(Subscription {
             subscribe: vec![path("navigation.headingTrue"), path("navigation.position")],
         })
@@ -1128,7 +1141,7 @@ mod test {
 
     #[test]
     fn notification_exact_path_matches() {
-        let mut subs = ActiveSubscriptions::new(Subscribe::Some);
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
         subs.subscribe(Subscription {
             subscribe: vec![path("notifications.radar.fur6424A.guardZone.1")],
         })
@@ -1140,7 +1153,7 @@ mod test {
 
     #[test]
     fn notification_wildcard_matches_per_zone_paths() {
-        let mut subs = ActiveSubscriptions::new(Subscribe::Some);
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
         subs.subscribe(Subscription {
             subscribe: vec![path("notifications.radar.*")],
         })
@@ -1154,7 +1167,7 @@ mod test {
 
     #[test]
     fn notification_desubscribe_removes_path() {
-        let mut subs = ActiveSubscriptions::new(Subscribe::Some);
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
         subs.subscribe(Subscription {
             subscribe: vec![path("notifications.radar.*"), path("notifications.foo")],
         })
@@ -1176,7 +1189,7 @@ mod test {
     fn notification_apply_subscriptions_retains_subscribed_paths() {
         use crate::stream::{NotificationMethod, NotificationState, NotificationValue};
 
-        let mut subs = ActiveSubscriptions::new(Subscribe::Some);
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
         subs.subscribe(Subscription {
             subscribe: vec![path("notifications.radar.*")],
         })
@@ -1241,7 +1254,7 @@ mod test {
     fn throttle_first_update_is_delivered() {
         // The first update on a freshly-subscribed path must be delivered,
         // and must mark `last_sent` so subsequent updates can be throttled.
-        let mut subs = ActiveSubscriptions::new(Subscribe::Some);
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
         subs.subscribe(Subscription {
             subscribe: vec![throttled_path(
                 "radars.nav1.controls.gain",
@@ -1262,7 +1275,7 @@ mod test {
         // too soon, it must be dropped *without* moving the deadline
         // forward. Otherwise every subsequent update is also dropped
         // and the subscriber is starved indefinitely.
-        let mut subs = ActiveSubscriptions::new(Subscribe::Some);
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
         subs.subscribe(Subscription {
             subscribe: vec![throttled_path(
                 "radars.nav1.controls.gain",
@@ -1282,7 +1295,7 @@ mod test {
 
     #[test]
     fn throttle_send_after_period_advances_last_sent() {
-        let mut subs = ActiveSubscriptions::new(Subscribe::Some);
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
         subs.subscribe(Subscription {
             subscribe: vec![throttled_path(
                 "radars.nav1.controls.gain",
@@ -1306,7 +1319,7 @@ mod test {
     fn throttle_min_period_drop_does_not_advance_last_sent() {
         // Same regression as above, but on the `min_period` branch with a
         // non-Fixed policy — the bug existed in both code paths.
-        let mut subs = ActiveSubscriptions::new(Subscribe::Some);
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
         subs.subscribe(Subscription {
             subscribe: vec![throttled_path(
                 "radars.nav1.controls.gain",

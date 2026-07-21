@@ -187,7 +187,7 @@ fn test_ais_store_accumulates_data() {
 
 #[test]
 fn test_ais_delta_filtering_without_subscription() {
-    let mut subscriptions = ActiveSubscriptions::new(Subscribe::Some);
+    let mut subscriptions = ActiveSubscriptions::new(Subscribe::None);
 
     // No vessel subscription - only radar controls
     let subscription = create_subscription("radars.test.controls.*");
@@ -225,7 +225,7 @@ fn test_ais_delta_filtering_without_subscription() {
 
 #[test]
 fn test_ais_delta_passes_with_subscription() {
-    let mut subscriptions = ActiveSubscriptions::new(Subscribe::Some);
+    let mut subscriptions = ActiveSubscriptions::new(Subscribe::None);
 
     // Subscribe to vessels.*
     let subscription = create_subscription("vessels.*");
@@ -264,7 +264,7 @@ fn test_ais_delta_passes_with_subscription() {
 
 #[test]
 fn test_ais_delta_filtered_after_desubscription() {
-    let mut subscriptions = ActiveSubscriptions::new(Subscribe::Some);
+    let mut subscriptions = ActiveSubscriptions::new(Subscribe::None);
 
     // Subscribe to vessels.*
     let subscription = create_subscription("vessels.*");
@@ -304,7 +304,7 @@ fn test_ais_delta_filtered_after_desubscription() {
 
 #[test]
 fn test_multiple_ais_vessels_subscription() {
-    let mut subscriptions = ActiveSubscriptions::new(Subscribe::Some);
+    let mut subscriptions = ActiveSubscriptions::new(Subscribe::None);
 
     // Subscribe to vessels.*
     let subscription = create_subscription("vessels.*");
@@ -451,7 +451,7 @@ fn test_subscribe_none_mode_blocks_ais() {
 
 #[test]
 fn test_specific_mmsi_subscription() {
-    let mut subscriptions = ActiveSubscriptions::new(Subscribe::Some);
+    let mut subscriptions = ActiveSubscriptions::new(Subscribe::None);
 
     // Subscribe to specific vessel only
     let subscription = create_subscription("vessels.123456789");

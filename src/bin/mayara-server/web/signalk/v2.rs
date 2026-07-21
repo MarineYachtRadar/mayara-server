@@ -1099,7 +1099,8 @@ async fn control_stream_handler(
     );
 
     let subscribe = match params.subscribe.as_deref() {
-        None | Some("self") | Some("all") => Subscribe::All,
+        None | Some("self") => Subscribe::SelfOnly,
+        Some("all") => Subscribe::All,
         Some("none") => Subscribe::None,
         _ => {
             return (
@@ -1191,7 +1192,9 @@ async fn ws_signalk_delta(
     let mut sk_delta = SignalKDelta::new();
     sk_delta.add_meta_updates(&radars, &mut meta_radar_data_sent);
 
-    if send_cached_values && subscribe == Subscribe::All {
+    // Radar controls are own-ship data, so send the cached values on connect for
+    // both `self` and `all` — only `none` waits for an explicit subscription.
+    if send_cached_values && subscribe != Subscribe::None {
         for radar in radars.get_active() {
             let rcvs: Vec<RadarControlValue> = radar.controls.get_radar_control_values();
             log::info!(
@@ -1499,7 +1502,9 @@ async fn send_all_subscribed(
     for radar in radars.get_active() {
         rcvs.append(&mut radar.controls.get_radar_control_values());
     }
-    if subscriptions.mode == Subscribe::Some {
+    // Under `none`, keep only explicitly-subscribed controls; `self`/`all` get
+    // them all (radar controls are own-ship data, always in those baselines).
+    if subscriptions.mode == Subscribe::None {
         rcvs.retain(|x| subscriptions.is_subscribed(x, true));
     }
     log::debug!("Sending {} subscribed controls", rcvs.len());
