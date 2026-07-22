@@ -28,7 +28,7 @@ struct FrameHeader {
 #[repr(C, packed)]
 struct SpokeHeader2 {
     field01: u32,
-    _length: u32, // ..
+    length: u32, // total block length: 8 where only the two header words follow, 28 on an RD418D
 }
 
 #[derive(Deserialize, Debug, Clone, Copy)]
@@ -183,7 +183,19 @@ pub(crate) fn process_frame(receiver: &mut RaymarineReportReceiver, data: &[u8])
         log::trace!("{}: header2 {:?}", receiver.common.key, header2);
 
         if header2.field01 == 0x00000002 {
-            next_offset += SPOKE_HEADER_2_LENGTH;
+            // The type-2 sub-block is length-prefixed: an RD418D sends
+            // 28-byte blocks with extra data after the two header words
+            // (issue #419); a fixed 8-byte skip misreads everything after.
+            let block_len = header2.length as usize;
+            if block_len < SPOKE_HEADER_2_LENGTH || next_offset + block_len > data.len() {
+                log::warn!(
+                    "{}: implausible type-2 spoke block length {}",
+                    receiver.common.key,
+                    block_len
+                );
+                break;
+            }
+            next_offset += block_len;
         }
 
         // Followed by the actual spoke data
@@ -563,6 +575,15 @@ pub(super) fn process_fixed_report(receiver: &mut RaymarineReportReceiver, data:
     }
 }
 
+/// The info report's model field holds the E-number, on some radars with the
+/// serial number appended without a separator (an RD418D sends
+/// "E921300530192"). Try the whole field first, then the 6-character
+/// E-number prefix.
+fn model_from_serial(model_serial: &str) -> Option<RaymarineModel> {
+    RaymarineModel::try_into(model_serial)
+        .or_else(|| model_serial.get(..6).and_then(RaymarineModel::try_into))
+}
+
 pub(super) fn process_info_report(receiver: &mut RaymarineReportReceiver, data: &[u8]) {
     if receiver.model.is_some() {
         return;
@@ -581,12 +602,14 @@ pub(super) fn process_info_report(receiver: &mut RaymarineReportReceiver, data: 
         .trim_end_matches('\0')
         .to_string();
 
-    let model_serial = &data[20..27];
-    let model_serial = String::from_utf8_lossy(model_serial)
-        .trim_end_matches('\0')
-        .to_string();
+    let model_field = &data[20..];
+    let model_field = &model_field[..model_field
+        .iter()
+        .position(|&b| b == 0)
+        .unwrap_or(model_field.len())];
+    let model_serial = String::from_utf8_lossy(model_field).to_string();
 
-    let model = match RaymarineModel::try_into(&model_serial) {
+    let model = match model_from_serial(&model_serial) {
         Some(model) => model,
         None => {
             if model_serial.parse::<u64>().is_ok() {
@@ -612,7 +635,9 @@ pub(super) fn process_info_report(receiver: &mut RaymarineReportReceiver, data: 
         .common
         .set_string(&ControlId::SerialNumber, serial_nr.clone());
     receiver.common.info.serial_no = Some(serial_nr);
-    receiver.common.info.spokes_per_revolution = model.max_spoke_len as u16;
+    // spokes_per_revolution keeps the locator's RD_SPOKES_PER_REVOLUTION:
+    // an RD418D sends azimuths 0..2047 even though its spokes carry only
+    // 512 samples (issue #419) — spoke count and sample count are distinct.
     receiver.common.info.max_spoke_len = model.max_spoke_len as u16;
     let info2 = receiver.common.info.clone();
     settings::update_when_model_known(&mut receiver.common.info.controls, &model, &info2);
@@ -626,4 +651,21 @@ pub(super) fn process_info_report(receiver: &mut RaymarineReportReceiver, data: 
     receiver.common.update();
     receiver.model = Some(model);
     receiver.state = ReceiverState::InfoRequestReceived;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::model_from_serial;
+
+    #[test]
+    fn model_from_concatenated_serial() {
+        // RD418D wire data (issue #419): E-number with the serial appended.
+        assert_eq!(model_from_serial("E921300530192").unwrap().name, "RD418D");
+        // NUL-padded fields arrive here already truncated and match exactly.
+        assert_eq!(model_from_serial("E92130").unwrap().name, "RD418D");
+        assert_eq!(model_from_serial("E70498").unwrap().name, "Quantum Q24D");
+        // Numeric E-series fields are no model; the caller falls back.
+        assert!(model_from_serial("1234567").is_none());
+        assert!(model_from_serial("E9999").is_none());
+    }
 }

@@ -45,6 +45,10 @@ pub(crate) const DISCOVERY_ADDRESS_WIFI: &str = "232.1.1.1:5800";
 //   Extended Quantum beacon with additional address fields. Not currently
 //   processed — the 56+36 byte pair is sufficient for discovery.
 //
+// MFDs additionally emit a 56-byte beacon with beacon_type = 2 (subtype
+// 0x1e, empty model string) alongside their type-1 MFD announcement. It is
+// not a radar identity and is ignored.
+//
 // A Quantum WiFi radar with a W3 wireless bridge sends both W3 beacons
 // (subtype 0x4d/0x29 with its own link_id) and direct Quantum beacons
 // (subtype 0x66/0x28 with the radar's link_id). The W3 beacons are
@@ -53,6 +57,9 @@ pub(crate) const DISCOVERY_ADDRESS_WIFI: &str = "232.1.1.1:5800";
 
 /// Subtypes in the 36-byte beacon (beacon_type = 0).
 pub(crate) mod beacon36 {
+    /// beacon_type of the 36-byte address beacon.
+    pub(crate) const TYPE_ADDRESS: u32 = 0;
+
     /// Quantum radar — carries the multicast report and command addresses.
     pub(crate) const QUANTUM: u32 = 0x28;
     /// RD (magnetron) radar.
@@ -60,15 +67,29 @@ pub(crate) mod beacon36 {
     /// W3 wireless bridge forwarding a Quantum (different link_id). Ignored.
     pub(crate) const W3: u32 = 0x29;
 
+    /// Subtypes observed on the wire from RD-family radars whose meaning is
+    /// unknown (0x24 is emitted by an "Ethernet Dome" radome every beacon
+    /// cycle). Ignored without warning.
+    pub(crate) const RD_IGNORED: [u32; 7] = [8, 21, 26, 27, 30, 35, 36];
+
     pub(crate) const LEN: usize = 36;
 }
 
 /// Subtypes in the 56-byte beacon (beacon_type = 1).
 pub(crate) mod beacon56 {
+    /// beacon_type of the 56-byte identity beacon.
+    pub(crate) const TYPE_IDENTITY: u32 = 1;
+    /// beacon_type of the secondary 56-byte announcement MFDs emit alongside
+    /// their type-1 MFD beacon (subtype 0x1e, empty model). Ignored.
+    pub(crate) const TYPE_MFD_SIDECAR: u32 = 2;
+
     /// Quantum radar identity — model name e.g. "QuantumRadar".
     pub(crate) const QUANTUM: u32 = 0x66;
     /// RD (magnetron) radar identity.
     pub(crate) const RD: u32 = 0x01;
+    /// RD Ethernet radome identity — model name "Ethernet Dome".
+    /// Wire-observed from an RD418D in MarineYachtRadar/mayara-server#419.
+    pub(crate) const RD_DOME: u32 = 0x0b;
     /// W3 wireless bridge identity — model name "Quantum_W3". Ignored.
     pub(crate) const W3: u32 = 0x4d;
     /// MFD announcement. Ignored.
