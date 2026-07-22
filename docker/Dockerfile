@@ -2,7 +2,7 @@ FROM rust:1.94-alpine AS builder
 # `curl` is needed at build time by utoipa-swagger-ui's build.rs to fetch
 # the Swagger UI bundle; without it the build fails with `curl command not
 # found`. `perl` is required by openssl-sys.
-RUN apk add --no-cache build-base curl perl
+RUN apk add --no-cache build-base curl perl cmake
 
 WORKDIR /usr/src/mayara-server
 
