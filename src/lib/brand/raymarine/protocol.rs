@@ -90,6 +90,9 @@ pub(crate) mod beacon56 {
     /// RD Ethernet radome identity — model name "Ethernet Dome".
     /// Wire-observed from an RD418D in MarineYachtRadar/mayara-server#419.
     pub(crate) const RD_DOME: u32 = 0x0b;
+    /// RD HD radome identity — model name "Digital Radar".
+    /// Wire-observed from an E92142 RD418HD (4kW 18" HD Color Radome).
+    pub(crate) const RD_HD: u32 = 0x0a;
     /// W3 wireless bridge identity — model name "Quantum_W3". Ignored.
     pub(crate) const W3: u32 = 0x4d;
     /// MFD announcement. Ignored.

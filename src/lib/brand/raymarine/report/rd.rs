@@ -20,8 +20,8 @@ struct FrameHeader {
     nspokes: u32,      // 0x00000008 - usually but changes
     _spoke_count: u32, // 0x00000000 in regular, counting in HD
     _zero_3: u32,
-    fieldx_3: u32, // 0x00000001
-    fieldx_4: u32, // 0x00000000 or 0xffffffff in regular, 0x400 in HD
+    fieldx_3: u32,  // 0x00000001
+    _fieldx_4: u32, // 0 on an RD418D; on an RD418HD the first spoke's block length
 }
 
 #[derive(Deserialize, Debug, Clone, Copy)]
@@ -102,10 +102,10 @@ pub(crate) fn process_frame(receiver: &mut RaymarineReportReceiver, data: &[u8])
         return;
     }
 
-    if header.fieldx_4 == 0x400 {
-        log::warn!("{}: different radar type found", receiver.common.key);
-        return;
-    }
+    // No check on _fieldx_4: it is not a radar-type marker. An RD418D sends 0
+    // there, an RD418HD the first spoke's block length — which reaches 0x400
+    // for an incompressible 1024-sample spoke, so rejecting on it drops valid
+    // frames. Unknown frame layouts fail the SpokeHeader1 match below instead.
 
     if nspokes == 0 || nspokes > 360 {
         log::warn!("{}: Invalid spoke count {}", receiver.common.key, nspokes);
@@ -344,6 +344,15 @@ struct StatusReport {
 
 const STATUS_REPORT_LENGTH: usize = size_of::<StatusReport>();
 
+/// Offset of the power-state byte in the HD (0x018801) status report. The
+/// D/analog (0x010001) report carries it at `StatusReport::status` (180),
+/// where the HD variant holds a constant 1. Wire-observed on an E92142
+/// RD418HD: byte 124 flips 0 -> 1 as the MFD switches it to transmit.
+const HD_STATUS_POWER_OFFSET: usize = 124;
+
+/// Offset of the range-index byte in the HD (0x018801) status report.
+const HD_STATUS_RANGE_OFFSET: usize = 296;
+
 pub(super) fn process_status_report(receiver: &mut RaymarineReportReceiver, data: &[u8]) {
     if receiver.state < ReceiverState::FixedRequestReceived {
         log::trace!("{}: Skip status: not all reports seen", receiver.common.key);
@@ -388,13 +397,29 @@ pub(super) fn process_status_report(receiver: &mut RaymarineReportReceiver, data
 
     let hd = report.field01 == 0x00018801;
 
-    let status = match report.status {
+    // The HD report reads bytes beyond STATUS_REPORT_LENGTH; a truncated
+    // datagram must not panic the receiver.
+    if hd && data.len() <= HD_STATUS_RANGE_OFFSET {
+        log::warn!(
+            "{}: Invalid data length for HD status report: {}",
+            receiver.common.key,
+            data.len()
+        );
+        return;
+    }
+
+    let power_byte = if hd {
+        data[HD_STATUS_POWER_OFFSET]
+    } else {
+        report.status
+    };
+    let status = match power_byte {
         0x00 => Power::Standby,
         0x01 => Power::Transmit,
         0x02 => Power::Preparing,
         0x03 => Power::Off,
         _ => {
-            log::warn!("{}: Unknown status {}", receiver.common.key, report.status);
+            log::warn!("{}: Unknown status {}", receiver.common.key, power_byte);
             Power::Standby // Default to Standby if unknown
         }
     };
@@ -420,7 +445,11 @@ pub(super) fn process_status_report(receiver: &mut RaymarineReportReceiver, data
             receiver.common.info.ranges
         );
     }
-    let range_index = if hd { data[296] } else { report.range_id } as usize;
+    let range_index = if hd {
+        data[HD_STATUS_RANGE_OFFSET]
+    } else {
+        report.range_id
+    } as usize;
     let range_meters = receiver.common.info.ranges.get_distance(range_index);
     receiver.range_meters = range_meters as u32;
     log::debug!("{}: range_meters={}", receiver.common.key, range_meters);
@@ -428,6 +457,15 @@ pub(super) fn process_status_report(receiver: &mut RaymarineReportReceiver, data
     receiver
         .common
         .set_value(&ControlId::Range, range_meters as f64);
+
+    // The remaining StatusReport offsets only hold data in the D/analog
+    // (0x010001) layout. In the HD (0x018801) report they land on constant
+    // zeros and a bogus bearing offset (wire-observed on an E92142), so
+    // leave those controls untouched until their HD offsets are mapped.
+    if hd {
+        return;
+    }
+
     receiver
         .common
         .set_value_auto(&ControlId::Gain, report.gain as f64, report.auto_gain);
@@ -625,16 +663,30 @@ pub(super) fn process_info_report(receiver: &mut RaymarineReportReceiver, data: 
             }
         }
     };
+    apply_model(receiver, model, Some(serial_nr));
+    receiver.state = ReceiverState::InfoRequestReceived;
+}
+
+/// Store the identified model and serial number and update the controls,
+/// legend and pixel geometry accordingly. The caller advances the receiver
+/// state, which differs per info-report flavour.
+fn apply_model(
+    receiver: &mut RaymarineReportReceiver,
+    model: RaymarineModel,
+    serial_nr: Option<String>,
+) {
     log::info!(
         "{}: Detected model {} with serialnr {}",
         receiver.common.key,
         model.name,
-        serial_nr
+        serial_nr.as_deref().unwrap_or("<unknown>")
     );
-    receiver
-        .common
-        .set_string(&ControlId::SerialNumber, serial_nr.clone());
-    receiver.common.info.serial_no = Some(serial_nr);
+    if let Some(serial_nr) = serial_nr {
+        receiver
+            .common
+            .set_string(&ControlId::SerialNumber, serial_nr.clone());
+        receiver.common.info.serial_no = Some(serial_nr);
+    }
     // spokes_per_revolution keeps the locator's RD_SPOKES_PER_REVOLUTION:
     // an RD418D sends azimuths 0..2047 even though its spokes carry only
     // 512 samples (issue #419) — spoke count and sample count are distinct.
@@ -650,22 +702,126 @@ pub(super) fn process_info_report(receiver: &mut RaymarineReportReceiver, data: 
     receiver.wire_to_legend = wire_to_legend(&receiver.common.info.get_legend());
     receiver.common.update();
     receiver.model = Some(model);
-    receiver.state = ReceiverState::InfoRequestReceived;
+}
+
+/// Marker introducing an identity block in the HD 0x018701 report.
+const HD_INFO_BLOCK_MARKER: [u8; 6] = [0xff, 0x01, 0x50, 0x50, 0x50, 0x41];
+
+/// The identity block is a grid of 16-byte string slots after the marker.
+const HD_INFO_SLOT_LEN: usize = 16;
+/// Slot offset (relative to the marker) of the 7-digit serial number.
+const HD_INFO_SERIAL_SLOT: usize = 16;
+/// Slot offset (relative to the marker) of the model + unit number string.
+const HD_INFO_MODEL_SLOT: usize = 32;
+
+/// Read a Pascal-style string from a 16-byte identity slot:
+/// a length byte followed by ASCII characters, padded with 0xff.
+fn hd_info_string(slot: &[u8]) -> Option<String> {
+    let len = *slot.first()? as usize;
+    if len == 0 || len >= HD_INFO_SLOT_LEN {
+        return None;
+    }
+    let bytes = slot.get(1..1 + len)?;
+    if !bytes.iter().all(|b| b.is_ascii_graphic()) {
+        return None;
+    }
+    Some(String::from_utf8_lossy(bytes).into_owned())
+}
+
+/// HD-generation radomes (e.g. an E92142 RD418HD) never send the 0x010006
+/// info or 0x010002 fixed reports; their ~1 Hz 0x018701 report carries the
+/// unit identity instead. It holds one identity block per subassembly, each
+/// starting with `HD_INFO_BLOCK_MARKER` followed by 16-byte string slots:
+/// the board serial ("9137606") and the model with the unit number appended
+/// ("E921421220193" = E92142 + unit, the same concatenation style as the
+/// RD418D's 0x010006 model field). Parse the first block and treat it as
+/// info + fixed combined, so the next status report completes the state
+/// machine and spokes flow.
+pub(super) fn process_hd_info_report(receiver: &mut RaymarineReportReceiver, data: &[u8]) {
+    if receiver.model.is_some() {
+        return;
+    }
+
+    let Some(marker) = data
+        .windows(HD_INFO_BLOCK_MARKER.len())
+        .position(|w| w == HD_INFO_BLOCK_MARKER)
+    else {
+        log::warn!(
+            "{}: HD info report without identity block, len {}",
+            receiver.common.key,
+            data.len()
+        );
+        return;
+    };
+
+    let slot = |offset: usize| data.get(marker + offset..marker + offset + HD_INFO_SLOT_LEN);
+    let serial_nr = slot(HD_INFO_SERIAL_SLOT).and_then(hd_info_string);
+    let model_serial = slot(HD_INFO_MODEL_SLOT).and_then(hd_info_string);
+
+    let Some(model_serial) = model_serial else {
+        log::error!(
+            "{}: HD info report identity block without model string: {:02X?}",
+            receiver.common.key,
+            &data[marker..data.len().min(marker + 64)]
+        );
+        return;
+    };
+
+    let Some(model) = model_from_serial(&model_serial) else {
+        log::error!(
+            "{}: Unknown model serial: {}",
+            receiver.common.key,
+            model_serial
+        );
+        return;
+    };
+
+    apply_model(receiver, model, serial_nr);
+    // No fixed report will ever come; this report covers both.
+    receiver.state = ReceiverState::FixedRequestReceived;
 }
 
 #[cfg(test)]
 mod tests {
-    use super::model_from_serial;
+    use super::{hd_info_string, model_from_serial};
 
     #[test]
     fn model_from_concatenated_serial() {
         // RD418D wire data (issue #419): E-number with the serial appended.
         assert_eq!(model_from_serial("E921300530192").unwrap().name, "RD418D");
+        // RD418HD wire data: model + unit number from the 0x018701 report.
+        assert_eq!(model_from_serial("E921421220193").unwrap().name, "RD418HD");
         // NUL-padded fields arrive here already truncated and match exactly.
         assert_eq!(model_from_serial("E92130").unwrap().name, "RD418D");
         assert_eq!(model_from_serial("E70498").unwrap().name, "Quantum Q24D");
         // Numeric E-series fields are no model; the caller falls back.
         assert!(model_from_serial("1234567").is_none());
         assert!(model_from_serial("E9999").is_none());
+    }
+
+    #[test]
+    fn hd_info_slot_strings() {
+        // Real identity slots from an E92142 RD418HD 0x018701 report:
+        // Pascal length byte, ASCII characters, 0xff padding.
+        const SERIAL_SLOT: [u8; 16] = [
+            0x07, 0x39, 0x31, 0x33, 0x37, 0x36, 0x30, 0x36, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff,
+        ];
+        const MODEL_SLOT: [u8; 16] = [
+            0x0d, 0x45, 0x39, 0x32, 0x31, 0x34, 0x32, 0x31, 0x32, 0x32, 0x30, 0x31, 0x39, 0x33,
+            0xff, 0xff,
+        ];
+        assert_eq!(hd_info_string(&SERIAL_SLOT).as_deref(), Some("9137606"));
+        assert_eq!(
+            hd_info_string(&MODEL_SLOT).as_deref(),
+            Some("E921421220193")
+        );
+
+        // Length byte out of range or non-printable content is rejected.
+        assert_eq!(hd_info_string(&[0x00; 16]), None);
+        assert_eq!(hd_info_string(&[0xff; 16]), None);
+        let mut bad = SERIAL_SLOT;
+        bad[1] = 0xff;
+        assert_eq!(hd_info_string(&bad), None);
     }
 }

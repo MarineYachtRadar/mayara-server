@@ -208,7 +208,7 @@ struct RaymarineBeacon56 {
     link_id: [u8; 4],     // 8
     _field4: [u8; 4],     // 12
     _field5: [u8; 4],     // 16
-    model_name: [u8; 32], // 20: String like "QuantumRadar" (subtype 0x66) or "Ethernet Dome" (subtype 0x0b)
+    model_name: [u8; 32], // 20: String like "QuantumRadar" (subtype 0x66), "Ethernet Dome" (subtype 0x0b) or "Digital Radar" (subtype 0x0a)
     _field7: [u8; 4],     // 52
 }
 
@@ -490,13 +490,15 @@ impl RaymarineLocator {
                             log::debug!("{}: data {:?}", from, data);
                         }
                     }
-                    protocol::beacon56::RD | protocol::beacon56::RD_DOME => {
+                    protocol::beacon56::RD
+                    | protocol::beacon56::RD_DOME
+                    | protocol::beacon56::RD_HD => {
                         let model = BaseModel::RD;
                         // Only Ethernet radomes carry a model string
-                        // ("Ethernet Dome"); the analog RD beacon's model
-                        // field holds other data that may happen to decode
-                        // as a string.
-                        let model_name = Some(if subtype == protocol::beacon56::RD_DOME {
+                        // ("Ethernet Dome", "Digital Radar"); the analog RD
+                        // beacon's model field holds other data that may
+                        // happen to decode as a string.
+                        let model_name = Some(if subtype != protocol::beacon56::RD {
                             c_string(&data.model_name)
                                 .filter(|s| !s.is_empty())
                                 .map(String::from)
@@ -1115,6 +1117,84 @@ mod tests {
         assert_eq!(
             info.report_addr,
             SocketAddrV4::new(Ipv4Addr::new(226, 77, 83, 98), 2572)
+        );
+        assert_eq!(info.spoke_data_addr, info.report_addr);
+    }
+
+    #[test]
+    fn rd418hd_digital_radar_discovery() {
+        // Real beacons from an E92142 RD418HD (4kW 18" HD Color Radome):
+        // radar at 10.3.82.210 announcing to 224.0.0.1:5800 on RayNet.
+        let args = Cli::parse_from(["mayara-server"]);
+        let mut locator = RaymarineLocator::new(args);
+        let radars = &SharedRadars::new();
+        const SRC: Ipv4Addr = Ipv4Addr::new(10, 3, 82, 210);
+
+        // 56-byte identity beacon: subtype 0x0a, model "Digital Radar".
+        const BEACON_56: [u8; 56] = [
+            0x01, 0x00, 0x00, 0x00, 0x0a, 0x00, 0x00, 0x00, 0xc2, 0xc1, 0x40, 0xb9, 0xab, 0x01,
+            0x00, 0x00, 0xd2, 0x52, 0x03, 0x0a, 0x44, 0x69, 0x67, 0x69, 0x74, 0x61, 0x6c, 0x20,
+            0x52, 0x61, 0x64, 0x61, 0x72, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+        ];
+        // 36-byte address beacon subtype 0x01 (RD): report=224.106.90.66:2572,
+        // command=10.3.82.210:2573.
+        const BEACON_36_RD: [u8; 36] = [
+            0x00, 0x00, 0x00, 0x00, 0xc2, 0xc1, 0x40, 0xb9, 0x01, 0x00, 0x00, 0x00, 0x03, 0x00,
+            0x1e, 0x00, 0x06, 0x08, 0x10, 0x00, 0x42, 0x5a, 0x6a, 0xe0, 0x0c, 0x0a, 0x00, 0x00,
+            0xd2, 0x52, 0x03, 0x0a, 0x0d, 0x0a, 0x00, 0x00,
+        ];
+        // Service beacons the radome also emits each cycle (subtypes 0x24 and
+        // 0x1b); both must be ignored without creating a radar.
+        const BEACON_36_X24: [u8; 36] = [
+            0x00, 0x00, 0x00, 0x00, 0xc2, 0xc1, 0x40, 0xb9, 0x24, 0x00, 0x00, 0x00, 0x03, 0x00,
+            0x1e, 0x00, 0x06, 0x08, 0x10, 0x00, 0x00, 0x01, 0x00, 0x00, 0x04, 0x08, 0x00, 0x00,
+            0xd2, 0x52, 0x03, 0x0a, 0x04, 0x08, 0x00, 0x00,
+        ];
+        const BEACON_36_X1B: [u8; 36] = [
+            0x00, 0x00, 0x00, 0x00, 0xc2, 0xc1, 0x40, 0xb9, 0x1b, 0x00, 0x00, 0x00, 0x03, 0x00,
+            0x1e, 0x00, 0x06, 0x08, 0x10, 0x00, 0x02, 0x00, 0x00, 0xe0, 0xa9, 0x16, 0x00, 0x00,
+            0xd2, 0x52, 0x03, 0x0a, 0xaa, 0x16, 0x00, 0x00,
+        ];
+
+        // Address beacon before the identity beacon: link unknown, ignored.
+        assert!(
+            locator
+                .process_beacon_36_report(&BEACON_36_RD, &SRC, radars)
+                .unwrap()
+                .is_none()
+        );
+
+        locator.process_beacon_56_report(&BEACON_56, &SRC).unwrap();
+        let state = locator
+            .ids
+            .get(&0xb940c1c2)
+            .expect("HD radome identity beacon must register its link_id");
+        assert_eq!(state.model, BaseModel::RD);
+        assert_eq!(state.model_name.as_deref(), Some("Digital Radar"));
+
+        for service in [&BEACON_36_X24, &BEACON_36_X1B] {
+            assert!(
+                locator
+                    .process_beacon_36_report(service, &SRC, radars)
+                    .unwrap()
+                    .is_none(),
+                "service subtypes must not create a radar"
+            );
+        }
+
+        let (info, model) = locator
+            .process_beacon_36_report(&BEACON_36_RD, &SRC, radars)
+            .unwrap()
+            .expect("radar should be created");
+        assert_eq!(model, BaseModel::RD);
+        assert_eq!(
+            info.send_command_addr,
+            SocketAddrV4::new(Ipv4Addr::new(10, 3, 82, 210), 2573)
+        );
+        assert_eq!(
+            info.report_addr,
+            SocketAddrV4::new(Ipv4Addr::new(224, 106, 90, 66), 2572)
         );
         assert_eq!(info.spoke_data_addr, info.report_addr);
     }

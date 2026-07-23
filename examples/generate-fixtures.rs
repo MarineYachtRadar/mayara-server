@@ -48,6 +48,16 @@ fn main() {
         500,
     );
 
+    // Raymarine RD418HD (E92142) HD Color Radome: beacons (224.0.0.1:5800) +
+    // report/spoke stream (224.106.90.66:2572). Capture from the Discord
+    // report by night199uk; radar switches standby -> transmit mid-capture.
+    generate_fixture(
+        &base.join("raymarine/RD418HD/night199uk/rd418hd-full.pcap.gz"),
+        &fixture_dir.join("raymarine-rd418hd.pcap.gz"),
+        &|p| p.dst_addr.port() == 5800 || p.dst_addr.port() == 2572,
+        500,
+    );
+
     // Navico: discovery beacons (236.6.7.5:6878 or 236.6.7.4:6768) +
     // report/spoke data (varies per beacon, but common are 236.6.7.x ports)
     generate_fixture(
