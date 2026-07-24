@@ -378,8 +378,15 @@ impl AisVesselStore {
             .collect()
     }
 
-    /// Check for timed-out vessels, mark as Lost and broadcast
-    /// Returns the number of vessels marked as Lost
+    /// Drop vessels whose updates have stopped for longer than [`AIS_TIMEOUT`].
+    ///
+    /// Nothing is broadcast: Signal K has no "lost" delta, so a client ages a
+    /// vessel out when its updates stop. Emitting one here would be worse than
+    /// silence — with no `status` on the wire it is indistinguishable from a
+    /// live refresh, and it would re-assert the vessel's last known position
+    /// exactly when that position has become untrustworthy.
+    ///
+    /// Returns the number of vessels dropped.
     pub fn check_timeouts(&self) -> usize {
         let now = Instant::now();
         let mut lost_vessels = Vec::new();
@@ -402,14 +409,6 @@ impl AisVesselStore {
                 Ok(v) => v,
                 Err(_) => return 0,
             };
-            for mmsi in &lost_vessels {
-                if let Some(vessel) = vessels.get_mut(mmsi) {
-                    vessel.status = "Lost".to_string();
-                    // Lost status is broadcast immediately (no delay needed)
-                    self.broadcast_vessel(vessel);
-                }
-            }
-            // Remove lost vessels from the store
             for mmsi in &lost_vessels {
                 vessels.remove(mmsi);
             }
@@ -802,6 +801,46 @@ mod tests {
         let active = store.get_all_active();
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].mmsi, "222222222");
+    }
+
+    /// A vessel that stops reporting is dropped silently. Signal K has no
+    /// "lost" delta — a client ages the vessel out — and with no `status` on
+    /// the wire a farewell broadcast would be indistinguishable from a live
+    /// refresh re-asserting a position that has just gone stale.
+    #[test]
+    fn test_check_timeouts_drops_silently() {
+        let (tx, mut rx) = broadcast::channel(16);
+        let store = AisVesselStore::new(tx);
+
+        let updates = json!([{
+            "values": [{
+                "path": "navigation.position",
+                "value": {"latitude": 52.0, "longitude": 4.0}
+            }]
+        }]);
+        store.update("vessels.urn:mrn:imo:mmsi:111111111", &updates);
+
+        // Backdate the vessel past the timeout, and drain the delta the
+        // initial update queued so only a timeout broadcast could remain.
+        {
+            let mut vessels = store.vessels.write().unwrap();
+            let vessel = vessels.get_mut("111111111").unwrap();
+            vessel.last_update = Instant::now()
+                .checked_sub(AIS_TIMEOUT + Duration::from_secs(1))
+                .expect("backdate");
+        }
+        store.flush_pending_broadcasts();
+        while rx.try_recv().is_ok() {}
+
+        assert_eq!(store.check_timeouts(), 1, "the vessel should time out");
+        assert!(
+            store.get_all_active().is_empty(),
+            "the vessel should be dropped from the store"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "timing out a vessel must not broadcast a delta"
+        );
     }
 
     #[test]
