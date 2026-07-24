@@ -2747,7 +2747,7 @@ impl Control {
     /// defaulting to `false` when the radar has not set one, so a client never
     /// has to treat a missing `auto` as "not in auto mode". Controls with no
     /// automatic mode report no flag (`None`).
-    pub fn reported_auto(&self) -> Option<bool> {
+    fn reported_auto(&self) -> Option<bool> {
         match self.auto {
             Some(_) => self.auto,
             None if self.item.automatic.is_some() => Some(false),
