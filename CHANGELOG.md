@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **raymarine:** support RD418D radomes (discovery and decoding) (#465) ([PR #465](https://github.com/MarineYachtRadar/mayara-server/pull/465))
 - add cmake to docker build tools (#469) ([PR #469](https://github.com/MarineYachtRadar/mayara-server/pull/469))
+- **raymarine:** support RD418HD radomes (discovery and decoding) (#470) ([PR #470](https://github.com/MarineYachtRadar/mayara-server/pull/470))
 
 ## [3.7.0] - 2026-07-20
 
