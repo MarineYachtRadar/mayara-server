@@ -1,24 +1,30 @@
 //! Cross-project Radar API surface parity.
 //!
-//! mayara-server, signalk-server, and the signalk-plugin must present an
-//! identical Radar API so a client cannot tell whether it is talking to mayara
-//! directly or through Signal K. This test enforces that the shared surface —
-//! the Radar API `version` and the `RadarInfo` field set — stays in lockstep.
+//! mayara-server and signalk-server must present an identical Radar API so a
+//! client cannot tell whether it is talking to mayara directly or through
+//! Signal K. This test enforces that the shared surface — the Radar API
+//! `version` and the `RadarInfo` field set — stays in lockstep.
+//!
+//! The signalk-plugin is deliberately not checked. It declares no Radar API
+//! surface of its own: it imports `RadarInfo` from `@signalk/server-api`, so it
+//! is pinned to signalk-server's definition by construction and there is
+//! nothing to extract or compare. Requiring a plugin checkout here would gate
+//! the test on a repository it never reads.
 //!
 //! It is gated on a committed snapshot of mayara's own surface
 //! (`tests/api_surface.snapshot`): while the surface is unchanged the test
 //! returns immediately, doing no cross-project or git work — that is the fast
 //! path on every `cargo test`. Only when mayara's Radar API surface *changes*
-//! does it verify the sister projects, which must be:
-//!   - checked out next to this repo (`../signalk-server`, `../mayara-server-signalk-plugin`),
+//! does it verify signalk-server, which must be:
+//!   - checked out next to this repo (`../signalk-server`),
 //!   - on a clean default branch (`main`/`master`), and
-//!   - not behind their already-fetched upstream.
+//!   - not behind its already-fetched upstream.
 //!
 //! The test is read-only and offline: it never fetches, pulls, or otherwise
-//! mutates a sister checkout. CI must fetch and prepare them beforehand.
+//! mutates the sister checkout. CI must fetch and prepare it beforehand.
 //!
-//! If a sister is missing, not on its default branch, dirty, or its surface
-//! differs, the test fails.
+//! If it is missing, not on its default branch, dirty, or its surface differs,
+//! the test fails.
 //!
 //! After an intentional API change, regenerate the snapshot:
 //!     MAYARA_UPDATE_API_SNAPSHOT=1 cargo test --test api_surface_parity
@@ -51,23 +57,18 @@ fn radar_api_surface_identical_across_projects() {
     }
 
     eprintln!(
-        "Radar API surface changed vs snapshot — verifying sister projects.\n\
+        "Radar API surface changed vs snapshot — verifying signalk-server.\n\
          current:\n{current}\nsnapshot:\n{snapshot}"
     );
 
-    let root = workspace_root();
-    let signalk = root.join("signalk-server");
-    let plugin = root.join("mayara-server-signalk-plugin");
-
-    for (name, path) in [("signalk-server", &signalk), ("signalk-plugin", &plugin)] {
-        assert!(
-            path.is_dir(),
-            "sister project '{name}' not found at {} — check it out next to \
-             mayara-server to verify Radar API parity",
-            path.display()
-        );
-        ensure_clean_default_branch_uptodate(name, path);
-    }
+    let signalk = workspace_root().join("signalk-server");
+    assert!(
+        signalk.is_dir(),
+        "sister project 'signalk-server' not found at {} — check it out next to \
+         mayara-server to verify Radar API parity",
+        signalk.display()
+    );
+    ensure_clean_default_branch_uptodate("signalk-server", &signalk);
 
     let sk = signalk_server_surface(&signalk);
     assert_eq!(
@@ -77,10 +78,10 @@ fn radar_api_surface_identical_across_projects() {
          Update both to match (and bump the version in lockstep).\n"
     );
 
-    // Surface changed and the sisters agree. Force the snapshot to be
+    // Surface changed and signalk-server agrees. Force the snapshot to be
     // regenerated so the fast path is restored and the change is acknowledged.
     panic!(
-        "\nRadar API surface changed and matches the sister projects.\n\
+        "\nRadar API surface changed and matches signalk-server.\n\
          Record the new surface:\n\
          \x20   MAYARA_UPDATE_API_SNAPSHOT=1 cargo test --test api_surface_parity\n"
     );
@@ -225,7 +226,7 @@ fn run_git(path: &Path, args: &[&str]) -> (bool, String, String) {
 /// Require the sister to be on a clean default branch that is not behind its
 /// already-fetched upstream, so the parity comparison is against the canonical
 /// version. Read-only and offline: the test never fetches, pulls, or otherwise
-/// mutates a sister checkout — CI is responsible for fetching them first.
+/// mutates the sister checkout — CI is responsible for fetching it first.
 fn ensure_clean_default_branch_uptodate(name: &str, path: &Path) {
     // The repo's default branch (origin/HEAD → e.g. "main" or "master").
     let (ok, head, _) = run_git(
