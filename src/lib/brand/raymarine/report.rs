@@ -574,6 +574,14 @@ impl RaymarineReportReceiver {
             0x010006 => {
                 rd::process_info_report(self, data);
             }
+            0x018701 => {
+                rd::process_hd_info_report(self, data);
+            }
+            0x018942 => {
+                // Database report (HD counterpart of Quantum 0x288942) — a
+                // static cyclic table flooded ~25/s in standby. Ignore.
+                log::trace!("{}: RD database report len={}", self.common.key, data.len());
+            }
             // Quantum messages
             0x280001 => {
                 quantum::process_info_report(self, data);
@@ -614,7 +622,7 @@ impl RaymarineReportReceiver {
                 quantum::process_self_test_results(self, data);
             }
             // Guard zone, alarm, MARPA, etc. — logged but not acted on
-            id if (id & 0xFFFF0000 == 0x28000000 || id & 0xFFFF0000 == 0x01000000) => {
+            id if (id & 0xFFFF0000 == 0x00280000 || id & 0xFFFF0000 == 0x00010000) => {
                 if !self.reported_unknown.contains_key(&id) {
                     log::debug!(
                         "{}: Unhandled report ID 0x{:08X} len={}",
