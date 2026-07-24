@@ -12,7 +12,10 @@
 //! does it verify the sister projects, which must be:
 //!   - checked out next to this repo (`../signalk-server`, `../mayara-server-signalk-plugin`),
 //!   - on a clean default branch (`main`/`master`), and
-//!   - up to date with their upstream (it fast-forward pulls).
+//!   - not behind their already-fetched upstream.
+//!
+//! The test is read-only and offline: it never fetches, pulls, or otherwise
+//! mutates a sister checkout. CI must fetch and prepare them beforehand.
 //!
 //! If a sister is missing, not on its default branch, dirty, or its surface
 //! differs, the test fails.
@@ -219,8 +222,10 @@ fn run_git(path: &Path, args: &[&str]) -> (bool, String, String) {
     )
 }
 
-/// Require the sister to be on a clean default branch and fast-forward it from
-/// upstream, so the parity comparison is against the canonical version.
+/// Require the sister to be on a clean default branch that is not behind its
+/// already-fetched upstream, so the parity comparison is against the canonical
+/// version. Read-only and offline: the test never fetches, pulls, or otherwise
+/// mutates a sister checkout — CI is responsible for fetching them first.
 fn ensure_clean_default_branch_uptodate(name: &str, path: &Path) {
     // The repo's default branch (origin/HEAD → e.g. "main" or "master").
     let (ok, head, _) = run_git(
@@ -249,10 +254,20 @@ fn ensure_clean_default_branch_uptodate(name: &str, path: &Path) {
          Radar API parity:\n{status}"
     );
 
-    // Pull the latest from the branch's upstream (canonical) — fast-forward only.
-    let (ok, _, stderr) = run_git(path, &["pull", "--ff-only"]);
-    assert!(
-        ok,
-        "could not fast-forward sister '{name}' from upstream: {stderr}"
+    // Compare against the upstream ref already in the local object store. If
+    // there is no upstream configured there is nothing to check — the local
+    // branch is canonical as far as this checkout is concerned.
+    let (ok, upstream, _) = run_git(
+        path,
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+    );
+    if !ok {
+        return;
+    }
+    let (_, behind, _) = run_git(path, &["rev-list", "--count", &format!("HEAD..{upstream}")]);
+    assert_eq!(
+        behind, "0",
+        "sister '{name}' is {behind} commit(s) behind '{upstream}'; fetch and \
+         fast-forward it before verifying Radar API parity"
     );
 }
