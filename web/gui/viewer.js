@@ -742,7 +742,11 @@ function handleAisDelta(context, update) {
       if (aisVesselState.delete(mmsi) && ppi) {
         ppi.removeAisVessel(mmsi);
       }
-      continue;
+      // Abandon the whole delta, not just this value: every value here
+      // belongs to the vessel we just identified as ourselves, so carrying on
+      // would re-create the aggregate we just evicted from a sibling value
+      // (heading, COG, …) and put own ship back on the PPI.
+      break;
     }
 
     aisVesselState.set(mmsi, agg);

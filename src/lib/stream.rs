@@ -959,7 +959,7 @@ impl ActiveSubscriptions {
     /// the `self` baseline, so outside `subscribe=all` it takes an explicit
     /// `vessels.*` subscription — matching Signal K, where `self` means own
     /// ship only.
-    pub fn is_subscribed_ais(&self, context: &str) -> bool {
+    fn is_subscribed_ais(&self, context: &str) -> bool {
         match self.mode {
             Subscribe::All => true,
             Subscribe::SelfOnly | Subscribe::None => self.is_subscribed_vessel_path(context),
