@@ -554,24 +554,17 @@ async function subscribeToAisViaSignalK() {
   socket.onopen = () => {
     console.log("AIS WebSocket connected");
     aisReconnectAttempts = 0;
-    // `vessels.*` triggers mayara's AIS-store full-snapshot replay; the
-    // remaining leaf paths drive Signal K's incremental delta delivery
-    // under context = "vessels.*". Sending both lets one subscription work
-    // against either backend without having to detect mode first.
-    // mayara's stream subscriber rejects unknown bare-leaf paths (e.g.
-    // "name") with CannotParseControlId, which short-circuits the AIS
-    // snapshot. Stick to paths it knows: `vessels.*` triggers the full
-    // snapshot replay (which already includes vessel names), and the
-    // `navigation.*` leaves drive incremental deltas in plugin mode.
+    // Subscribe to everything under every vessel context — the same
+    // subscription mayara itself sends to its upstream Signal K server, and
+    // the reason it works against either backend: both emit AIS in Signal K's
+    // shape, so there is nothing to detect. A vessel's name in particular
+    // cannot be subscribed to by leaf path (it rides the empty path, see
+    // handleAisDelta), so narrowing this list would silently lose names.
+    // Both servers replay their cached values on subscribe, so the overlay
+    // fills immediately rather than waiting for the next AIS report.
     const subscription = {
       context: "vessels.*",
-      subscribe: [
-        { path: "vessels.*", period: 1000 },
-        { path: "navigation.position", period: 1000 },
-        { path: "navigation.courseOverGroundTrue", period: 1000 },
-        { path: "navigation.speedOverGround", period: 1000 },
-        { path: "navigation.headingTrue", period: 1000 },
-      ],
+      subscribe: [{ path: "*" }],
     };
     socket.send(JSON.stringify(subscription));
   };
@@ -640,7 +633,10 @@ async function primeAisFromRestSnapshot() {
       if (ownShipIdentifiers.has(mmsi)) continue;
       const nav = vessel.navigation;
       const agg = aisVesselState.get(mmsi) || { mmsi, status: "Active" };
-      if (vessel.name?.value) agg.name = vessel.name.value;
+      // `name` is a top-level vessel property, so the REST tree carries it as a
+      // plain string — unlike `navigation.position` below, which is a metered
+      // value wrapped in `{ value, timestamp, … }`.
+      if (typeof vessel.name === "string") agg.name = vessel.name;
       if (nav?.position?.value) agg.position = nav.position.value;
       if (nav?.courseOverGroundTrue?.value != null)
         agg.cog = nav.courseOverGroundTrue.value;
@@ -677,67 +673,53 @@ function unsubscribeFromAisViaSignalK() {
 }
 
 // Apply a single Signal K delta update to the per-MMSI aggregate, then push
-// the merged snapshot to the PPI. Handles two delta shapes:
-//   - Real Signal K: context = `vessels.{mmsi}`, values[].path = leaf path
-//     (e.g. "navigation.position"). Aggregator promotes leaves to flat fields.
-//   - Mayara standalone: context = "vessels.*" wildcard, values[].path =
-//     `vessels.{mmsi}`, value = whole flat snapshot. Merged directly.
+// the merged snapshot to the PPI. There is one shape to handle: the observed
+// vessel is the delta's context (`vessels.{mmsi-urn}`) and each value carries a
+// Signal K path. mayara emits exactly this too, so the aggregator does not care
+// which server it is talking to.
 function handleAisDelta(context, update) {
   if (!update.values) return;
+  if (!context || !context.startsWith("vessels.")) return;
+
+  // The context names the observed vessel. Strip the Signal K URN prefix so the
+  // bare MMSI shows in labels and acts as the map key.
+  let mmsi = context.slice("vessels.".length);
+  if (!mmsi || mmsi === "self" || mmsi === "*") return;
+  const URN_PREFIX = "urn:mrn:imo:mmsi:";
+  if (mmsi.startsWith(URN_PREFIX)) {
+    mmsi = mmsi.slice(URN_PREFIX.length);
+  }
+  if (ownShipIdentifiers.has(mmsi)) return;
 
   for (const item of update.values) {
-    let mmsi = null;
-    let leafPath = null;
+    const leafPath = item.path ?? "";
+    const agg = aisVesselState.get(mmsi) || { mmsi };
 
-    if (item.path && item.path.startsWith("vessels.")) {
-      // Mayara-style: path = "vessels.{mmsi}", value = flat snapshot
-      mmsi = item.path.slice("vessels.".length);
-    } else if (context && context.startsWith("vessels.")) {
-      // Signal K-style: context = "vessels.{mmsi}", path = leaf
-      mmsi = context.slice("vessels.".length);
-      leafPath = item.path;
-    } else {
-      continue;
-    }
-
-    if (!mmsi || mmsi === "self" || mmsi === "*") continue;
-
-    // Strip the Signal K URN prefix so the bare MMSI shows in labels and acts
-    // as a stable map key across delta shapes.
-    const URN_PREFIX = "urn:mrn:imo:mmsi:";
-    if (mmsi.startsWith(URN_PREFIX)) {
-      mmsi = mmsi.slice(URN_PREFIX.length);
-    }
-
-    if (ownShipIdentifiers.has(mmsi)) continue;
-
-    const agg = aisVesselState.get(mmsi) || { mmsi, status: "Active" };
-
-    if (leafPath === null) {
-      // Mayara style: value is the full flat object
-      if (typeof item.value !== "object" || item.value === null) continue;
-      Object.assign(agg, item.value);
-    } else {
-      // Signal K style: promote leaf to flat field
-      switch (leafPath) {
-        case "navigation.position":
-          agg.position = item.value;
-          break;
-        case "navigation.courseOverGroundTrue":
-          agg.cog = item.value;
-          break;
-        case "navigation.speedOverGround":
-          agg.sog = item.value;
-          break;
-        case "navigation.headingTrue":
-          agg.heading = item.value;
-          break;
-        case "name":
-          agg.name = item.value;
-          break;
-        default:
-          continue; // unknown leaf — don't push a redundant update
+    // Promote the Signal K path to the flat field the PPI reads.
+    switch (leafPath) {
+      case "": {
+        // A vessel's top-level properties (name, mmsi, callsign, …) are not
+        // leaf paths: Signal K sends each as its own value on the empty path,
+        // carrying a single-key object. Only the name is drawn.
+        const name = item.value?.name;
+        if (typeof name !== "string") continue;
+        agg.name = name;
+        break;
       }
+      case "navigation.position":
+        agg.position = item.value;
+        break;
+      case "navigation.courseOverGroundTrue":
+        agg.cog = item.value;
+        break;
+      case "navigation.speedOverGround":
+        agg.sog = item.value;
+        break;
+      case "navigation.headingTrue":
+        agg.heading = item.value;
+        break;
+      default:
+        continue; // path the overlay doesn't draw — no redundant update
     }
 
     // Position-proximity own-ship filter: if a vessel reports a position

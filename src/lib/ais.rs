@@ -60,7 +60,12 @@ pub struct AisVessel {
     last_update: Instant,
 }
 
-/// Serializable view of AisVessel (only includes dimensions when known)
+/// Serializable view of AisVessel (only includes dimensions when known).
+///
+/// This is the input to [`SignalKDelta::for_ais_vessel`], which fans it out
+/// into Signal K's own delta paths. `status` is deliberately absent: Signal K
+/// has no liveness field — a consumer ages a vessel out when its updates stop —
+/// so mayara's internal `Active`/`Lost` state never reaches the wire.
 #[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct AisVesselApi {
@@ -77,7 +82,6 @@ pub struct AisVesselApi {
     pub cog: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sog: Option<f64>,
-    pub status: String,
 }
 
 impl From<&AisVessel> for AisVesselApi {
@@ -94,7 +98,6 @@ impl From<&AisVessel> for AisVesselApi {
             heading: vessel.heading,
             cog: vessel.cog,
             sog: vessel.sog,
-            status: vessel.status.clone(),
         }
     }
 }
@@ -418,9 +421,7 @@ impl AisVesselStore {
     /// Broadcast a vessel update to all connected clients
     fn broadcast_vessel(&self, vessel: &AisVessel) {
         let api = AisVesselApi::from(vessel);
-        let path = format!("vessels.{}", vessel.mmsi);
-
-        let delta = SignalKDelta::for_ais_vessel(&path, &api);
+        let delta = SignalKDelta::for_ais_vessel(&api);
 
         let _ = self.broadcast_tx.send(delta);
     }
@@ -675,7 +676,6 @@ mod tests {
         );
         assert_eq!(api.cog, Some(1.5));
         assert_eq!(api.sog, Some(5.0));
-        assert_eq!(api.status, "Active");
         // No dimensions set, so should be None
         assert!(api.dimensions.is_none());
     }
@@ -712,7 +712,6 @@ mod tests {
         assert_eq!(json["position"]["longitude"], -78.64894);
         assert_eq!(json["cog"], 3.632);
         assert_eq!(json["sog"], 0.0);
-        assert_eq!(json["status"], "Active");
         assert_eq!(json["dimensions"]["length"], 12.0);
         assert_eq!(json["dimensions"]["beam"], 4.0);
         // camelCase serialization
@@ -733,7 +732,8 @@ mod tests {
         assert!(json.get("sog").is_none());
         // These should always be present
         assert!(json.get("mmsi").is_some());
-        assert!(json.get("status").is_some());
+        // `status` is internal-only — Signal K has no liveness field.
+        assert!(json.get("status").is_none());
     }
 
     #[test]

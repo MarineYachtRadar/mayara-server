@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::{
     cmp::min,
     collections::{HashMap, HashSet},
@@ -22,6 +23,13 @@ use crate::{
 /// (e.g. `vessels.urn:mrn:signalk:uuid:…`) is detected from the upstream.
 const SELF_CONTEXT: &str = "vessels.self";
 
+/// The Signal K context for an AIS target, keyed by MMSI the way Signal K
+/// itself keys it (`vessels.urn:mrn:imo:mmsi:431004411`) rather than by bare
+/// MMSI, so the context is identical whichever server the client asked.
+fn ais_context(mmsi: &str) -> String {
+    format!("vessels.urn:mrn:imo:mmsi:{}", mmsi)
+}
+
 /// Server-to-client delta message containing control value updates
 #[derive(Serialize, Clone, Debug, ToSchema)]
 #[schema(example = json!({
@@ -42,6 +50,15 @@ pub struct SignalKDelta {
     context: Option<String>,
     /// Array of update batches, each containing changed control values
     updates: Vec<DeltaUpdate>,
+    /// True for a delta about another vessel (AIS). Not part of the wire
+    /// format — it exists because subscription filtering can no longer tell
+    /// AIS from own-ship data by path: in Signal K's shape an AIS position is
+    /// `navigation.position` under a `vessels.<urn>` context, identical to the
+    /// own-ship path. The context is the only discriminator, so the delta
+    /// carries the answer rather than making the filter re-derive it.
+    #[serde(skip)]
+    #[schema(ignore)]
+    is_ais: bool,
 }
 
 impl Default for SignalKDelta {
@@ -59,6 +76,7 @@ impl SignalKDelta {
         Self {
             context: Some(get_own_ship_context().unwrap_or_else(|| SELF_CONTEXT.to_string())),
             updates: Vec::new(),
+            is_ais: false,
         }
     }
 
@@ -190,30 +208,73 @@ impl SignalKDelta {
         self.updates.push(delta_update);
     }
 
-    /// A delta carrying one AIS vessel. Unlike own-ship data, an AIS update
-    /// belongs to the observed vessel's own context, and a Signal K delta has a
-    /// single top-level `context` — so each vessel needs its own delta. This is
-    /// a constructor rather than an `add_…` method precisely so several vessels
-    /// cannot be batched into one delta and silently take the last one's
-    /// context. (The value shape itself is still mayara-specific — normalising
-    /// it to per-path Signal K deltas is tracked separately.)
-    pub fn for_ais_vessel(path: &str, vessel: &crate::ais::AisVesselApi) -> SignalKDelta {
-        let mut delta = Self {
-            context: Some(path.to_string()),
-            updates: Vec::new(),
-        };
-        let value = serde_json::to_value(vessel).unwrap_or(serde_json::Value::Null);
-        let delta_update = DeltaUpdate {
-            timestamp: Some(Utc::now()),
-            source: Some("signalk".to_string()),
-            meta: Vec::new(),
-            values: vec![DeltaValue::Ais {
+    /// A delta carrying one AIS vessel, in Signal K's own shape.
+    ///
+    /// An AIS update belongs to the observed vessel's context, and a Signal K
+    /// delta has a single top-level `context` — so each vessel needs its own
+    /// delta. This is a constructor rather than an `add_…` method precisely so
+    /// several vessels cannot be batched into one and silently take the last
+    /// one's context.
+    ///
+    /// The values are the same paths a Signal K server emits for an AIS target,
+    /// so a client cannot tell whether the vessel came from mayara or from
+    /// Signal K. Note that a vessel's *top-level* properties (`name`, `mmsi`)
+    /// are not leaf paths: Signal K delivers each as its own value on the empty
+    /// path with a single-key object, and this mirrors that exactly.
+    pub fn for_ais_vessel(vessel: &crate::ais::AisVesselApi) -> SignalKDelta {
+        let mut values = Vec::new();
+        let mut push = |path: &str, value: serde_json::Value| {
+            values.push(DeltaValue::Ais {
                 path: path.to_string(),
                 value,
-            }],
+            });
         };
-        delta.updates.push(delta_update);
-        delta
+
+        // Top-level vessel properties ride the empty path, one value each.
+        push("", json!({ "mmsi": vessel.mmsi }));
+        if let Some(name) = &vessel.name {
+            push("", json!({ "name": name }));
+        }
+        if let Some(position) = &vessel.position {
+            push(
+                "navigation.position",
+                json!({ "latitude": position.latitude, "longitude": position.longitude }),
+            );
+        }
+        if let Some(cog) = vessel.cog {
+            push("navigation.courseOverGroundTrue", json!(cog));
+        }
+        if let Some(sog) = vessel.sog {
+            push("navigation.speedOverGround", json!(sog));
+        }
+        if let Some(heading) = vessel.heading {
+            push("navigation.headingTrue", json!(heading));
+        }
+        if let Some(dimensions) = &vessel.dimensions {
+            if let Some(length) = dimensions.length {
+                push("design.length", json!({ "overall": length }));
+            }
+            if let Some(beam) = dimensions.beam {
+                push("design.beam", json!(beam));
+            }
+            if let Some(from_bow) = dimensions.from_bow {
+                push("sensors.ais.fromBow", json!(from_bow));
+            }
+            if let Some(from_center) = dimensions.from_center {
+                push("sensors.ais.fromCenter", json!(from_center));
+            }
+        }
+
+        SignalKDelta {
+            context: Some(ais_context(&vessel.mmsi)),
+            is_ais: true,
+            updates: vec![DeltaUpdate {
+                timestamp: Some(Utc::now()),
+                source: Some("signalk".to_string()),
+                meta: Vec::new(),
+                values,
+            }],
+        }
     }
 
     pub fn add_meta_for_control(&mut self, radar_id: &str, control: &Control) {
@@ -232,6 +293,17 @@ impl SignalKDelta {
     }
 
     pub fn apply_subscriptions(&mut self, subscriptions: &mut ActiveSubscriptions) {
+        // An AIS delta is subscribed (or not) as a whole, by its context: the
+        // client asked for `vessels.*`, not for `navigation.position`. Filtering
+        // its values by path would match them against the own-ship rules and
+        // leak other vessels to a `subscribe=self` client.
+        if self.is_ais {
+            let context = self.context.clone().unwrap_or_default();
+            if !subscriptions.is_subscribed_ais(&context) {
+                self.updates.clear();
+            }
+            return;
+        }
         for update in self.updates.iter_mut() {
             update
                 .values
@@ -304,11 +376,15 @@ enum DeltaValue {
         /// `{latitude, longitude}` in decimal degrees.
         value: PositionValue,
     },
-    /// AIS vessel update (structured data from AIS store)
+    /// One value of an AIS vessel update, in Signal K's own shape: either a
+    /// leaf path (`navigation.position`, `design.beam`, …) or the empty path
+    /// carrying a single top-level vessel property (`{"name": …}`). The
+    /// observed vessel is identified by the delta's context, not by this path.
     Ais {
-        /// Vessel path (e.g., "vessels.227334400")
+        /// Signal K path, or "" for a top-level vessel property.
+        #[schema(example = "navigation.position")]
         path: String,
-        /// Structured vessel data
+        /// The value for that path.
         value: serde_json::Value,
     },
     /// Signal K `notifications.*` alarm. Payload shape matches the
@@ -501,6 +577,27 @@ impl ActiveSubscriptions {
         for path_subscription in subscription.subscribe {
             let path = &path_subscription.path;
 
+            // Signal K's subscribe-everything wildcard — what mayara itself
+            // sends to its upstream Signal K server, and so what a client can
+            // send to either server. It is not a control path: fan it out to
+            // every category, then fall through so the control handler below
+            // sees it too.
+            if path == "*" {
+                log::debug!("Subscribing to all paths");
+                for list in [
+                    &mut self.navigation_subscriptions,
+                    &mut self.notification_subscriptions,
+                ] {
+                    if !list.iter().any(|p| p == "*") {
+                        list.push("*".to_string());
+                    }
+                }
+                if !self.vessel_subscriptions.iter().any(|p| p == "*") {
+                    self.vessel_subscriptions.push("*".to_string());
+                    ais_subscribed = true;
+                }
+            }
+
             // Handle navigation subscriptions (e.g., "navigation.headingTrue")
             if path.starts_with("navigation.") {
                 log::debug!("Subscribing to navigation path: {}", path);
@@ -584,12 +681,17 @@ impl ActiveSubscriptions {
                         paths.insert(control_id, path_subscription);
                     }
                     Err(_e) => {
-                        log::warn!(
-                            "Cannot subscribe radar '{}' path '{}': does not exist",
+                        // Not a control mayara knows. Signal K answers a
+                        // subscription for a path it has no data for by simply
+                        // never sending it, so do the same rather than failing
+                        // the whole subscribe — one unrecognised leaf must not
+                        // cost the client the paths it asked for alongside it.
+                        log::debug!(
+                            "Ignoring subscription to radar '{}' path '{}': not a known control",
                             radar_id,
                             control_id,
                         );
-                        return Err(RadarError::CannotParseControlId(control_id.to_string()));
+                        continue;
                     }
                 }
             }
@@ -852,6 +954,18 @@ impl ActiveSubscriptions {
     }
 
     /// Check if subscribed to a vessel (AIS) path
+    /// Whether the client wants AIS data for `context` (e.g.
+    /// `vessels.urn:mrn:imo:mmsi:431004411`). Another vessel's data is never in
+    /// the `self` baseline, so outside `subscribe=all` it takes an explicit
+    /// `vessels.*` subscription — matching Signal K, where `self` means own
+    /// ship only.
+    pub fn is_subscribed_ais(&self, context: &str) -> bool {
+        match self.mode {
+            Subscribe::All => true,
+            Subscribe::SelfOnly | Subscribe::None => self.is_subscribed_vessel_path(context),
+        }
+    }
+
     fn is_subscribed_vessel_path(&self, path: &str) -> bool {
         for subscribed_path in &self.vessel_subscriptions {
             if subscribed_path == path {

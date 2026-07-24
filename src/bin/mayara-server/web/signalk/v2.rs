@@ -1565,10 +1565,12 @@ async fn send_all_ais_vessels(socket: &mut WebSocket) -> Result<(), RadarError> 
         if !vessels.is_empty() {
             log::info!("Sending {} AIS vessels after subscription", vessels.len());
             // One delta per vessel: a Signal K delta carries a single context,
-            // and each AIS vessel is its own context.
+            // and each AIS vessel is its own context. This is mayara's
+            // equivalent of the cached-value replay a Signal K server sends
+            // when a client subscribes, so the client sees every known vessel
+            // immediately rather than waiting for the next AIS report.
             for vessel in vessels {
-                let path = format!("vessels.{}", vessel.mmsi);
-                let sk_delta = SignalKDelta::for_ais_vessel(&path, &vessel);
+                let sk_delta = SignalKDelta::for_ais_vessel(&vessel);
                 if let Some(delta) = sk_delta.build() {
                     send_message(socket, delta).await?;
                 }
