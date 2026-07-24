@@ -54,7 +54,7 @@ impl SignalKDelta {
     /// A new delta for own-ship data (radar controls, navigation, targets,
     /// notifications). Its context is the detected own-ship context, falling
     /// back to `vessels.self` until a concrete URN arrives from the upstream.
-    /// AIS deltas override this via [`add_ais_vessel_update`].
+    /// AIS vessels get their own context via [`SignalKDelta::for_ais_vessel`].
     pub fn new() -> SignalKDelta {
         Self {
             context: Some(get_own_ship_context().unwrap_or_else(|| SELF_CONTEXT.to_string())),
@@ -190,13 +190,18 @@ impl SignalKDelta {
         self.updates.push(delta_update);
     }
 
-    /// Add an AIS vessel update to the delta message. Unlike own-ship data,
-    /// an AIS delta belongs to the observed vessel's own context, so this
-    /// overrides the own-ship context set by [`new`]. (The value shape itself
-    /// is still mayara-specific — normalising it to per-path Signal K deltas is
-    /// tracked separately.)
-    pub fn add_ais_vessel_update(&mut self, path: &str, vessel: &crate::ais::AisVesselApi) {
-        self.context = Some(path.to_string());
+    /// A delta carrying one AIS vessel. Unlike own-ship data, an AIS update
+    /// belongs to the observed vessel's own context, and a Signal K delta has a
+    /// single top-level `context` — so each vessel needs its own delta. This is
+    /// a constructor rather than an `add_…` method precisely so several vessels
+    /// cannot be batched into one delta and silently take the last one's
+    /// context. (The value shape itself is still mayara-specific — normalising
+    /// it to per-path Signal K deltas is tracked separately.)
+    pub fn for_ais_vessel(path: &str, vessel: &crate::ais::AisVesselApi) -> SignalKDelta {
+        let mut delta = Self {
+            context: Some(path.to_string()),
+            updates: Vec::new(),
+        };
         let value = serde_json::to_value(vessel).unwrap_or(serde_json::Value::Null);
         let delta_update = DeltaUpdate {
             timestamp: Some(Utc::now()),
@@ -207,7 +212,8 @@ impl SignalKDelta {
                 value,
             }],
         };
-        self.updates.push(delta_update);
+        delta.updates.push(delta_update);
+        delta
     }
 
     pub fn add_meta_for_control(&mut self, radar_id: &str, control: &Control) {

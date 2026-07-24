@@ -420,8 +420,7 @@ impl AisVesselStore {
         let api = AisVesselApi::from(vessel);
         let path = format!("vessels.{}", vessel.mmsi);
 
-        let mut delta = SignalKDelta::new();
-        delta.add_ais_vessel_update(&path, &api);
+        let delta = SignalKDelta::for_ais_vessel(&path, &api);
 
         let _ = self.broadcast_tx.send(delta);
     }

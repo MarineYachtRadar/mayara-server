@@ -194,9 +194,8 @@ fn test_ais_delta_filtering_without_subscription() {
     let _ = subscriptions.subscribe(subscription);
 
     // Create a delta with AIS data
-    let mut delta = SignalKDelta::new();
     let vessel = create_test_vessel("123456789", "TEST", 52.0, 4.0);
-    delta.add_ais_vessel_update("vessels.123456789", &vessel);
+    let mut delta = SignalKDelta::for_ais_vessel("vessels.123456789", &vessel);
 
     // Apply subscription filtering
     delta.apply_subscriptions(&mut subscriptions);
@@ -232,9 +231,8 @@ fn test_ais_delta_passes_with_subscription() {
     let _ = subscriptions.subscribe(subscription);
 
     // Create a delta with AIS data
-    let mut delta = SignalKDelta::new();
     let vessel = create_test_vessel("123456789", "TEST", 52.0, 4.0);
-    delta.add_ais_vessel_update("vessels.123456789", &vessel);
+    let mut delta = SignalKDelta::for_ais_vessel("vessels.123456789", &vessel);
 
     // Apply subscription filtering
     delta.apply_subscriptions(&mut subscriptions);
@@ -275,9 +273,8 @@ fn test_ais_delta_filtered_after_desubscription() {
     let _ = subscriptions.desubscribe(desubscription);
 
     // Create a delta with AIS data
-    let mut delta = SignalKDelta::new();
     let vessel = create_test_vessel("123456789", "TEST", 52.0, 4.0);
-    delta.add_ais_vessel_update("vessels.123456789", &vessel);
+    let mut delta = SignalKDelta::for_ais_vessel("vessels.123456789", &vessel);
 
     // Apply subscription filtering
     delta.apply_subscriptions(&mut subscriptions);
@@ -310,38 +307,53 @@ fn test_multiple_ais_vessels_subscription() {
     let subscription = create_subscription("vessels.*");
     let _ = subscriptions.subscribe(subscription);
 
-    // Create a delta with multiple AIS vessels
-    let mut delta = SignalKDelta::new();
-    let vessel1 = create_test_vessel("111111111", "VESSEL1", 52.0, 4.0);
-    let vessel2 = create_test_vessel("222222222", "VESSEL2", 53.0, 5.0);
-    let vessel3 = create_test_vessel("333333333", "VESSEL3", 54.0, 6.0);
-
-    delta.add_ais_vessel_update("vessels.111111111", &vessel1);
-    delta.add_ais_vessel_update("vessels.222222222", &vessel2);
-    delta.add_ais_vessel_update("vessels.333333333", &vessel3);
-
-    // Apply subscription filtering
-    delta.apply_subscriptions(&mut subscriptions);
-
-    // Build and check - all vessels should pass through
-    let built = delta.build();
-    assert!(built.is_some(), "Delta should not be empty");
-
-    let json = serde_json::to_value(built.unwrap()).unwrap();
-    let updates = json["updates"].as_array().unwrap();
+    // One delta per vessel, as the server emits them: a Signal K delta carries
+    // a single context, so each vessel gets its own.
+    let vessels = [
+        (
+            "vessels.111111111",
+            create_test_vessel("111111111", "VESSEL1", 52.0, 4.0),
+        ),
+        (
+            "vessels.222222222",
+            create_test_vessel("222222222", "VESSEL2", 53.0, 5.0),
+        ),
+        (
+            "vessels.333333333",
+            create_test_vessel("333333333", "VESSEL3", 54.0, 6.0),
+        ),
+    ];
 
     let mut vessel_count = 0;
-    for update in updates {
-        if let Some(values) = update["values"].as_array() {
-            for value in values {
-                let path = value["path"].as_str().unwrap_or("");
-                if path.starts_with("vessels.") {
-                    vessel_count += 1;
+    for (path, vessel) in &vessels {
+        let mut delta = SignalKDelta::for_ais_vessel(path, vessel);
+
+        // Apply subscription filtering
+        delta.apply_subscriptions(&mut subscriptions);
+
+        // Build and check - the vessel should pass through
+        let built = delta.build();
+        assert!(built.is_some(), "Delta for {path} should not be empty");
+
+        let json = serde_json::to_value(built.unwrap()).unwrap();
+        assert_eq!(
+            json["context"].as_str(),
+            Some(*path),
+            "each vessel's delta must carry its own context"
+        );
+        let updates = json["updates"].as_array().unwrap();
+
+        for update in updates {
+            if let Some(values) = update["values"].as_array() {
+                for value in values {
+                    if value["path"].as_str().unwrap_or("").starts_with("vessels.") {
+                        vessel_count += 1;
+                    }
                 }
             }
         }
     }
-    assert_eq!(vessel_count, 3, "Should find all 3 vessels in delta");
+    assert_eq!(vessel_count, 3, "Should find all 3 vessels");
 }
 
 #[tokio::test]
@@ -387,9 +399,8 @@ fn test_subscribe_all_mode_passes_ais() {
     let mut subscriptions = ActiveSubscriptions::new(Subscribe::All);
 
     // Create a delta with AIS data
-    let mut delta = SignalKDelta::new();
     let vessel = create_test_vessel("123456789", "TEST", 52.0, 4.0);
-    delta.add_ais_vessel_update("vessels.123456789", &vessel);
+    let mut delta = SignalKDelta::for_ais_vessel("vessels.123456789", &vessel);
 
     // Apply subscription filtering
     delta.apply_subscriptions(&mut subscriptions);
@@ -421,9 +432,8 @@ fn test_subscribe_none_mode_blocks_ais() {
     let mut subscriptions = ActiveSubscriptions::new(Subscribe::None);
 
     // Create a delta with AIS data
-    let mut delta = SignalKDelta::new();
     let vessel = create_test_vessel("123456789", "TEST", 52.0, 4.0);
-    delta.add_ais_vessel_update("vessels.123456789", &vessel);
+    let mut delta = SignalKDelta::for_ais_vessel("vessels.123456789", &vessel);
 
     // Apply subscription filtering
     delta.apply_subscriptions(&mut subscriptions);
@@ -457,39 +467,50 @@ fn test_specific_mmsi_subscription() {
     let subscription = create_subscription("vessels.123456789");
     let _ = subscriptions.subscribe(subscription);
 
-    // Create a delta with multiple AIS vessels
-    let mut delta = SignalKDelta::new();
+    // One delta per vessel, as the server emits them.
     let vessel1 = create_test_vessel("123456789", "SUBSCRIBED", 52.0, 4.0);
     let vessel2 = create_test_vessel("999999999", "NOT_SUBSCRIBED", 53.0, 5.0);
 
-    delta.add_ais_vessel_update("vessels.123456789", &vessel1);
-    delta.add_ais_vessel_update("vessels.999999999", &vessel2);
-
-    // Apply subscription filtering
-    delta.apply_subscriptions(&mut subscriptions);
-
-    // Build and check - only the subscribed vessel should pass through
-    let built = delta.build();
-    assert!(built.is_some(), "Delta should not be empty");
-
+    let mut subscribed = SignalKDelta::for_ais_vessel("vessels.123456789", &vessel1);
+    subscribed.apply_subscriptions(&mut subscriptions);
+    let built = subscribed.build();
+    assert!(
+        built.is_some(),
+        "Subscribed vessel's delta should not be empty"
+    );
     let json = serde_json::to_value(built.unwrap()).unwrap();
-    let updates = json["updates"].as_array().unwrap();
+    assert_eq!(
+        json["context"].as_str(),
+        Some("vessels.123456789"),
+        "the delta must carry the subscribed vessel's context"
+    );
+    assert!(
+        vessel_paths(&json).contains(&"vessels.123456789".to_string()),
+        "Should find subscribed vessel"
+    );
 
-    let mut found_subscribed = false;
-    let mut found_other = false;
-    for update in updates {
-        if let Some(values) = update["values"].as_array() {
-            for value in values {
-                let path = value["path"].as_str().unwrap_or("");
-                if path == "vessels.123456789" {
-                    found_subscribed = true;
-                }
-                if path == "vessels.999999999" {
-                    found_other = true;
-                }
+    // The unsubscribed vessel is filtered out, so its delta carries no values.
+    let mut other = SignalKDelta::for_ais_vessel("vessels.999999999", &vessel2);
+    other.apply_subscriptions(&mut subscriptions);
+    if let Some(built) = other.build() {
+        let json = serde_json::to_value(built).unwrap();
+        assert!(
+            vessel_paths(&json).is_empty(),
+            "Should NOT find unsubscribed vessel"
+        );
+    }
+}
+
+/// The `vessels.*` paths carried by a built delta.
+fn vessel_paths(json: &Value) -> Vec<String> {
+    let mut paths = Vec::new();
+    for update in json["updates"].as_array().into_iter().flatten() {
+        for value in update["values"].as_array().into_iter().flatten() {
+            let path = value["path"].as_str().unwrap_or("");
+            if path.starts_with("vessels.") {
+                paths.push(path.to_string());
             }
         }
     }
-    assert!(found_subscribed, "Should find subscribed vessel");
-    assert!(!found_other, "Should NOT find unsubscribed vessel");
+    paths
 }
