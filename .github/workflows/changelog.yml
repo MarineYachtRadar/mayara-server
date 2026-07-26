@@ -61,7 +61,7 @@ jobs:
           git switch -C "$BRANCH"
           git commit -m "docs(changelog): update CHANGELOG.md"
           git push --force --set-upstream origin "$BRANCH"
-          PR_URL="$(gh pr list --head "$BRANCH" --state open --json url --jq '.[0].url')"
+          PR_URL="$(gh pr list --head "$BRANCH" --base main --state open --json url --jq '.[0].url')"
           if [ -z "$PR_URL" ]; then
             PR_URL="$(gh pr create --title "docs(changelog): update CHANGELOG.md" --body "Auto-generated changelog update after merge to main." --base main --head "$BRANCH")"
           fi
