@@ -34,7 +34,7 @@ atomic_float = "1.1.0"
 axum = { version = "0.8.9", features = ["http2", "json", "macros", "tokio", "tower-log", "tracing", "ws"] }
 axum-core = "0.5.6"
 axum-embed = "0.1.0"
-base64 = "0.22.1"
+base64 = "0.23.0"
 bincode = { version = "2.0.1", features = ["serde"] }
 bitflags = "2.11.1"
 bytes = "1"
