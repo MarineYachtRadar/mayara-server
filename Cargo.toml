@@ -24,6 +24,7 @@ koden = []
 raymarine = []
 emulator = []
 pcap-replay = []
+garmin-xhd-output = ["furuno"]
 # default = ["navico", "furuno", "raymarine"]
 default = ["navico", "furuno", "garmin", "koden", "raymarine", "emulator"]
 

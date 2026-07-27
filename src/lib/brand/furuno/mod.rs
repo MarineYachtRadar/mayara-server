@@ -91,6 +91,10 @@ impl FurunoLocator {
         beacon_model: &str,
     ) {
         if let Some(mut info) = radars.add(info) {
+            // Start Garmin xHD output bridge if feature is enabled
+            #[cfg(feature = "garmin-xhd-output")]
+            crate::output::garmin_xhd::spawn(&info, subsys);
+
             // It's new, start the RadarProcessor thread
 
             let port: u16 = if !self.args.is_replay() {

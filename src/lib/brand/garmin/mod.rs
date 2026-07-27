@@ -16,7 +16,7 @@ mod capabilities;
 mod cdm_heartbeat;
 mod command;
 mod discovery;
-mod protocol;
+pub(crate) mod protocol;
 mod range_table;
 mod report;
 mod settings;
