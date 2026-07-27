@@ -451,6 +451,7 @@ impl FurunoReportReceiver {
 
     pub(super) async fn run(mut self, subsys: &mut SubsystemHandle) -> Result<(), RadarError> {
         let mut backoff = RECONNECT_BACKOFF_MIN;
+        let mut short_lived_sessions = 0u32;
         loop {
             // Each time we start the loop, there is no stream
             // and none of the data sockets are open.
@@ -481,6 +482,24 @@ impl FurunoReportReceiver {
                 }
                 if started.elapsed() >= RECONNECT_STABLE_AFTER {
                     backoff = RECONNECT_BACKOFF_MIN;
+                    short_lived_sessions = 0;
+                } else {
+                    // Furuno radars keep one control session per client IP.
+                    // A pattern of sessions that die right after the radar has
+                    // answered the initial requests means another client on
+                    // THIS host (e.g. a second mayara instance) keeps taking
+                    // the slot — name the cause instead of churning silently.
+                    short_lived_sessions += 1;
+                    if short_lived_sessions == 3 {
+                        log::error!(
+                            "{}: three control sessions in a row died within seconds — \
+                             another client on this machine (a second mayara instance?) \
+                             is likely competing for the radar's single per-host control \
+                             session. Spoke data still flows; controls will not work \
+                             until only one instance talks to this radar.",
+                            self.common.key
+                        );
+                    }
                 }
             }
 
