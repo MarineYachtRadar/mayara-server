@@ -207,6 +207,17 @@ struct RadarApiV3 {
     /// path but they have no effect on the recorded data stream.
     #[schema(example = false)]
     replay: bool,
+    /// Which range of a dual-range antenna this radar serves ("A", "B", ...).
+    /// Absent for single-range radars.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = "A")]
+    dual: Option<String>,
+    /// Group id shared by all ranges of one dual-range antenna. Clients can
+    /// pair radars carrying the same value into a combined side-by-side view.
+    /// Absent for single-range radars.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = "nav2452")]
+    dual_group: Option<String>,
 }
 
 impl From<&RadarInfo> for RadarApiV3 {
@@ -217,6 +228,8 @@ impl From<&RadarInfo> for RadarApiV3 {
             model: info.controls.model_name(),
             radar_ip_address: *info.addr.ip(),
             replay: info.replay(),
+            dual: info.dual.clone(),
+            dual_group: info.dual.is_some().then(|| info.base_key().to_string()),
         }
     }
 }
@@ -1632,6 +1645,20 @@ mod tests {
             model: None,
             radar_ip_address: Ipv4Addr::new(10, 56, 0, 24),
             replay: false,
+            dual: None,
+            dual_group: None,
+        }
+    }
+
+    fn radar_api(dual: Option<&str>, dual_group: Option<&str>) -> RadarApiV3 {
+        RadarApiV3 {
+            name: "4G A".to_string(),
+            brand: "Navico".to_string(),
+            model: Some("4G".to_string()),
+            radar_ip_address: Ipv4Addr::new(10, 0, 0, 1),
+            replay: false,
+            dual: dual.map(String::from),
+            dual_group: dual_group.map(String::from),
         }
     }
 
@@ -1655,5 +1682,19 @@ mod tests {
         let a = json.find("nav1034A").expect("range A listed");
         let b = json.find("nav1034B").expect("range B listed");
         assert!(a < b, "radar ids must be serialised in order: {}", json);
+    }
+
+    #[test]
+    fn radar_api_serializes_dual_group_in_camel_case() {
+        let json = serde_json::to_value(radar_api(Some("A"), Some("nav2452"))).unwrap();
+        assert_eq!(json["dual"], "A");
+        assert_eq!(json["dualGroup"], "nav2452");
+    }
+
+    #[test]
+    fn radar_api_omits_dual_fields_for_single_range_radars() {
+        let json = serde_json::to_value(radar_api(None, None)).unwrap();
+        assert!(json.get("dual").is_none());
+        assert!(json.get("dualGroup").is_none());
     }
 }

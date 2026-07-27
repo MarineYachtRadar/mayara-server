@@ -439,46 +439,65 @@ const RadarEntry = (radar) => {
     displayName = `${brand} ${name}`;
   }
 
-  // Show different links based on WebGPU availability
+  const actions = [
+    a(
+      {
+        href: "viewer.html?id=" + encodeURIComponent(radar.id),
+        class: "myr_radar_link myr_radar_link_primary",
+      },
+      "Open Radar Display"
+    ),
+  ];
+
+  // WebGL is only offered as an alternative when WebGPU is the default
   if (webGPUAvailable) {
-    return tr(
-      { class: "myr_radar_row" },
-      td({ class: "myr_radar_name" }, displayName),
-      td(
-        { class: "myr_radar_actions" },
-        a(
-          {
-            href: "viewer.html?id=" + radar.id,
-            class: "myr_radar_link myr_radar_link_primary",
-          },
-          "Open Radar Display"
-        ),
-        a(
-          {
-            href: "viewer.html?id=" + radar.id + "&renderer=webgl",
-            class: "myr_radar_link myr_radar_link_secondary",
-          },
-          "Alternate Display"
-        )
-      )
-    );
-  } else {
-    return tr(
-      { class: "myr_radar_row" },
-      td({ class: "myr_radar_name" }, displayName),
-      td(
-        { class: "myr_radar_actions" },
-        a(
-          {
-            href: "viewer.html?id=" + radar.id,
-            class: "myr_radar_link myr_radar_link_primary",
-          },
-          "Open Radar Display"
-        )
+    actions.push(
+      a(
+        {
+          href:
+            "viewer.html?id=" + encodeURIComponent(radar.id) + "&renderer=webgl",
+          class: "myr_radar_link myr_radar_link_secondary",
+        },
+        "Alternate Display"
       )
     );
   }
+
+  // Both ranges of a dual-range antenna side by side, this radar on the left
+  if (radar.dualSibling) {
+    actions.push(
+      a(
+        {
+          href:
+            "dual.html?a=" +
+            encodeURIComponent(radar.id) +
+            "&b=" +
+            encodeURIComponent(radar.dualSibling),
+          class: "myr_radar_link myr_radar_link_secondary",
+        },
+        "Dual Range Display"
+      )
+    );
+  }
+
+  return tr(
+    { class: "myr_radar_row" },
+    td({ class: "myr_radar_name" }, displayName),
+    td({ class: "myr_radar_actions" }, ...actions)
+  );
 };
+
+// The other range of `id`'s dual-range antenna, or null. Radars report a
+// shared dualGroup id per physical antenna; a pane pair only makes sense
+// when the group has exactly two members.
+function dualSiblingId(radars, id) {
+  const group = radars[id].dualGroup;
+  if (!group) return null;
+  const members = Object.keys(radars).filter(
+    (k) => radars[k].dualGroup === group
+  );
+  return members.length === 2 ? members.find((k) => k !== id) : null;
+}
 
 // Track previous radar count to avoid unnecessary DOM rebuilds
 let previousRadarCount = -1;
@@ -515,7 +534,7 @@ function radarsLoaded(d) {
 
     radarIds.sort().forEach(function (v, i) {
       // Pass the full radar object (includes id, name, brand, model)
-      const radar = { ...d[v], id: v };
+      const radar = { ...d[v], id: v, dualSibling: dualSiblingId(d, v) };
       van.add(table, RadarEntry(radar));
     });
 
