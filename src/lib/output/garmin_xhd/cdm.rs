@@ -4,8 +4,9 @@
 //! for the first 30 transmissions, then every 5 seconds. The Garmin plotter
 //! uses this to discover the radar in Marine Network.
 
-use std::net::{Ipv4Addr, UdpSocket};
+use std::net::Ipv4Addr;
 use std::time::Duration;
+use tokio::net::UdpSocket;
 use tokio::sync::oneshot;
 
 use crate::brand::garmin::protocol::{
@@ -50,7 +51,7 @@ fn build_heartbeat(seq: u32) -> Vec<u8> {
 }
 
 pub(super) async fn run(local_ip: Ipv4Addr, mut stop: oneshot::Receiver<()>) {
-    let sock = match UdpSocket::bind((local_ip, CDM_HEARTBEAT_PORT)) {
+    let sock = match UdpSocket::bind((local_ip, CDM_HEARTBEAT_PORT)).await {
         Ok(s) => s,
         Err(e) => {
             log::error!("GarminXhd CDM: failed to bind socket: {e}");
@@ -66,7 +67,7 @@ pub(super) async fn run(local_ip: Ipv4Addr, mut stop: oneshot::Receiver<()>) {
 
     loop {
         let pkt = build_heartbeat(seq);
-        if let Err(e) = sock.send_to(&pkt, dest) {
+        if let Err(e) = sock.send_to(&pkt, dest).await {
             log::warn!("GarminXhd CDM: send failed: {e}");
         }
         log::debug!("GarminXhd CDM heartbeat seq={seq}");
