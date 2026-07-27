@@ -28,6 +28,11 @@ use super::convert::{FURUNO_RANGE_RATIO, nearest_xhd_range, to_xhd_spoke};
 // the next batch refills it immediately.
 const SPOKE_INTERVAL: Duration = Duration::from_micros(200);
 
+// Cap the queue to two full revolutions worth of spokes. If we fall this far
+// behind (e.g. due to a network stall), drop the oldest packets rather than
+// letting memory grow without bound.
+const QUEUE_MAX: usize = 8192 * 2;
+
 pub(super) async fn run(
     local_ip: Ipv4Addr,
     brand: Brand,
@@ -55,7 +60,7 @@ pub(super) async fn run(
 
     loop {
         // Drain the queue: send all packets that are due.
-        while let Some(_) = queue.front() {
+        while queue.front().is_some() {
             let now = Instant::now();
             if now < next_send {
                 break;
@@ -67,67 +72,98 @@ pub(super) async fn run(
             next_send = next_send + SPOKE_INTERVAL;
         }
 
-        // Wait for next send time or a new batch — whichever comes first.
-        let wait = next_send.saturating_duration_since(Instant::now());
-
-        tokio::select! {
-            biased;
-            _ = &mut stop => break,
-            res = message_rx.recv() => {
-                let bytes = match res {
-                    Ok(b) => b,
-                    Err(broadcast::error::RecvError::Lagged(n)) => {
-                        log::warn!("GarminXhd spokes: lagged, dropped {n} messages");
-                        continue;
+        if queue.is_empty() {
+            // Nothing queued — block until a new batch or stop signal.
+            tokio::select! {
+                biased;
+                _ = &mut stop => break,
+                res = message_rx.recv() => {
+                    if !handle_batch(res, &mut queue, brand, spokes_per_rev, &state) {
+                        break;
                     }
-                    Err(_) => break,
-                };
-                let msg = match RadarMessage::parse_from_bytes(&bytes) {
-                    Ok(m) => m,
-                    Err(e) => {
-                        log::warn!("GarminXhd spokes: protobuf parse error: {e}");
-                        continue;
-                    }
-                };
-                for spoke in &msg.spokes {
-                    if spoke.range == 0 {
-                        continue;
-                    }
-                    let display_range = match brand {
-                        Brand::Furuno => (spoke.range as f64 / FURUNO_RANGE_RATIO).round() as u32,
-                        _ => spoke.range,
-                    };
-                    {
-                        let mut st = state.lock().unwrap();
-                        let now = Instant::now();
-                        if now >= st.range_lock_until {
-                            let new_range = nearest_xhd_range(display_range);
-                            if new_range != st.range_m {
-                                log::info!(
-                                    "GarminXhd spokes: range update {}m → {}m (display {}m)",
-                                    st.range_m, new_range, display_range
-                                );
-                                st.range_m = new_range;
-                            }
-                        }
-                    }
-                    let pkt = to_xhd_spoke(
-                        spoke.angle,
-                        spokes_per_rev,
-                        &spoke.data,
-                        display_range,
-                        spoke.range,
-                    );
-                    queue.push_back(pkt);
-                }
-                // Reset send clock if queue was empty (we were idle).
-                if next_send < Instant::now() {
                     next_send = Instant::now();
                 }
             }
-            _ = tokio::time::sleep(wait) => {
-                // Timer fired — loop back to drain the queue.
+        } else {
+            // Queue has packets — wait for the next send slot or a new batch.
+            let wait = next_send.saturating_duration_since(Instant::now());
+            tokio::select! {
+                biased;
+                _ = &mut stop => break,
+                res = message_rx.recv() => {
+                    if !handle_batch(res, &mut queue, brand, spokes_per_rev, &state) {
+                        break;
+                    }
+                    // Don't reset next_send — keep draining at the current pace.
+                }
+                _ = tokio::time::sleep(wait) => {
+                    // Timer fired — loop back to drain the queue.
+                }
             }
         }
     }
+}
+
+/// Decode one broadcast message and enqueue its spokes.
+/// Returns `false` if the channel is closed (caller should break).
+fn handle_batch(
+    res: Result<Bytes, broadcast::error::RecvError>,
+    queue: &mut VecDeque<Vec<u8>>,
+    brand: Brand,
+    spokes_per_rev: u32,
+    state: &Arc<Mutex<SharedState>>,
+) -> bool {
+    let bytes = match res {
+        Ok(b) => b,
+        Err(broadcast::error::RecvError::Lagged(n)) => {
+            log::warn!("GarminXhd spokes: lagged, dropped {n} messages");
+            return true;
+        }
+        Err(_) => return false,
+    };
+    let msg = match RadarMessage::parse_from_bytes(&bytes) {
+        Ok(m) => m,
+        Err(e) => {
+            log::warn!("GarminXhd spokes: protobuf parse error: {e}");
+            return true;
+        }
+    };
+    for spoke in &msg.spokes {
+        if spoke.range == 0 {
+            continue;
+        }
+        let display_range = match brand {
+            Brand::Furuno => (spoke.range as f64 / FURUNO_RANGE_RATIO).round() as u32,
+            _ => spoke.range,
+        };
+        {
+            let mut st = state.lock().unwrap();
+            let now = Instant::now();
+            if now >= st.range_lock_until {
+                let new_range = nearest_xhd_range(display_range);
+                if new_range != st.range_m {
+                    log::info!(
+                        "GarminXhd spokes: range update {}m → {}m (display {}m)",
+                        st.range_m,
+                        new_range,
+                        display_range
+                    );
+                    st.range_m = new_range;
+                }
+            }
+        }
+        let pkt = to_xhd_spoke(
+            spoke.angle,
+            spokes_per_rev,
+            &spoke.data,
+            display_range,
+            spoke.range,
+        );
+        if queue.len() >= QUEUE_MAX {
+            queue.pop_front();
+            log::warn!("GarminXhd spokes: queue full, dropped oldest packet");
+        }
+        queue.push_back(pkt);
+    }
+    true
 }
