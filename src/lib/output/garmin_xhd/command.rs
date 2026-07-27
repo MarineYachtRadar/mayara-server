@@ -238,6 +238,13 @@ pub(super) async fn run(
 
             x if x == MSG_RANGE_A_RAIN_MODE && pay_len >= 1 => {
                 let on = payload[0] != 0;
+                {
+                    let mut st = state.lock().unwrap();
+                    st.rain_mode = payload[0];
+                    if !on {
+                        st.rain_gain = 0;
+                    }
+                }
                 // Garmin has no "rain auto" — map off→auto on Furuno, on→50%
                 if on {
                     send_control(
@@ -255,6 +262,11 @@ pub(super) async fn run(
             x if x == MSG_RANGE_A_RAIN_GAIN && pay_len >= 2 => {
                 let raw = u16::from_le_bytes([payload[0], payload[1]]);
                 let pct = (raw / 100) as f64;
+                {
+                    let mut st = state.lock().unwrap();
+                    st.rain_mode = 1;
+                    st.rain_gain = raw;
+                }
                 send_control(
                     &controls,
                     ControlId::Rain,

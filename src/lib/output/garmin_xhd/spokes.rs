@@ -81,10 +81,9 @@ pub(super) async fn run(
                 _ => spoke.range,
             };
 
-            // Update shared range and transmit state unless range-lock is active.
+            // Update shared range unless the plotter's command lock is active.
             {
                 let mut st = state.lock().unwrap();
-                st.transmitting = true;
                 let now = Instant::now();
                 if now >= st.range_lock_until {
                     let new_range = nearest_xhd_range(display_range);

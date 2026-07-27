@@ -11,6 +11,7 @@ use std::time::Duration;
 use tokio::sync::oneshot;
 
 use crate::brand::garmin::protocol::{self, *};
+use crate::radar::Power;
 use crate::radar::settings::{ControlId, SharedControls};
 
 use super::SharedState;
@@ -80,10 +81,16 @@ fn build_range_table_pkt() -> Vec<u8> {
 }
 
 fn build_status_packets(state: &SharedState, controls: &SharedControls) -> Vec<Vec<u8>> {
-    let transmitting = state.transmitting;
+    // Prefer the live Power value from controls (updated by Furuno reports);
+    // fall back to SharedState which is set by plotter commands.
+    let transmitting = controls
+        .get(&ControlId::Power)
+        .and_then(|c| c.value)
+        .map(|v| v as u32 == Power::Transmit as u32)
+        .unwrap_or(state.transmitting);
     let range_m = state.range_m;
 
-    // Read gain/sea/rain from SharedControls (set by command.rs after plotter commands).
+    // Read gain/sea from SharedControls; rain is cached in SharedState (see command.rs).
     let gain_auto = controls
         .get(&ControlId::Gain)
         .and_then(|c| c.auto)
@@ -112,17 +119,8 @@ fn build_status_packets(state: &SharedState, controls: &SharedControls) -> Vec<V
     };
     let sea_gain = (sea_val * 100.0) as u16;
 
-    let rain_enabled = controls
-        .get(&ControlId::Rain)
-        .and_then(|c| c.value)
-        .unwrap_or(0.0)
-        > 0.0;
-    let rain_val = controls
-        .get(&ControlId::Rain)
-        .and_then(|c| c.value)
-        .unwrap_or(0.0);
-    let rain_mode: u8 = if rain_enabled { 1 } else { 0 };
-    let rain_gain = (rain_val * 100.0) as u16;
+    let rain_mode = state.rain_mode;
+    let rain_gain = state.rain_gain;
 
     let scanner_state: u8 = if transmitting {
         STATE_TRANSMIT as u8

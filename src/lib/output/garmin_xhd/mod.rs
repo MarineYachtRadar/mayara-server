@@ -39,14 +39,22 @@ pub(super) struct SharedState {
     pub range_lock_until: Instant,
     /// Whether the radar is transmitting.
     pub transmitting: bool,
+    /// Rain clutter mode sent to the plotter: 0=off, 1=on.
+    /// Cached here because mayara maps "off" to auto=true while keeping the
+    /// old value, so reading SharedControls would show the wrong gain.
+    pub rain_mode: u8,
+    /// Rain clutter gain in plotter units (percent×100, 0..10000).
+    pub rain_gain: u16,
 }
 
 impl Default for SharedState {
     fn default() -> Self {
         Self {
-            range_m: 3704, // 2 NM default
+            range_m: 3704,
             range_lock_until: Instant::now(),
-            transmitting: true,
+            transmitting: false,
+            rain_mode: 0,
+            rain_gain: 0,
         }
     }
 }
