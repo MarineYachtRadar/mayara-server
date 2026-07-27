@@ -390,6 +390,14 @@ impl FurunoReportReceiver {
                     match r {
                         Ok((len, addr)) => {
                             if self.verify_source_address(&addr) {
+                                // Spoke traffic proves the radar is alive even
+                                // while the TCP report session is down — keep
+                                // the silence watchdog from decaying a
+                                // transmitting radar to Off.
+                                self.common.info.mark_input();
+                                if let Some(ref cb) = self.common_b {
+                                    cb.info.mark_input();
+                                }
                                 // Idle mode: drain the recv but skip decoding.
                                 // Furuno radars emit spokes even in Standby;
                                 // when nobody is watching, decoding them costs
@@ -418,6 +426,10 @@ impl FurunoReportReceiver {
                     match r {
                         Ok((len, addr)) => {
                             if self.verify_source_address(&addr) {
+                                self.common.info.mark_input();
+                                if let Some(ref cb) = self.common_b {
+                                    cb.info.mark_input();
+                                }
                                 if !self.both_ranges_idle() {
                                     self.process_frame(&buf2[..len]);
                                 }
