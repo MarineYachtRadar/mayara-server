@@ -23,8 +23,10 @@ use super::SharedState;
 use super::convert::{FURUNO_RANGE_RATIO, nearest_xhd_range, to_xhd_spoke};
 
 // At 24 RPM / 8192 spokes/rev, one spoke = ~0.305ms.
-// We send one spoke per tick at this interval.
-const SPOKE_INTERVAL: Duration = Duration::from_micros(305);
+// We drain the queue faster than real-time so the buffer stays small
+// and the display lag stays low. If the queue runs empty briefly,
+// the next batch refills it immediately.
+const SPOKE_INTERVAL: Duration = Duration::from_micros(200);
 
 pub(super) async fn run(
     local_ip: Ipv4Addr,
