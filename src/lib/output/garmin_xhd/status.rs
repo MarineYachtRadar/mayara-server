@@ -5,9 +5,10 @@
 //! state, and other settings. Every value must match what the spoke packets
 //! carry — mismatches cause the plotter to crash or freeze.
 
-use std::net::{Ipv4Addr, UdpSocket};
+use std::net::Ipv4Addr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::net::UdpSocket;
 use tokio::sync::oneshot;
 
 use crate::brand::garmin::protocol::{self, *};
@@ -158,16 +159,22 @@ pub(super) async fn run(
     controls: SharedControls,
     mut stop: oneshot::Receiver<()>,
 ) {
-    let sock = match UdpSocket::bind((local_ip, protocol::REPORT_PORT)) {
+    let std_sock = match std::net::UdpSocket::bind((local_ip, protocol::REPORT_PORT)) {
         Ok(s) => s,
         Err(e) => {
             log::error!("GarminXhd status: failed to bind socket: {e}");
             return;
         }
     };
-    if let Err(e) = sock.set_multicast_ttl_v4(1) {
-        log::warn!("GarminXhd status: could not set TTL=1: {e}");
-    }
+    std_sock.set_multicast_ttl_v4(1).ok();
+    std_sock.set_nonblocking(true).ok();
+    let sock = match UdpSocket::from_std(std_sock) {
+        Ok(s) => s,
+        Err(e) => {
+            log::error!("GarminXhd status: failed to create async socket: {e}");
+            return;
+        }
+    };
 
     let dest = REPORT_ADDRESS;
 
@@ -177,7 +184,7 @@ pub(super) async fn run(
             build_status_packets(&st, &controls)
         };
         for pkt in &pkts {
-            if let Err(e) = sock.send_to(pkt, dest) {
+            if let Err(e) = sock.send_to(pkt, dest).await {
                 log::warn!("GarminXhd status: send failed: {e}");
             }
         }

@@ -12,9 +12,10 @@
 //! command, to prevent the incoming spoke range from immediately overriding
 //! what the plotter just set).
 
-use std::net::{Ipv4Addr, UdpSocket};
+use std::net::Ipv4Addr;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+use tokio::net::UdpSocket;
 use tokio::sync::oneshot;
 
 use bytes::Bytes;
@@ -36,16 +37,22 @@ pub(super) async fn run(
     state: Arc<Mutex<SharedState>>,
     mut stop: oneshot::Receiver<()>,
 ) {
-    let sock = match UdpSocket::bind((local_ip, DATA_PORT)) {
+    let std_sock = match std::net::UdpSocket::bind((local_ip, DATA_PORT)) {
         Ok(s) => s,
         Err(e) => {
             log::error!("GarminXhd spokes: failed to bind socket: {e}");
             return;
         }
     };
-    if let Err(e) = sock.set_multicast_ttl_v4(1) {
-        log::warn!("GarminXhd spokes: could not set TTL=1: {e}");
-    }
+    std_sock.set_multicast_ttl_v4(1).ok();
+    std_sock.set_nonblocking(true).ok();
+    let sock = match UdpSocket::from_std(std_sock) {
+        Ok(s) => s,
+        Err(e) => {
+            log::error!("GarminXhd spokes: failed to create async socket: {e}");
+            return;
+        }
+    };
 
     let dest = DATA_ADDRESS;
 
@@ -106,7 +113,7 @@ pub(super) async fn run(
                 display_range,
                 spoke.range,
             );
-            if let Err(e) = sock.send_to(&pkt, dest) {
+            if let Err(e) = sock.send_to(&pkt, dest).await {
                 log::warn!("GarminXhd spokes: send failed: {e}");
             }
         }
