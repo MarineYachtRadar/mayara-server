@@ -41,6 +41,17 @@ const CONTROL_KEEPALIVE_IDLE: Duration = Duration::from_secs(30);
 const CONTROL_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
 const CONTROL_KEEPALIVE_RETRIES: u32 = 3;
 
+/// Reconnect backoff after the radar drops the control session. Every login
+/// consumes a session slot in the radar's firmware; hammering relogins at a
+/// fixed short interval can exhaust the slot table and lock ALL clients out
+/// until the radar garbage-collects (observed on DRS4D-NXT: churn every ~6 s
+/// kept the table full indefinitely). Back off exponentially and reset only
+/// after a connection has proven stable.
+const RECONNECT_BACKOFF_MIN: Duration = Duration::from_secs(1);
+const RECONNECT_BACKOFF_MAX: Duration = Duration::from_secs(60);
+/// A session that survived this long counts as stable: reset the backoff.
+const RECONNECT_STABLE_AFTER: Duration = Duration::from_secs(60);
+
 /// Furuno wire-format decoding mode. When Target Analyzer is active on NXT
 /// radars, each echo byte encodes `[dopplerClass:2 | intensity:4 | 00:2]`
 /// rather than a plain intensity in 0..PIXEL_VALUES. The report receiver
@@ -427,6 +438,7 @@ impl FurunoReportReceiver {
     }
 
     pub(super) async fn run(mut self, subsys: &mut SubsystemHandle) -> Result<(), RadarError> {
+        let mut backoff = RECONNECT_BACKOFF_MIN;
         loop {
             // Each time we start the loop, there is no stream
             // and none of the data sockets are open.
@@ -440,14 +452,31 @@ impl FurunoReportReceiver {
                 log::warn!("{}: Failed to login to radar: {}", self.common.key, e);
             } else if let Err(e) = self.start_command_stream().await {
                 log::warn!("{}: Failed to start command stream: {}", self.common.key, e);
-            } else if let Err(RadarError::Shutdown) = self.data_loop(subsys).await {
-                return Ok(());
+            } else {
+                let started = Instant::now();
+                match self.data_loop(subsys).await {
+                    Err(RadarError::Shutdown) => return Ok(()),
+                    Err(e) => {
+                        log::warn!(
+                            "{}: Radar control session ended after {:?}: {}; reconnecting in {:?}",
+                            self.common.key,
+                            started.elapsed(),
+                            e,
+                            backoff
+                        );
+                    }
+                    Ok(()) => {}
+                }
+                if started.elapsed() >= RECONNECT_STABLE_AFTER {
+                    backoff = RECONNECT_BACKOFF_MIN;
+                }
             }
 
             tokio::select! {
                 _ = subsys.on_shutdown_requested() => return Ok(()),
-                _ = sleep(Duration::from_millis(1000)) => {}
+                _ = sleep(backoff) => {}
             }
+            backoff = (backoff * 2).min(RECONNECT_BACKOFF_MAX);
         }
     }
 
