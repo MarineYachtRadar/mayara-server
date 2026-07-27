@@ -953,46 +953,47 @@ impl FurunoReportReceiver {
                     2.0 // Rain
                 };
 
-                let drid = self.extract_drid(&command_id, &numbers);
-                let range_idx = if drid == 1 && self.common_b.is_some() {
-                    1
+                // Target Analyzer is shared between the ranges of a dual-range
+                // antenna: the firmware mirrors the state, and the radar only
+                // reports it for the range the controlling client addressed.
+                // Apply the report to both ranges so Range B's emission gate
+                // lifts even when the confirmation arrives as Range A.
+                let range_indices: &[u8] = if self.common_b.is_some() {
+                    &[0, 1]
                 } else {
-                    0
+                    &[0]
                 };
-                let old_mode = self.doppler_wire_mode_for(range_idx);
-                self.common_for_range(drid)
-                    .set_value(&ControlId::Doppler, value);
-                let new_mode = self.doppler_wire_mode_for(range_idx);
-                if old_mode != new_mode {
-                    let low_power = self.model.is_low_power();
-                    let legend = if range_idx == 1 {
-                        self.common_b.as_ref().unwrap().info.get_legend()
-                    } else {
-                        self.common.info.get_legend()
-                    };
-                    self.wire_to_legend[range_idx] =
-                        Self::wire_to_legend(&legend, new_mode, low_power);
+                for &range_idx in range_indices {
+                    let old_mode = self.doppler_wire_mode_for(range_idx as usize);
+                    self.common_for_range(range_idx)
+                        .set_value(&ControlId::Doppler, value);
+                    let new_mode = self.doppler_wire_mode_for(range_idx as usize);
                     let key = if range_idx == 1 {
                         &self.common_b.as_ref().unwrap().key
                     } else {
                         &self.common.key
                     };
-                    log::debug!("{}: Doppler wire mode changed to {:?}", key, new_mode);
-                }
-                // First `$NEF` for this range confirms the TA state, so the
-                // LUT is now trustworthy and spoke emission can resume.
-                if !self.target_analyzer_known[range_idx] {
-                    self.target_analyzer_known[range_idx] = true;
-                    let key = if range_idx == 1 {
-                        &self.common_b.as_ref().unwrap().key
-                    } else {
-                        &self.common.key
-                    };
-                    log::info!(
-                        "{}: Target Analyzer state confirmed (mode {:?}), spoke output enabled",
-                        key,
-                        self.doppler_wire_mode_for(range_idx)
-                    );
+                    if old_mode != new_mode {
+                        let low_power = self.model.is_low_power();
+                        let legend = if range_idx == 1 {
+                            self.common_b.as_ref().unwrap().info.get_legend()
+                        } else {
+                            self.common.info.get_legend()
+                        };
+                        self.wire_to_legend[range_idx as usize] =
+                            Self::wire_to_legend(&legend, new_mode, low_power);
+                        log::debug!("{}: Doppler wire mode changed to {:?}", key, new_mode);
+                    }
+                    // First `$NEF` confirms the TA state, so the LUT is now
+                    // trustworthy and spoke emission can resume.
+                    if !self.target_analyzer_known[range_idx as usize] {
+                        self.target_analyzer_known[range_idx as usize] = true;
+                        log::info!(
+                            "{}: Target Analyzer state confirmed (mode {:?}), spoke output enabled",
+                            key,
+                            self.doppler_wire_mode_for(range_idx as usize)
+                        );
+                    }
                 }
             }
 
