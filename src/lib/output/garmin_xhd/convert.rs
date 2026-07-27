@@ -1,8 +1,4 @@
-//! Furuno → Garmin xHD spoke conversion.
-//!
-//! All logic here is a direct port of the tested Python implementation in
-//! `garmin-radar-bridge/bridge.py`. See that file and the project README for
-//! the derivation of every constant.
+//! Spoke conversion from any mayara input brand to Garmin xHD wire format.
 
 /// xHD range table (meters). The plotter only accepts values from this list.
 pub(super) const XHD_RANGES_M: &[u32] = &[
@@ -37,14 +33,10 @@ pub(super) fn nearest_xhd_range(meters: u32) -> u32 {
 /// * `src_angle`          — spoke angle in source units (0..src_spokes_per_rev)
 /// * `src_spokes_per_rev` — full revolution in source spoke units
 /// * `src_data`           — raw 8-bit intensity samples from the source radar
-/// * `display_range`      — actual range in meters (used for chart scaling)
-///
-/// `range_meters` in the spoke header is snapped to the nearest xHD table
-/// entry; `display_meters` carries `display_range` so the plotter scales the
-/// image correctly when the source radar's range doesn't align exactly.
-/// * `display_range`  — brand-corrected range in meters (used for range_meters snap)
-/// * `src_range_raw`  — raw spoke.range from the radar (used as display_meters so the
-///                      plotter scales the chart image correctly, matching bridge.py behaviour)
+/// * `display_range`      — brand-corrected range in meters; used to snap to the nearest xHD
+///                          table entry for the `range_meters` header field (plotter UI display)
+/// * `src_range_raw`      — unmodified `spoke.range` from the source radar; used as
+///                          `display_meters` so the plotter scales the chart overlay correctly
 pub(super) fn to_xhd_spoke(
     src_angle: u32,
     src_spokes_per_rev: u32,

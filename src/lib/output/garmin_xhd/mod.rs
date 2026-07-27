@@ -31,7 +31,35 @@ mod status;
 const GARMIN_NET: u32 = 0xac10_0000;
 const GARMIN_MASK: u32 = 0xfff0_0000;
 
-/// State shared between the status broadcaster and command listener.
+/// Default range on startup (2 NM in meters, snapped to xHD table).
+pub(super) const DEFAULT_RANGE_M: u32 = 3704;
+
+/// TLV packet helpers — shared between status.rs and command.rs.
+pub(super) fn pkt_u8(msg_id: u32, value: u8) -> Vec<u8> {
+    let mut p = Vec::with_capacity(9);
+    p.extend_from_slice(&msg_id.to_le_bytes());
+    p.extend_from_slice(&1u32.to_le_bytes());
+    p.push(value);
+    p
+}
+
+pub(super) fn pkt_u16(msg_id: u32, value: u16) -> Vec<u8> {
+    let mut p = Vec::with_capacity(10);
+    p.extend_from_slice(&msg_id.to_le_bytes());
+    p.extend_from_slice(&2u32.to_le_bytes());
+    p.extend_from_slice(&value.to_le_bytes());
+    p
+}
+
+pub(super) fn pkt_u32(msg_id: u32, value: u32) -> Vec<u8> {
+    let mut p = Vec::with_capacity(12);
+    p.extend_from_slice(&msg_id.to_le_bytes());
+    p.extend_from_slice(&4u32.to_le_bytes());
+    p.extend_from_slice(&value.to_le_bytes());
+    p
+}
+
+/// State shared between the status broadcaster, spoke sender, and command listener.
 pub(super) struct SharedState {
     /// Current range in meters (snapped to nearest xHD table value).
     pub range_m: u32,
@@ -50,7 +78,7 @@ pub(super) struct SharedState {
 impl Default for SharedState {
     fn default() -> Self {
         Self {
-            range_m: 3704,
+            range_m: DEFAULT_RANGE_M,
             range_lock_until: Instant::now(),
             transmitting: false,
             rain_mode: 0,

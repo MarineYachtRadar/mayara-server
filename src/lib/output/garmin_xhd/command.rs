@@ -14,37 +14,17 @@ use tokio::sync::oneshot;
 use serde_json::Value;
 
 use crate::brand::garmin::protocol::*;
+use crate::radar::Power;
 use crate::radar::settings::{ControlId, ControlValue, SharedControls};
 
-use super::SharedState;
 use super::convert::nearest_xhd_range;
+use super::{SharedState, pkt_u8, pkt_u16, pkt_u32};
 
 /// How long after a range command to ignore spoke-range updates.
 const RANGE_LOCK_SECS: u64 = 5;
 
-fn pkt_u8(msg_id: u32, value: u8) -> Vec<u8> {
-    let mut p = Vec::with_capacity(9);
-    p.extend_from_slice(&msg_id.to_le_bytes());
-    p.extend_from_slice(&1u32.to_le_bytes());
-    p.push(value);
-    p
-}
-
-fn pkt_u16(msg_id: u32, value: u16) -> Vec<u8> {
-    let mut p = Vec::with_capacity(10);
-    p.extend_from_slice(&msg_id.to_le_bytes());
-    p.extend_from_slice(&2u32.to_le_bytes());
-    p.extend_from_slice(&value.to_le_bytes());
-    p
-}
-
-fn pkt_u32(msg_id: u32, value: u32) -> Vec<u8> {
-    let mut p = Vec::with_capacity(12);
-    p.extend_from_slice(&msg_id.to_le_bytes());
-    p.extend_from_slice(&4u32.to_le_bytes());
-    p.extend_from_slice(&value.to_le_bytes());
-    p
-}
+/// Default rain gain sent when the plotter turns rain on without a gain value.
+const RAIN_DEFAULT_GAIN_PCT: u8 = 50;
 
 fn send_control(
     controls: &SharedControls,
@@ -144,15 +124,11 @@ pub(super) async fn run(
                     let mut st = state.lock().unwrap();
                     st.transmitting = on;
                 }
-                // Power: Standby=1, Transmit=2 (matches mayara's Power enum)
+                let power = if on { Power::Transmit } else { Power::Standby };
                 send_control(
                     &controls,
                     ControlId::Power,
-                    Some(Value::Number(serde_json::Number::from(if on {
-                        2
-                    } else {
-                        1
-                    }))),
+                    Some(Value::Number(serde_json::Number::from(power as u32))),
                     None,
                 );
                 let scanner_state: u8 = if on {
@@ -198,7 +174,7 @@ pub(super) async fn run(
 
             x if x == MSG_RANGE_A_GAIN && pay_len >= 2 => {
                 let raw = u16::from_le_bytes([payload[0], payload[1]]);
-                let pct = (raw / 100) as f64;
+                let pct = raw as f64 / 100.0;
                 send_control(
                     &controls,
                     ControlId::Gain,
@@ -224,7 +200,7 @@ pub(super) async fn run(
 
             x if x == MSG_RANGE_A_SEA_GAIN && pay_len >= 2 => {
                 let raw = u16::from_le_bytes([payload[0], payload[1]]);
-                let pct = (raw / 100) as f64;
+                let pct = raw as f64 / 100.0;
                 send_control(
                     &controls,
                     ControlId::Sea,
@@ -250,7 +226,9 @@ pub(super) async fn run(
                     send_control(
                         &controls,
                         ControlId::Rain,
-                        Some(Value::Number(serde_json::Number::from(50))),
+                        Some(Value::Number(serde_json::Number::from(
+                            RAIN_DEFAULT_GAIN_PCT,
+                        ))),
                         Some(false),
                     );
                 } else {
@@ -261,7 +239,7 @@ pub(super) async fn run(
 
             x if x == MSG_RANGE_A_RAIN_GAIN && pay_len >= 2 => {
                 let raw = u16::from_le_bytes([payload[0], payload[1]]);
-                let pct = (raw / 100) as f64;
+                let pct = raw as f64 / 100.0;
                 {
                     let mut st = state.lock().unwrap();
                     st.rain_mode = 1;

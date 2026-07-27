@@ -64,7 +64,7 @@ crate::output::garmin_xhd::spawn(&info, subsys);
 ## Shared State
 
 `SharedState` (defined in `mod.rs`) is an `Arc<Mutex<SharedState>>` shared
-between the four tasks:
+between the status, spoke sender, and command tasks (CDM does not use it):
 
 ```rust
 pub(super) struct SharedState {
@@ -117,10 +117,12 @@ The Garmin plotter crashes or freezes if these fields are wrong:
 | angle | byte 12 | 0..11512, multiple of 8 |
 
 The angle constraint is enforced by:
+
 ```rust
 let raw_angle = (src_angle as u64 * 11520 / spokes_per_rev as u64) % 11520;
 let xhd_angle = ((raw_angle / 8) * 8) as u16;
 ```
+
 The `% 11520` keeps the value in `[0, 11519]`; the `/8*8` snaps it to a
 multiple of 8, giving `[0, 11512]` (since 11512 = 1439×8).
 

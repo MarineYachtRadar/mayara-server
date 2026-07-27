@@ -14,32 +14,8 @@ use crate::brand::garmin::protocol::{self, *};
 use crate::radar::Power;
 use crate::radar::settings::{ControlId, SharedControls};
 
-use super::SharedState;
 use super::convert::XHD_RANGES_M;
-
-fn pkt_u8(msg_id: u32, value: u8) -> Vec<u8> {
-    let mut p = Vec::with_capacity(9);
-    p.extend_from_slice(&msg_id.to_le_bytes());
-    p.extend_from_slice(&1u32.to_le_bytes());
-    p.push(value);
-    p
-}
-
-fn pkt_u16(msg_id: u32, value: u16) -> Vec<u8> {
-    let mut p = Vec::with_capacity(10);
-    p.extend_from_slice(&msg_id.to_le_bytes());
-    p.extend_from_slice(&2u32.to_le_bytes());
-    p.extend_from_slice(&value.to_le_bytes());
-    p
-}
-
-fn pkt_u32(msg_id: u32, value: u32) -> Vec<u8> {
-    let mut p = Vec::with_capacity(12);
-    p.extend_from_slice(&msg_id.to_le_bytes());
-    p.extend_from_slice(&4u32.to_le_bytes());
-    p.extend_from_slice(&value.to_le_bytes());
-    p
-}
+use super::{SharedState, pkt_u8, pkt_u16, pkt_u32};
 
 fn pkt_i32(msg_id: u32, value: i32) -> Vec<u8> {
     pkt_u32(msg_id, value as u32)
