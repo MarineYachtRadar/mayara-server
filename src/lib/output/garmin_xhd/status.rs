@@ -5,10 +5,9 @@
 //! state, and other settings. Every value must match what the spoke packets
 //! carry — mismatches cause the plotter to crash or freeze.
 
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, UdpSocket};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::net::UdpSocket;
 use tokio::sync::oneshot;
 
 use crate::brand::garmin::protocol::{self, *};
@@ -159,14 +158,16 @@ pub(super) async fn run(
     controls: SharedControls,
     mut stop: oneshot::Receiver<()>,
 ) {
-    let sock = match UdpSocket::bind((local_ip, protocol::REPORT_PORT)).await {
+    let sock = match UdpSocket::bind((local_ip, protocol::REPORT_PORT)) {
         Ok(s) => s,
         Err(e) => {
             log::error!("GarminXhd status: failed to bind socket: {e}");
             return;
         }
     };
-    sock.set_multicast_ttl_v4(1).ok();
+    if let Err(e) = sock.set_multicast_ttl_v4(1) {
+        log::warn!("GarminXhd status: could not set TTL=1: {e}");
+    }
 
     let dest = REPORT_ADDRESS;
 
@@ -176,7 +177,7 @@ pub(super) async fn run(
             build_status_packets(&st, &controls)
         };
         for pkt in &pkts {
-            if let Err(e) = sock.send_to(pkt, dest).await {
+            if let Err(e) = sock.send_to(pkt, dest) {
                 log::warn!("GarminXhd status: send failed: {e}");
             }
         }
