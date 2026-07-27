@@ -42,7 +42,7 @@ src/lib/output/
     convert.rs            to_xhd_spoke(), nearest_xhd_range(), unit tests
     cdm.rs                CDM V2 heartbeat task
     status.rs             Status/report stream task
-    spokes.rs             Spoke conversion and UDP sender task
+    spokes.rs             Spoke buffer and UDP sender task
     command.rs            Plotter command listener task
 ```
 
@@ -101,6 +101,38 @@ Step 2 is essential on hosts that run Docker: Docker creates bridge interfaces
 (`172.17.0.1`–`172.20.0.1`) that fall inside `172.16.0.0/12`. Without the
 NIC-pinning step, the bridge would bind to a Docker bridge address and the
 Garmin plotter would not receive any packets.
+
+## Spoke Buffering (`spokes.rs`)
+
+Furuno delivers spokes in batches of ~1500 every ~450ms (configured via
+`set_spoke_batch_threshold` to ~1/6 of a revolution per broadcast). Without
+pacing, `spokes.rs` would send all 1500 spokes in a few milliseconds and then
+go silent for ~450ms. During that silence the Garmin plotter continues sweeping
+and renders the gap as missing sectors.
+
+**Solution — jitter buffer:** incoming batches are pre-converted and pushed into
+a `VecDeque`. A drain loop sends one packet every `SPOKE_INTERVAL` (200µs),
+regardless of when the next batch arrives:
+
+```
+Furuno batch (~1500 spokes)          Plotter
+  arrives every ~450ms               receives one spoke every 200ms
+        │                                  │
+  ──────┤ push_back ──► VecDeque ──► pop_front ──► UDP
+        │                                  │
+  next  │◄──── ~300ms drain time ────►     │
+  batch │        queue runs low            │
+  arrives, refills queue seamlessly        │
+```
+
+At 200µs/spoke the queue drains 1500 spokes in ~300ms — faster than Furuno's
+~450ms batch cadence — so the next batch arrives before the queue runs empty.
+Average display lag is ~150ms (~22° at 24 RPM), which is imperceptible in
+practice.
+
+`SPOKE_INTERVAL` was tuned by experiment: 100µs caused occasional gaps
+(draining too fast, queue ran empty); 150µs worked but left little margin;
+200µs is stable with comfortable headroom.
 
 ## Spoke Conversion (`convert.rs`)
 
