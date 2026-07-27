@@ -18,7 +18,8 @@ use tokio_graceful_shutdown::{SubsystemBuilder, SubsystemHandle};
 
 use network_interface::{NetworkInterface, NetworkInterfaceConfig};
 
-use crate::radar::RadarInfo;
+use crate::radar::settings::ControlId;
+use crate::radar::{Power, RadarInfo};
 
 mod cdm;
 mod command;
@@ -50,11 +51,32 @@ impl Default for SharedState {
     }
 }
 
-/// Detect the first local IP in the 172.16.0.0/12 Garmin Marine Network subnet.
-fn detect_garmin_ip() -> Option<Ipv4Addr> {
+/// Detect the Garmin Marine Network IP (172.16.0.0/12) on the same physical
+/// NIC as `nic_addr`. This avoids picking a Docker bridge address when the
+/// host has multiple 172.16/12 interfaces.
+fn detect_garmin_ip(nic_addr: Ipv4Addr) -> Option<Ipv4Addr> {
     let ifaces = NetworkInterface::show().ok()?;
-    for iface in ifaces {
-        for addr in iface.addr {
+    // First pass: find the NIC that has nic_addr, then return its first GMN IP.
+    for iface in &ifaces {
+        let has_nic_addr = iface
+            .addr
+            .iter()
+            .any(|a| a.ip() == std::net::IpAddr::V4(nic_addr));
+        if !has_nic_addr {
+            continue;
+        }
+        for addr in &iface.addr {
+            if let std::net::IpAddr::V4(ip) = addr.ip() {
+                let n = u32::from(ip);
+                if (n & GARMIN_MASK) == GARMIN_NET {
+                    return Some(ip);
+                }
+            }
+        }
+    }
+    // Fallback: any GMN IP on any interface (original behaviour).
+    for iface in &ifaces {
+        for addr in &iface.addr {
             if let std::net::IpAddr::V4(ip) = addr.ip() {
                 let n = u32::from(ip);
                 if (n & GARMIN_MASK) == GARMIN_NET {
@@ -68,7 +90,7 @@ fn detect_garmin_ip() -> Option<Ipv4Addr> {
 
 /// Spawn all four xHD output tasks as graceful-shutdown subsystems.
 pub(crate) fn spawn(radar: &RadarInfo, subsys: &SubsystemHandle) {
-    let local_ip = match detect_garmin_ip() {
+    let local_ip = match detect_garmin_ip(radar.nic_addr) {
         Some(ip) => ip,
         None => {
             log::info!(
@@ -81,8 +103,18 @@ pub(crate) fn spawn(radar: &RadarInfo, subsys: &SubsystemHandle) {
 
     log::info!("{}: GarminXhd output starting on {}", radar.key(), local_ip);
 
-    let state = Arc::new(Mutex::new(SharedState::default()));
     let controls = radar.controls.clone();
+
+    // Read initial transmit state from controls; default to false (standby) if unknown.
+    let transmitting = controls
+        .get(&ControlId::Power)
+        .and_then(|c| c.value)
+        .map(|v| v as u32 == Power::Transmit as u32)
+        .unwrap_or(false);
+    let state = Arc::new(Mutex::new(SharedState {
+        transmitting,
+        ..SharedState::default()
+    }));
     let brand = radar.brand;
     let spokes_per_rev = radar.spokes_per_revolution as u32;
     let message_rx = radar.message_tx.subscribe();

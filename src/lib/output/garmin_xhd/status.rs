@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::oneshot;
 
-use crate::brand::garmin::protocol::*;
+use crate::brand::garmin::protocol::{self, *};
 use crate::radar::settings::{ControlId, SharedControls};
 
 use super::SharedState;
@@ -184,7 +184,7 @@ pub(super) async fn run(
     controls: SharedControls,
     mut stop: oneshot::Receiver<()>,
 ) {
-    let sock = match UdpSocket::bind((local_ip, 0)) {
+    let sock = match UdpSocket::bind((local_ip, protocol::REPORT_PORT)) {
         Ok(s) => s,
         Err(e) => {
             log::error!("GarminXhd status: failed to bind socket: {e}");

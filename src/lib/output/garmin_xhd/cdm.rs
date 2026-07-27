@@ -8,7 +8,9 @@ use std::net::{Ipv4Addr, UdpSocket};
 use std::time::Duration;
 use tokio::sync::oneshot;
 
-use crate::brand::garmin::protocol::{CDM_HEARTBEAT_ADDRESS, MSG_CDM_HEARTBEAT};
+use crate::brand::garmin::protocol::{
+    CDM_HEARTBEAT_ADDRESS, CDM_HEARTBEAT_PORT, MSG_CDM_HEARTBEAT,
+};
 
 const PRODUCT_ID_XHD: u16 = 0x06d0;
 const SYC_GROUP_ID: u8 = 6;
@@ -48,7 +50,7 @@ fn build_heartbeat(seq: u32) -> Vec<u8> {
 }
 
 pub(super) async fn run(local_ip: Ipv4Addr, mut stop: oneshot::Receiver<()>) {
-    let sock = match UdpSocket::bind((local_ip, 0)) {
+    let sock = match UdpSocket::bind((local_ip, CDM_HEARTBEAT_PORT)) {
         Ok(s) => s,
         Err(e) => {
             log::error!("GarminXhd CDM: failed to bind socket: {e}");

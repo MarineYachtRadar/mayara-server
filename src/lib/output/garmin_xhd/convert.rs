@@ -42,11 +42,15 @@ pub(super) fn nearest_xhd_range(meters: u32) -> u32 {
 /// `range_meters` in the spoke header is snapped to the nearest xHD table
 /// entry; `display_meters` carries `display_range` so the plotter scales the
 /// image correctly when the source radar's range doesn't align exactly.
+/// * `display_range`  — brand-corrected range in meters (used for range_meters snap)
+/// * `src_range_raw`  — raw spoke.range from the radar (used as display_meters so the
+///                      plotter scales the chart image correctly, matching bridge.py behaviour)
 pub(super) fn to_xhd_spoke(
     src_angle: u32,
     src_spokes_per_rev: u32,
     src_data: &[u8],
     display_range: u32,
+    src_range_raw: u32,
 ) -> Vec<u8> {
     // Angle: map source units → xHD 1/8° units, then quantize to step=8.
     // Values above 11512 crash the plotter — the % keeps us in [0,11519],
@@ -70,23 +74,30 @@ pub(super) fn to_xhd_spoke(
     }
 
     let range_meters = nearest_xhd_range(display_range);
-    let pay_len = (28 + SAMPLES_PER_SPOKE) as u32; // bytes after the GMN 8-byte header
+    // display_meters: raw spoke.range (unmodified) — the plotter uses this to scale
+    // the chart image, exactly as bridge.py does (src_range_m passed through directly).
+    let display_meters = if src_range_raw > 0 {
+        src_range_raw
+    } else {
+        range_meters
+    };
+    let pay_len = (28 + SAMPLES_PER_SPOKE) as u32;
 
     // struct radar_line (from GarminxHDReceive.cpp, pragma pack 1):
-    //   [0]  u32 packet_type       = 0x0998
-    //   [4]  u32 len1              = pay_len
-    //   [8]  u16 fill_1            = 1  (must not be 0 — crashes plotter)
-    //   [10] u16 scan_length       = 0x02d3
-    //   [12] u16 angle             = xhd_angle
-    //   [14] u16 fill_2            = 0
-    //   [16] u32 range_meters      = nearest xHD table value
-    //   [20] u32 display_meters    = display_range (actual range for chart scale)
-    //   [24] u8  a_b_range         = 0
-    //   [25] u8  dual_range        = 0
+    //   [0]  u32 packet_type         = 0x0998
+    //   [4]  u32 len1                = pay_len
+    //   [8]  u16 fill_1              = 1  (must not be 0 — crashes plotter)
+    //   [10] u16 scan_length         = 0x02d3
+    //   [12] u16 angle               = xhd_angle
+    //   [14] u16 fill_2              = 0
+    //   [16] u32 range_meters        = nearest xHD table value (UI range display)
+    //   [20] u32 display_meters      = raw spoke.range (chart image scaling)
+    //   [24] u8  a_b_range           = 0
+    //   [25] u8  dual_range          = 0
     //   [26] u16 scan_length_bytes_s = SAMPLES_PER_SPOKE
-    //   [28] u16 fills_4           = 0x0108  (must not be 0 — crashes plotter)
+    //   [28] u16 fills_4             = 0x0108  (must not be 0 — crashes plotter)
     //   [30] u32 scan_length_bytes_i = SAMPLES_PER_SPOKE
-    //   [34] u16 fills_5           = 0
+    //   [34] u16 fills_5             = 0
     //   [36+] line_data
     let mut pkt = Vec::with_capacity(36 + SAMPLES_PER_SPOKE);
     pkt.extend_from_slice(&0x0998_u32.to_le_bytes());
@@ -96,7 +107,7 @@ pub(super) fn to_xhd_spoke(
     pkt.extend_from_slice(&xhd_angle.to_le_bytes());
     pkt.extend_from_slice(&0_u16.to_le_bytes()); // fill_2
     pkt.extend_from_slice(&range_meters.to_le_bytes());
-    pkt.extend_from_slice(&display_range.to_le_bytes());
+    pkt.extend_from_slice(&display_meters.to_le_bytes());
     pkt.push(0); // a_b_range
     pkt.push(0); // dual_range
     pkt.extend_from_slice(&(SAMPLES_PER_SPOKE as u16).to_le_bytes());
@@ -129,7 +140,7 @@ mod tests {
     fn spoke_angle_maps_furuno_8192_spokes() {
         // Furuno: 8192 spokes/rev. Angle 0 → xhd 0, angle 1024 → xhd 1440 (= 11520/8).
         // For angle 1024: raw = 1024*11520/8192 = 1440; quantized = 1440.
-        let pkt = to_xhd_spoke(1024, 8192, &[], 3704);
+        let pkt = to_xhd_spoke(1024, 8192, &[], 3704, 3704);
         let angle = u16::from_le_bytes([pkt[12], pkt[13]]);
         assert_eq!(angle, 1440);
     }
@@ -137,7 +148,7 @@ mod tests {
     #[test]
     fn spoke_angle_never_exceeds_11512() {
         // Angle just before wrap: 8191/8192 * 11520 = 11518.59 → quantize → 11512
-        let pkt = to_xhd_spoke(8191, 8192, &[], 3704);
+        let pkt = to_xhd_spoke(8191, 8192, &[], 3704, 3704);
         let angle = u16::from_le_bytes([pkt[12], pkt[13]]);
         assert!(angle <= 11512, "angle {angle} exceeds max");
     }
@@ -145,7 +156,7 @@ mod tests {
     #[test]
     fn spoke_angle_wraps_at_max() {
         // Angle 8192 (= full revolution) → xhd 0 (wraps)
-        let pkt = to_xhd_spoke(8192, 8192, &[], 3704);
+        let pkt = to_xhd_spoke(8192, 8192, &[], 3704, 3704);
         let angle = u16::from_le_bytes([pkt[12], pkt[13]]);
         assert_eq!(angle, 0);
     }
@@ -153,7 +164,7 @@ mod tests {
     #[test]
     fn spoke_range_fields() {
         let display = 9902_u32; // Furuno internal range for xhd=5556
-        let pkt = to_xhd_spoke(0, 8192, &[], display);
+        let pkt = to_xhd_spoke(0, 8192, &[], display, display);
         let range_m = u32::from_le_bytes([pkt[16], pkt[17], pkt[18], pkt[19]]);
         let display_m = u32::from_le_bytes([pkt[20], pkt[21], pkt[22], pkt[23]]);
         assert_eq!(range_m, 11112); // nearest_xhd_range(9902)
@@ -162,7 +173,7 @@ mod tests {
 
     #[test]
     fn spoke_critical_constants() {
-        let pkt = to_xhd_spoke(0, 8192, &[0u8; 1024], 3704);
+        let pkt = to_xhd_spoke(0, 8192, &[0u8; 1024], 3704, 3704);
         assert_eq!(pkt.len(), 36 + SAMPLES_PER_SPOKE);
         // fill_1 at byte 8 must be 1
         let fill_1 = u16::from_le_bytes([pkt[8], pkt[9]]);
@@ -175,7 +186,7 @@ mod tests {
     #[test]
     fn sample_resampling_1024_to_695() {
         let src: Vec<u8> = (0..1024_u16).map(|i| (i % 256) as u8).collect();
-        let pkt = to_xhd_spoke(0, 8192, &src, 3704);
+        let pkt = to_xhd_spoke(0, 8192, &src, 3704, 3704);
         let samples = &pkt[36..];
         assert_eq!(samples.len(), SAMPLES_PER_SPOKE);
         // First sample should be the first source byte
@@ -187,7 +198,7 @@ mod tests {
 
     #[test]
     fn empty_src_data_gives_zero_samples() {
-        let pkt = to_xhd_spoke(0, 8192, &[], 3704);
+        let pkt = to_xhd_spoke(0, 8192, &[], 3704, 3704);
         assert!(pkt[36..].iter().all(|&b| b == 0));
     }
 }

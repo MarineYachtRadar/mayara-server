@@ -22,7 +22,7 @@ use protobuf::Message as _;
 use tokio::sync::broadcast;
 
 use crate::Brand;
-use crate::brand::garmin::protocol::DATA_ADDRESS;
+use crate::brand::garmin::protocol::{DATA_ADDRESS, DATA_PORT};
 use crate::protos::RadarMessage::RadarMessage;
 
 use super::SharedState;
@@ -36,7 +36,7 @@ pub(super) async fn run(
     state: Arc<Mutex<SharedState>>,
     mut stop: oneshot::Receiver<()>,
 ) {
-    let sock = match UdpSocket::bind((local_ip, 0)) {
+    let sock = match UdpSocket::bind((local_ip, DATA_PORT)) {
         Ok(s) => s,
         Err(e) => {
             log::error!("GarminXhd spokes: failed to bind socket: {e}");
@@ -81,9 +81,10 @@ pub(super) async fn run(
                 _ => spoke.range,
             };
 
-            // Update shared range unless the plotter's command lock is active.
+            // Update shared range and transmit state unless range-lock is active.
             {
                 let mut st = state.lock().unwrap();
+                st.transmitting = true;
                 let now = Instant::now();
                 if now >= st.range_lock_until {
                     let new_range = nearest_xhd_range(display_range);
@@ -99,7 +100,13 @@ pub(super) async fn run(
                 }
             }
 
-            let pkt = to_xhd_spoke(spoke.angle, spokes_per_rev, &spoke.data, display_range);
+            let pkt = to_xhd_spoke(
+                spoke.angle,
+                spokes_per_rev,
+                &spoke.data,
+                display_range,
+                spoke.range,
+            );
             if let Err(e) = sock.send_to(&pkt, dest) {
                 log::warn!("GarminXhd spokes: send failed: {e}");
             }
