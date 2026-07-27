@@ -71,7 +71,7 @@ pub const BYTE_LOOKUP_LENGTH: usize = (u8::MAX as usize) + 1;
 
 #[derive(Error, Debug)]
 pub enum RadarError {
-    #[error("I/O operation failed")]
+    #[error("I/O operation failed: {0}")]
     Io(#[from] std::io::Error),
     #[error("Axum operation failed")]
     Axum(#[from] axum::Error),
