@@ -159,22 +159,14 @@ pub(super) async fn run(
     controls: SharedControls,
     mut stop: oneshot::Receiver<()>,
 ) {
-    let std_sock = match std::net::UdpSocket::bind((local_ip, protocol::REPORT_PORT)) {
+    let sock = match UdpSocket::bind((local_ip, protocol::REPORT_PORT)).await {
         Ok(s) => s,
         Err(e) => {
             log::error!("GarminXhd status: failed to bind socket: {e}");
             return;
         }
     };
-    std_sock.set_multicast_ttl_v4(1).ok();
-    std_sock.set_nonblocking(true).ok();
-    let sock = match UdpSocket::from_std(std_sock) {
-        Ok(s) => s,
-        Err(e) => {
-            log::error!("GarminXhd status: failed to create async socket: {e}");
-            return;
-        }
-    };
+    sock.set_multicast_ttl_v4(1).ok();
 
     let dest = REPORT_ADDRESS;
 

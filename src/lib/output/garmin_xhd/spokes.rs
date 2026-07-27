@@ -37,22 +37,14 @@ pub(super) async fn run(
     state: Arc<Mutex<SharedState>>,
     mut stop: oneshot::Receiver<()>,
 ) {
-    let std_sock = match std::net::UdpSocket::bind((local_ip, DATA_PORT)) {
+    let sock = match UdpSocket::bind((local_ip, DATA_PORT)).await {
         Ok(s) => s,
         Err(e) => {
             log::error!("GarminXhd spokes: failed to bind socket: {e}");
             return;
         }
     };
-    std_sock.set_multicast_ttl_v4(1).ok();
-    std_sock.set_nonblocking(true).ok();
-    let sock = match UdpSocket::from_std(std_sock) {
-        Ok(s) => s,
-        Err(e) => {
-            log::error!("GarminXhd spokes: failed to create async socket: {e}");
-            return;
-        }
-    };
+    sock.set_multicast_ttl_v4(1).ok();
 
     let dest = DATA_ADDRESS;
 
@@ -113,8 +105,10 @@ pub(super) async fn run(
                 display_range,
                 spoke.range,
             );
-            if let Err(e) = sock.send_to(&pkt, dest).await {
-                log::warn!("GarminXhd spokes: send failed: {e}");
+            if let Err(e) = sock.try_send_to(&pkt, dest) {
+                if e.kind() != std::io::ErrorKind::WouldBlock {
+                    log::warn!("GarminXhd spokes: send failed: {e}");
+                }
             }
         }
     }

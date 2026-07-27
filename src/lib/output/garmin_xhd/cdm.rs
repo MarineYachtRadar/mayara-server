@@ -51,23 +51,14 @@ fn build_heartbeat(seq: u32) -> Vec<u8> {
 }
 
 pub(super) async fn run(local_ip: Ipv4Addr, mut stop: oneshot::Receiver<()>) {
-    // Bind via std first to set socket options, then convert to tokio async socket.
-    let std_sock = match std::net::UdpSocket::bind((local_ip, CDM_HEARTBEAT_PORT)) {
+    let sock = match UdpSocket::bind((local_ip, CDM_HEARTBEAT_PORT)).await {
         Ok(s) => s,
         Err(e) => {
             log::error!("GarminXhd CDM: failed to bind socket: {e}");
             return;
         }
     };
-    std_sock.set_multicast_ttl_v4(1).ok();
-    std_sock.set_nonblocking(true).ok();
-    let sock = match UdpSocket::from_std(std_sock) {
-        Ok(s) => s,
-        Err(e) => {
-            log::error!("GarminXhd CDM: failed to create async socket: {e}");
-            return;
-        }
-    };
+    sock.set_multicast_ttl_v4(1).ok();
 
     let dest = CDM_HEARTBEAT_ADDRESS;
     let mut seq: u32 = 0;
