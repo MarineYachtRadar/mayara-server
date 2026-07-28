@@ -104,35 +104,28 @@ Garmin plotter would not receive any packets.
 
 ## Spoke Buffering (`spokes.rs`)
 
-Furuno delivers spokes in batches of ~1500 every ~450ms (configured via
-`set_spoke_batch_threshold` to ~1/6 of a revolution per broadcast). Without
-pacing, `spokes.rs` would send all 1500 spokes in a few milliseconds and then
-go silent for ~450ms. During that silence the Garmin plotter continues sweeping
-and renders the gap as missing sectors.
+The input radar delivers spokes in batches. Without pacing, `spokes.rs` would
+send an entire batch in a burst and then go silent until the next batch arrives.
+During that silence the Garmin plotter continues sweeping and renders the gap as
+missing sectors.
 
 **Solution — jitter buffer:** incoming batches are pre-converted and pushed into
-a `VecDeque`. A drain loop sends one packet every `SPOKE_INTERVAL` (200µs),
-regardless of when the next batch arrives:
+a `VecDeque`. A drain loop sends one packet per `SPOKE_INTERVAL`, regardless of
+when the next batch arrives:
 
-```
-Furuno batch (~1500 spokes)          Plotter
-  arrives every ~450ms               receives one spoke every 200ms
+```text
+Input batch                          Plotter
+  arrives every ~N ms                receives one spoke every SPOKE_INTERVAL
         │                                  │
   ──────┤ push_back ──► VecDeque ──► pop_front ──► UDP
         │                                  │
-  next  │◄──── ~300ms drain time ────►     │
-  batch │        queue runs low            │
-  arrives, refills queue seamlessly        │
+  next batch arrives, refills queue        │
 ```
 
-At 200µs/spoke the queue drains 1500 spokes in ~300ms — faster than Furuno's
-~450ms batch cadence — so the next batch arrives before the queue runs empty.
-Average display lag is ~150ms (~22° at 24 RPM), which is imperceptible in
-practice.
-
-`SPOKE_INTERVAL` was tuned by experiment: 100µs caused occasional gaps
-(draining too fast, queue ran empty); 150µs worked but left little margin;
-200µs is stable with comfortable headroom.
+The drain rate is chosen so the queue empties slightly faster than the input
+batch cadence, keeping display lag low while ensuring the next batch arrives
+before the queue runs empty. See `SPOKE_INTERVAL` in `spokes.rs` for the
+current value and `QUEUE_MAX` for the overflow cap.
 
 ## Spoke Conversion (`convert.rs`)
 
