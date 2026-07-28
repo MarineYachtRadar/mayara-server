@@ -122,10 +122,12 @@ Input batch                          Plotter
   next batch arrives, refills queue        │
 ```
 
-The drain rate is chosen so the queue empties slightly faster than the input
-batch cadence, keeping display lag low while ensuring the next batch arrives
-before the queue runs empty. See `SPOKE_INTERVAL` in `spokes.rs` for the
-current value and `QUEUE_MAX` for the overflow cap.
+The drain rate is chosen to reduce burstiness and keep display lag low. If the
+queue runs empty before the next batch arrives, the sender blocks on
+`message_rx` and resumes immediately when new spokes are available — the
+send clock is reset so there is no artificial delay on restart. See
+`SPOKE_INTERVAL` in `spokes.rs` for the current drain rate and `QUEUE_MAX`
+for the overflow cap.
 
 ## Spoke Conversion (`convert.rs`)
 
