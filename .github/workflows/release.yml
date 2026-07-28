@@ -4,16 +4,9 @@ on:
   push:
     tags:
       - 'v*'
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Tag name for the release (e.g. v3.7.0-xhd.1)'
-        required: true
-        default: 'v3.7.0-xhd.1'
 
 env:
   CARGO_TERM_COLOR: always
-  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
 jobs:
   build-linux:
@@ -43,14 +36,14 @@ jobs:
     - name: Package
       run: |
         cd target/${{ matrix.target }}/release
-        tar -czvf mayara-server-${{ env.RELEASE_TAG }}-${{ matrix.target }}.tar.gz mayara-server
-        mv mayara-server-${{ env.RELEASE_TAG }}-${{ matrix.target }}.tar.gz ../../../
+        tar -czvf mayara-server-${{ github.ref_name }}-${{ matrix.target }}.tar.gz mayara-server
+        mv mayara-server-${{ github.ref_name }}-${{ matrix.target }}.tar.gz ../../../
 
     - name: Upload artifact
       uses: actions/upload-artifact@v7
       with:
         name: mayara-server-${{ matrix.target }}
-        path: mayara-server-${{ env.RELEASE_TAG }}-${{ matrix.target }}.tar.gz
+        path: mayara-server-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
 
   build-macos:
     name: Build macOS Universal
@@ -81,13 +74,13 @@ jobs:
         file mayara-server
 
     - name: Package
-      run: tar -czvf mayara-server-${{ env.RELEASE_TAG }}-universal-apple-darwin.tar.gz mayara-server
+      run: tar -czvf mayara-server-${{ github.ref_name }}-universal-apple-darwin.tar.gz mayara-server
 
     - name: Upload artifact
       uses: actions/upload-artifact@v7
       with:
         name: mayara-server-macos
-        path: mayara-server-${{ env.RELEASE_TAG }}-universal-apple-darwin.tar.gz
+        path: mayara-server-${{ github.ref_name }}-universal-apple-darwin.tar.gz
 
   build-windows:
     name: Build Windows
@@ -102,13 +95,13 @@ jobs:
       run: cargo build --release
 
     - name: Package
-      run: Compress-Archive -Path target/release/mayara-server.exe -DestinationPath mayara-server-${{ env.RELEASE_TAG }}-x86_64-pc-windows.zip
+      run: Compress-Archive -Path target/release/mayara-server.exe -DestinationPath mayara-server-${{ github.ref_name }}-x86_64-pc-windows.zip
 
     - name: Upload artifact
       uses: actions/upload-artifact@v7
       with:
         name: mayara-server-windows
-        path: mayara-server-${{ env.RELEASE_TAG }}-x86_64-pc-windows.zip
+        path: mayara-server-${{ github.ref_name }}-x86_64-pc-windows.zip
 
   release:
     name: Create Release
@@ -136,7 +129,7 @@ jobs:
       uses: orhun/git-cliff-action@v4
       with:
         config: cliff.toml
-        args: --latest --strip header --tag ${{ env.RELEASE_TAG }}
+        args: --latest --strip header --tag ${{ github.ref_name }}
       env:
         OUTPUT: CHANGES.md
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -145,7 +138,7 @@ jobs:
       uses: orhun/git-cliff-action@v4
       with:
         config: cliff.toml
-        args: --output CHANGELOG.md --tag ${{ env.RELEASE_TAG }}
+        args: --output CHANGELOG.md --tag ${{ github.ref_name }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -182,11 +175,11 @@ jobs:
         cp /tmp/CHANGELOG.md CHANGELOG.md
         git add CHANGELOG.md
         if ! git diff --staged --quiet; then
-          BRANCH="docs-changelog-${{ env.RELEASE_TAG }}-${{ github.run_id }}-${{ github.run_attempt }}"
+          BRANCH="docs-changelog-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}"
           git switch -C "$BRANCH"
-          git commit -m "docs(changelog): update CHANGELOG.md for ${{ env.RELEASE_TAG }}"
+          git commit -m "docs(changelog): update CHANGELOG.md for ${{ github.ref_name }}"
           git push --set-upstream origin "$BRANCH"
-          PR_URL="$(gh pr create --title "docs(changelog): update CHANGELOG.md for ${{ env.RELEASE_TAG }}" --body "Auto-generated changelog update." --base main --head "$BRANCH")"
+          PR_URL="$(gh pr create --title "docs(changelog): update CHANGELOG.md for ${{ github.ref_name }}" --body "Auto-generated changelog update." --base main --head "$BRANCH")"
           gh pr merge "$PR_URL" --squash --delete-branch --auto || gh pr merge "$PR_URL" --squash --delete-branch
         fi
 
