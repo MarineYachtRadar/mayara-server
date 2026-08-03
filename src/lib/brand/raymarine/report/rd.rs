@@ -367,9 +367,16 @@ pub(super) fn process_status_report(receiver: &mut RaymarineReportReceiver, data
         );
         return;
     }
-    let report = &data[..STATUS_REPORT_LENGTH];
-    log::info!("{}: status report {:02X?}", receiver.common.key, report);
-    let report: StatusReport = match decode_bin(report) {
+    // Dump the whole datagram, not just the part StatusReport covers: the HD
+    // variant carries power and range past its end, and the words following
+    // the range table are still unidentified.
+    log::info!(
+        "{}: status report len={} {:02X?}",
+        receiver.common.key,
+        data.len(),
+        data
+    );
+    let report: StatusReport = match decode_bin(&data[..STATUS_REPORT_LENGTH]) {
         Ok(h) => h,
         Err(e) => {
             log::error!(
