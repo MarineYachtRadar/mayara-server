@@ -257,6 +257,9 @@ impl Web {
                     let _ = shutdown_tx.send(());
                 },
                 r = axum::serve(tls_listener, app).with_graceful_shutdown(shutdown) => {
+                    // Reached only via /quit or a serve error; either way the
+                    // rest of mayara must not keep running headless.
+                    subsys.request_shutdown();
                     return r.map_err(WebError::Io);
                 }
             }
@@ -272,6 +275,9 @@ impl Web {
                     let _ = shutdown_tx.send(());
                 },
                 r = axum::serve(listener, app).with_graceful_shutdown(shutdown) => {
+                    // Reached only via /quit or a serve error; either way the
+                    // rest of mayara must not keep running headless.
+                    subsys.request_shutdown();
                     return r.map_err(WebError::Io);
                 }
             }
