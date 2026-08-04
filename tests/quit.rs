@@ -1,9 +1,6 @@
-//! `/quit` must stop the whole process, not just the web server.
-//!
-//! Regression test: the web server used to shut down on its own broadcast
-//! channel without ever requesting a shutdown of the subsystem tree, leaving
-//! a headless process behind that still held the radar sockets and could
-//! only be killed by hand.
+//! `/quit` stops the whole process, not just the web server. A web server
+//! that shuts down while the subsystem tree keeps running leaves a headless
+//! process holding the radar sockets that can only be killed by hand.
 
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
@@ -12,6 +9,7 @@ use std::time::{Duration, Instant};
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
 const EXIT_TIMEOUT: Duration = Duration::from_secs(15);
+const EXIT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Start a server on an ephemeral port and return it with that port.
 ///
@@ -56,7 +54,7 @@ fn wait_for_exit(child: &mut Child, timeout: Duration) -> Option<std::process::E
         if let Some(status) = child.try_wait().expect("try_wait failed") {
             return Some(status);
         }
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(EXIT_POLL_INTERVAL);
     }
     None
 }
