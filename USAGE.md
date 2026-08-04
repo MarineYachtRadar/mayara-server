@@ -198,6 +198,15 @@ mayara-server --nmea0183 -n udp:0.0.0.0:10110
 
 The built-in web interface is available at `http://localhost:6502` (or your configured port).
 
+Mayara announces itself on the local network with mDNS (Bonjour/Avahi), so from
+another computer, tablet or phone on the same network the web interface is
+reachable at `http://mayara.local:6502` without knowing the server's IP address.
+The announcement is the DNS-SD service type `_mayara-http._tcp`, with TXT keys
+`version`, `api` (Signal K radar API version), `path` and `scheme`
+(`http` or `https`, depending on whether TLS is configured). Browse for other
+mayara servers with, for example, `dns-sd -B _mayara-http._tcp` (macOS) or
+`avahi-browse -r _mayara-http._tcp` (Linux).
+
 Features:
 - Real-time radar display (PPI view)
 - Range and control adjustments
