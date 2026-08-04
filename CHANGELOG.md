@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **network:** advertise web server via mDNS (#483) ([PR #483](https://github.com/MarineYachtRadar/mayara-server/pull/483))
+- **server:** add --parent for running under a chart plotter (#485) ([PR #485](https://github.com/MarineYachtRadar/mayara-server/pull/485))
 
 ### Fixed
 
