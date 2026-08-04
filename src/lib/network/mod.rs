@@ -19,6 +19,7 @@ pub(crate) mod windows;
 
 pub mod arp;
 pub mod devices;
+pub mod mdns_advertise;
 pub mod mdns_browse;
 pub mod passive_capture;
 

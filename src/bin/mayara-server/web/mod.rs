@@ -161,6 +161,27 @@ impl Web {
         socket.listen(1024).map_err(WebError::Io)?;
         let listener = TcpListener::from_std(socket.into()).map_err(WebError::Io)?;
 
+        // Announce the bound port, not the requested one: `--port 0` asks the
+        // kernel for a free port, and clients need the one we actually got.
+        // Discovery is a convenience, so a failure here must not stop the web
+        // server.
+        let bound_port = listener.local_addr().map_err(WebError::Io)?.port();
+        let _advertiser =
+            match mayara::network::mdns_advertise::Advertiser::start(bound_port, self.tls) {
+                Ok(advertiser) => {
+                    log::info!(
+                        "Advertising {} port {} on mDNS",
+                        advertiser.fullname(),
+                        bound_port
+                    );
+                    Some(advertiser)
+                }
+                Err(e) => {
+                    log::warn!("Cannot advertise web server on mDNS: {}", e);
+                    None
+                }
+            };
+
         let tls_acceptor = match (&self.args.tls_cert, &self.args.tls_key) {
             (Some(cert), Some(key)) => {
                 let config = load_tls_config(cert, key)?;
