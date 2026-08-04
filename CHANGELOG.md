@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **network:** advertise web server via mDNS (#483) ([PR #483](https://github.com/MarineYachtRadar/mayara-server/pull/483))
+
 ### Fixed
 
 - **raymarine:** support RD418D radomes (discovery and decoding) (#465) ([PR #465](https://github.com/MarineYachtRadar/mayara-server/pull/465))
