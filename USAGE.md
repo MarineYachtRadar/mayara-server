@@ -48,6 +48,7 @@ Command Line Options
 | `--tls-key <FILE>`            | TLS private key file (PEM format). Enables HTTPS when set with `--tls-cert`.                            |
 | `-i, --interface <INTERFACE>` | Limit radar discovery to a specific network interface                                                   |
 | `--allow-wifi`                | Allow radar discovery on WiFi interfaces (not recommended for most brands due to multicast limitations) |
+| `--parent <PID>`              | Run as a helper process of a chart plotter; see [Running under a chart plotter](#running-under-a-chart-plotter) |
 
 ### Radar Selection
 
@@ -194,11 +195,34 @@ mayara-server --tls-cert /path/to/cert.pem --tls-key /path/to/key.pem
 mayara-server --nmea0183 -n udp:0.0.0.0:10110
 ```
 
+### Running under a chart plotter
+
+A chart plotter such as OpenCPN can start mayara for its own use, passing its
+own process id:
+
+```bash
+# Started by the plotter, which passes its pid
+mayara-server --parent 12345
+```
+
+In this mode mayara:
+
+- serves the web interface on `127.0.0.1` only, so it is not reachable from the
+  rest of the network,
+- does not advertise itself on mDNS, so it does not turn up in other machines'
+  network browsers,
+- exits as soon as process 12345 is gone, so a plotter that crashes or is killed
+  does not leave mayara behind holding the radar sockets and the server port.
+
+Radar discovery itself is unaffected and still uses the real network interfaces.
+The parent is checked every two seconds; mayara exits straight away if the pid is
+already gone at startup.
+
 ## Web Interface
 
 The built-in web interface is available at `http://localhost:6502` (or your configured port).
 
-Mayara announces itself on the local network with mDNS (Bonjour/Avahi), so from
+Unless `--parent` is used, mayara announces itself on the local network with mDNS (Bonjour/Avahi), so from
 another computer, tablet or phone on the same network the web interface is
 reachable at `http://mayara.local:6502` without knowing the server's IP address.
 The announcement is the DNS-SD service type `_mayara-http._tcp`, with TXT keys

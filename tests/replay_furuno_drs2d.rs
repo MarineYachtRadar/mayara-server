@@ -19,6 +19,7 @@ fn test_args() -> Cli {
         port: 0,
         tls_cert: None,
         tls_key: None,
+        parent: None,
         interface: None,
         brand: Some(mayara::Brand::Furuno),
         targets: mayara::TargetMode::None,
