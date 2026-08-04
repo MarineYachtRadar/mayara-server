@@ -17,6 +17,27 @@ use mayara::recording::RecordingManager;
 use mayara::replay;
 use mayara::{Cli, network};
 
+/// Shut down the whole server once the `--parent` process is gone, so a
+/// crashed chart plotter does not leave mayara behind holding its port.
+async fn watch_parent(
+    subsys: &mut SubsystemHandle,
+    pid: u32,
+) -> std::result::Result<(), web::WebError> {
+    if !mayara::process::is_alive(pid) {
+        warn!("Parent process {} is not running", pid);
+    }
+
+    tokio::select! {
+        _ = subsys.on_shutdown_requested() => {}
+        _ = mayara::process::wait_for_exit(pid) => {
+            info!("Parent process {} has gone away, shutting down", pid);
+            subsys.request_shutdown();
+        }
+    }
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Cli::parse();
@@ -67,6 +88,12 @@ async fn main() -> Result<()> {
     if args.output {
         warn!("Output mode activated; 'protobuf' formatted RadarMessage sent to stdout");
     }
+    if let Some(pid) = args.parent {
+        warn!("Child process mode activated, this does the following:");
+        warn!(" * The web server listens on localhost only");
+        warn!(" * The web server is not advertised on mDNS");
+        warn!(" * Mayara stops as soon as process {} is gone", pid);
+    }
     if args.nmea0183 {
         warn!(
             "NMEA0183 mode activated; will load GPS position, heading and date/time from {}",
@@ -78,7 +105,15 @@ async fn main() -> Result<()> {
 
     RecordingManager::new().cleanup_orphaned_uploads();
 
+    let parent_pid = args.parent;
+
     Toplevel::new(async move |s: &mut SubsystemHandle| {
+        if let Some(pid) = parent_pid {
+            s.start(SubsystemBuilder::new(
+                "ParentWatch",
+                async move |a: &mut SubsystemHandle| watch_parent(a, pid).await,
+            ));
+        }
         let web = Web::new(&*s, args).await;
         s.start(SubsystemBuilder::new(
             "Webserver",

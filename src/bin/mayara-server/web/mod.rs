@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     io,
-    net::{IpAddr, Ipv6Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     sync::Arc,
 };
 use thiserror::Error;
@@ -141,14 +141,28 @@ impl Web {
 
     pub async fn run(self, subsys: &mut SubsystemHandle) -> Result<(), WebError> {
         let port = self.args.port;
-        let addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), port);
-        let socket = socket2::Socket::new(
-            socket2::Domain::IPV6,
-            socket2::Type::STREAM,
-            Some(socket2::Protocol::TCP),
-        )
-        .map_err(WebError::Io)?;
-        socket.set_only_v6(false).map_err(WebError::Io)?;
+        // `--parent` means we serve one local chart plotter, so the web server
+        // stays on the loopback interface. IPv4 loopback rather than IPv6:
+        // clients asking for `localhost` fall back from ::1 to 127.0.0.1 on
+        // their own, and a v6 socket cannot answer a v4 client.
+        let embedded = self.args.parent.is_some();
+        let (domain, addr) = if embedded {
+            (
+                socket2::Domain::IPV4,
+                SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port),
+            )
+        } else {
+            (
+                socket2::Domain::IPV6,
+                SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), port),
+            )
+        };
+        let socket =
+            socket2::Socket::new(domain, socket2::Type::STREAM, Some(socket2::Protocol::TCP))
+                .map_err(WebError::Io)?;
+        if !embedded {
+            socket.set_only_v6(false).map_err(WebError::Io)?;
+        }
         socket.set_reuse_address(true).map_err(WebError::Io)?;
         socket.set_nonblocking(true).map_err(WebError::Io)?;
         socket.bind(&addr.into()).map_err(|e| {
@@ -164,9 +178,13 @@ impl Web {
         // Announce the bound port, not the requested one: `--port 0` asks the
         // kernel for a free port, and clients need the one we actually got.
         // Discovery is a convenience, so a failure here must not stop the web
-        // server.
-        let bound_port = listener.local_addr().map_err(WebError::Io)?.port();
-        let _advertiser =
+        // server. Nothing to announce when embedded: the server is not
+        // reachable from the network at all.
+        let bound_addr = listener.local_addr().map_err(WebError::Io)?;
+        let bound_port = bound_addr.port();
+        let _advertiser = if embedded {
+            None
+        } else {
             match mayara::network::mdns_advertise::Advertiser::start(bound_port, self.tls) {
                 Ok(advertiser) => {
                     log::info!(
@@ -180,7 +198,8 @@ impl Web {
                     log::warn!("Cannot advertise web server on mDNS: {}", e);
                     None
                 }
-            };
+            }
+        };
 
         let tls_acceptor = match (&self.args.tls_cert, &self.args.tls_key) {
             (Some(cert), Some(key)) => {
@@ -228,8 +247,8 @@ impl Web {
         if let Some(acceptor) = tls_acceptor {
             let app = router.into_make_service();
             log::info!(
-                "Starting HTTPS web server on port {} (pid {})",
-                port,
+                "Starting HTTPS web server on {} (pid {})",
+                bound_addr,
                 std::process::id()
             );
             let tls_listener = TlsListener { listener, acceptor };
@@ -244,8 +263,8 @@ impl Web {
         } else {
             let app = router.into_make_service();
             log::info!(
-                "Starting HTTP web server on port {} (pid {})",
-                port,
+                "Starting HTTP web server on {} (pid {})",
+                bound_addr,
                 std::process::id()
             );
             tokio::select! { biased;

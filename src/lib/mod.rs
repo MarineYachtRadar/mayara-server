@@ -24,6 +24,7 @@ pub mod network;
 pub(crate) mod nnd;
 #[cfg(feature = "pcap-replay")]
 pub mod pcap;
+pub mod process;
 pub mod protos;
 pub mod radar;
 pub mod recording;
@@ -65,6 +66,12 @@ pub struct Cli {
     /// TLS private key file (PEM format). Enables HTTPS when set with --tls-cert.
     #[arg(long, requires = "tls_cert")]
     pub tls_key: Option<std::path::PathBuf>,
+
+    /// Run as a helper process of a chart plotter such as OpenCPN, given its
+    /// process id. The web server then listens on localhost only and is not
+    /// advertised on mDNS, and mayara exits once that process is gone.
+    #[arg(long, value_name = "PID")]
+    pub parent: Option<u32>,
 
     /// Limit radar location to a single interface
     #[arg(short, long)]
