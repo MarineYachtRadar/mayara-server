@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **raymarine:** draw RD/HD echoes at their true distance (#495) ([PR #495](https://github.com/MarineYachtRadar/mayara-server/pull/495))
+
 ## [3.8.1] - 2026-08-04
 
 ### Fixed
@@ -336,6 +342,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **ci:** use PR for changelog commit to respect branch protection (#73) ([PR #73](https://github.com/MarineYachtRadar/mayara-server/pull/73))
 - **ci:** fall back to immediate merge when auto-merge not needed (#77) ([PR #77](https://github.com/MarineYachtRadar/mayara-server/pull/77))
 
+[Unreleased]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.8.1...HEAD
 [3.8.1]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.8.0...v3.8.1
 [3.8.0]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.7.0...v3.8.0
 [3.7.0]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.6.0...v3.7.0
