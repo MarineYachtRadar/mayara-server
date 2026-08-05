@@ -54,6 +54,13 @@ struct SpokeHeader3 {
     data_len: u32,
 }
 
+/// A spoke reaches twice as far as the range the radar reports: the last
+/// sample of a 512-sample D or 1024-sample HD spoke sits at twice the
+/// selected range, and a Raymarine MFD draws only the inner half. The
+/// Quantum states the same ratio explicitly in its frame header
+/// (`scan_len` / `returns_per_range`).
+const RD_SPOKE_RANGE_FACTOR: u32 = 2;
+
 const FRAME_HEADER_LENGTH: usize = size_of::<FrameHeader>();
 const SPOKE_HEADER_2_LENGTH: usize = size_of::<SpokeHeader2>();
 const SPOKE_HEADER_1_LENGTH: usize = size_of::<SpokeHeader1>();
@@ -235,7 +242,7 @@ pub(crate) fn process_frame(receiver: &mut RaymarineReportReceiver, data: &[u8])
             % receiver.common.info.spokes_per_revolution;
 
         receiver.common.add_spoke(
-            receiver.range_meters * 4,
+            receiver.range_meters * RD_SPOKE_RANGE_FACTOR,
             angle,
             None,
             process_spoke(hd_type, returns_per_line, spoke, data_len),
