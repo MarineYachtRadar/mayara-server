@@ -60,7 +60,12 @@ pub struct AisVessel {
     last_update: Instant,
 }
 
-/// Serializable view of AisVessel (only includes dimensions when known)
+/// Serializable view of AisVessel (only includes dimensions when known).
+///
+/// This is the input to [`SignalKDelta::for_ais_vessel`], which fans it out
+/// into Signal K's own delta paths. `status` is deliberately absent: Signal K
+/// has no liveness field — a consumer ages a vessel out when its updates stop —
+/// so mayara's internal `Active`/`Lost` state never reaches the wire.
 #[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct AisVesselApi {
@@ -77,7 +82,6 @@ pub struct AisVesselApi {
     pub cog: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sog: Option<f64>,
-    pub status: String,
 }
 
 impl From<&AisVessel> for AisVesselApi {
@@ -94,7 +98,6 @@ impl From<&AisVessel> for AisVesselApi {
             heading: vessel.heading,
             cog: vessel.cog,
             sog: vessel.sog,
-            status: vessel.status.clone(),
         }
     }
 }
@@ -375,8 +378,15 @@ impl AisVesselStore {
             .collect()
     }
 
-    /// Check for timed-out vessels, mark as Lost and broadcast
-    /// Returns the number of vessels marked as Lost
+    /// Drop vessels whose updates have stopped for longer than [`AIS_TIMEOUT`].
+    ///
+    /// Nothing is broadcast: Signal K has no "lost" delta, so a client ages a
+    /// vessel out when its updates stop. Emitting one here would be worse than
+    /// silence — with no `status` on the wire it is indistinguishable from a
+    /// live refresh, and it would re-assert the vessel's last known position
+    /// exactly when that position has become untrustworthy.
+    ///
+    /// Returns the number of vessels dropped.
     pub fn check_timeouts(&self) -> usize {
         let now = Instant::now();
         let mut lost_vessels = Vec::new();
@@ -400,14 +410,6 @@ impl AisVesselStore {
                 Err(_) => return 0,
             };
             for mmsi in &lost_vessels {
-                if let Some(vessel) = vessels.get_mut(mmsi) {
-                    vessel.status = "Lost".to_string();
-                    // Lost status is broadcast immediately (no delay needed)
-                    self.broadcast_vessel(vessel);
-                }
-            }
-            // Remove lost vessels from the store
-            for mmsi in &lost_vessels {
                 vessels.remove(mmsi);
             }
         }
@@ -418,10 +420,7 @@ impl AisVesselStore {
     /// Broadcast a vessel update to all connected clients
     fn broadcast_vessel(&self, vessel: &AisVessel) {
         let api = AisVesselApi::from(vessel);
-        let path = format!("vessels.{}", vessel.mmsi);
-
-        let mut delta = SignalKDelta::new();
-        delta.add_ais_vessel_update(&path, &api);
+        let delta = SignalKDelta::for_ais_vessel(&api);
 
         let _ = self.broadcast_tx.send(delta);
     }
@@ -676,7 +675,6 @@ mod tests {
         );
         assert_eq!(api.cog, Some(1.5));
         assert_eq!(api.sog, Some(5.0));
-        assert_eq!(api.status, "Active");
         // No dimensions set, so should be None
         assert!(api.dimensions.is_none());
     }
@@ -713,7 +711,6 @@ mod tests {
         assert_eq!(json["position"]["longitude"], -78.64894);
         assert_eq!(json["cog"], 3.632);
         assert_eq!(json["sog"], 0.0);
-        assert_eq!(json["status"], "Active");
         assert_eq!(json["dimensions"]["length"], 12.0);
         assert_eq!(json["dimensions"]["beam"], 4.0);
         // camelCase serialization
@@ -734,7 +731,8 @@ mod tests {
         assert!(json.get("sog").is_none());
         // These should always be present
         assert!(json.get("mmsi").is_some());
-        assert!(json.get("status").is_some());
+        // `status` is internal-only — Signal K has no liveness field.
+        assert!(json.get("status").is_none());
     }
 
     #[test]
@@ -803,6 +801,46 @@ mod tests {
         let active = store.get_all_active();
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].mmsi, "222222222");
+    }
+
+    /// A vessel that stops reporting is dropped silently. Signal K has no
+    /// "lost" delta — a client ages the vessel out — and with no `status` on
+    /// the wire a farewell broadcast would be indistinguishable from a live
+    /// refresh re-asserting a position that has just gone stale.
+    #[test]
+    fn test_check_timeouts_drops_silently() {
+        let (tx, mut rx) = broadcast::channel(16);
+        let store = AisVesselStore::new(tx);
+
+        let updates = json!([{
+            "values": [{
+                "path": "navigation.position",
+                "value": {"latitude": 52.0, "longitude": 4.0}
+            }]
+        }]);
+        store.update("vessels.urn:mrn:imo:mmsi:111111111", &updates);
+
+        // Backdate the vessel past the timeout, and drain the delta the
+        // initial update queued so only a timeout broadcast could remain.
+        {
+            let mut vessels = store.vessels.write().unwrap();
+            let vessel = vessels.get_mut("111111111").unwrap();
+            vessel.last_update = Instant::now()
+                .checked_sub(AIS_TIMEOUT + Duration::from_secs(1))
+                .expect("backdate");
+        }
+        store.flush_pending_broadcasts();
+        while rx.try_recv().is_ok() {}
+
+        assert_eq!(store.check_timeouts(), 1, "the vessel should time out");
+        assert!(
+            store.get_all_active().is_empty(),
+            "the vessel should be dropped from the store"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "timing out a vessel must not broadcast a delta"
+        );
     }
 
     #[test]

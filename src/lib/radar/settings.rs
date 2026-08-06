@@ -1918,7 +1918,7 @@ impl ControlValue {
             id: control.item().control_id,
             value: control.value(),
             units: control.item().units,
-            auto: control.auto,
+            auto: control.reported_auto(),
             auto_value: control.auto_value(),
             end_value: control.end_value(),
             start_distance: control.start_distance(),
@@ -2088,7 +2088,7 @@ impl RadarControlValue {
             control_id: Some(control.item().control_id),
             value: control.value(),
             units: control.item().units,
-            auto: control.auto,
+            auto: control.reported_auto(),
             auto_value: control.auto_value(),
             end_value: control.end_value(),
             start_distance: control.start_distance(),
@@ -2740,6 +2740,19 @@ impl Control {
     /// Read-only access to the definition of the control
     pub fn item(&self) -> &ControlDefinition {
         &self.item
+    }
+
+    /// The `auto` flag as reported to clients. Auto-capable controls (those with
+    /// an automatic mode — gain, sea, rain, ...) always report a flag,
+    /// defaulting to `false` when the radar has not set one, so a client never
+    /// has to treat a missing `auto` as "not in auto mode". Controls with no
+    /// automatic mode report no flag (`None`).
+    fn reported_auto(&self) -> Option<bool> {
+        match self.auto {
+            Some(_) => self.auto,
+            None if self.item.automatic.is_some() => Some(false),
+            None => None,
+        }
     }
 
     pub(crate) fn set_valid_values(&mut self, values: Vec<i32>) {
@@ -3548,6 +3561,18 @@ mod test {
             width: None,
             timestamp: None,
         }
+    }
+
+    #[test]
+    fn reported_auto_defaults_false_for_auto_capable_controls() {
+        // An auto-capable control (gain) whose auto state has never been set
+        // still reports `auto: false`, so a client never sees a missing flag.
+        let (_, gain) = new_auto(ControlId::Gain, 0., 100., HAS_AUTO_NOT_ADJUSTABLE).take();
+        assert_eq!(gain.reported_auto(), Some(false));
+
+        // A control with no automatic mode reports no flag at all.
+        let (_, range) = new_numeric(ControlId::Range, 0., 100_000.).take();
+        assert_eq!(range.reported_auto(), None);
     }
 
     #[test]

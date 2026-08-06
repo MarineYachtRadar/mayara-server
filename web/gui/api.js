@@ -5,6 +5,11 @@
  * and provides a unified API interface for the capabilities-driven v5 API.
  */
 
+// The Radar API version this UI was built against, permeated from the server's
+// api-version at build time (build.rs generates api-version.js). Used to enforce
+// ^major.minor compatibility against whatever server the UI talks to.
+import { RADAR_API_VERSION } from "./api-version.js";
+
 // API endpoints for different modes
 const SIGNALK_RADARS_API = "/signalk/v2/api/vessels/self/radars";
 const STANDALONE_INTERFACES_API =
@@ -119,8 +124,9 @@ export async function fetchRadarIds() {
 
   const response = await fetch(getRadarsPath());
   const data = await response.json();
+  assertCompatibleApiVersion(data);
 
-  return Object.keys(data);
+  return Object.keys(radarsMap(data));
 }
 
 /**
@@ -131,7 +137,55 @@ export async function fetchRadars() {
   await detectMode();
 
   const response = await fetch(getRadarsPath());
-  return response.json();
+  const data = await response.json();
+  assertCompatibleApiVersion(data);
+  return radarsMap(data);
+}
+
+/**
+ * Unwrap the radar list to a plain `{ id: radar }` map. The Radar API response
+ * is the `{ version, radars }` envelope (both mayara and signalk-server return
+ * this); older/bare responses that are already a keyed map are passed through.
+ * @param {Object} data - Parsed radar-list response
+ * @returns {Object} Radars keyed by ID
+ */
+function radarsMap(data) {
+  return data && typeof data.radars === "object" ? data.radars : data;
+}
+
+/** Parse a "X.Y.Z" version string into `[major, minor, patch]` numbers. */
+function parseVersion(v) {
+  return String(v)
+    .split(".")
+    .map((n) => parseInt(n, 10) || 0);
+}
+
+/**
+ * Assert the server's Radar API `version` satisfies `^<built version>` — the
+ * same major with an equal-or-newer minor. Future minor updates are assumed to
+ * be additive and compatible; an older API (or a missing version, i.e. a
+ * pre-envelope server) or a new major (breaking) is refused with a thrown error
+ * that surfaces in the UI.
+ * @param {Object} data - Parsed `GET /radars` response (the `{ version, radars }` envelope)
+ * @returns {string} the accepted server version
+ */
+function assertCompatibleApiVersion(data) {
+  const [reqMajor, reqMinor] = parseVersion(RADAR_API_VERSION);
+  const serverVersion =
+    data && typeof data.version === "string" ? data.version : null;
+  if (!serverVersion) {
+    throw new Error(
+      `Radar API too old: this UI requires ^${reqMajor}.${reqMinor} but the server reported no version.`
+    );
+  }
+  const [major, minor] = parseVersion(serverVersion);
+  if (major !== reqMajor || minor < reqMinor) {
+    throw new Error(
+      `Incompatible Radar API version ${serverVersion}: this UI requires ` +
+        `^${reqMajor}.${reqMinor} (>= ${reqMajor}.${reqMinor}.0, < ${reqMajor + 1}.0.0).`
+    );
+  }
+  return serverVersion;
 }
 
 /**

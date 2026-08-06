@@ -23,7 +23,7 @@ use utoipa::OpenApi;
 use utoipa::ToSchema;
 use utoipa_swagger_ui::{Config as SwaggerConfig, SwaggerUi};
 
-use crate::web::{derive_public_base, signalk::diagnostics, spokes_handler};
+use crate::web::{signalk::diagnostics, spokes_handler};
 
 use super::super::{Message, Web, WebSocket, WebSocketUpgrade};
 use mayara::{
@@ -42,6 +42,7 @@ pub(crate) const BASE_URI: &str = "/signalk/v2/api/vessels/self/radars";
 pub(crate) const CONTROL_URI: &str = "/signalk/v1/stream";
 pub(crate) const SPOKES_URI: &str = "/signalk/v2/api/vessels/self/radars/{id}/spokes"; // plus radar_id
 const OPENAPI_URI: &str = "/signalk/v2/api/vessels/self/radars/resources/openapi.json";
+const RADAR_URI: &str = "/signalk/v2/api/vessels/self/radars/{radar_id}";
 const RADAR_CAPABILITIES_URI: &str = "/signalk/v2/api/vessels/self/radars/{radar_id}/capabilities";
 const INTERFACES_URI: &str = "/signalk/v2/api/vessels/self/radars/interfaces";
 const RADAR_CONTROLS_URI: &str = "/signalk/v2/api/vessels/self/radars/{radar_id}/controls";
@@ -68,6 +69,7 @@ const RADAR_TARGET_URI: &str = "/signalk/v2/api/vessels/self/radars/{radar_id}/t
     ),
     paths(
         get_radars,
+        get_radar_info,
         get_interfaces,
         diagnostics::get_diagnostics,
         get_radar,
@@ -82,6 +84,7 @@ const RADAR_TARGET_URI: &str = "/signalk/v2/api/vessels/self/radars/{radar_id}/t
     components(schemas(
         RadarControlIdParam,
         RadarApiV3,
+        RadarsResponse,
         Capabilities,
         BareControlValue,
         // Target types
@@ -106,6 +109,7 @@ pub(crate) fn routes(axum: axum::Router<Web>) -> axum::Router<Web> {
         )
         .route(CONTROL_URI, get(control_stream_handler))
         .route(SPOKES_URI, get(spokes_handler))
+        .route(RADAR_URI, get(get_radar_info))
         .route(RADAR_CAPABILITIES_URI, get(get_radar))
         .route(RADAR_CONTROLS_URI, get(get_control_values))
         .route(
@@ -168,16 +172,20 @@ pub fn generate_openapi_json() -> String {
     serde_json::to_string_pretty(&openapi_spec()).unwrap()
 }
 
-/// Information about a detected radar, including WebSocket URLs for data streams
+/// Information about a detected radar.
+///
+/// The spoke and control-stream WebSockets are not listed here: they are always
+/// reached by convention from the host serving this response —
+/// `…/radars/{id}/spokes` and `/signalk/v1/stream` — so a client uses the same
+/// construction whether it talks to mayara directly or through a Signal K server.
 #[derive(Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 #[schema(as = RadarInfo, example = json!({
     "name": "HALO 034A",
     "brand": "Navico",
     "model": "HALO",
-    "spokeDataUrl": "ws://192.168.1.100:8080/signalk/v2/api/vessels/self/radars/nav1034A/spokes",
-    "streamUrl": "ws://192.168.1.100:8080/signalk/v1/stream",
-    "radarIpAddress": "192.168.1.50"
+    "radarIpAddress": "192.168.1.50",
+    "replay": false
 }))]
 struct RadarApiV3 {
     /// User-defined name or auto-detected model name
@@ -190,14 +198,6 @@ struct RadarApiV3 {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(example = "HALO")]
     model: Option<String>,
-    /// WebSocket URL for receiving raw radar spoke data (binary)
-    #[schema(
-        example = "ws://192.168.1.100:8080/signalk/v2/api/vessels/self/radars/nav1034A/spokes"
-    )]
-    spoke_data_url: String,
-    /// WebSocket URL for Signal K control stream (JSON)
-    #[schema(example = "ws://192.168.1.100:8080/signalk/v1/stream")]
-    stream_url: String,
     /// IP address of the radar unit on the network
     #[schema(value_type = String, example = "192.168.1.50")]
     radar_ip_address: Ipv4Addr,
@@ -209,37 +209,78 @@ struct RadarApiV3 {
     replay: bool,
 }
 
+impl From<&RadarInfo> for RadarApiV3 {
+    fn from(info: &RadarInfo) -> Self {
+        RadarApiV3 {
+            name: info.controls.user_name(),
+            brand: info.brand.to_string(),
+            model: info.controls.model_name(),
+            radar_ip_address: *info.addr.ip(),
+            replay: info.replay(),
+        }
+    }
+}
+
+/// The `GET /radars` response: the Radar API version plus the discovered radars
+/// keyed by radar ID. This envelope matches the signalk-server Radar API, so a
+/// client sees the same shape whether it talks to mayara directly or through a
+/// Signal K server.
+#[derive(Serialize, ToSchema)]
+#[schema(as = RadarsResponse)]
+struct RadarsResponse {
+    /// Radar API version (semver) this response conforms to.
+    #[schema(example = "3.4.0")]
+    version: String,
+    /// Discovered radars, keyed by radar ID.
+    radars: HashMap<String, RadarApiV3>,
+}
+
 #[utoipa::path(
     get,
     path = "/signalk/v2/api/vessels/self/radars",
     summary = "List all active radars",
-    description = "Returns all radars that have been detected on the network and are currently online. \
-                   Each radar entry includes WebSocket URLs for accessing spoke data and control streams.",
+    description = "Returns the Radar API version and all radars that have been detected on the network and \
+                   are currently online, keyed by radar ID. Entries carry no WebSocket URLs: the spoke and \
+                   control streams are reached by convention from this host.",
     responses(
-        (status = 200, body = HashMap<String, RadarApiV3>, description = "Map of radar IDs to radar information")
+        (status = 200, body = RadarsResponse, description = "API version and map of radar IDs to radar information")
     ),
     tag = "Radars"
 )]
-async fn get_radars(State(state): State<Web>, headers: hyper::header::HeaderMap) -> Response {
-    let (host, _, ws_scheme) = derive_public_base(&headers, state.tls, state.args.port);
-
-    log::debug!("Radar state request, target host = '{}'", host);
-    let mut api: HashMap<String, RadarApiV3> = HashMap::new();
+async fn get_radars(State(state): State<Web>) -> Response {
+    log::debug!("Radar list request");
+    let mut radars: HashMap<String, RadarApiV3> = HashMap::new();
     for info in state.radars.get_discovered() {
-        let spoke_data_uri = SPOKES_URI.replace("{id}", &info.key());
-        let v = RadarApiV3 {
-            name: info.controls.user_name(),
-            brand: info.brand.to_string(),
-            model: info.controls.model_name(),
-            spoke_data_url: format!("{}://{}{}", ws_scheme, host, spoke_data_uri),
-            stream_url: format!("{}://{}{}", ws_scheme, host, CONTROL_URI),
-            radar_ip_address: *info.addr.ip(),
-            replay: info.replay(),
-        };
-
-        api.insert(info.key(), v);
+        radars.insert(info.key(), RadarApiV3::from(&info));
     }
-    Json(api).into_response()
+    Json(RadarsResponse {
+        version: mayara::SIGNALK_RADAR_API_VERSION.to_string(),
+        radars,
+    })
+    .into_response()
+}
+
+#[utoipa::path(
+    get,
+    path = "/signalk/v2/api/vessels/self/radars/{radar_id}",
+    summary = "Get a single radar",
+    description = "Returns discovery information for one radar by ID (the same entry as in the list). \
+                   Live state is under /controls; static parameters under /capabilities.",
+    params(
+        ("radar_id" = String, Path, description = "Radar identifier", example = "nav1034A")
+    ),
+    responses(
+        (status = 200, body = RadarApiV3, description = "Radar discovery information"),
+        (status = 404, description = "Radar not found")
+    ),
+    tag = "Radars"
+)]
+async fn get_radar_info(Path(radar_id): Path<String>, State(state): State<Web>) -> Response {
+    if let Some(info) = state.radars.get_by_key(&radar_id) {
+        Json(RadarApiV3::from(&info)).into_response()
+    } else {
+        no_such_radar(&radar_id, &state.radars)
+    }
 }
 
 #[utoipa::path(
@@ -1099,7 +1140,8 @@ async fn control_stream_handler(
     );
 
     let subscribe = match params.subscribe.as_deref() {
-        None | Some("self") | Some("all") => Subscribe::All,
+        None | Some("self") => Subscribe::SelfOnly,
+        Some("all") => Subscribe::All,
         Some("none") => Subscribe::None,
         _ => {
             return (
@@ -1191,7 +1233,9 @@ async fn ws_signalk_delta(
     let mut sk_delta = SignalKDelta::new();
     sk_delta.add_meta_updates(&radars, &mut meta_radar_data_sent);
 
-    if send_cached_values && subscribe == Subscribe::All {
+    // Radar controls are own-ship data, so send the cached values on connect for
+    // both `self` and `all` — only `none` waits for an explicit subscription.
+    if send_cached_values && subscribe != Subscribe::None {
         for radar in radars.get_active() {
             let rcvs: Vec<RadarControlValue> = radar.controls.get_radar_control_values();
             log::info!(
@@ -1499,7 +1543,9 @@ async fn send_all_subscribed(
     for radar in radars.get_active() {
         rcvs.append(&mut radar.controls.get_radar_control_values());
     }
-    if subscriptions.mode == Subscribe::Some {
+    // Under `none`, keep only explicitly-subscribed controls; `self`/`all` get
+    // them all (radar controls are own-ship data, always in those baselines).
+    if subscriptions.mode == Subscribe::None {
         rcvs.retain(|x| subscriptions.is_subscribed(x, true));
     }
     log::debug!("Sending {} subscribed controls", rcvs.len());
@@ -1518,13 +1564,16 @@ async fn send_all_ais_vessels(socket: &mut WebSocket) -> Result<(), RadarError> 
         let vessels = ais_store.get_all_active();
         if !vessels.is_empty() {
             log::info!("Sending {} AIS vessels after subscription", vessels.len());
-            let mut sk_delta = SignalKDelta::new();
+            // One delta per vessel: a Signal K delta carries a single context,
+            // and each AIS vessel is its own context. This is mayara's
+            // equivalent of the cached-value replay a Signal K server sends
+            // when a client subscribes, so the client sees every known vessel
+            // immediately rather than waiting for the next AIS report.
             for vessel in vessels {
-                let path = format!("vessels.{}", vessel.mmsi);
-                sk_delta.add_ais_vessel_update(&path, &vessel);
-            }
-            if let Some(delta) = sk_delta.build() {
-                send_message(socket, delta).await?;
+                let sk_delta = SignalKDelta::for_ais_vessel(&vessel);
+                if let Some(delta) = sk_delta.build() {
+                    send_message(socket, delta).await?;
+                }
             }
         }
     }
@@ -1535,6 +1584,11 @@ async fn send_all_ais_vessels(socket: &mut WebSocket) -> Result<(), RadarError> 
 struct SignalKHello {
     name: &'static str,
     version: &'static str,
+    /// The self vessel's context, per the Signal K hello. Detected from the
+    /// upstream server; falls back to `vessels.self` until a concrete URN
+    /// arrives.
+    #[serde(rename = "self")]
+    self_context: String,
     #[serde(serialize_with = "to_rfc3339")]
     timestamp: DateTime<Utc>,
     roles: Vec<&'static str>,
@@ -1552,6 +1606,7 @@ async fn send_hello(socket: &mut WebSocket) -> Result<(), Error> {
     let message = SignalKHello {
         name: PROVIDER,
         version: VERSION,
+        self_context: navdata::get_own_ship_context().unwrap_or_else(|| "vessels.self".to_string()),
         timestamp: Utc::now(),
         roles: vec!["master"],
     };

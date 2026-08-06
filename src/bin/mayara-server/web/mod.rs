@@ -581,7 +581,7 @@ async fn endpoints(State(state): State<Web>, headers: hyper::header::HeaderMap) 
     endpoints.endpoints.insert(
         "v2".to_string(),
         Endpoint {
-            version: "v2".to_string(),
+            version: mayara::SIGNALK_RADAR_API_VERSION.to_string(),
             http: format!("{}://{}{}", http_scheme, host, signalk::v2::BASE_URI),
             ws: format!("{}://{}{}", ws_scheme, host, signalk::v2::CONTROL_URI),
         },

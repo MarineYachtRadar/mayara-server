@@ -43,7 +43,13 @@ async fn put_json(path: &str, body: &Value) -> reqwest::Response {
 
 async fn first_radar_id() -> String {
     let json = get_json("/signalk/v2/api/vessels/self/radars").await;
-    json.as_object().unwrap().keys().next().unwrap().clone()
+    json["radars"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .next()
+        .unwrap()
+        .clone()
 }
 
 // ============================================================================
@@ -101,17 +107,12 @@ async fn test_signalk_endpoints() {
 async fn test_get_radars() {
     let json = get_json("/signalk/v2/api/vessels/self/radars").await;
 
-    let radars = json.as_object().unwrap();
+    assert!(json["version"].is_string(), "Missing 'version'");
+    let radars = json["radars"].as_object().unwrap();
     assert!(!radars.is_empty(), "No radars found");
 
     for (id, radar) in radars {
-        for field in [
-            "name",
-            "brand",
-            "spokeDataUrl",
-            "streamUrl",
-            "radarIpAddress",
-        ] {
+        for field in ["name", "brand", "radarIpAddress"] {
             assert!(
                 radar.get(field).is_some(),
                 "Radar {} missing '{}'",
@@ -126,13 +127,51 @@ async fn test_get_radars() {
 #[ignore = "requires running server"]
 async fn test_get_radars_returns_emulator() {
     let json = get_json("/signalk/v2/api/vessels/self/radars").await;
-    let radars = json.as_object().unwrap();
+    let radars = json["radars"].as_object().unwrap();
 
     let (_, radar) = radars
         .iter()
         .find(|(id, _)| id.starts_with("emu"))
         .expect("No emulator radar found");
     assert_eq!(radar["brand"], "Emulator");
+}
+
+// ============================================================================
+// GET /signalk/v2/api/vessels/self/radars/{radar_id}
+// ============================================================================
+
+#[tokio::test]
+#[ignore = "requires running server"]
+async fn test_get_radar_info() {
+    let id = first_radar_id().await;
+    let json = get_json(&format!("/signalk/v2/api/vessels/self/radars/{}", id)).await;
+
+    for field in ["name", "brand", "radarIpAddress"] {
+        assert!(
+            json.get(field).is_some(),
+            "Radar {} missing '{}'",
+            id,
+            field
+        );
+    }
+}
+
+/// The single-radar response is the same entry the list returns for that ID.
+#[tokio::test]
+#[ignore = "requires running server"]
+async fn test_get_radar_info_matches_list_entry() {
+    let id = first_radar_id().await;
+    let list = get_json("/signalk/v2/api/vessels/self/radars").await;
+    let single = get_json(&format!("/signalk/v2/api/vessels/self/radars/{}", id)).await;
+
+    assert_eq!(list["radars"][&id], single);
+}
+
+#[tokio::test]
+#[ignore = "requires running server"]
+async fn test_get_radar_info_unknown_id_returns_404() {
+    let response = get_response("/signalk/v2/api/vessels/self/radars/no-such-radar").await;
+    assert_eq!(response.status(), 404);
 }
 
 // ============================================================================
