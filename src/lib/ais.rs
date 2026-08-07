@@ -56,16 +56,15 @@ pub struct AisVessel {
     pub heading: Option<f64>,
     pub cog: Option<f64>,
     pub sog: Option<f64>,
-    pub status: String,
     last_update: Instant,
 }
 
 /// Serializable view of AisVessel (only includes dimensions when known).
 ///
 /// This is the input to [`SignalKDelta::for_ais_vessel`], which fans it out
-/// into Signal K's own delta paths. `status` is deliberately absent: Signal K
-/// has no liveness field — a consumer ages a vessel out when its updates stop —
-/// so mayara's internal `Active`/`Lost` state never reaches the wire.
+/// into Signal K's own delta paths. There is no liveness field: Signal K has
+/// none, and a consumer ages a vessel out when its updates stop. A vessel is
+/// live for exactly as long as it is in the store.
 #[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct AisVesselApi {
@@ -112,7 +111,6 @@ impl AisVessel {
             heading: None,
             cog: None,
             sog: None,
-            status: "Active".to_string(),
             last_update: Instant::now(),
         }
     }
@@ -365,26 +363,24 @@ impl AisVesselStore {
         to_broadcast.len()
     }
 
-    /// Get all active vessels (for initial connection)
+    /// Get all live vessels (for initial connection). Timed-out vessels are
+    /// dropped by [`Self::check_timeouts`], so everything still in the store
+    /// counts as live.
     pub fn get_all_active(&self) -> Vec<AisVesselApi> {
         let vessels = match self.vessels.read() {
             Ok(v) => v,
             Err(_) => return Vec::new(),
         };
-        vessels
-            .values()
-            .filter(|v| v.status == "Active")
-            .map(AisVesselApi::from)
-            .collect()
+        vessels.values().map(AisVesselApi::from).collect()
     }
 
     /// Drop vessels whose updates have stopped for longer than [`AIS_TIMEOUT`].
     ///
     /// Nothing is broadcast: Signal K has no "lost" delta, so a client ages a
     /// vessel out when its updates stop. Emitting one here would be worse than
-    /// silence — with no `status` on the wire it is indistinguishable from a
-    /// live refresh, and it would re-assert the vessel's last known position
-    /// exactly when that position has become untrustworthy.
+    /// silence — with no liveness field on the wire it is indistinguishable
+    /// from a live refresh, and it would re-assert the vessel's last known
+    /// position exactly when that position has become untrustworthy.
     ///
     /// Returns the number of vessels dropped.
     pub fn check_timeouts(&self) -> usize {
@@ -397,8 +393,7 @@ impl AisVesselStore {
                 Err(_) => return 0,
             };
             for (mmsi, vessel) in vessels.iter() {
-                if vessel.status == "Active" && now.duration_since(vessel.last_update) > AIS_TIMEOUT
-                {
+                if now.duration_since(vessel.last_update) > AIS_TIMEOUT {
                     lost_vessels.push(mmsi.clone());
                 }
             }
@@ -506,7 +501,6 @@ mod tests {
         assert!(vessel.position.is_none());
         assert!(vessel.cog.is_none());
         assert!(vessel.sog.is_none());
-        assert_eq!(vessel.status, "Active");
         assert!(!vessel.dimensions.has_any());
     }
 
@@ -731,8 +725,6 @@ mod tests {
         assert!(json.get("sog").is_none());
         // These should always be present
         assert!(json.get("mmsi").is_some());
-        // `status` is internal-only — Signal K has no liveness field.
-        assert!(json.get("status").is_none());
     }
 
     #[test]
@@ -776,7 +768,7 @@ mod tests {
     }
 
     #[test]
-    fn test_store_get_all_active_filters_lost() {
+    fn test_store_get_all_active_excludes_timed_out() {
         let (tx, _rx) = broadcast::channel(16);
         let store = AisVesselStore::new(tx);
 
@@ -790,13 +782,15 @@ mod tests {
         store.update("vessels.urn:mrn:imo:mmsi:111111111", &updates);
         store.update("vessels.urn:mrn:imo:mmsi:222222222", &updates);
 
-        // Mark one as lost manually
+        // Age one past the timeout so the next sweep drops it
         {
             let mut vessels = store.vessels.write().unwrap();
-            if let Some(v) = vessels.get_mut("111111111") {
-                v.status = "Lost".to_string();
-            }
+            let vessel = vessels.get_mut("111111111").unwrap();
+            vessel.last_update = Instant::now()
+                .checked_sub(AIS_TIMEOUT + Duration::from_secs(1))
+                .expect("backdate");
         }
+        assert_eq!(store.check_timeouts(), 1);
 
         let active = store.get_all_active();
         assert_eq!(active.len(), 1);
@@ -804,9 +798,9 @@ mod tests {
     }
 
     /// A vessel that stops reporting is dropped silently. Signal K has no
-    /// "lost" delta — a client ages the vessel out — and with no `status` on
-    /// the wire a farewell broadcast would be indistinguishable from a live
-    /// refresh re-asserting a position that has just gone stale.
+    /// "lost" delta — a client ages the vessel out — and with no liveness
+    /// field on the wire a farewell broadcast would be indistinguishable
+    /// from a live refresh re-asserting a position that has just gone stale.
     #[test]
     fn test_check_timeouts_drops_silently() {
         let (tx, mut rx) = broadcast::channel(16);
