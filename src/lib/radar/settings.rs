@@ -964,6 +964,35 @@ impl SharedControls {
     // Some controls are handled internally, some in the data handler for a radar and the
     // rest are settings that need to be sent to the radar.
     //
+    /// Carry the control's current state into the fields a client left out.
+    ///
+    /// A zone or rect is a single control holding several coupled numbers.
+    /// Clients routinely send only the one they changed — dragging a guard
+    /// zone's start angle sends `value` alone — and the zone and rect
+    /// branches below read every field, defaulting absent ones to zero. So
+    /// without this, a partial update silently wipes the fields it omitted.
+    fn fill_unsupplied_fields(mut cv: ControlValue, current: &Control) -> ControlValue {
+        match current.item.data_type {
+            ControlDataType::Zone => {
+                cv.value = cv.value.or_else(|| current.value.map(Into::into));
+                cv.end_value = cv.end_value.or(current.end_value);
+                cv.start_distance = cv.start_distance.or(current.start_distance);
+                cv.end_distance = cv.end_distance.or(current.end_distance);
+                cv.enabled = cv.enabled.or(current.enabled);
+            }
+            ControlDataType::Rect => {
+                cv.x1 = cv.x1.or(current.x1);
+                cv.y1 = cv.y1.or(current.y1);
+                cv.x2 = cv.x2.or(current.x2);
+                cv.y2 = cv.y2.or(current.y2);
+                cv.width = cv.width.or(current.width);
+                cv.enabled = cv.enabled.or(current.enabled);
+            }
+            _ => {}
+        }
+        cv
+    }
+
     pub fn process_client_request(
         &self,
         control_value: ControlValue,
@@ -971,6 +1000,7 @@ impl SharedControls {
     ) -> Result<(), RadarError> {
         match self.get(&control_value.id) {
             Some(c) => {
+                let control_value = Self::fill_unsupplied_fields(control_value, &c);
                 let cv_orig = control_value.clone();
                 let (units, value) =
                     Self::convert_to_wire_number(control_value.units, control_value.value, &c)?;
@@ -3573,6 +3603,97 @@ mod test {
         // A control with no automatic mode reports no flag at all.
         let (_, range) = new_numeric(ControlId::Range, 0., 100_000.).take();
         assert_eq!(range.reported_auto(), None);
+    }
+
+    /// A guard zone edited by dragging its start angle arrives as `value`
+    /// alone. The other three numbers and the enabled flag must survive, or
+    /// the zone collapses to 0-0 and can never trigger.
+    #[test]
+    fn partial_zone_update_keeps_unsupplied_fields() {
+        let (_, mut zone) = new_zone(
+            ControlId::GuardZone1,
+            -std::f64::consts::PI,
+            std::f64::consts::PI,
+            100_000.,
+        )
+        .take();
+        zone.value = Some(0.2);
+        zone.end_value = Some(1.9);
+        zone.start_distance = Some(500.);
+        zone.end_distance = Some(900.);
+        zone.enabled = Some(true);
+
+        let update = ControlValue::new(ControlId::GuardZone1, (-0.96).into());
+
+        let merged = SharedControls::fill_unsupplied_fields(update, &zone);
+
+        assert_eq!(merged.value.and_then(|v| v.as_f64()), Some(-0.96));
+        assert_eq!(merged.end_value, Some(1.9));
+        assert_eq!(merged.start_distance, Some(500.));
+        assert_eq!(merged.end_distance, Some(900.));
+        assert_eq!(merged.enabled, Some(true));
+    }
+
+    /// A supplied field always wins over the stored one, including a
+    /// deliberate zero — otherwise a zone could never be shrunk to nothing.
+    #[test]
+    fn partial_zone_update_does_not_override_supplied_fields() {
+        let (_, mut zone) = new_zone(
+            ControlId::GuardZone1,
+            -std::f64::consts::PI,
+            std::f64::consts::PI,
+            100_000.,
+        )
+        .take();
+        zone.start_distance = Some(500.);
+        zone.enabled = Some(true);
+
+        let mut update = ControlValue::new(ControlId::GuardZone1, 0.into());
+        update.start_distance = Some(0.);
+        update.enabled = Some(false);
+
+        let merged = SharedControls::fill_unsupplied_fields(update, &zone);
+
+        assert_eq!(merged.start_distance, Some(0.));
+        assert_eq!(merged.enabled, Some(false));
+    }
+
+    /// Same coupling for rectangular exclusion zones: a partial update must
+    /// not zero the corners it left out.
+    #[test]
+    fn partial_rect_update_keeps_unsupplied_corners() {
+        let (_, mut rect) = new_rect(ControlId::ExclusionRect1, 100_000.).take();
+        rect.x1 = Some(10.);
+        rect.y1 = Some(20.);
+        rect.x2 = Some(30.);
+        rect.y2 = Some(40.);
+        rect.width = Some(50.);
+
+        let mut update = ControlValue::new(ControlId::ExclusionRect1, 0.into());
+        update.x1 = Some(11.);
+
+        let merged = SharedControls::fill_unsupplied_fields(update, &rect);
+
+        assert_eq!(merged.x1, Some(11.));
+        assert_eq!(merged.y1, Some(20.));
+        assert_eq!(merged.x2, Some(30.));
+        assert_eq!(merged.y2, Some(40.));
+        assert_eq!(merged.width, Some(50.));
+    }
+
+    /// Single-valued controls are untouched: a gain update carries only
+    /// `value`, and nothing should be back-filled onto it.
+    #[test]
+    fn partial_update_leaves_plain_controls_alone() {
+        let (_, gain) = new_auto(ControlId::Gain, 0., 100., HAS_AUTO_NOT_ADJUSTABLE).take();
+
+        let update = ControlValue::new(ControlId::Gain, 50.into());
+
+        let merged = SharedControls::fill_unsupplied_fields(update, &gain);
+
+        assert_eq!(merged.end_value, None);
+        assert_eq!(merged.start_distance, None);
+        assert_eq!(merged.enabled, None);
     }
 
     #[test]
