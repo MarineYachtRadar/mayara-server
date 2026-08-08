@@ -473,13 +473,12 @@ fn base_key<'a>(key: &'a str, dual: Option<&str>) -> &'a str {
     }
 }
 
-/// The key this radar had before it was identified by a stable hardware
-/// identity — the address-derived fallback, and nothing else.
+/// The key a radar has when nothing identifies it but its address.
 ///
-/// Radars that gained an identity change key exactly once, on the upgrade
-/// that introduced it. Deriving the old key through the very same function
-/// that produced it keeps the two from drifting apart: a migration that
-/// guessed the format wrongly would silently adopt nothing.
+/// Used to find settings saved before the radar had a hardware identity.
+/// Deriving it through the very function that produces the real key keeps
+/// the two from drifting apart: a lookup that guessed the format wrongly
+/// would silently find nothing.
 pub(crate) fn legacy_address_key(info: &RadarInfo) -> String {
     radar_key(
         info.brand.to_prefix(),

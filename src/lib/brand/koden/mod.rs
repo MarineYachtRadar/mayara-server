@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
+use std::time::{Duration, Instant};
 use tokio_graceful_shutdown::{SubsystemBuilder, SubsystemHandle};
 
 use crate::locator::LocatorAddress;
@@ -17,13 +18,26 @@ mod settings;
 
 use protocol::{
     BEACON_ADDRESS, CMD_MAC_ADDRESS, CONTROL_PREFIX, IMAGE_MARKER, IMG_MIN_SIZE, KEEPALIVE_PACKET,
-    MAC_ADDRESS_REQUEST, PIXEL_VALUES, RADAR_PORT, RESP_POWER, RESP_WARMUP, SPOKE_LEN, SPOKES,
-    STATUS_PREFIX,
+    MAC_ADDRESS_REQUEST, PACKET_END, PIXEL_VALUES, RADAR_PORT, RESP_POWER, RESP_WARMUP, SPOKE_LEN,
+    SPOKES, STATUS_PREFIX,
 };
 
 /// Length of a `0xA7` MAC address response: prefix, command, six bytes
 /// of MAC, terminator.
 const MAC_RESPONSE_LEN: usize = 9;
+
+/// How long to keep asking a radar for its MAC before giving up and
+/// keying it on its address.
+///
+/// No Koden radar has been available to test against, so a unit that
+/// never answers must still appear: the identity is an improvement when
+/// it arrives, never a precondition for the radar being usable.
+const MAC_REQUEST_BUDGET: Duration = Duration::from_secs(5);
+
+/// Minimum gap between MAC requests to one radar. Without it every
+/// accepted packet would provoke one, and Koden image frames arrive
+/// continuously.
+const MAC_REQUEST_INTERVAL: Duration = Duration::from_millis(500);
 
 #[derive(Clone)]
 struct KodenLocator {
@@ -33,6 +47,10 @@ struct KodenLocator {
     /// changes with the DHCP lease and takes the radar's saved settings
     /// with it.
     macs: HashMap<Ipv4Addr, String>,
+    /// When each radar was first asked for its MAC, and when it was last
+    /// asked, so requests stay bounded and a radar that never answers is
+    /// still registered.
+    asked: HashMap<Ipv4Addr, (Instant, Instant)>,
 }
 
 impl RadarLocator for KodenLocator {
@@ -57,17 +75,66 @@ impl KodenLocator {
         KodenLocator {
             args,
             macs: HashMap::new(),
+            asked: HashMap::new(),
         }
     }
 
     /// Record the MAC from a `0xA7` response. Returns whether it was new,
     /// so the caller only logs a radar's identity once.
+    ///
+    /// Only a complete, correctly terminated response is trusted: a
+    /// truncated or malformed one would yield a hardware id that is not
+    /// the radar's, and two radars could end up sharing it.
     fn record_mac(&mut self, radar_addr: &Ipv4Addr, report: &[u8]) -> bool {
-        if report.len() < MAC_RESPONSE_LEN {
+        if report.len() != MAC_RESPONSE_LEN || report[MAC_RESPONSE_LEN - 1] != PACKET_END {
+            log::debug!("{}: ignoring a malformed MAC response", radar_addr);
             return false;
         }
         let mac: String = report[2..8].iter().map(|b| format!("{:02x}", b)).collect();
         self.macs.insert(*radar_addr, mac).is_none()
+    }
+
+    /// Ask a radar for its MAC, at most once every
+    /// [`MAC_REQUEST_INTERVAL`], and report whether the budget for an
+    /// answer has run out.
+    fn chase_mac(&mut self, radar_addr: &SocketAddrV4) -> bool {
+        let now = Instant::now();
+        let (first, last) = self
+            .asked
+            .entry(*radar_addr.ip())
+            .or_insert((now, now - MAC_REQUEST_INTERVAL));
+
+        if now.duration_since(*first) >= MAC_REQUEST_BUDGET {
+            return true;
+        }
+        if now.duration_since(*last) >= MAC_REQUEST_INTERVAL {
+            *last = now;
+            request_mac(radar_addr);
+        }
+        false
+    }
+
+    /// What to key this radar on: `Some(Some(mac))` once it has reported
+    /// one, `Some(None)` to fall back to its address, and `None` while it
+    /// is still being asked.
+    ///
+    /// A Koden radar will tell us its own MAC, and it answers on the port
+    /// discovery already listens on. Waiting briefly for that is worth
+    /// it, because an address-derived key moves with the DHCP lease. But
+    /// only briefly: no Koden unit has been available to test against, so
+    /// one that never answers must still appear.
+    fn identity_for(&mut self, radar_addr: &SocketAddrV4) -> Option<Option<String>> {
+        if let Some(mac) = self.macs.get(radar_addr.ip()) {
+            return Some(Some(mac.clone()));
+        }
+        if self.chase_mac(radar_addr) {
+            log::info!(
+                "{}: no MAC reported, keying the radar on its address",
+                radar_addr
+            );
+            return Some(None);
+        }
+        None
     }
 
     fn process_locator_report(
@@ -136,13 +203,7 @@ impl KodenLocator {
         let report_addr = SocketAddrV4::new(*radar_addr.ip(), RADAR_PORT);
         let send_command_addr = SocketAddrV4::new(*radar_addr.ip(), RADAR_PORT);
 
-        // A Koden radar will tell us its own MAC if asked. Until it has,
-        // hold off rather than key it on an address a later DHCP lease
-        // would change: the radar answers on the port discovery already
-        // listens on, and keeps talking, so the next packet brings us
-        // back here with an identity in hand.
-        let Some(hardware_id) = self.macs.get(radar_addr.ip()).cloned() else {
-            request_mac(&radar_addr);
+        let Some(hardware_id) = self.identity_for(&radar_addr) else {
             return;
         };
 
@@ -151,7 +212,7 @@ impl KodenLocator {
             &self.args,
             Brand::Koden,
             None, // serial number discovered later
-            Some(hardware_id.as_str()),
+            hardware_id.as_deref(),
             None, // no dual range
             PIXEL_VALUES,
             SPOKES,
@@ -251,5 +312,104 @@ mod tests {
 
         assert!(!locator.record_mac(&RADAR, &short));
         assert!(locator.macs.is_empty());
+    }
+
+    /// Malformed responses must not become an identity: a wrong hardware
+    /// id is worse than none, since two radars could share it.
+    #[test]
+    fn malformed_mac_responses_are_refused() {
+        let mut locator = locator();
+        let good = [
+            STATUS_PREFIX,
+            CMD_MAC_ADDRESS,
+            0x00,
+            0x0e,
+            0xc6,
+            0x12,
+            0x34,
+            0x56,
+            PACKET_END,
+        ];
+
+        let mut no_terminator = good;
+        no_terminator[MAC_RESPONSE_LEN - 1] = 0x00;
+        assert!(!locator.record_mac(&RADAR, &no_terminator));
+
+        let mut overlong = good.to_vec();
+        overlong.push(0x00);
+        assert!(!locator.record_mac(&RADAR, &overlong));
+
+        assert!(locator.macs.is_empty(), "nothing malformed may be cached");
+        assert!(
+            locator.record_mac(&RADAR, &good),
+            "a clean response is taken"
+        );
+    }
+
+    /// A radar that answers is keyed on the MAC it reported.
+    #[test]
+    fn a_radar_that_reports_its_mac_is_keyed_on_it() {
+        let mut locator = locator();
+        let addr = SocketAddrV4::new(RADAR, RADAR_PORT);
+        let response = [
+            STATUS_PREFIX,
+            CMD_MAC_ADDRESS,
+            0x00,
+            0x0e,
+            0xc6,
+            0x12,
+            0x34,
+            0x56,
+            PACKET_END,
+        ];
+
+        assert_eq!(locator.identity_for(&addr), None, "asked, and waiting");
+        assert!(locator.record_mac(&RADAR, &response));
+        assert_eq!(
+            locator.identity_for(&addr),
+            Some(Some("000ec6123456".to_string()))
+        );
+    }
+
+    /// A radar that never answers must still appear. No Koden unit has
+    /// been available to test against, so the address fallback is what
+    /// keeps an unresponsive one usable.
+    #[test]
+    fn a_silent_radar_falls_back_to_its_address() {
+        let mut locator = locator();
+        let addr = SocketAddrV4::new(RADAR, RADAR_PORT);
+
+        assert_eq!(locator.identity_for(&addr), None, "waits while asking");
+
+        // Exhaust the budget rather than sleeping through it.
+        let expired = Instant::now() - MAC_REQUEST_BUDGET - Duration::from_secs(1);
+        locator.asked.insert(RADAR, (expired, expired));
+
+        assert_eq!(
+            locator.identity_for(&addr),
+            Some(None),
+            "an unresponsive radar is keyed on its address"
+        );
+    }
+
+    /// Koden image frames arrive continuously, so a request per accepted
+    /// packet would be a flood.
+    #[test]
+    fn mac_requests_are_rate_limited() {
+        let mut locator = locator();
+        let addr = SocketAddrV4::new(RADAR, RADAR_PORT);
+
+        locator.identity_for(&addr);
+        let (_, after_first) = locator.asked[&RADAR];
+
+        for _ in 0..50 {
+            locator.identity_for(&addr);
+        }
+        let (_, after_many) = locator.asked[&RADAR];
+
+        assert_eq!(
+            after_first, after_many,
+            "no further request inside the interval"
+        );
     }
 }

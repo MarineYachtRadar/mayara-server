@@ -259,7 +259,11 @@ impl GarminLocator {
 
         // CDM messages (broadcast on a separate multicast group).
         if packet_type == MSG_CDM_HEARTBEAT {
-            self.handle_cdm_heartbeat(report, from);
+            // The heartbeat is what identifies a radar, so it is also what
+            // lets one that was waiting on its identity be registered.
+            if self.handle_cdm_heartbeat(report, from) {
+                self.try_register_pending(from, nic_addr, radars, subsys);
+            }
             return Ok(());
         }
         if packet_type == discovery::MSG_CDM_PRODUCT_DATA {
@@ -343,14 +347,18 @@ impl GarminLocator {
         Ok(())
     }
 
-    /// Parse a CDM `0x038E` heartbeat and stash the radar's product_id.
-    /// On first receipt, also send a `0x0391` product data request to
-    /// learn the radar's factory name and user alias.
-    fn handle_cdm_heartbeat(&self, report: &[u8], from: &SocketAddrV4) {
+    /// Parse a CDM `0x038E` heartbeat and stash the radar's identity and
+    /// product_id. On first receipt, also send a `0x0391` product data
+    /// request to learn the radar's factory name and user alias.
+    ///
+    /// Returns whether this heartbeat was the first to identify the radar,
+    /// which is the moment a radar waiting on its identity can be
+    /// registered.
+    fn handle_cdm_heartbeat(&self, report: &[u8], from: &SocketAddrV4) -> bool {
         let payload = &report[GMN_HEADER_LEN..];
         let hb = match discovery::parse(payload) {
             Some(h) => h,
-            None => return,
+            None => return false,
         };
 
         // Mirror the boat's SYC group so mayara's outbound heartbeat
@@ -372,9 +380,9 @@ impl GarminLocator {
         // product_id changes: registration may happen on the very first
         // one, and a radar keyed before its identity is known could never
         // be re-keyed.
-        if let Some(unique_id) = hb.unique_id {
-            state.unique_ids.insert(*from.ip(), unique_id);
-        }
+        let identity_is_new = hb
+            .unique_id
+            .is_some_and(|id| state.unique_ids.insert(*from.ip(), id).is_none());
 
         if already != Some(hb.product_id) {
             log::info!(
@@ -398,6 +406,8 @@ impl GarminLocator {
                 }
             });
         }
+
+        identity_is_new
     }
 
     /// Parse a CDM `0x0392` product data response and stash the radar's
@@ -566,12 +576,19 @@ impl GarminLocator {
         // across power cycles and independent of its address. Garmin
         // assigns addresses by device role — every radar answers on
         // 172.16.2.0 — so the address distinguishes almost nothing.
+        // Capability and range packets can arrive before the first
+        // heartbeat, and a radar registered then could never be re-keyed.
+        // Wait for the identity instead: heartbeats come every five
+        // seconds, and each one retries registration.
         let hardware_id = {
             let state = self.state.lock().unwrap();
-            state
-                .unique_ids
-                .get(from.ip())
-                .map(|id| format!("{:08x}", id))
+            match state.unique_ids.get(from.ip()) {
+                Some(id) => format!("{:08x}", id),
+                None => {
+                    log::debug!("{}: waiting for a heartbeat to identify the radar", from);
+                    return;
+                }
+            }
         };
         let state = self.state.lock().unwrap();
         let product_id = state.product_ids.get(from.ip()).copied();
@@ -609,7 +626,7 @@ impl GarminLocator {
             &self.args,
             Brand::Garmin,
             None,
-            hardware_id.as_deref(),
+            Some(hardware_id.as_str()),
             dual_a,
             detected_type.pixel_values(),
             detected_type.spokes_per_revolution(),
@@ -637,7 +654,7 @@ impl GarminLocator {
                 &self.args,
                 Brand::Garmin,
                 None,
-                hardware_id.as_deref(),
+                Some(hardware_id.as_str()),
                 Some("B"),
                 detected_type.pixel_values(),
                 detected_type.spokes_per_revolution(),

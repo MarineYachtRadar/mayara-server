@@ -350,31 +350,36 @@ impl Persistence {
         }
     }
 
-    /// Settings saved under a radar's old address-derived key, when it has
-    /// none under its current one. Returns `None` once the radar has been
-    /// saved under its new key, so this only ever fires on the first run
-    /// after the upgrade.
-    fn adopt_legacy_entry(&self, info: &RadarInfo) -> Option<&Radar> {
-        let legacy = crate::radar::legacy_address_key(info);
-        if legacy == info.key() {
-            return None;
+    /// Move settings saved under a radar's address-derived key across to
+    /// the key it is known by now, once.
+    ///
+    /// The move matters as much as the copy: leaving the old entry behind
+    /// would have every later start find it again, and would let a
+    /// different radar that happens to take the same address inherit the
+    /// settings of the one it replaced.
+    fn take_legacy_entry(&mut self, key: &str, legacy: &str) -> bool {
+        if legacy == key || self.config.radars.contains_key(key) {
+            return false;
         }
-        let p = self.config.radars.get(&legacy)?;
+        let Some(entry) = self.config.radars.remove(legacy) else {
+            return false;
+        };
         log::info!(
-            "{}: adopting settings saved under its previous key '{}'",
-            info.key(),
+            "{}: adopting the settings saved under its previous key '{}'",
+            key,
             legacy
         );
-        Some(p)
+        self.config.radars.insert(key.to_string(), entry);
+        if !self.path.as_os_str().is_empty() {
+            self.save();
+        }
+        true
     }
 
-    pub(crate) fn update_info_from_persistence(&self, info: &mut RadarInfo) {
-        if let Some(p) = self
-            .config
-            .radars
-            .get(&info.key())
-            .or_else(|| self.adopt_legacy_entry(info))
-        {
+    pub(crate) fn update_info_from_persistence(&mut self, info: &mut RadarInfo) {
+        self.take_legacy_entry(&info.key(), &crate::radar::legacy_address_key(info));
+
+        if let Some(p) = self.config.radars.get(&info.key()) {
             if let Some(model_name) = p.model_name.as_ref() {
                 info.controls.set_model_name(model_name.clone());
             }
@@ -427,5 +432,79 @@ impl Persistence {
             info.controls.set_arpa_max_speed(p.arpa_max_speed);
             info.controls.set_doppler_auto_track(p.doppler_auto_track);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn persistence_with(key: &str, user_name: &str) -> Persistence {
+        let mut radars = HashMap::new();
+        radars.insert(
+            key.to_string(),
+            Radar {
+                user_name: user_name.to_string(),
+                ..Default::default()
+            },
+        );
+        Persistence {
+            config: Config { radars },
+            timestamp: SystemTime::UNIX_EPOCH,
+            path: PathBuf::new(),
+        }
+    }
+
+    /// Settings follow a radar to its new key exactly once, and the old
+    /// entry does not linger: leaving it would have every later start find
+    /// it again, and would let a different radar that later takes the same
+    /// address inherit the settings of the one it replaced.
+    #[test]
+    fn legacy_settings_move_to_the_stable_key() {
+        let mut p = persistence_with("kod0102", "Bow Radar");
+
+        assert!(p.take_legacy_entry("kod3456", "kod0102"));
+        assert_eq!(
+            p.config.radars.get("kod3456").map(|r| r.user_name.as_str()),
+            Some("Bow Radar")
+        );
+        assert!(
+            !p.config.radars.contains_key("kod0102"),
+            "the old entry must not linger"
+        );
+
+        assert!(
+            !p.take_legacy_entry("kod3456", "kod0102"),
+            "a second start has nothing left to move"
+        );
+    }
+
+    /// A radar that already has settings under its stable key keeps them:
+    /// whatever is under an address key is older and must not win.
+    #[test]
+    fn an_existing_stable_entry_is_not_overwritten() {
+        let mut p = persistence_with("kod0102", "Old Name");
+        p.config.radars.insert(
+            "kod3456".to_string(),
+            Radar {
+                user_name: "Current Name".to_string(),
+                ..Default::default()
+            },
+        );
+
+        assert!(!p.take_legacy_entry("kod3456", "kod0102"));
+        assert_eq!(
+            p.config.radars.get("kod3456").map(|r| r.user_name.as_str()),
+            Some("Current Name")
+        );
+    }
+
+    /// Brands that never had an identity key on their address as before,
+    /// so there is nothing to move.
+    #[test]
+    fn a_radar_still_keyed_on_its_address_moves_nothing() {
+        let mut p = persistence_with("gar0102", "Radar");
+        assert!(!p.take_legacy_entry("gar0102", "gar0102"));
+        assert!(p.config.radars.contains_key("gar0102"));
     }
 }
