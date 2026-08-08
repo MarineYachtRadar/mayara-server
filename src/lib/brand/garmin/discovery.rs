@@ -28,15 +28,17 @@
 //! +07     1     constant             0x01
 //! +08     1     service_count        0x01
 //! +09     3     padding              0x00 0x00 0x00
-//! +0c     8*N   service_id_array     [class:1][inst:0][ver:2][rsv:0]+u32 id
+//! +0c     4*N   service_id_array     one u32 per published service
+//!         4     unique_id            per-device, stable across power cycles
 //!         var   serialized tail      uptime/sequence counter
 //! ```
 
 #![allow(dead_code)]
 
 use super::protocol::{
-    CDM_OFFSET_PRODUCT_ID, CDM_OFFSET_PRODUCT_SUBTYPE, CDM_OFFSET_SIMULATOR_MODE,
-    CDM_OFFSET_SYC_GROUP_ID, CDM_OFFSET_VERSION_MARKER,
+    CDM_OFFSET_PRODUCT_ID, CDM_OFFSET_PRODUCT_SUBTYPE, CDM_OFFSET_SERVICE_COUNT,
+    CDM_OFFSET_SIMULATOR_MODE, CDM_OFFSET_SYC_GROUP_ID, CDM_OFFSET_VERSION_MARKER,
+    CDM_SERVICE_ARRAY_OFFSET, CDM_SERVICE_ID_LEN,
 };
 
 /// Minimum number of bytes the CDM heartbeat body must contain (i.e.
@@ -60,6 +62,11 @@ pub(crate) struct CdmHeartbeat {
     /// network group. Devices on the same boat share the same value.
     /// Read from gmcfg `"syc.group_id"` in the firmware; default 6.
     pub syc_group_id: u8,
+    /// Per-device identifier, the word following the service id array.
+    /// Stable across power cycles and independent of the address, so it
+    /// is what distinguishes one Garmin radar from another. `None` if
+    /// the body is truncated before it.
+    pub unique_id: Option<u32>,
 }
 
 /// Parse the body of a `0x038e` heartbeat. `payload` must be the slice
@@ -81,9 +88,19 @@ pub(crate) fn parse(payload: &[u8]) -> Option<CdmHeartbeat> {
             .try_into()
             .ok()?,
     );
+    // The identifier sits after a variable-length service array, so its
+    // offset depends on how many services this device publishes.
+    let unique_id = payload
+        .get(CDM_OFFSET_SERVICE_COUNT)
+        .map(|count| CDM_SERVICE_ARRAY_OFFSET + *count as usize * CDM_SERVICE_ID_LEN)
+        .and_then(|at| payload.get(at..at + 4))
+        .and_then(|b| b.try_into().ok())
+        .map(u32::from_le_bytes);
+
     Some(CdmHeartbeat {
         version,
         product_id,
+        unique_id,
         simulator_mode: payload[CDM_OFFSET_SIMULATOR_MODE],
         product_subtype: payload[CDM_OFFSET_PRODUCT_SUBTYPE],
         syc_group_id: payload[CDM_OFFSET_SYC_GROUP_ID],
@@ -175,6 +192,36 @@ pub(crate) fn product_name(product_id: u16) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// CDM heartbeat body from the Fantom Pro radar in
+    /// `radar-recordings/garmin/fantom_pro/`. Two published services, so
+    /// the unique id sits four bytes further along than on the xHD — the
+    /// reason the offset has to be computed rather than fixed.
+    const FANTOM_BODY: [u8; 30] = [
+        0x02, 0x8c, 0x2c, 0x0f, 0x00, 0x00, 0x02, 0x01, 0x02, 0x00, 0x00, 0x00, 0x17, 0x00, 0x00,
+        0x00, 0x01, 0x00, 0x02, 0x00, 0x30, 0xce, 0xc2, 0x04, 0x01, 0x04, 0xb3, 0x00, 0x00, 0x00,
+    ];
+
+    /// The identity is what tells two Garmin radars apart: Garmin assigns
+    /// addresses by role, so both of these radars answer on 172.16.2.0.
+    #[test]
+    fn unique_id_is_read_past_the_service_array() {
+        let xhd = parse(&SAMPLE_BODY).expect("xHD heartbeat");
+        assert_eq!(xhd.unique_id, Some(0x08d4_0aa0));
+
+        let fantom = parse(&FANTOM_BODY).expect("Fantom heartbeat");
+        assert_eq!(fantom.product_id, 0x0f2c);
+        assert_eq!(fantom.unique_id, Some(0x04c2_ce30));
+        assert_ne!(xhd.unique_id, fantom.unique_id);
+    }
+
+    /// A body truncated before the identifier must not be misread as one:
+    /// better no identity than a wrong one shared between radars.
+    #[test]
+    fn unique_id_is_absent_when_the_body_is_truncated() {
+        let short = &SAMPLE_BODY[..18];
+        assert_eq!(parse(short).and_then(|hb| hb.unique_id), None);
+    }
 
     /// CDM heartbeat body captured from a GMR xHD radar in
     /// `radar-recordings/garmin/garmin_xhd.pcap`. Sourced from

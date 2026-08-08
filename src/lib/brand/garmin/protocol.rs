@@ -171,6 +171,17 @@ pub(crate) const CDM_OFFSET_PRODUCT_SUBTYPE: usize = 5;
 /// MFD configured, and the MFD reads it from gmcfg `"syc.group_id"`.
 pub(crate) const CDM_OFFSET_SYC_GROUP_ID: usize = 6;
 
+/// Number of services this device publishes, at +08. The service id
+/// array follows the padding at [`CDM_SERVICE_ARRAY_OFFSET`].
+pub(crate) const CDM_OFFSET_SERVICE_COUNT: usize = 8;
+
+/// Start of the service id array.
+pub(crate) const CDM_SERVICE_ARRAY_OFFSET: usize = 0x0c;
+
+/// Size of one entry in the service id array. The device's unique
+/// identifier is the word immediately after the array.
+pub(crate) const CDM_SERVICE_ID_LEN: usize = 4;
+
 // =============================================================================
 // Legacy HD message IDs (0x02xx)
 // =============================================================================

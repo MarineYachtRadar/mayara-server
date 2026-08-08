@@ -148,10 +148,18 @@ struct LocatorShared {
     radars: HashMap<SocketAddrV4, RadarState>,
     /// Garmin CDM `product_id` per radar IP, learned from the `0x038e`
     /// heartbeat. Used to look up the model name.
-    product_ids: HashMap<SocketAddrV4, u16>,
+    ///
+    /// Keyed by address only. The heartbeat arrives on the CDM port and
+    /// the radar's own traffic on another, so anything keyed by the full
+    /// socket address is stored under one key and looked up under a
+    /// different one — it would never be found.
+    product_ids: HashMap<Ipv4Addr, u16>,
     /// Factory name + user alias per radar IP, learned from the `0x0392`
     /// product data response.
-    device_names: HashMap<SocketAddrV4, discovery::CdmProductData>,
+    device_names: HashMap<Ipv4Addr, discovery::CdmProductData>,
+    /// Per-device identifier from the `0x038e` heartbeat. Stable across
+    /// power cycles, so it is what a radar is keyed on.
+    unique_ids: HashMap<Ipv4Addr, u32>,
 }
 
 #[derive(Clone)]
@@ -359,7 +367,15 @@ impl GarminLocator {
         }
 
         let mut state = self.state.lock().unwrap();
-        let already = state.product_ids.get(from).copied();
+        let already = state.product_ids.get(from.ip()).copied();
+        // Record the identity on every heartbeat, not just when the
+        // product_id changes: registration may happen on the very first
+        // one, and a radar keyed before its identity is known could never
+        // be re-keyed.
+        if let Some(unique_id) = hb.unique_id {
+            state.unique_ids.insert(*from.ip(), unique_id);
+        }
+
         if already != Some(hb.product_id) {
             log::info!(
                 "{}: Garmin CDM heartbeat: product_id=0x{:04x} ({})",
@@ -367,7 +383,7 @@ impl GarminLocator {
                 hb.product_id,
                 discovery::product_name(hb.product_id).unwrap_or("unknown"),
             );
-            state.product_ids.insert(*from, hb.product_id);
+            state.product_ids.insert(*from.ip(), hb.product_id);
 
             // Send a product data request to learn the device name/alias.
             // This is fire-and-forget; the response arrives as 0x0392 on
@@ -399,7 +415,7 @@ impl GarminLocator {
             pd.device_alias,
         );
         let mut state = self.state.lock().unwrap();
-        state.device_names.insert(*from, pd);
+        state.device_names.insert(*from.ip(), pd);
     }
 
     /// Handle a `MSG_CAPABILITY` packet that arrived for a pending
@@ -546,13 +562,20 @@ impl GarminLocator {
             _ => return,
         };
 
-        // Garmin radars don't expose a per-unit serial number on the
-        // wire. Passing None for serial_no makes RadarInfo::new fall
-        // back to the last two octets of the radar's IP (172.16.x.y)
-        // as the key suffix, which is unique per physical radar.
+        // The heartbeat's unique id is the radar's own identity: stable
+        // across power cycles and independent of its address. Garmin
+        // assigns addresses by device role — every radar answers on
+        // 172.16.2.0 — so the address distinguishes almost nothing.
+        let hardware_id = {
+            let state = self.state.lock().unwrap();
+            state
+                .unique_ids
+                .get(from.ip())
+                .map(|id| format!("{:08x}", id))
+        };
         let state = self.state.lock().unwrap();
-        let product_id = state.product_ids.get(from).copied();
-        let device_info = state.device_names.get(from).cloned();
+        let product_id = state.product_ids.get(from.ip()).copied();
+        let device_info = state.device_names.get(from.ip()).cloned();
         drop(state);
 
         // Model name: prefer the factory name from 0x0392, fall back
@@ -586,7 +609,7 @@ impl GarminLocator {
             &self.args,
             Brand::Garmin,
             None,
-            None,
+            hardware_id.as_deref(),
             dual_a,
             detected_type.pixel_values(),
             detected_type.spokes_per_revolution(),
@@ -614,7 +637,7 @@ impl GarminLocator {
                 &self.args,
                 Brand::Garmin,
                 None,
-                None,
+                hardware_id.as_deref(),
                 Some("B"),
                 detected_type.pixel_values(),
                 detected_type.spokes_per_revolution(),
