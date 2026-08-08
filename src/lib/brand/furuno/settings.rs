@@ -225,9 +225,15 @@ pub(crate) fn update_when_model_known(info: &mut RadarInfo, model: RadarModel, v
 
     if info.controls.user_name() == info.key() {
         let mut user_name = model_name.to_string();
-        if let Some(serial_no) = info.serial_no.as_deref() {
+        // Same discriminator as the key, so two units reporting an all-zero
+        // serial are told apart by name as well as by key.
+        if let Some(discriminator) = info.discriminator() {
             user_name.push(' ');
-            user_name.push_str(&serial_no[serial_no.len().saturating_sub(4)..]);
+            user_name.push_str(discriminator);
+        }
+        if let Some(dual) = info.dual.as_deref() {
+            user_name.push(' ');
+            user_name.push_str(dual);
         }
         info.controls.set_user_name(user_name);
     }

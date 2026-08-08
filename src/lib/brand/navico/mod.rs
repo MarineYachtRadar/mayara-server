@@ -344,6 +344,7 @@ impl NavicoLocator {
                 &self.args,
                 Brand::Navico,
                 Some(beacon.serial_no),
+                None,
                 suffix,
                 16,
                 SPOKES_PER_REVOLUTION,

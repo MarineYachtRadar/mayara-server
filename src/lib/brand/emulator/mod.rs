@@ -125,6 +125,7 @@ pub(crate) fn create_emulator_radar(args: &Cli, radars: &SharedRadars, subsys: &
         Brand::Emulator,
         Some("EMU00001"),
         None,
+        None,
         16, // 16 pixel values (4 bits like HALO)
         EMULATOR_SPOKES,
         EMULATOR_SPOKE_LEN,

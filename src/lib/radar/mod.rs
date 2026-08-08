@@ -330,7 +330,10 @@ pub struct RadarInfo {
     output: bool,
 
     pub brand: Brand,
-    pub serial_no: Option<String>,       // Serial # for this radar
+    pub serial_no: Option<String>, // Serial # for this radar
+    /// Hardware identity (a MAC address) for radars that report no usable
+    /// serial number. Not the serial, and never shown as one.
+    pub hardware_id: Option<String>,
     pub dual: Option<String>,            // "A", "B" or None
     pub pixel_values: u8,                // How many values per pixel, 0..220 or so
     pub spokes_per_revolution: u16,      // How many spokes per rotation
@@ -386,21 +389,66 @@ pub struct RadarInfo {
     last_input: Arc<AtomicU64>,
 }
 
+/// Number of trailing characters of an identity that make a radar
+/// distinguishable in its key and default name. Four is enough to tell
+/// units apart on one vessel while staying short enough to read.
+const IDENTITY_TAIL_LEN: usize = 4;
+
+/// The tail of a radar identity, used as the discriminator in both the
+/// radar key and the default user-visible name so the two always agree.
+pub(crate) fn identity_tail(identity: &str) -> &str {
+    &identity[identity.len().saturating_sub(IDENTITY_TAIL_LEN)..]
+}
+
+/// The discriminator that distinguishes this radar from its siblings:
+/// the tail of the serial number, or of a hardware identity such as a MAC
+/// address when the radar reports no usable serial. `None` when the radar
+/// offers neither, in which case only the key falls back to the IP.
+pub(crate) fn identity_discriminator<'a>(
+    serial_no: Option<&'a str>,
+    hardware_id: Option<&'a str>,
+) -> Option<&'a str> {
+    // Filter each candidate before the fallback, or an empty serial would
+    // win over a perfectly good MAC and drop us to the IP.
+    serial_no
+        .filter(|s| !s.is_empty())
+        .or(hardware_id.filter(|s| !s.is_empty()))
+        .map(identity_tail)
+}
+
+/// Format a MAC address as a radar hardware identity, or `None` when it
+/// cannot identify anything: all-zero, or the broadcast address that
+/// Furuno's virtual devices (e.g. the `CAN-BUS` entry) report.
+pub(crate) fn mac_identity(mac: &[u8; 6]) -> Option<String> {
+    if mac.iter().all(|&b| b == 0) || mac.iter().all(|&b| b == 0xff) {
+        return None;
+    }
+    Some(mac.iter().fold(String::new(), |mut s, b| {
+        write!(s, "{:02x}", b).unwrap();
+        s
+    }))
+}
+
 /// Build the stable per-radar key: the brand prefix, a four-character
-/// discriminator, and the optional dual-range suffix. The discriminator is the
-/// last four characters of the serial number, or the low 16 bits of the radar
-/// IP when the serial number is absent *or* empty — so radars reporting an
-/// all-zero serial (e.g. Furuno NavNet 3D DRS units) fall back to the IP and
-/// each gets a distinct key instead of colliding on the bare prefix.
+/// discriminator, and the optional dual-range suffix.
+///
+/// The discriminator is the tail of the serial number; of `hardware_id`
+/// (a MAC address) when the serial is absent *or* empty, as on Furuno
+/// NavNet 3D DRS units which report an all-zero serial; and only failing
+/// both, the low 16 bits of the radar IP. The IP is a last resort because
+/// it moves with the DHCP lease and takes the radar's saved settings with
+/// it — brands that expose neither serial nor MAC (Garmin, Raymarine,
+/// Koden) have nothing better.
 fn radar_key(
     prefix: &str,
     serial_no: Option<&str>,
+    hardware_id: Option<&str>,
     dual: Option<&str>,
     addr: &SocketAddrV4,
 ) -> String {
     let mut key = prefix.to_string();
-    match serial_no.filter(|s| !s.is_empty()) {
-        Some(serial_no) => key.push_str(&serial_no[serial_no.len().saturating_sub(4)..]),
+    match identity_discriminator(serial_no, hardware_id) {
+        Some(discriminator) => key.push_str(discriminator),
         None => write!(key, "{:04x}", addr.ip().to_bits() & 0xffff).unwrap(),
     }
     if let Some(dual) = dual {
@@ -416,6 +464,7 @@ impl RadarInfo {
         args: &Cli,
         brand: Brand,
         serial_no: Option<&str>,
+        hardware_id: Option<&str>,
         dual: Option<&str>,
         pixel_values: u8, // How many values per pixel, 0..220 or so
         spokes_per_revolution: usize,
@@ -443,7 +492,8 @@ impl RadarInfo {
         // `serial_no` field treat it the same way (avoids a `Some("")` that
         // later code guards with `is_some()` would mishandle).
         let serial_no = serial_no.filter(|s| !s.is_empty());
-        let key = radar_key(brand.to_prefix(), serial_no, dual, &addr);
+        let hardware_id = hardware_id.filter(|s| !s.is_empty());
+        let key = radar_key(brand.to_prefix(), serial_no, hardware_id, dual, &addr);
 
         let sk_client_tx = radars.radars.read().unwrap().sk_client_tx.clone();
         let controls = controls_fn(key.clone(), sk_client_tx);
@@ -455,6 +505,7 @@ impl RadarInfo {
             key,
             brand,
             serial_no: serial_no.map(String::from),
+            hardware_id: hardware_id.map(String::from),
             dual: dual.map(String::from),
             reported_name: None,
             pixel_values,
@@ -499,6 +550,12 @@ impl RadarInfo {
 
     pub fn key(&self) -> String {
         self.key.to_owned()
+    }
+
+    /// The discriminator this radar's key was built from, for brands that
+    /// want the default user-visible name to match the key.
+    pub(crate) fn discriminator(&self) -> Option<&str> {
+        identity_discriminator(self.serial_no.as_deref(), self.hardware_id.as_deref())
     }
 
     /// True when this radar's data_loop is currently dropping decoded frames
@@ -2235,34 +2292,91 @@ mod tests {
     #[test]
     fn radar_key_uses_serial_tail() {
         assert_eq!(
-            radar_key("fur", Some("1403302452"), None, &test_addr()),
+            radar_key("fur", Some("1403302452"), None, None, &test_addr()),
             "fur2452"
         );
         // Serials shorter than four characters are used in full.
-        assert_eq!(radar_key("fur", Some("12"), None, &test_addr()), "fur12");
+        assert_eq!(
+            radar_key("fur", Some("12"), None, None, &test_addr()),
+            "fur12"
+        );
     }
 
     #[test]
-    fn radar_key_falls_back_to_ip_without_serial() {
-        // Both an absent and an empty serial derive the key from the IP.
-        assert_eq!(radar_key("fur", None, None, &test_addr()), "fur0102");
-        assert_eq!(radar_key("fur", Some(""), None, &test_addr()), "fur0102");
+    fn radar_key_prefers_serial_over_mac() {
+        assert_eq!(
+            radar_key(
+                "fur",
+                Some("1403302452"),
+                Some("00d01d057903"),
+                None,
+                &test_addr()
+            ),
+            "fur2452"
+        );
+    }
+
+    #[test]
+    fn radar_key_falls_back_to_mac_without_serial() {
+        // The NavNet 3D case from issue #447: two units, both reporting an
+        // all-zero serial from the same DHCP pool, told apart by their MACs.
+        assert_eq!(
+            radar_key("fur", None, Some("00d01d057903"), None, &test_addr()),
+            "fur7903"
+        );
+        assert_eq!(
+            radar_key("fur", Some(""), Some("00d01d057045"), None, &test_addr()),
+            "fur7045"
+        );
+    }
+
+    #[test]
+    fn radar_key_falls_back_to_ip_without_serial_or_mac() {
+        // Garmin, Raymarine and Koden expose neither; the IP is all they have.
+        assert_eq!(radar_key("gar", None, None, None, &test_addr()), "gar0102");
+        assert_eq!(
+            radar_key("gar", Some(""), Some(""), None, &test_addr()),
+            "gar0102"
+        );
     }
 
     #[test]
     fn radar_key_appends_dual_suffix() {
         assert_eq!(
-            radar_key("nav", Some("1403302452"), Some("A"), &test_addr()),
+            radar_key("nav", Some("1403302452"), None, Some("A"), &test_addr()),
             "nav2452A"
         );
-        // Two empty-serial radars on the same IP stay distinct via the suffix.
+        // Two ranges of one MAC-identified radar stay distinct via the suffix.
         assert_eq!(
-            radar_key("fur", Some(""), Some("A"), &test_addr()),
-            "fur0102A"
+            radar_key(
+                "fur",
+                Some(""),
+                Some("00d01d057903"),
+                Some("A"),
+                &test_addr()
+            ),
+            "fur7903A"
         );
         assert_eq!(
-            radar_key("fur", Some(""), Some("B"), &test_addr()),
-            "fur0102B"
+            radar_key(
+                "fur",
+                Some(""),
+                Some("00d01d057903"),
+                Some("B"),
+                &test_addr()
+            ),
+            "fur7903B"
+        );
+    }
+
+    #[test]
+    fn mac_identity_rejects_non_identifying_addresses() {
+        // Furuno's virtual devices (the CAN-BUS entry) report broadcast.
+        assert_eq!(mac_identity(&[0xff; 6]), None);
+        assert_eq!(mac_identity(&[0; 6]), None);
+        assert_eq!(
+            mac_identity(&[0x00, 0xd0, 0x1d, 0x05, 0x79, 0x03]).as_deref(),
+            Some("00d01d057903")
         );
     }
 
