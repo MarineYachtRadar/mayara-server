@@ -22,6 +22,19 @@ use crate::stream::{NotificationMethod, NotificationState, NotificationValue, Si
 /// that dies young is never seen by a client and never alarms.
 const MIN_BROADCAST_UPDATE_COUNT: u32 = 4;
 
+/// Guard zones a radar carries, numbered 1..=GUARD_ZONE_COUNT on the wire.
+/// Zone 0 is reserved for manual MARPA acquisition and never alarms.
+const GUARD_ZONE_COUNT: u8 = 2;
+
+/// Index into a per-radar alarm array for a wire zone number, or `None`
+/// when the number is outside the guard zones (manual MARPA, or a value
+/// a brand backend should never produce).
+fn guard_zone_index(zone: u8) -> Option<usize> {
+    (1..=GUARD_ZONE_COUNT)
+        .contains(&zone)
+        .then(|| (zone - 1) as usize)
+}
+
 /// Context from the spoke that produced a blob
 #[derive(Clone, Debug)]
 pub struct SpokeContext {
@@ -114,11 +127,14 @@ pub struct TrackerManager {
     /// Command receiver for MARPA requests and control changes
     command_rx: mpsc::Receiver<TrackerCommand>,
     /// Whether `notifications.radar.<key>.guardZone.<n>` currently stands
-    /// raised, per (radar_key, guard_zone_index). Indexes 0 and 1
-    /// correspond to guard zones 1 and 2 (manual MARPA acquisitions use
-    /// GuardZone(0), which we skip). Raised when a target inside the zone
-    /// is promoted, cleared once the zone holds no client-visible target.
-    guard_zone_alarm: HashMap<String, [bool; 2]>,
+    /// raised, per (radar_key, [`guard_zone_index`]).
+    ///
+    /// The alarm means "a target acquired in this zone is still being
+    /// tracked", not "a target is inside the zone right now": a target
+    /// carries the zone it was acquired in for life, so one that wanders
+    /// out keeps the alarm up until it is lost or deleted. That mirrors
+    /// the GUI's audible alert, which is likewise driven by acquisition.
+    guard_zone_alarm: HashMap<String, [bool; GUARD_ZONE_COUNT as usize]>,
 }
 
 impl TrackerManager {
@@ -152,12 +168,12 @@ impl TrackerManager {
     /// than only on the first one, so a second vessel entering an already
     /// alarming zone is still announced.
     fn raise_guard_zone_alarm(&mut self, radar_key: &str, zone: u8, target_id: u64) {
-        if !(1..=2).contains(&zone) {
+        let Some(idx) = guard_zone_index(zone) else {
             return;
-        }
+        };
         self.guard_zone_alarm
             .entry(radar_key.to_string())
-            .or_insert([false; 2])[(zone - 1) as usize] = true;
+            .or_insert([false; GUARD_ZONE_COUNT as usize])[idx] = true;
         self.emit_guard_zone_notification(
             radar_key,
             zone,
@@ -174,7 +190,7 @@ impl TrackerManager {
     /// from enter/leave events, so the Lost timeout, an explicit target
     /// delete and a radar-wide clear all release the alarm identically.
     fn refresh_guard_zone_alarms(&mut self) {
-        let mut occupied: HashMap<&str, [bool; 2]> = HashMap::new();
+        let mut occupied: HashMap<&str, [bool; GUARD_ZONE_COUNT as usize]> = HashMap::new();
         let trackers: Vec<&TargetTracker> = if self.merge_mode {
             self.shared_tracker.iter().collect()
         } else {
@@ -186,10 +202,10 @@ impl TrackerManager {
             {
                 continue;
             }
-            if let Some(zone) = target.source_zone.filter(|z| (1..=2).contains(z)) {
+            if let Some(idx) = target.source_zone.and_then(guard_zone_index) {
                 occupied
                     .entry(target.last_radar_key.as_str())
-                    .or_insert([false; 2])[(zone - 1) as usize] = true;
+                    .or_insert([false; GUARD_ZONE_COUNT as usize])[idx] = true;
             }
         }
 
@@ -198,7 +214,7 @@ impl TrackerManager {
             let occupancy = occupied
                 .get(radar_key.as_str())
                 .copied()
-                .unwrap_or([false; 2]);
+                .unwrap_or([false; GUARD_ZONE_COUNT as usize]);
             for (idx, alarm) in alarms.iter_mut().enumerate() {
                 if *alarm && !occupancy[idx] {
                     *alarm = false;
@@ -1085,9 +1101,29 @@ mod tests {
         TrackerManager,
         tokio::sync::broadcast::Receiver<SignalKDelta>,
     ) {
+        make_test_manager_with_rx_mode(false)
+    }
+
+    fn make_test_manager_with_rx_mode(
+        merge_mode: bool,
+    ) -> (
+        TrackerManager,
+        tokio::sync::broadcast::Receiver<SignalKDelta>,
+    ) {
         let (sk_tx, sk_rx) = broadcast::channel(64);
-        let (manager, _command_tx) = TrackerManager::new(false, sk_tx);
+        let (manager, _command_tx) = TrackerManager::new(merge_mode, sk_tx);
         (manager, sk_rx)
+    }
+
+    /// The id of the first target the tracker holds for `radar_key`,
+    /// whichever tracker mode the manager is in.
+    fn first_target_id(manager: &TrackerManager, radar_key: &str) -> u64 {
+        let tracker = if manager.merge_mode {
+            manager.shared_tracker.as_ref().unwrap()
+        } else {
+            &manager.per_radar_trackers[radar_key]
+        };
+        tracker.get_active_targets().next().unwrap().id
     }
 
     /// Reduce the emitted deltas to the `notifications.*` (path, state)
@@ -1189,11 +1225,7 @@ mod tests {
         let (mut manager, rx) = make_test_manager_with_rx();
         feed_guard_zone_target(&mut manager, "nav1", 0, 1, 4);
 
-        let target_id = manager.per_radar_trackers["nav1"]
-            .get_active_targets()
-            .next()
-            .unwrap()
-            .id;
+        let target_id = first_target_id(&manager, "nav1");
         assert!(manager.delete_target("nav1", target_id));
         manager.check_all_timeouts();
 
@@ -1218,20 +1250,71 @@ mod tests {
         feed_guard_zone_target(&mut manager, "nav1", 0, 1, 4);
         feed_guard_zone_target(&mut manager, "nav1", 1024, 1, 4);
 
-        let target_id = manager.per_radar_trackers["nav1"]
-            .get_active_targets()
-            .next()
-            .unwrap()
-            .id;
+        let target_id = first_target_id(&manager, "nav1");
         manager.delete_target("nav1", target_id);
         manager.check_all_timeouts();
 
-        // One of two targets gone: no clear yet.
+        // One of two targets gone: both alerts stand and no clear follows.
         let states = notifications(&drain_sk_deltas(rx));
+        assert_eq!(
+            states.len(),
+            2,
+            "expected one alert per target: {:?}",
+            states
+        );
         assert!(
             states.iter().all(|(_, state)| state == "alert"),
             "unexpected clear: {:?}",
             states
+        );
+    }
+
+    #[test]
+    fn guard_zone_clears_after_clear_all_targets() {
+        let (mut manager, rx) = make_test_manager_with_rx();
+        feed_guard_zone_target(&mut manager, "nav1", 0, 1, 4);
+
+        // Clearing a radar's targets removes them without any Lost
+        // transition; the next sweep must still release the alarm.
+        manager.clear_all_targets("nav1");
+        manager.check_all_timeouts();
+
+        let states = notifications(&drain_sk_deltas(rx));
+        assert_eq!(
+            states.last(),
+            Some(&(
+                "notifications.radar.nav1.guardZone.1".to_string(),
+                "normal".to_string()
+            )),
+            "clear_all_targets should end with a clear: {:?}",
+            states
+        );
+    }
+
+    #[test]
+    fn guard_zone_alarms_work_in_merged_mode() {
+        // Merged mode routes every radar through one shared tracker, so
+        // occupancy is keyed by each target's last_radar_key rather than
+        // by which tracker it came from.
+        let (mut manager, rx) = make_test_manager_with_rx_mode(true);
+        feed_guard_zone_target(&mut manager, "nav1", 0, 1, 4);
+
+        let target_id = first_target_id(&manager, "nav1");
+        assert!(manager.delete_target("nav1", target_id));
+        manager.check_all_timeouts();
+
+        assert_eq!(
+            notifications(&drain_sk_deltas(rx)),
+            vec![
+                (
+                    "notifications.radar.nav1.guardZone.1".to_string(),
+                    "alert".to_string()
+                ),
+                (
+                    "notifications.radar.nav1.guardZone.1".to_string(),
+                    "normal".to_string()
+                ),
+            ]
         );
     }
 
