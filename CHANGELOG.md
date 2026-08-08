@@ -7,9 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **ais:** drop vestigial AisVessel::status field (#498) ([PR #498](https://github.com/MarineYachtRadar/mayara-server/pull/498))
+
 ### Fixed
 
 - **raymarine:** draw RD/HD echoes at their true distance (#495) ([PR #495](https://github.com/MarineYachtRadar/mayara-server/pull/495))
+- **ais:** stop the timeout sweep dropping vessels that just reported (#499) ([PR #499](https://github.com/MarineYachtRadar/mayara-server/pull/499))
 
 ## [3.8.1] - 2026-08-04
 
