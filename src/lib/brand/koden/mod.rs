@@ -110,6 +110,7 @@ impl KodenLocator {
             &self.args,
             Brand::Koden,
             None, // serial number discovered later
+            None, // no MAC on the wire
             None, // no dual range
             PIXEL_VALUES,
             SPOKES,

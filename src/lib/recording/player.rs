@@ -276,6 +276,7 @@ pub async fn load_recording(
         args,
         brand,
         Some(&serial_no),
+        None, // playback has no hardware identity; the serial above is synthesized
         identity.dual.as_deref(),
         identity.pixel_values,
         identity.spokes_per_revolution as usize,

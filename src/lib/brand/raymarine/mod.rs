@@ -388,6 +388,7 @@ impl RaymarineLocator {
                         Brand::Raymarine,
                         None,
                         None,
+                        None,
                         0,
                         spokes_per_revolution,
                         max_spoke_len,

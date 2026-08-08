@@ -5,7 +5,7 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 use tokio_graceful_shutdown::{SubsystemBuilder, SubsystemHandle};
 
 use crate::locator::LocatorAddress;
-use crate::radar::{RadarInfo, SharedRadars};
+use crate::radar::{RadarInfo, SharedRadars, identity_discriminator, mac_identity};
 use crate::util::{PrintableSlice, c_string, decode_bin};
 use crate::{Brand, Cli};
 
@@ -248,6 +248,10 @@ impl FurunoLocator {
             Ok(data) => {
                 let model = c_string(&data.model);
                 let serial_no = c_string(&data.serial_no);
+                // NavNet 3D era units report an all-zero serial; their MAC is
+                // the only thing telling two of them apart.
+                let mac_id = mac_identity(&data.mac);
+                let discriminator = identity_discriminator(serial_no, mac_id.as_deref());
                 log::trace!(
                     "{}: Furuno model report: {}",
                     from,
@@ -255,6 +259,7 @@ impl FurunoLocator {
                 );
                 log::debug!("{}: model: {:?}", from, model);
                 log::debug!("{}: serial_no: {:?}", from, serial_no);
+                log::debug!("{}: mac: {:?}", from, mac_id);
 
                 let model = match model {
                     Some(t) => t,
@@ -281,6 +286,7 @@ impl FurunoLocator {
                     &self.args,
                     Brand::Furuno,
                     serial_no,
+                    mac_id.as_deref(),
                     dual_suffix,
                     PIXEL_VALUES,
                     SPOKES,
@@ -297,7 +303,7 @@ impl FurunoLocator {
 
                 radar_info.controls.set_model_name(model.to_string());
                 radar_info.controls.set_user_name(
-                    format!("{model} {}", serial_no.unwrap_or(""))
+                    format!("{model} {}", discriminator.unwrap_or(""))
                         .trim()
                         .to_string(),
                 );
@@ -311,6 +317,7 @@ impl FurunoLocator {
                         &self.args,
                         Brand::Furuno,
                         serial_no,
+                        mac_id.as_deref(),
                         Some("B"),
                         PIXEL_VALUES,
                         SPOKES,
@@ -326,7 +333,7 @@ impl FurunoLocator {
                     );
                     info_b.controls.set_model_name(model.to_string());
                     info_b.controls.set_user_name(
-                        format!("{model} {} B", serial_no.unwrap_or(""))
+                        format!("{model} {} B", discriminator.unwrap_or(""))
                             .trim()
                             .to_string(),
                     );

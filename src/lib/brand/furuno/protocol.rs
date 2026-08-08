@@ -165,7 +165,15 @@ pub(crate) struct FurunoRadarReport {
 #[derive(Deserialize, Debug, Copy, Clone)]
 #[repr(C, packed)]
 pub(crate) struct FurunoRadarModelReport {
-    pub _filler1: [u8; 24],
+    pub _filler1: [u8; 18],
+    /// MAC address of the device this report describes. Note "describes",
+    /// not "sent by": an MFD relaying a radar's report carries the radar's
+    /// MAC here, so this must be read from the payload and never taken
+    /// from the Ethernet source address.
+    ///
+    /// The only per-unit-unique field present on every Furuno LAN device —
+    /// NavNet 3D era DRS units report an all-zero `serial_no`.
+    pub mac: [u8; 6],
     pub model: [u8; 32],
     pub _firmware_versions: [u8; 32],
     pub _firmware_version: [u8; 32],
