@@ -1009,16 +1009,16 @@ impl SharedControls {
                 // Handle zone controls specially - they have multiple values and are stored directly
                 // This applies to both Internal and Target destinations (guard zones are Target)
                 if c.item.data_type == ControlDataType::Zone {
-                    let start_angle = cv.value.as_ref().and_then(|v| v.as_f64()).unwrap_or(0.0);
-                    let end_angle = cv.end_value.unwrap_or(0.0);
-                    let start_distance = cv.start_distance.unwrap_or(0.0);
-                    let end_distance = cv.end_distance.unwrap_or(0.0);
+                    // Pass the request through as-is: a field the client did
+                    // not send stays `None` and set_zone keeps the stored
+                    // value, so a drag of the start angle cannot wipe the
+                    // zone's range or its enabled flag.
                     self.set_zone(
                         &cv.id,
-                        start_angle,
-                        end_angle,
-                        start_distance,
-                        end_distance,
+                        cv.value.as_ref().and_then(|v| v.as_f64()),
+                        cv.end_value,
+                        cv.start_distance,
+                        cv.end_distance,
                         cv.enabled,
                     )
                     .map_err(RadarError::ControlError)?;
@@ -1028,12 +1028,7 @@ impl SharedControls {
 
                 // Handle rect controls specially - they have corner-based coordinates
                 if c.item.data_type == ControlDataType::Rect {
-                    let x1 = cv.x1.unwrap_or(0.0);
-                    let y1 = cv.y1.unwrap_or(0.0);
-                    let x2 = cv.x2.unwrap_or(0.0);
-                    let y2 = cv.y2.unwrap_or(0.0);
-                    let width = cv.width.unwrap_or(0.0);
-                    self.set_rect(&cv.id, x1, y1, x2, y2, width, cv.enabled)
+                    self.set_rect(&cv.id, cv.x1, cv.y1, cv.x2, cv.y2, cv.width, cv.enabled)
                         .map_err(RadarError::ControlError)?;
                     // Broadcast the update to the radar so exclusion mask gets updated
                     return self.send_to_command_handler(cv, reply_tx);
@@ -1543,13 +1538,17 @@ impl SharedControls {
     }
 
     /// Set a zone control with start/end angles and start/end distances
+    /// Apply a (possibly partial) zone update. Fields left `None` keep
+    /// their stored value; the merge happens under the write lock so two
+    /// concurrent partial updates cannot each merge from the same stale
+    /// snapshot and clobber one another.
     pub fn set_zone(
         &self,
         control_id: &ControlId,
-        start_angle: f64,
-        end_angle: f64,
-        start_distance: f64,
-        end_distance: f64,
+        start_angle: Option<f64>,
+        end_angle: Option<f64>,
+        start_distance: Option<f64>,
+        end_distance: Option<f64>,
         enabled: Option<bool>,
     ) -> Result<Option<()>, ControlError> {
         let control = {
@@ -1579,14 +1578,15 @@ impl SharedControls {
 
     /// Set a rectangular exclusion zone with corner-based coordinates
     #[allow(clippy::too_many_arguments)] // 4 corner coords + zone id + label + ack channel — flat is clearer than a struct
+    /// Apply a (possibly partial) rectangle update; see [`Self::set_zone`].
     pub fn set_rect(
         &self,
         control_id: &ControlId,
-        x1: f64,
-        y1: f64,
-        x2: f64,
-        y2: f64,
-        width: f64,
+        x1: Option<f64>,
+        y1: Option<f64>,
+        x2: Option<f64>,
+        y2: Option<f64>,
+        width: Option<f64>,
         enabled: Option<bool>,
     ) -> Result<Option<()>, ControlError> {
         let control = {
@@ -3119,41 +3119,49 @@ impl Control {
     ///
     /// Angles are in wire units (degrees) and will be converted to SI (radians).
     /// Distances are always in meters.
+    /// Set a guard/exclusion zone. Each field is optional: a zone carries
+    /// several coupled numbers and clients send only the one they changed
+    /// (dragging the start angle sends that alone), so `None` means "leave
+    /// as it is" rather than "set to zero". Merging here rather than in the
+    /// caller keeps the read and the write inside one lock, and means only
+    /// supplied values are converted from wire units.
     pub fn set_zone(
         &mut self,
-        mut start_angle: f64,
-        mut end_angle: f64,
-        start_distance: f64,
-        end_distance: f64,
+        start_angle: Option<f64>,
+        end_angle: Option<f64>,
+        start_distance: Option<f64>,
+        end_distance: Option<f64>,
         enabled: Option<bool>,
     ) -> Result<Option<()>, ControlError> {
         if self.item.data_type != ControlDataType::Zone {
             return Err(ControlError::NotSupported(self.item.control_id));
         }
 
-        // Convert angles to SI units (radians)
-        start_angle = self
-            .item
-            .wire_units
-            .map(|u| u.to_si(start_angle).1)
-            .unwrap_or(start_angle);
-        end_angle = self
-            .item
-            .wire_units
-            .map(|u| u.to_si(end_angle).1)
-            .unwrap_or(end_angle);
+        // Convert supplied angles to SI units (radians); retained ones are
+        // already stored in SI and must not be converted a second time.
+        let to_si = |angle: f64| {
+            self.item
+                .wire_units
+                .map(|u| u.to_si(angle).1)
+                .unwrap_or(angle)
+        };
+        let start_angle = start_angle.map(to_si).or(self.value);
+        let end_angle = end_angle.map(to_si).or(self.end_value);
+        let start_distance = start_distance.or(self.start_distance);
+        let end_distance = end_distance.or(self.end_distance);
+        let enabled = enabled.or(self.enabled);
 
-        let changed = self.value != Some(start_angle)
-            || self.end_value != Some(end_angle)
-            || self.start_distance != Some(start_distance)
-            || self.end_distance != Some(end_distance)
+        let changed = self.value != start_angle
+            || self.end_value != end_angle
+            || self.start_distance != start_distance
+            || self.end_distance != end_distance
             || self.enabled != enabled;
 
         if changed {
-            self.value = Some(start_angle);
-            self.end_value = Some(end_angle);
-            self.start_distance = Some(start_distance);
-            self.end_distance = Some(end_distance);
+            self.value = start_angle;
+            self.end_value = end_angle;
+            self.start_distance = start_distance;
+            self.end_distance = end_distance;
             self.enabled = enabled;
             self.needs_refresh = false;
             self.timestamp = Some(Utc::now());
@@ -3169,32 +3177,43 @@ impl Control {
 
     /// Set a rectangular exclusion zone with corner-based coordinates.
     /// x1,y1 and x2,y2 define one edge, width is perpendicular.
+    /// Set a rectangular exclusion zone with corner-based coordinates.
+    /// x1,y1 and x2,y2 define one edge, width is perpendicular. As with
+    /// [`Self::set_zone`], `None` leaves a field untouched so a partial
+    /// update cannot zero the corners it omitted.
     pub fn set_rect(
         &mut self,
-        x1: f64,
-        y1: f64,
-        x2: f64,
-        y2: f64,
-        width: f64,
+        x1: Option<f64>,
+        y1: Option<f64>,
+        x2: Option<f64>,
+        y2: Option<f64>,
+        width: Option<f64>,
         enabled: Option<bool>,
     ) -> Result<Option<()>, ControlError> {
         if self.item.data_type != ControlDataType::Rect {
             return Err(ControlError::NotSupported(self.item.control_id));
         }
 
-        let changed = self.x1 != Some(x1)
-            || self.y1 != Some(y1)
-            || self.x2 != Some(x2)
-            || self.y2 != Some(y2)
-            || self.width != Some(width)
+        let x1 = x1.or(self.x1);
+        let y1 = y1.or(self.y1);
+        let x2 = x2.or(self.x2);
+        let y2 = y2.or(self.y2);
+        let width = width.or(self.width);
+        let enabled = enabled.or(self.enabled);
+
+        let changed = self.x1 != x1
+            || self.y1 != y1
+            || self.x2 != x2
+            || self.y2 != y2
+            || self.width != width
             || self.enabled != enabled;
 
         if changed {
-            self.x1 = Some(x1);
-            self.y1 = Some(y1);
-            self.x2 = Some(x2);
-            self.y2 = Some(y2);
-            self.width = Some(width);
+            self.x1 = x1;
+            self.y1 = y1;
+            self.x2 = x2;
+            self.y2 = y2;
+            self.width = width;
             self.enabled = enabled;
             self.needs_refresh = false;
             self.timestamp = Some(Utc::now());
@@ -3573,6 +3592,99 @@ mod test {
         // A control with no automatic mode reports no flag at all.
         let (_, range) = new_numeric(ControlId::Range, 0., 100_000.).take();
         assert_eq!(range.reported_auto(), None);
+    }
+
+    /// A guard zone dragged by its start angle arrives as that one field.
+    /// The other three numbers and the enabled flag must survive, or the
+    /// zone collapses to 0-0 and can never trigger.
+    #[test]
+    fn partial_zone_update_keeps_unsupplied_fields() {
+        let (_, mut zone) = new_zone(
+            ControlId::GuardZone1,
+            -std::f64::consts::PI,
+            std::f64::consts::PI,
+            100_000.,
+        )
+        .take();
+
+        zone.set_zone(Some(0.2), Some(1.9), Some(500.), Some(900.), Some(true))
+            .unwrap();
+        // The drag: start angle alone.
+        zone.set_zone(Some(-0.96), None, None, None, None).unwrap();
+
+        assert_eq!(zone.value, Some(-0.96));
+        assert_eq!(zone.end_value, Some(1.9));
+        assert_eq!(zone.start_distance, Some(500.));
+        assert_eq!(zone.end_distance, Some(900.));
+        assert_eq!(zone.enabled, Some(true));
+    }
+
+    /// Retained fields are already stored in SI, so they must not be run
+    /// through the wire conversion a second time — that would inflate a
+    /// kept angle by the degrees-to-radians factor on every partial update.
+    #[test]
+    fn partial_zone_update_does_not_reconvert_retained_angles() {
+        let (_, mut zone) = new_zone(ControlId::GuardZone1, -180., 180., 100_000.)
+            .wire_units(Units::Degrees)
+            .take();
+
+        // Supplied in wire units (degrees), stored as radians.
+        zone.set_zone(Some(0.), Some(90.), Some(500.), Some(900.), Some(true))
+            .unwrap();
+        let kept_end = zone.end_value;
+        assert_eq!(kept_end, Some(std::f64::consts::FRAC_PI_2));
+
+        zone.set_zone(Some(-58.), None, None, None, None).unwrap();
+
+        assert_eq!(zone.end_value, kept_end, "retained angle was reconverted");
+        assert_eq!(zone.value, Some((-58f64).to_radians()));
+    }
+
+    /// A supplied field always wins over the stored one, including a
+    /// deliberate zero — otherwise a zone could never be shrunk to nothing.
+    #[test]
+    fn partial_zone_update_does_not_override_supplied_fields() {
+        let (_, mut zone) = new_zone(
+            ControlId::GuardZone1,
+            -std::f64::consts::PI,
+            std::f64::consts::PI,
+            100_000.,
+        )
+        .take();
+        zone.set_zone(Some(0.2), Some(1.9), Some(500.), Some(900.), Some(true))
+            .unwrap();
+
+        zone.set_zone(None, None, Some(0.), None, Some(false))
+            .unwrap();
+
+        assert_eq!(zone.start_distance, Some(0.));
+        assert_eq!(zone.enabled, Some(false));
+        assert_eq!(zone.end_distance, Some(900.));
+    }
+
+    /// Same coupling for rectangular exclusion zones.
+    #[test]
+    fn partial_rect_update_keeps_unsupplied_corners() {
+        let (_, mut rect) = new_rect(ControlId::ExclusionRect1, 100_000.).take();
+        rect.set_rect(
+            Some(10.),
+            Some(20.),
+            Some(30.),
+            Some(40.),
+            Some(50.),
+            Some(true),
+        )
+        .unwrap();
+
+        rect.set_rect(Some(11.), None, None, None, None, None)
+            .unwrap();
+
+        assert_eq!(rect.x1, Some(11.));
+        assert_eq!(rect.y1, Some(20.));
+        assert_eq!(rect.x2, Some(30.));
+        assert_eq!(rect.y2, Some(40.));
+        assert_eq!(rect.width, Some(50.));
+        assert_eq!(rect.enabled, Some(true));
     }
 
     #[test]
