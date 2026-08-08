@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **furuno:** identify radars by MAC when they report no serial (#509) ([PR #509](https://github.com/MarineYachtRadar/mayara-server/pull/509))
+
 ### Changed
 
 - **ais:** drop vestigial AisVessel::status field (#498) ([PR #498](https://github.com/MarineYachtRadar/mayara-server/pull/498))
