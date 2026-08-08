@@ -350,8 +350,31 @@ impl Persistence {
         }
     }
 
+    /// Settings saved under a radar's old address-derived key, when it has
+    /// none under its current one. Returns `None` once the radar has been
+    /// saved under its new key, so this only ever fires on the first run
+    /// after the upgrade.
+    fn adopt_legacy_entry(&self, info: &RadarInfo) -> Option<&Radar> {
+        let legacy = crate::radar::legacy_address_key(info);
+        if legacy == info.key() {
+            return None;
+        }
+        let p = self.config.radars.get(&legacy)?;
+        log::info!(
+            "{}: adopting settings saved under its previous key '{}'",
+            info.key(),
+            legacy
+        );
+        Some(p)
+    }
+
     pub(crate) fn update_info_from_persistence(&self, info: &mut RadarInfo) {
-        if let Some(p) = self.config.radars.get(&info.key()) {
+        if let Some(p) = self
+            .config
+            .radars
+            .get(&info.key())
+            .or_else(|| self.adopt_legacy_entry(info))
+        {
             if let Some(model_name) = p.model_name.as_ref() {
                 info.controls.set_model_name(model_name.clone());
             }

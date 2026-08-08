@@ -473,6 +473,23 @@ fn base_key<'a>(key: &'a str, dual: Option<&str>) -> &'a str {
     }
 }
 
+/// The key this radar had before it was identified by a stable hardware
+/// identity — the address-derived fallback, and nothing else.
+///
+/// Radars that gained an identity change key exactly once, on the upgrade
+/// that introduced it. Deriving the old key through the very same function
+/// that produced it keeps the two from drifting apart: a migration that
+/// guessed the format wrongly would silently adopt nothing.
+pub(crate) fn legacy_address_key(info: &RadarInfo) -> String {
+    radar_key(
+        info.brand.to_prefix(),
+        None,
+        None,
+        info.dual.as_deref(),
+        &info.addr,
+    )
+}
+
 impl RadarInfo {
     #[allow(clippy::too_many_arguments)] // every radar field comes flat from per-brand discovery; the brands are the only callers
     pub fn new<F>(
@@ -2349,6 +2366,18 @@ mod tests {
         assert_eq!(
             radar_key("fur", Some(""), Some("00d01d057045"), None, &test_addr()),
             "fur7045"
+        );
+    }
+
+    #[test]
+    fn legacy_address_key_matches_the_address_fallback() {
+        // The migration key must be byte-identical to what a radar with no
+        // serial and no hardware identity used to be called, or settings
+        // saved under the old key would never be found.
+        assert_eq!(radar_key("ray", None, None, None, &test_addr()), "ray0102");
+        assert_eq!(
+            radar_key("ray", None, None, Some("B"), &test_addr()),
+            "ray0102B"
         );
     }
 
