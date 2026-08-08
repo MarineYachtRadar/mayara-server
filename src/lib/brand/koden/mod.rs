@@ -1,5 +1,6 @@
+use std::collections::HashMap;
 use std::io;
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
 use tokio_graceful_shutdown::{SubsystemBuilder, SubsystemHandle};
 
 use crate::locator::LocatorAddress;
@@ -15,13 +16,23 @@ mod report;
 mod settings;
 
 use protocol::{
-    BEACON_ADDRESS, CONTROL_PREFIX, IMAGE_MARKER, IMG_MIN_SIZE, KEEPALIVE_PACKET, PIXEL_VALUES,
-    RADAR_PORT, RESP_POWER, RESP_WARMUP, SPOKE_LEN, SPOKES, STATUS_PREFIX,
+    BEACON_ADDRESS, CMD_MAC_ADDRESS, CONTROL_PREFIX, IMAGE_MARKER, IMG_MIN_SIZE, KEEPALIVE_PACKET,
+    MAC_ADDRESS_REQUEST, PIXEL_VALUES, RADAR_PORT, RESP_POWER, RESP_WARMUP, SPOKE_LEN, SPOKES,
+    STATUS_PREFIX,
 };
+
+/// Length of a `0xA7` MAC address response: prefix, command, six bytes
+/// of MAC, terminator.
+const MAC_RESPONSE_LEN: usize = 9;
 
 #[derive(Clone)]
 struct KodenLocator {
     args: Cli,
+    /// The MAC each radar reported for itself, from its `0xA7` response.
+    /// A Koden radar is keyed on this rather than on its address, which
+    /// changes with the DHCP lease and takes the radar's saved settings
+    /// with it.
+    macs: HashMap<Ipv4Addr, String>,
 }
 
 impl RadarLocator for KodenLocator {
@@ -43,7 +54,20 @@ impl RadarLocator for KodenLocator {
 
 impl KodenLocator {
     fn new(args: Cli) -> Self {
-        KodenLocator { args }
+        KodenLocator {
+            args,
+            macs: HashMap::new(),
+        }
+    }
+
+    /// Record the MAC from a `0xA7` response. Returns whether it was new,
+    /// so the caller only logs a radar's identity once.
+    fn record_mac(&mut self, radar_addr: &Ipv4Addr, report: &[u8]) -> bool {
+        if report.len() < MAC_RESPONSE_LEN {
+            return false;
+        }
+        let mac: String = report[2..8].iter().map(|b| format!("{:02x}", b)).collect();
+        self.macs.insert(*radar_addr, mac).is_none()
     }
 
     fn process_locator_report(
@@ -83,6 +107,13 @@ impl KodenLocator {
             return Ok(());
         }
 
+        if first == STATUS_PREFIX
+            && report[1] == CMD_MAC_ADDRESS
+            && self.record_mac(from.ip(), report)
+        {
+            log::debug!("{}: Koden radar reported its MAC", from);
+        }
+
         log::debug!(
             "Koden radar detected at {} via {} (packet: {})",
             from,
@@ -95,7 +126,7 @@ impl KodenLocator {
     }
 
     fn found(
-        &self,
+        &mut self,
         radar_addr: SocketAddrV4,
         nic_addr: Ipv4Addr,
         radars: &SharedRadars,
@@ -105,12 +136,22 @@ impl KodenLocator {
         let report_addr = SocketAddrV4::new(*radar_addr.ip(), RADAR_PORT);
         let send_command_addr = SocketAddrV4::new(*radar_addr.ip(), RADAR_PORT);
 
+        // A Koden radar will tell us its own MAC if asked. Until it has,
+        // hold off rather than key it on an address a later DHCP lease
+        // would change: the radar answers on the port discovery already
+        // listens on, and keeps talking, so the next packet brings us
+        // back here with an identity in hand.
+        let Some(hardware_id) = self.macs.get(radar_addr.ip()).cloned() else {
+            request_mac(&radar_addr);
+            return;
+        };
+
         let radar_info = RadarInfo::new(
             radars,
             &self.args,
             Brand::Koden,
             None, // serial number discovered later
-            None, // no MAC on the wire
+            Some(hardware_id.as_str()),
             None, // no dual range
             PIXEL_VALUES,
             SPOKES,
@@ -148,5 +189,67 @@ pub(super) fn new(args: &Cli, addresses: &mut Vec<LocatorAddress>) {
             vec![&KEEPALIVE_PACKET],
             Box::new(KodenLocator::new(args.clone())),
         ));
+    }
+}
+
+/// Ask a radar for its MAC address. Fire-and-forget: the answer arrives
+/// as a `0xA7` status packet on the port the locator already listens on,
+/// and the radar is asked again on its next packet if it does not reply.
+fn request_mac(radar_addr: &SocketAddrV4) {
+    if let Ok(socket) = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)) {
+        let _ = socket.set_nonblocking(true);
+        let _ = socket.send_to(&MAC_ADDRESS_REQUEST, radar_addr);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    const RADAR: Ipv4Addr = Ipv4Addr::new(172, 31, 3, 12);
+
+    fn locator() -> KodenLocator {
+        KodenLocator::new(Cli::parse_from(["mayara-server"]))
+    }
+
+    /// A `0xA7` response: prefix, command, the radar's own six MAC bytes,
+    /// terminator. The identity must come out in the same compact hex form
+    /// other brands use, so keys look alike however they were obtained.
+    #[test]
+    fn mac_response_yields_the_radar_identity() {
+        let mut locator = locator();
+        let report = [
+            STATUS_PREFIX,
+            CMD_MAC_ADDRESS,
+            0x00,
+            0x0e,
+            0xc6,
+            0x12,
+            0x34,
+            0x56,
+            0x0d,
+        ];
+
+        assert!(locator.record_mac(&RADAR, &report), "first MAC is new");
+        assert_eq!(
+            locator.macs.get(&RADAR).map(String::as_str),
+            Some("000ec6123456")
+        );
+        assert!(
+            !locator.record_mac(&RADAR, &report),
+            "the same MAC again is not news"
+        );
+    }
+
+    /// A truncated response must leave the radar unidentified rather than
+    /// produce a short identity that could collide with another unit's.
+    #[test]
+    fn truncated_mac_response_is_ignored() {
+        let mut locator = locator();
+        let short = [STATUS_PREFIX, CMD_MAC_ADDRESS, 0x00, 0x0e, 0xc6];
+
+        assert!(!locator.record_mac(&RADAR, &short));
+        assert!(locator.macs.is_empty());
     }
 }
