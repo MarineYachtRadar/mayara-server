@@ -408,12 +408,19 @@ pub(crate) fn identity_discriminator<'a>(
     serial_no: Option<&'a str>,
     hardware_id: Option<&'a str>,
 ) -> Option<&'a str> {
-    // Filter each candidate before the fallback, or an empty serial would
+    // Filter each candidate before the fallback, or an unusable serial would
     // win over a perfectly good MAC and drop us to the IP.
     serial_no
-        .filter(|s| !s.is_empty())
-        .or(hardware_id.filter(|s| !s.is_empty()))
+        .filter(|s| usable_identity(s))
+        .or(hardware_id.filter(|s| usable_identity(s)))
         .map(identity_tail)
+}
+
+/// Whether an identity string actually distinguishes one unit from another.
+/// A radar that reports no serial may send an empty field or a run of ASCII
+/// zeros; neither tells two units apart, and both must give way to the MAC.
+fn usable_identity(identity: &str) -> bool {
+    !identity.is_empty() && !identity.bytes().all(|b| b == b'0')
 }
 
 /// Format a MAC address as a radar hardware identity, or `None` when it
@@ -2327,6 +2334,27 @@ mod tests {
         assert_eq!(
             radar_key("fur", Some(""), Some("00d01d057045"), None, &test_addr()),
             "fur7045"
+        );
+    }
+
+    #[test]
+    fn radar_key_treats_an_all_zero_serial_as_unusable() {
+        // A radar reporting its serial as ASCII zeros rather than an empty
+        // field must still key on the MAC, not on "0000".
+        assert_eq!(
+            radar_key(
+                "fur",
+                Some("000000000000"),
+                Some("00d01d057903"),
+                None,
+                &test_addr()
+            ),
+            "fur7903"
+        );
+        // With nothing better, an all-zero serial still must not become the key.
+        assert_eq!(
+            radar_key("fur", Some("000000000000"), None, None, &test_addr()),
+            "fur0102"
         );
     }
 

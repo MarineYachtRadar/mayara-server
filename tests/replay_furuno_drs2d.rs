@@ -81,6 +81,17 @@ async fn replay_furuno_drs2d() {
                             assert!(key.starts_with("fur"), "expected Furuno key, got: {}", key);
                             assert_eq!(info.brand, mayara::Brand::Furuno);
                             assert_eq!(info.controls.model_name().unwrap(), "DRS");
+                            // This DRS reports an all-zero serial, so its
+                            // identity comes from the MAC at bytes 18..23 of
+                            // the model report: 00:d0:1d:05:57:51. Keyed on
+                            // the IP instead it would read "furfe96", which
+                            // would change with the next DHCP lease.
+                            assert_eq!(
+                                key, "fur5751",
+                                "expected the key to come from the model report MAC, got: {}",
+                                key
+                            );
+                            assert_eq!(info.serial_no, None, "this unit reports no usable serial");
                             // Give the spoke worker time to ingest the trailing
                             // spoke frames in the fixture so the alignment bug
                             // (issue #195) would have a chance to panic.
