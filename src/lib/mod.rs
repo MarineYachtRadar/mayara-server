@@ -616,9 +616,9 @@ pub async fn start_session(
                     },
                     _ = interval.tick() => {
                         if let Some(store) = navdata::get_ais_store() {
-                            let lost_count = store.check_timeouts();
-                            if lost_count > 0 {
-                                log::debug!("Marked {} AIS vessels as Lost", lost_count);
+                            let removed_count = store.check_timeouts();
+                            if removed_count > 0 {
+                                log::debug!("Dropped {} timed-out AIS vessels", removed_count);
                             }
                         }
                     }

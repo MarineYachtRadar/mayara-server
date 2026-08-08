@@ -12,7 +12,7 @@ use tokio::sync::broadcast;
 
 use crate::stream::SignalKDelta;
 
-/// Timeout after which a vessel is marked as "Lost" (3 minutes)
+/// Silence after which a vessel is dropped from the store (3 minutes)
 const AIS_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// GPS position
@@ -385,7 +385,7 @@ impl AisVesselStore {
     /// Returns the number of vessels dropped.
     pub fn check_timeouts(&self) -> usize {
         let now = Instant::now();
-        let mut lost_vessels = Vec::new();
+        let mut timed_out_vessels = Vec::new();
 
         {
             let vessels = match self.vessels.read() {
@@ -394,22 +394,22 @@ impl AisVesselStore {
             };
             for (mmsi, vessel) in vessels.iter() {
                 if now.duration_since(vessel.last_update) > AIS_TIMEOUT {
-                    lost_vessels.push(mmsi.clone());
+                    timed_out_vessels.push(mmsi.clone());
                 }
             }
         }
 
-        if !lost_vessels.is_empty() {
+        if !timed_out_vessels.is_empty() {
             let mut vessels = match self.vessels.write() {
                 Ok(v) => v,
                 Err(_) => return 0,
             };
-            for mmsi in &lost_vessels {
+            for mmsi in &timed_out_vessels {
                 vessels.remove(mmsi);
             }
         }
 
-        lost_vessels.len()
+        timed_out_vessels.len()
     }
 
     /// Broadcast a vessel update to all connected clients
@@ -425,6 +425,10 @@ impl AisVesselStore {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// How far past [`AIS_TIMEOUT`] a test backdates a vessel to put it
+    /// unambiguously beyond the timeout.
+    const TIMEOUT_MARGIN: Duration = Duration::from_secs(1);
 
     #[test]
     fn test_extract_mmsi() {
@@ -787,7 +791,7 @@ mod tests {
             let mut vessels = store.vessels.write().unwrap();
             let vessel = vessels.get_mut("111111111").unwrap();
             vessel.last_update = Instant::now()
-                .checked_sub(AIS_TIMEOUT + Duration::from_secs(1))
+                .checked_sub(AIS_TIMEOUT + TIMEOUT_MARGIN)
                 .expect("backdate");
         }
         assert_eq!(store.check_timeouts(), 1);
@@ -820,7 +824,7 @@ mod tests {
             let mut vessels = store.vessels.write().unwrap();
             let vessel = vessels.get_mut("111111111").unwrap();
             vessel.last_update = Instant::now()
-                .checked_sub(AIS_TIMEOUT + Duration::from_secs(1))
+                .checked_sub(AIS_TIMEOUT + TIMEOUT_MARGIN)
                 .expect("backdate");
         }
         store.flush_pending_broadcasts();
