@@ -382,34 +382,21 @@ impl AisVesselStore {
     /// from a live refresh, and it would re-assert the vessel's last known
     /// position exactly when that position has become untrustworthy.
     ///
+    /// Selection and removal happen under one write lock, so a vessel that
+    /// reports in mid-sweep cannot be dropped on the strength of an age
+    /// measured before it arrived.
+    ///
     /// Returns the number of vessels dropped.
     pub fn check_timeouts(&self) -> usize {
         let now = Instant::now();
-        let mut timed_out_vessels = Vec::new();
+        let mut vessels = match self.vessels.write() {
+            Ok(v) => v,
+            Err(_) => return 0,
+        };
 
-        {
-            let vessels = match self.vessels.read() {
-                Ok(v) => v,
-                Err(_) => return 0,
-            };
-            for (mmsi, vessel) in vessels.iter() {
-                if now.duration_since(vessel.last_update) > AIS_TIMEOUT {
-                    timed_out_vessels.push(mmsi.clone());
-                }
-            }
-        }
-
-        if !timed_out_vessels.is_empty() {
-            let mut vessels = match self.vessels.write() {
-                Ok(v) => v,
-                Err(_) => return 0,
-            };
-            for mmsi in &timed_out_vessels {
-                vessels.remove(mmsi);
-            }
-        }
-
-        timed_out_vessels.len()
+        let before = vessels.len();
+        vessels.retain(|_, vessel| now.duration_since(vessel.last_update) <= AIS_TIMEOUT);
+        before - vessels.len()
     }
 
     /// Broadcast a vessel update to all connected clients
