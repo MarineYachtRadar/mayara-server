@@ -89,7 +89,7 @@ jobs:
     steps:
     - uses: actions/checkout@v7
     - uses: swatinem/rust-cache@v2
-    - uses: taiki-e/install-action@v2.85.4
+    - uses: taiki-e/install-action@v2.85.8
       with:
         tool: nextest
     - name: Run tests
