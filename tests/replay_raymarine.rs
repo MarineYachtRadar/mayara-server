@@ -89,6 +89,22 @@ async fn replay_raymarine_quantum() {
                             );
                             assert!(info.doppler, "Quantum should support Doppler");
                             assert_eq!(info.spokes_per_revolution, 250);
+                            // Identity and serial come from different places
+                            // and must not be confused. The key is the
+                            // beacons' link_id (0xd68168b4), which survives a
+                            // change of address; the serial is the real one
+                            // off the 0x280001 info report, for display.
+                            assert_eq!(key, "ray68b4", "key must come from link_id");
+                            assert_eq!(
+                                info.serial_no.as_deref(),
+                                Some("1140360"),
+                                "the radar's real serial must be reported"
+                            );
+                            assert!(
+                                info.controls.user_name().contains("1140360"),
+                                "the serial should reach the user-visible name, got: {}",
+                                info.controls.user_name()
+                            );
                             break;
                         }
                     }
