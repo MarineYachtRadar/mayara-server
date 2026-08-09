@@ -123,6 +123,38 @@ async fn test_get_radars() {
     }
 }
 
+/// Clients that take "the first radar" must get the same one every time.
+/// A dual-range radar otherwise offers range A or range B at random, with
+/// nothing the operator can see or control. Issue #497.
+#[tokio::test]
+#[ignore = "requires running server"]
+async fn test_get_radars_key_order_is_stable() {
+    let mut seen: Vec<Vec<String>> = Vec::new();
+    for _ in 0..6 {
+        let json = get_json("/signalk/v2/api/vessels/self/radars").await;
+        let keys: Vec<String> = json["radars"]
+            .as_object()
+            .expect("radars object")
+            .keys()
+            .cloned()
+            .collect();
+        seen.push(keys);
+    }
+
+    let first = &seen[0];
+    assert!(!first.is_empty(), "No radars found");
+    for (n, keys) in seen.iter().enumerate() {
+        assert_eq!(keys, first, "radar order changed on request {}", n + 1);
+    }
+
+    let mut sorted = first.clone();
+    sorted.sort();
+    assert_eq!(
+        first, &sorted,
+        "radar ids should come back in a predictable order"
+    );
+}
+
 #[tokio::test]
 #[ignore = "requires running server"]
 async fn test_get_radars_returns_emulator() {
