@@ -39,6 +39,20 @@ const MAC_REQUEST_BUDGET: Duration = Duration::from_secs(5);
 /// continuously.
 const MAC_REQUEST_INTERVAL: Duration = Duration::from_millis(500);
 
+/// What to key a radar on, once [`KodenLocator::identity_for`] has looked
+/// at what the radar has told us so far.
+#[derive(Debug, PartialEq, Eq)]
+enum Identity {
+    /// The radar reported this MAC; key on it.
+    Known(String),
+    /// Nothing yet, and it is time to ask again.
+    Ask,
+    /// Nothing yet; an answer may still arrive, so do not ask again.
+    Wait,
+    /// The radar never answered. Key on its address, as before.
+    UseAddress,
+}
+
 #[derive(Clone)]
 struct KodenLocator {
     args: Cli,
@@ -94,10 +108,22 @@ impl KodenLocator {
         self.macs.insert(*radar_addr, mac).is_none()
     }
 
-    /// Ask a radar for its MAC, at most once every
-    /// [`MAC_REQUEST_INTERVAL`], and report whether the budget for an
-    /// answer has run out.
-    fn chase_mac(&mut self, radar_addr: &SocketAddrV4) -> bool {
+    /// What to key a radar on, and whether it is time to ask it for its
+    /// MAC again.
+    ///
+    /// Deciding is separate from asking: this touches only local state, so
+    /// it can be exercised without putting a datagram on the network.
+    ///
+    /// A Koden radar will tell us its own MAC, and it answers on the port
+    /// discovery already listens on. Waiting briefly for that is worth it,
+    /// because an address-derived key moves with the DHCP lease. But only
+    /// briefly: no Koden unit has been available to test against, so one
+    /// that never answers must still appear.
+    fn identity_for(&mut self, radar_addr: &SocketAddrV4) -> Identity {
+        if let Some(mac) = self.macs.get(radar_addr.ip()) {
+            return Identity::Known(mac.clone());
+        }
+
         let now = Instant::now();
         let (first, last) = self
             .asked
@@ -105,36 +131,17 @@ impl KodenLocator {
             .or_insert((now, now - MAC_REQUEST_INTERVAL));
 
         if now.duration_since(*first) >= MAC_REQUEST_BUDGET {
-            return true;
-        }
-        if now.duration_since(*last) >= MAC_REQUEST_INTERVAL {
-            *last = now;
-            request_mac(radar_addr);
-        }
-        false
-    }
-
-    /// What to key this radar on: `Some(Some(mac))` once it has reported
-    /// one, `Some(None)` to fall back to its address, and `None` while it
-    /// is still being asked.
-    ///
-    /// A Koden radar will tell us its own MAC, and it answers on the port
-    /// discovery already listens on. Waiting briefly for that is worth
-    /// it, because an address-derived key moves with the DHCP lease. But
-    /// only briefly: no Koden unit has been available to test against, so
-    /// one that never answers must still appear.
-    fn identity_for(&mut self, radar_addr: &SocketAddrV4) -> Option<Option<String>> {
-        if let Some(mac) = self.macs.get(radar_addr.ip()) {
-            return Some(Some(mac.clone()));
-        }
-        if self.chase_mac(radar_addr) {
             log::info!(
                 "{}: no MAC reported, keying the radar on its address",
                 radar_addr
             );
-            return Some(None);
+            return Identity::UseAddress;
         }
-        None
+        if now.duration_since(*last) >= MAC_REQUEST_INTERVAL {
+            *last = now;
+            return Identity::Ask;
+        }
+        Identity::Wait
     }
 
     fn process_locator_report(
@@ -203,8 +210,14 @@ impl KodenLocator {
         let report_addr = SocketAddrV4::new(*radar_addr.ip(), RADAR_PORT);
         let send_command_addr = SocketAddrV4::new(*radar_addr.ip(), RADAR_PORT);
 
-        let Some(hardware_id) = self.identity_for(&radar_addr) else {
-            return;
+        let hardware_id = match self.identity_for(&radar_addr) {
+            Identity::Known(mac) => Some(mac),
+            Identity::Ask => {
+                request_mac(&radar_addr);
+                return;
+            }
+            Identity::Wait => return,
+            Identity::UseAddress => None,
         };
 
         let radar_info = RadarInfo::new(
@@ -363,11 +376,11 @@ mod tests {
             PACKET_END,
         ];
 
-        assert_eq!(locator.identity_for(&addr), None, "asked, and waiting");
+        assert_eq!(locator.identity_for(&addr), Identity::Ask);
         assert!(locator.record_mac(&RADAR, &response));
         assert_eq!(
             locator.identity_for(&addr),
-            Some(Some("000ec6123456".to_string()))
+            Identity::Known("000ec6123456".to_string())
         );
     }
 
@@ -379,7 +392,7 @@ mod tests {
         let mut locator = locator();
         let addr = SocketAddrV4::new(RADAR, RADAR_PORT);
 
-        assert_eq!(locator.identity_for(&addr), None, "waits while asking");
+        assert_eq!(locator.identity_for(&addr), Identity::Ask);
 
         // Exhaust the budget rather than sleeping through it.
         let expired = Instant::now() - MAC_REQUEST_BUDGET - Duration::from_secs(1);
@@ -387,29 +400,25 @@ mod tests {
 
         assert_eq!(
             locator.identity_for(&addr),
-            Some(None),
+            Identity::UseAddress,
             "an unresponsive radar is keyed on its address"
         );
     }
 
     /// Koden image frames arrive continuously, so a request per accepted
-    /// packet would be a flood.
+    /// packet would be a flood. Only the first asks; the rest wait.
     #[test]
     fn mac_requests_are_rate_limited() {
         let mut locator = locator();
         let addr = SocketAddrV4::new(RADAR, RADAR_PORT);
 
-        locator.identity_for(&addr);
-        let (_, after_first) = locator.asked[&RADAR];
-
+        assert_eq!(locator.identity_for(&addr), Identity::Ask);
         for _ in 0..50 {
-            locator.identity_for(&addr);
+            assert_eq!(
+                locator.identity_for(&addr),
+                Identity::Wait,
+                "no further request inside the interval"
+            );
         }
-        let (_, after_many) = locator.asked[&RADAR];
-
-        assert_eq!(
-            after_first, after_many,
-            "no further request inside the interval"
-        );
     }
 }
