@@ -567,6 +567,24 @@ async function subscribeToAisViaSignalK() {
       subscribe: [{ path: "*" }],
     };
     socket.send(JSON.stringify(subscription));
+
+    // `vessels.*` matches own ship too, and own ship is the single loudest
+    // context on a real boat — every N2K-derived path (engine, wind, water
+    // temperature, attitude) at native update rate. Measured against a live
+    // Signal K server: 413 deltas/s total, of which 71% were own ship and
+    // only ~110/s were the AIS targets this overlay actually draws. That
+    // volume is parsed on the main thread, which starves spoke rendering —
+    // the radar picture stutters and stalls while the socket is busy.
+    //
+    // The overlay never needs own ship from here: heading and position come
+    // from subscribeToHeading() on `vessels.self`. Unsubscribing keeps the
+    // wildcard path list intact (vessel names ride the empty path, so they
+    // must not be narrowed away) while dropping the bulk of the traffic.
+    const unsubscribeSelf = {
+      context: "vessels.self",
+      unsubscribe: [{ path: "*" }],
+    };
+    socket.send(JSON.stringify(unsubscribeSelf));
   };
 
   socket.onmessage = (event) => {
