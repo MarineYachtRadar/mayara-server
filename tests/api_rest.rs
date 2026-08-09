@@ -126,32 +126,59 @@ async fn test_get_radars() {
 /// Clients that take "the first radar" must get the same one every time.
 /// A dual-range radar otherwise offers range A or range B at random, with
 /// nothing the operator can see or control. Issue #497.
+///
+/// The response is examined as text. Parsing it into a `serde_json::Value`
+/// would sort the keys in this test's own parser — `serde_json::Map` is a
+/// `BTreeMap` unless the `preserve_order` feature is on — and hide the one
+/// thing under test.
 #[tokio::test]
 #[ignore = "requires running server"]
 async fn test_get_radars_key_order_is_stable() {
-    let mut seen: Vec<Vec<String>> = Vec::new();
-    for _ in 0..6 {
-        let json = get_json("/signalk/v2/api/vessels/self/radars").await;
-        let keys: Vec<String> = json["radars"]
+    /// Enough requests to catch an order that varies per response; the
+    /// issue was reported from six.
+    const REQUESTS: usize = 6;
+
+    let mut wire_orders: Vec<Vec<String>> = Vec::new();
+    for _ in 0..REQUESTS {
+        let body = get_response("/signalk/v2/api/vessels/self/radars")
+            .await
+            .text()
+            .await
+            .unwrap();
+
+        // The ids themselves come from a parse — only their *order* is
+        // untrustworthy there — and the wire order from where each one
+        // appears in the raw body.
+        let parsed: Value = serde_json::from_str(&body).unwrap();
+        let mut ids: Vec<String> = parsed["radars"]
             .as_object()
             .expect("radars object")
             .keys()
             .cloned()
             .collect();
-        seen.push(keys);
+        // Scope the search to the radars member so a radar whose *name*
+        // happens to contain another's id cannot skew the order.
+        let radars_at = body.find("\"radars\"").expect("radars member");
+        let radars = &body[radars_at..];
+        ids.sort_by_key(|id| {
+            radars
+                .find(&format!("\"{}\"", id))
+                .expect("id present in the raw body")
+        });
+        wire_orders.push(ids);
     }
 
-    let first = &seen[0];
+    let first = &wire_orders[0];
     assert!(!first.is_empty(), "No radars found");
-    for (n, keys) in seen.iter().enumerate() {
-        assert_eq!(keys, first, "radar order changed on request {}", n + 1);
+    for (n, order) in wire_orders.iter().enumerate() {
+        assert_eq!(order, first, "radar order changed on request {}", n + 1);
     }
 
     let mut sorted = first.clone();
     sorted.sort();
     assert_eq!(
         first, &sorted,
-        "radar ids should come back in a predictable order"
+        "radar ids should be written in a predictable order"
     );
 }
 
