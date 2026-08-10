@@ -43,6 +43,48 @@ export function wsBase(path) {
   return `${wsProtocol}//${window.location.host}${basePrefix()}${path}`;
 }
 
+// Every request carries a deadline. A browser `fetch` has no timeout of its
+// own, so a stall anywhere below HTTP — an mDNS answer that never arrives for
+// a `.local` host, a radar that dropped off the LAN, a Wi-Fi handover — leaves
+// the promise pending forever. The GUI then shows a frozen control or an empty
+// panel with nothing in the console, which is indistinguishable from a bug in
+// mayara itself.
+const REQUEST_TIMEOUT_MS = 10000;
+
+// An upload carries a whole recording over the boat's Wi-Fi, so it gets a
+// deadline of its own rather than the interactive one.
+const UPLOAD_TIMEOUT_MS = 300000;
+
+/**
+ * `fetch` with a deadline. Rejects with a descriptive `Error` when the request
+ * outlives `timeoutMs`, so callers report "timed out" rather than hanging or
+ * reporting an opaque `AbortError`.
+ *
+ * @param {string} url - Request URL
+ * @param {Object} [options] - `fetch` options
+ * @param {number} [timeoutMs] - Deadline in milliseconds
+ * @returns {Promise<Response>}
+ */
+export async function apiFetch(
+  url,
+  options = {},
+  timeoutMs = REQUEST_TIMEOUT_MS
+) {
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (e) {
+    if (e.name === "TimeoutError") {
+      throw new Error(
+        `${options.method || "GET"} ${url} timed out after ${timeoutMs} ms`
+      );
+    }
+    throw e;
+  }
+}
+
 // Detected mode (null = not detected yet)
 let detectedMode = null;
 
@@ -60,7 +102,7 @@ export async function detectMode() {
 
   // Try standalone first - check if / returns server mayara
   try {
-    const response = await fetch(apiBase(ENDPOINT_API), {
+    const response = await apiFetch(apiBase(ENDPOINT_API), {
       headers: { Accept: "application/json" },
     });
     const data = await response.json();
@@ -75,7 +117,9 @@ export async function detectMode() {
 
   // Try SignalK - check if endpoint returns 200
   try {
-    const response = await fetch(apiBase(SIGNALK_RADARS_API), { method: "HEAD" });
+    const response = await apiFetch(apiBase(SIGNALK_RADARS_API), {
+      method: "HEAD",
+    });
     if (response.ok) {
       detectedMode = "signalk";
       console.log("Detected SignalK mode");
@@ -122,7 +166,7 @@ export function getDiagnosticsUrl() {
 export async function fetchRadarIds() {
   await detectMode();
 
-  const response = await fetch(getRadarsPath());
+  const response = await apiFetch(getRadarsPath());
   const data = await response.json();
   assertCompatibleApiVersion(data);
 
@@ -136,7 +180,7 @@ export async function fetchRadarIds() {
 export async function fetchRadars() {
   await detectMode();
 
-  const response = await fetch(getRadarsPath());
+  const response = await apiFetch(getRadarsPath());
   const data = await response.json();
   assertCompatibleApiVersion(data);
   return radarsMap(data);
@@ -204,7 +248,7 @@ export async function fetchCapabilities(radarId) {
   const url = `${getRadarsPath()}/${radarId}/capabilities`;
   console.log(`Fetching capabilities: GET ${url}`);
 
-  const response = await fetch(url);
+  const response = await apiFetch(url);
   if (!response.ok) {
     throw new Error(`Failed to fetch capabilities: ${response.status}`);
   }
@@ -224,7 +268,7 @@ export async function fetchInterfaces() {
     return null;
   }
 
-  const response = await fetch(url);
+  const response = await apiFetch(url);
   return response.json();
 }
 
@@ -261,7 +305,7 @@ export async function acquireTarget(radarId, bearing, distance) {
   console.log(`Acquiring target: POST ${url}`, body);
 
   try {
-    const response = await fetch(url, {
+    const response = await apiFetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -308,7 +352,7 @@ export async function setControl(radarId, controlId, body) {
   console.log(`Setting control: PUT ${url}`, bodyStr);
 
   try {
-    const response = await fetch(url, {
+    const response = await apiFetch(url, {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
@@ -361,7 +405,7 @@ export async function listRecordings(subdirectory) {
   const url = subdirectory
     ? `${RECORDINGS_API}/files?dir=${encodeURIComponent(subdirectory)}`
     : `${RECORDINGS_API}/files`;
-  const response = await fetch(url);
+  const response = await apiFetch(url);
   if (!response.ok) {
     throw new Error(`Failed to list recordings: ${response.status}`);
   }
@@ -378,7 +422,7 @@ export async function listRecordings(subdirectory) {
  */
 export async function getRecordingInfo(filename, subdirectory) {
   const params = subdirectory ? `?dir=${encodeURIComponent(subdirectory)}` : "";
-  const response = await fetch(
+  const response = await apiFetch(
     `${RECORDINGS_API}/files/${encodeURIComponent(filename)}${params}`
   );
   if (!response.ok) {
@@ -395,7 +439,7 @@ export async function getRecordingInfo(filename, subdirectory) {
  */
 export async function deleteRecording(filename, subdirectory) {
   const params = subdirectory ? `?dir=${encodeURIComponent(subdirectory)}` : "";
-  const response = await fetch(
+  const response = await apiFetch(
     `${RECORDINGS_API}/files/${encodeURIComponent(filename)}${params}`,
     {
       method: "DELETE",
@@ -411,7 +455,7 @@ export async function deleteRecording(filename, subdirectory) {
  * @returns {Promise<Object>} Result with new filename
  */
 export async function renameRecording(oldFilename, newFilename) {
-  const response = await fetch(
+  const response = await apiFetch(
     `${RECORDINGS_API}/files/${encodeURIComponent(oldFilename)}`,
     {
       method: "PUT",
@@ -437,13 +481,17 @@ export async function renameRecording(oldFilename, newFilename) {
  * @returns {Promise<Object>} Upload result with filename and size
  */
 export async function uploadRecording(file) {
-  const response = await fetch(`${RECORDINGS_API}/files/upload`, {
-    method: "POST",
-    headers: {
-      "Content-Disposition": `attachment; filename="${file.name}"`,
+  const response = await apiFetch(
+    `${RECORDINGS_API}/files/upload`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Disposition": `attachment; filename="${file.name}"`,
+      },
+      body: file,
     },
-    body: file,
-  });
+    UPLOAD_TIMEOUT_MS
+  );
 
   if (!response.ok) {
     const error = await response
@@ -473,7 +521,7 @@ export function getRecordingDownloadUrl(filename, subdirectory) {
  * @returns {Promise<Object[]>} Array of radar info objects
  */
 export async function getRecordableRadars() {
-  const response = await fetch(`${RECORDINGS_API}/radars`);
+  const response = await apiFetch(`${RECORDINGS_API}/radars`);
   if (!response.ok) {
     throw new Error(`Failed to get recordable radars: ${response.status}`);
   }
@@ -492,7 +540,7 @@ export async function startRecording(radarId, filename, subdirectory) {
   if (filename) body.filename = filename;
   if (subdirectory) body.subdirectory = subdirectory;
 
-  const response = await fetch(`${RECORDINGS_API}/record/start`, {
+  const response = await apiFetch(`${RECORDINGS_API}/record/start`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -509,7 +557,7 @@ export async function startRecording(radarId, filename, subdirectory) {
  * @returns {Promise<Object>} Final recording status
  */
 export async function stopRecording() {
-  const response = await fetch(`${RECORDINGS_API}/record/stop`, {
+  const response = await apiFetch(`${RECORDINGS_API}/record/stop`, {
     method: "POST",
   });
   if (!response.ok) {
@@ -523,7 +571,7 @@ export async function stopRecording() {
  * @returns {Promise<Object>} Recording status
  */
 export async function getRecordingStatus() {
-  const response = await fetch(`${RECORDINGS_API}/record/status`);
+  const response = await apiFetch(`${RECORDINGS_API}/record/status`);
   if (!response.ok) {
     throw new Error(`Failed to get recording status: ${response.status}`);
   }
@@ -540,7 +588,7 @@ export async function loadPlayback(filename, subdirectory) {
   const body = { filename };
   if (subdirectory) body.subdirectory = subdirectory;
 
-  const response = await fetch(`${RECORDINGS_API}/playback/load`, {
+  const response = await apiFetch(`${RECORDINGS_API}/playback/load`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -557,7 +605,7 @@ export async function loadPlayback(filename, subdirectory) {
  * @returns {Promise<Object>} Playback status
  */
 export async function playPlayback() {
-  const response = await fetch(`${RECORDINGS_API}/playback/play`, {
+  const response = await apiFetch(`${RECORDINGS_API}/playback/play`, {
     method: "POST",
   });
   if (!response.ok) {
@@ -571,7 +619,7 @@ export async function playPlayback() {
  * @returns {Promise<Object>} Playback status
  */
 export async function pausePlayback() {
-  const response = await fetch(`${RECORDINGS_API}/playback/pause`, {
+  const response = await apiFetch(`${RECORDINGS_API}/playback/pause`, {
     method: "POST",
   });
   if (!response.ok) {
@@ -585,7 +633,7 @@ export async function pausePlayback() {
  * @returns {Promise<Object>} Playback status
  */
 export async function stopPlayback() {
-  const response = await fetch(`${RECORDINGS_API}/playback/stop`, {
+  const response = await apiFetch(`${RECORDINGS_API}/playback/stop`, {
     method: "POST",
   });
   if (!response.ok) {
@@ -600,7 +648,7 @@ export async function stopPlayback() {
  * @returns {Promise<Object>} Playback status
  */
 export async function seekPlayback(positionMs) {
-  const response = await fetch(`${RECORDINGS_API}/playback/seek`, {
+  const response = await apiFetch(`${RECORDINGS_API}/playback/seek`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ positionMs }),
@@ -617,7 +665,7 @@ export async function seekPlayback(positionMs) {
  * @returns {Promise<Object>} Playback status
  */
 export async function setPlaybackSettings(settings) {
-  const response = await fetch(`${RECORDINGS_API}/playback/settings`, {
+  const response = await apiFetch(`${RECORDINGS_API}/playback/settings`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(settings),
@@ -633,7 +681,7 @@ export async function setPlaybackSettings(settings) {
  * @returns {Promise<Object>} Playback status
  */
 export async function getPlaybackStatus() {
-  const response = await fetch(`${RECORDINGS_API}/playback/status`);
+  const response = await apiFetch(`${RECORDINGS_API}/playback/status`);
   if (!response.ok) {
     throw new Error(`Failed to get playback status: ${response.status}`);
   }
