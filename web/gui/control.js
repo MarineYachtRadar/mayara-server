@@ -1576,6 +1576,62 @@ function do_input() {
   // Real-time feedback while dragging (optional)
 }
 
+// How long the radar gets to report a setting back before the GUI stops
+// presenting it as applied.
+const CONTROL_CONFIRM_TIMEOUT_MS = 5000;
+
+// Controls whose value the radar reports over the state stream, learned as
+// those reports arrive. A write-only action such as "clear trails" never comes
+// back with a value, so it must never be judged unconfirmed.
+const reportedControls = new Set();
+
+// controlId -> pending confirmation timer
+const unconfirmedTimers = new Map();
+
+/** The `.myr_control` box a control lives in, or null if it is not on screen. */
+function controlElement(controlId) {
+  const el =
+    get_element_by_server_id(controlId) ||
+    document.getElementById(`myr_${controlId}`);
+  return el ? el.closest(".myr_control") : null;
+}
+
+/**
+ * Flag a control as not applied. The GUI updates a control optimistically the
+ * moment the user moves it, so without this a request the radar never adopted
+ * — or never even received — stays on screen looking like the live setting.
+ */
+function markControlUnconfirmed(controlId, reason) {
+  clearConfirmationTimer(controlId);
+
+  console.warn(`Control ${controlId} unconfirmed: ${reason}`);
+  const box = controlElement(controlId);
+  if (box) {
+    box.classList.add("myr_control_unconfirmed");
+    box.title = reason;
+  }
+}
+
+function clearConfirmationTimer(controlId) {
+  const timer = unconfirmedTimers.get(controlId);
+  if (timer !== undefined) {
+    clearTimeout(timer);
+    unconfirmedTimers.delete(controlId);
+  }
+}
+
+/** Called when the radar reports a value: the control is live again. */
+function confirmControl(controlId) {
+  reportedControls.add(controlId);
+  clearConfirmationTimer(controlId);
+
+  const box = controlElement(controlId);
+  if (box) {
+    box.classList.remove("myr_control_unconfirmed");
+    box.removeAttribute("title");
+  }
+}
+
 async function sendControlToServer(controlId, message) {
   if (playbackMode) {
     console.log(`Playback mode: ignoring control ${controlId}`);
@@ -1584,7 +1640,24 @@ async function sendControlToServer(controlId, message) {
 
   console.log(`Sending control: ${controlId} = ${JSON.stringify(message)}`);
 
-  const success = await apiSetControl(radarId, controlId, message);
+  if (reportedControls.has(controlId)) {
+    clearConfirmationTimer(controlId);
+    unconfirmedTimers.set(
+      controlId,
+      setTimeout(
+        () =>
+          markControlUnconfirmed(
+            controlId,
+            "The radar did not confirm this setting"
+          ),
+        CONTROL_CONFIRM_TIMEOUT_MS
+      )
+    );
+  }
+
+  if (!(await apiSetControl(radarId, controlId, message))) {
+    markControlUnconfirmed(controlId, "Could not reach mayara to set this");
+  }
 }
 
 // ============================================================================
@@ -1708,6 +1781,7 @@ function connectStateStream(streamUrl, radarIdParam) {
                 );
 
                 const cv = { ...item.value, id: controlId };
+                confirmControl(controlId);
                 setControlValue(cv);
               }
               // Notify stream message callbacks for all values (targets, etc.)
