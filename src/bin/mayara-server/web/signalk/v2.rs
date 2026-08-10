@@ -74,6 +74,7 @@ const RADAR_TARGET_URI: &str = "/signalk/v2/api/vessels/self/radars/{radar_id}/t
         diagnostics::get_diagnostics,
         get_radar,
         get_control_values,
+        set_control_values,
         get_control_value,
         set_control_value,
         get_targets,
@@ -111,7 +112,10 @@ pub(crate) fn routes(axum: axum::Router<Web>) -> axum::Router<Web> {
         .route(SPOKES_URI, get(spokes_handler))
         .route(RADAR_URI, get(get_radar_info))
         .route(RADAR_CAPABILITIES_URI, get(get_radar))
-        .route(RADAR_CONTROLS_URI, get(get_control_values))
+        .route(
+            RADAR_CONTROLS_URI,
+            get(get_control_values).put(set_control_values),
+        )
         .route(
             RADAR_CONTROL_URI,
             get(get_control_value).put(set_control_value),
@@ -561,20 +565,7 @@ async fn set_control_value(
     let (reply_tx, mut reply_rx) = tokio::sync::mpsc::channel(1);
 
     // Check if this control should trigger persistence save
-    let needs_persistence = matches!(
-        control_value.id,
-        ControlId::GuardZone1
-            | ControlId::GuardZone2
-            | ControlId::ExclusionZone1
-            | ControlId::ExclusionZone2
-            | ControlId::ExclusionZone3
-            | ControlId::ExclusionZone4
-            | ControlId::ExclusionRect1
-            | ControlId::ExclusionRect2
-            | ControlId::ExclusionRect3
-            | ControlId::ExclusionRect4
-            | ControlId::UserName
-    );
+    let needs_persistence = control_needs_persistence(control_value.id);
 
     // Send the control request
     if let Err(e) = controls.process_client_request(control_value, reply_tx) {
@@ -999,6 +990,129 @@ async fn get_control_values(Path(radar_id): Path<String>, State(state): State<We
         Some(radar) => Json(get_controls(&radar)).into_response(),
         None => no_such_radar(&radar_id, &state.radars),
     }
+}
+
+#[utoipa::path(
+    put,
+    path = "/signalk/v2/api/vessels/self/radars/{radar_id}/controls",
+    summary = "Set several control values",
+    description = "Sets several radar controls in one request. The body is a map of control id \
+                   to the same value object `PUT /controls/{control_id}` accepts, mirroring the \
+                   shape returned by `GET /controls`. Controls are applied in the order given; \
+                   if any fail the response is 400 and names them, while the others still apply.",
+    params(
+        ("radar_id" = String, Path, description = "Radar identifier", example = "nav1034A")
+    ),
+    request_body(
+        content = Object,
+        description = "Map of control id to control value",
+        example = json!({"gain": {"value": 50, "auto": false}, "range": {"value": 1852}})
+    ),
+    responses(
+        (status = 200, description = "All control values set successfully"),
+        (status = 400, description = "One or more controls were unknown, out of range or invalid"),
+        (status = 404, description = "Radar not found")
+    ),
+    tag = "Controls"
+)]
+async fn set_control_values(
+    Path(radar_id): Path<String>,
+    State(state): State<Web>,
+    extract::Json(request): extract::Json<HashMap<String, BareControlValue>>,
+) -> Response {
+    log::info!("PUT {} controls for radar {}", request.len(), radar_id);
+
+    // Resolve everything up front so the radar lock is not held across an await.
+    let (controls, resolved, radar_key) = {
+        match state.radars.get_by_key(&radar_id) {
+            Some(radar) => {
+                // Any control PUT means someone is interacting with this radar
+                // — exit idle synchronously, as the single-control PUT does.
+                radar.wake_up();
+                let mut resolved = Vec::with_capacity(request.len());
+                let mut unknown = Vec::new();
+                for (control_id, value) in request {
+                    match radar.controls.get_by_id(&control_id) {
+                        Some(c) => {
+                            resolved.push(ControlValue::from_request(c.item().control_id, value))
+                        }
+                        None => unknown.push(control_id),
+                    }
+                }
+                if !unknown.is_empty() {
+                    // Nothing has been applied yet, so reject the whole request
+                    // rather than leave the radar half-updated.
+                    unknown.sort();
+                    let all = radar.controls.get_control_keys();
+                    return (
+                        StatusCode::NOT_FOUND,
+                        format!("Unknown control(s) {:?} -- use {:?} instead", unknown, all),
+                    )
+                        .into_response();
+                }
+                (radar.controls.clone(), resolved, radar.key())
+            }
+            None => {
+                return no_such_radar(&radar_id, &state.radars);
+            }
+        }
+    };
+    // Lock is released here
+
+    let needs_persistence = resolved.iter().any(|cv| control_needs_persistence(cv.id));
+
+    let mut failures: Vec<String> = Vec::new();
+    for control_value in resolved {
+        let id = control_value.id;
+        let (reply_tx, mut reply_rx) = tokio::sync::mpsc::channel(1);
+
+        if let Err(e) = controls.process_client_request(control_value, reply_tx) {
+            failures.push(format!("{:?}: {}", id, e));
+            continue;
+        }
+
+        // Same brief wait as the single-control PUT: most controls only reply
+        // on error.
+        tokio::select! {
+            reply = reply_rx.recv() => {
+                if let Some(cv) = reply
+                    && let Some(err) = cv.error
+                {
+                    failures.push(format!("{:?}: {}", id, err));
+                }
+            }
+            _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {}
+        }
+    }
+
+    if needs_persistence {
+        state.radars.save_persistence(&radar_key);
+    }
+
+    if failures.is_empty() {
+        StatusCode::OK.into_response()
+    } else {
+        failures.sort();
+        (StatusCode::BAD_REQUEST, failures.join("; ")).into_response()
+    }
+}
+
+/// Controls whose value survives a restart and so must be written to disk.
+fn control_needs_persistence(id: ControlId) -> bool {
+    matches!(
+        id,
+        ControlId::GuardZone1
+            | ControlId::GuardZone2
+            | ControlId::ExclusionZone1
+            | ControlId::ExclusionZone2
+            | ControlId::ExclusionZone3
+            | ControlId::ExclusionZone4
+            | ControlId::ExclusionRect1
+            | ControlId::ExclusionRect2
+            | ControlId::ExclusionRect3
+            | ControlId::ExclusionRect4
+            | ControlId::UserName
+    )
 }
 
 fn get_controls(info: &RadarInfo) -> Value {
