@@ -1220,7 +1220,14 @@ impl SharedControls {
         if let Some(control) = self.get(&cv.id) {
             self.send_reply_to_client(reply_tx, &control, Some(e.to_string()))
                 .await?;
-            log::warn!("User tried to set invalid {}: {}", cv.id, e);
+            // An I/O error means the radar connection failed, not that the
+            // user's value was invalid — word the log accordingly.
+            match e {
+                RadarError::Io(_) => {
+                    log::warn!("Failed to send {} to radar: {}", cv.id, e)
+                }
+                _ => log::warn!("User tried to set invalid {}: {}", cv.id, e),
+            }
             Ok(())
         } else {
             Err(RadarError::CannotSetControlId(cv.id))

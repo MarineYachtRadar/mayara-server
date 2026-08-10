@@ -1993,6 +1993,13 @@ function zoomIn() {
     (v) => Number(v) === Number(currentValue)
   );
 
+  // No range reported yet (range B of a dual-range radar stays unknown until
+  // its first command activates it) — send the shortest range to start from.
+  if (currentIndex === -1) {
+    sendControlToServer(controlId, { value: validValues[0] });
+    return;
+  }
+
   // Go to previous (shorter) range
   if (currentIndex > 0) {
     const newValue = validValues[currentIndex - 1];
@@ -2013,6 +2020,13 @@ function zoomOut() {
   const currentIndex = validValues.findIndex(
     (v) => Number(v) === Number(currentValue)
   );
+
+  // No range reported yet (range B of a dual-range radar stays unknown until
+  // its first command activates it) — send the shortest range to start from.
+  if (currentIndex === -1) {
+    sendControlToServer(controlId, { value: validValues[0] });
+    return;
+  }
 
   // Go to next (longer) range
   if (currentIndex < validValues.length - 1) {
