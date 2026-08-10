@@ -534,3 +534,115 @@ async fn test_openapi_spec() {
     let paths = json["paths"].as_object().unwrap();
     assert!(paths.contains_key("/signalk/v2/api/vessels/self/radars"));
 }
+
+// ---------------------------------------------------------------------------
+// Bulk control PUT
+// ---------------------------------------------------------------------------
+//
+// These assert on controls the emulator actually applies (userName, range,
+// targetTrails). Gain is deliberately avoided: the emulator accepts a gain PUT
+// and reports success but never reflects the value, on the single-control path
+// as much as this one, so asserting a gain round-trip would test the emulator
+// rather than the endpoint.
+
+#[tokio::test]
+#[ignore = "requires running server"]
+async fn test_set_control_values_bulk() {
+    let id = first_radar_id().await;
+    let path = format!("/signalk/v2/api/vessels/self/radars/{}/controls", id);
+
+    let response = put_json(
+        &path,
+        &serde_json::json!({
+            "userName": {"value": "BulkTest"},
+            "range": {"value": 1852},
+            "targetTrails": {"value": 2}
+        }),
+    )
+    .await;
+    assert!(
+        response.status().is_success(),
+        "bulk PUT should succeed, got {}",
+        response.status()
+    );
+
+    let controls = get_json(&path).await;
+    assert_eq!(controls["userName"]["value"], "BulkTest");
+    assert_eq!(controls["range"]["value"], 1852);
+    assert_eq!(controls["targetTrails"]["value"], 2);
+}
+
+#[tokio::test]
+#[ignore = "requires running server"]
+async fn test_set_control_values_rejects_unknown_control_atomically() {
+    let id = first_radar_id().await;
+    let path = format!("/signalk/v2/api/vessels/self/radars/{}/controls", id);
+
+    put_json(&path, &serde_json::json!({"range": {"value": 1852}})).await;
+    let before = get_json(&path).await;
+    assert_eq!(before["range"]["value"], 1852, "test precondition");
+
+    // One good control, one that does not exist. Nothing should be applied.
+    let response = put_json(
+        &path,
+        &serde_json::json!({
+            "range": {"value": 926},
+            "notAControl": {"value": 1}
+        }),
+    )
+    .await;
+    assert_eq!(
+        response.status(),
+        404,
+        "an unknown control id should be rejected with 404"
+    );
+
+    let after = get_json(&path).await;
+    assert_eq!(
+        after["range"]["value"], 1852,
+        "the valid control must not be applied when another id is unknown"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires running server"]
+async fn test_set_control_values_rejects_duplicate_control() {
+    let id = first_radar_id().await;
+    let path = format!("/signalk/v2/api/vessels/self/radars/{}/controls", id);
+
+    // Control ids are parsed, not matched literally, so these two keys name the
+    // same control and the result would otherwise depend on map ordering.
+    let response = put_json(
+        &path,
+        &serde_json::json!({"range": {"value": 926}, "Range": {"value": 1852}}),
+    )
+    .await;
+    assert_eq!(
+        response.status(),
+        400,
+        "naming one control twice should be rejected"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires running server"]
+async fn test_set_control_values_persists_a_persistent_control() {
+    let id = first_radar_id().await;
+    let path = format!("/signalk/v2/api/vessels/self/radars/{}/controls", id);
+
+    // userName is written to disk; the bulk path must save persistence just as
+    // the single-control path does.
+    let response = put_json(
+        &path,
+        &serde_json::json!({"userName": {"value": "BulkPersist"}}),
+    )
+    .await;
+    assert!(
+        response.status().is_success(),
+        "setting a persistent control should succeed, got {}",
+        response.status()
+    );
+
+    let controls = get_json(&path).await;
+    assert_eq!(controls["userName"]["value"], "BulkPersist");
+}
