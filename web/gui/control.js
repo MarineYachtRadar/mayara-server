@@ -1411,16 +1411,18 @@ function setControlValue(cv) {
 
     // A control the radar has not reported yet carries no value at all — a
     // Furuno dual-range B channel has no range until its first command
-    // activates it. Show a placeholder rather than letting `undefined` reach
-    // innerHTML, which renders the literal text "undefined" (or "undefined m"
-    // once units are appended).
-    if (value === undefined || value === null) {
+    // activates it. Only the value rendering is skipped: `undefined` reaching
+    // innerHTML shows the literal text "undefined" (or "undefined m" once
+    // units are appended). Everything below — auto and enabled state, the
+    // allowed flag, errors, and the callbacks — still applies, because those
+    // are independent of whether a value has arrived.
+    const unset = value === undefined || value === null;
+    if (unset) {
       showUnsetControl(i, control, cv);
-      return;
     }
 
     let html = value;
-    if (control.units && cv.id !== "range") {
+    if (!unset && control.units && cv.id !== "range") {
       [units, value] = toUser(control.units, value);
       if (control.stepValue) {
         value = roundToStep(value, control.stepValue, control.minValue ?? 0);
@@ -1434,7 +1436,8 @@ function setControlValue(cv) {
 
     // For read-only controls, update the element directly (it's a span with myr_info_value)
     if (control.isReadOnly || control.readOnly) {
-      i.innerHTML = html;
+      // showUnsetControl already wrote the placeholder here.
+      if (!unset) i.innerHTML = html;
     } else if (control && control.dataType === "sector") {
       updateSectorUI(cv.id, control, cv);
     } else if (control && control.dataType === "zone") {
@@ -1447,7 +1450,7 @@ function setControlValue(cv) {
       if (!n) {
         n = i.parentNode.querySelector(".myr_numeric");
       }
-      if (n) {
+      if (n && !unset) {
         n.innerHTML = html;
       }
 
@@ -1456,7 +1459,7 @@ function setControlValue(cv) {
       if (!d) {
         d = i.parentNode.querySelector(".myr_description");
       }
-      if (d) {
+      if (d && !unset) {
         let description = control.descriptions
           ? control.descriptions[value]
           : undefined;
@@ -1477,8 +1480,9 @@ function setControlValue(cv) {
         d.innerHTML = description;
       }
 
-      // Set input value after setting min/max
-      i.value = value;
+      // Set input value after setting min/max. Left alone when unset, so the
+      // slider does not present an invented position as the current setting.
+      if (!unset) i.value = value;
 
       // Update tick marks for discrete sliders
       if (i.classList.contains("myr_slider_discrete")) {
