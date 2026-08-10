@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
 use std::time::{Duration, Instant};
@@ -65,6 +65,10 @@ struct KodenLocator {
     /// asked, so requests stay bounded and a radar that never answers is
     /// still registered.
     asked: HashMap<Ipv4Addr, (Instant, Instant)>,
+    /// Radars already registered on their address because no MAC arrived
+    /// in time. Nothing re-keys a registered radar, so the decision has
+    /// to stand for the session.
+    settled: HashSet<Ipv4Addr>,
 }
 
 impl RadarLocator for KodenLocator {
@@ -90,6 +94,7 @@ impl KodenLocator {
             args,
             macs: HashMap::new(),
             asked: HashMap::new(),
+            settled: HashSet::new(),
         }
     }
 
@@ -102,6 +107,18 @@ impl KodenLocator {
     fn record_mac(&mut self, radar_addr: &Ipv4Addr, report: &[u8]) -> bool {
         if report.len() != MAC_RESPONSE_LEN || report[MAC_RESPONSE_LEN - 1] != PACKET_END {
             log::debug!("{}: ignoring a malformed MAC response", radar_addr);
+            return false;
+        }
+        if self.settled.contains(radar_addr) {
+            // The radar is already registered under its address. Taking
+            // the MAC now would build a differently keyed RadarInfo, and
+            // SharedRadars::add dedupes on the exact key — so the same
+            // unit would be registered twice. It keys on its MAC from the
+            // next start, where the saved settings follow it across.
+            log::debug!(
+                "{}: MAC arrived after the radar was keyed on its address, ignoring",
+                radar_addr
+            );
             return false;
         }
         let mac: String = report[2..8].iter().map(|b| format!("{:02x}", b)).collect();
@@ -120,6 +137,9 @@ impl KodenLocator {
     /// briefly: no Koden unit has been available to test against, so one
     /// that never answers must still appear.
     fn identity_for(&mut self, radar_addr: &SocketAddrV4) -> Identity {
+        if self.settled.contains(radar_addr.ip()) {
+            return Identity::UseAddress;
+        }
         if let Some(mac) = self.macs.get(radar_addr.ip()) {
             return Identity::Known(mac.clone());
         }
@@ -135,6 +155,8 @@ impl KodenLocator {
                 "{}: no MAC reported, keying the radar on its address",
                 radar_addr
             );
+            self.asked.remove(radar_addr.ip());
+            self.settled.insert(*radar_addr.ip());
             return Identity::UseAddress;
         }
         if now.duration_since(*last) >= MAC_REQUEST_INTERVAL {
@@ -420,5 +442,62 @@ mod tests {
                 "no further request inside the interval"
             );
         }
+    }
+
+    /// Once a radar has been registered on its address, that stands for
+    /// the session: nothing re-keys a registered radar, and building a
+    /// differently keyed RadarInfo would register the same unit twice,
+    /// since SharedRadars::add dedupes on the exact key.
+    #[test]
+    fn a_late_mac_does_not_re_key_a_settled_radar() {
+        let mut locator = locator();
+        let addr = SocketAddrV4::new(RADAR, RADAR_PORT);
+        let response = [
+            STATUS_PREFIX,
+            CMD_MAC_ADDRESS,
+            0x00,
+            0x0e,
+            0xc6,
+            0x12,
+            0x34,
+            0x56,
+            PACKET_END,
+        ];
+
+        // Spend the budget, so the radar is registered on its address.
+        let expired = Instant::now() - MAC_REQUEST_BUDGET - Duration::from_secs(1);
+        locator.asked.insert(RADAR, (expired, expired));
+        assert_eq!(locator.identity_for(&addr), Identity::UseAddress);
+
+        // The radar answers afterwards. It must change nothing.
+        assert!(
+            !locator.record_mac(&RADAR, &response),
+            "a MAC arriving late must not be taken"
+        );
+        assert_eq!(
+            locator.identity_for(&addr),
+            Identity::UseAddress,
+            "the radar keeps the identity it was registered under"
+        );
+    }
+
+    /// And having settled, the radar is left alone: no further requests.
+    #[test]
+    fn a_settled_radar_is_not_asked_again() {
+        let mut locator = locator();
+        let addr = SocketAddrV4::new(RADAR, RADAR_PORT);
+
+        let expired = Instant::now() - MAC_REQUEST_BUDGET - Duration::from_secs(1);
+        locator.asked.insert(RADAR, (expired, expired));
+        assert_eq!(locator.identity_for(&addr), Identity::UseAddress);
+
+        for _ in 0..50 {
+            assert_eq!(
+                locator.identity_for(&addr),
+                Identity::UseAddress,
+                "a settled radar must never be asked again"
+            );
+        }
+        assert!(!locator.asked.contains_key(&RADAR), "nothing left to chase");
     }
 }
