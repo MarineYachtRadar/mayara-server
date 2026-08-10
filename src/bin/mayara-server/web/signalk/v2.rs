@@ -51,6 +51,10 @@ const RADAR_CONTROL_URI: &str =
 const RADAR_TARGETS_URI: &str = "/signalk/v2/api/vessels/self/radars/{radar_id}/targets";
 const RADAR_TARGET_URI: &str = "/signalk/v2/api/vessels/self/radars/{radar_id}/targets/{target_id}";
 
+/// How long a control PUT waits for the radar to object before it reports
+/// success. Most controls only send a reply when they reject a value.
+const CONTROL_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(100);
+
 #[derive(OpenApi)]
 #[openapi(
     info(
@@ -588,7 +592,7 @@ async fn set_control_value(
                 _ => {}
             }
         }
-        _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
+        _ = tokio::time::sleep(CONTROL_REPLY_TIMEOUT) => {
             // No error reply within timeout, assume success
         }
     }
@@ -998,8 +1002,10 @@ async fn get_control_values(Path(radar_id): Path<String>, State(state): State<We
     summary = "Set several control values",
     description = "Sets several radar controls in one request. The body is a map of control id \
                    to the same value object `PUT /controls/{control_id}` accepts, mirroring the \
-                   shape returned by `GET /controls`. Controls are applied in the order given; \
-                   if any fail the response is 400 and names them, while the others still apply.",
+                   shape returned by `GET /controls`. A JSON object has no inherent order, so \
+                   controls are applied in a deterministic order by control id rather than the \
+                   order they appear in the body; if any fail the response is 400 and names \
+                   them, while the others still apply.",
     params(
         ("radar_id" = String, Path, description = "Radar identifier", example = "nav1034A")
     ),
@@ -1010,15 +1016,16 @@ async fn get_control_values(Path(radar_id): Path<String>, State(state): State<We
     ),
     responses(
         (status = 200, description = "All control values set successfully"),
-        (status = 400, description = "One or more controls were unknown, out of range or invalid"),
-        (status = 404, description = "Radar not found")
+        (status = 400, description = "A control was named twice, or one or more values were \
+                                      out of range or refused by the radar"),
+        (status = 404, description = "Radar not found, or a control id is not known to it")
     ),
     tag = "Controls"
 )]
 async fn set_control_values(
     Path(radar_id): Path<String>,
     State(state): State<Web>,
-    extract::Json(request): extract::Json<HashMap<String, BareControlValue>>,
+    extract::Json(request): extract::Json<BTreeMap<String, BareControlValue>>,
 ) -> Response {
     log::info!("PUT {} controls for radar {}", request.len(), radar_id);
 
@@ -1050,6 +1057,23 @@ async fn set_control_values(
                     )
                         .into_response();
                 }
+                // Distinct keys can name the same control, because control ids
+                // are parsed rather than matched literally. Applying both would
+                // make the result depend on which the map yielded last, so say
+                // so instead of silently picking one.
+                let mut seen = HashSet::new();
+                let duplicates: Vec<String> = resolved
+                    .iter()
+                    .filter(|cv| !seen.insert(cv.id))
+                    .map(|cv| format!("{:?}", cv.id))
+                    .collect();
+                if !duplicates.is_empty() {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        format!("Control(s) {:?} named more than once", duplicates),
+                    )
+                        .into_response();
+                }
                 (radar.controls.clone(), resolved, radar.key())
             }
             None => {
@@ -1057,7 +1081,6 @@ async fn set_control_values(
             }
         }
     };
-    // Lock is released here
 
     let needs_persistence = resolved.iter().any(|cv| control_needs_persistence(cv.id));
 
@@ -1081,7 +1104,7 @@ async fn set_control_values(
                     failures.push(format!("{:?}: {}", id, err));
                 }
             }
-            _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {}
+            _ = tokio::time::sleep(CONTROL_REPLY_TIMEOUT) => {}
         }
     }
 
