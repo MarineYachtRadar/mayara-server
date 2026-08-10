@@ -3824,6 +3824,10 @@ mod test {
         let (_, range) = new_numeric(ControlId::Range, 0., 100_000.).take();
         assert_eq!(range.value, None, "range must not report a phantom 0");
         assert_eq!(
+            range.timestamp, None,
+            "and no timestamp — a stamped value is what made it look observed"
+        );
+        assert_eq!(
             range.item.min_value,
             Some(0.),
             "the minimum is still a bound"
@@ -3831,6 +3835,7 @@ mod test {
 
         let (_, gain) = new_auto(ControlId::Gain, 0., 100., HAS_AUTO_NOT_ADJUSTABLE).take();
         assert_eq!(gain.value, None, "auto-capable numerics too");
+        assert_eq!(gain.timestamp, None);
 
         // Enum controls still seed 0 and are deliberately left alone here: for
         // an enum, 0 is usually a real option (the first list entry), so
