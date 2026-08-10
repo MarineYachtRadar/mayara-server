@@ -3836,6 +3836,7 @@ mod test {
         let (_, gain) = new_auto(ControlId::Gain, 0., 100., HAS_AUTO_NOT_ADJUSTABLE).take();
         assert_eq!(gain.value, None, "auto-capable numerics too");
         assert_eq!(gain.timestamp, None);
+        assert_eq!(gain.item.min_value, Some(0.), "its bound survives too");
 
         // Enum controls still seed 0 and are deliberately left alone here: for
         // an enum, 0 is usually a real option (the first list entry), so

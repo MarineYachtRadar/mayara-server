@@ -1459,20 +1459,28 @@ function setControlValue(cv) {
       if (!d) {
         d = i.parentNode.querySelector(".myr_description");
       }
+      // The slider's bounds follow the auto mode, not the value: switching
+      // auto on an auto-adjustable control changes which range the slider
+      // spans. Applied even when unset, so a control still waiting for its
+      // first report has the right bounds the moment a value arrives — and
+      // regardless of whether a description element exists to render into.
+      if (control.hasAutoAdjustable) {
+        if (cv.auto) {
+          i.min = control.autoAdjustMinValue;
+          i.max = control.autoAdjustMaxValue;
+        } else {
+          i.min = control.minValue;
+          i.max = control.maxValue;
+        }
+      }
+
       if (d && !unset) {
         let description = control.descriptions
           ? control.descriptions[value]
           : undefined;
-        if (!description && control.hasAutoAdjustable) {
-          if (cv.auto) {
-            description =
-              "A" + (value > 0 ? "+" + value : "") + (value < 0 ? value : "");
-            i.min = control.autoAdjustMinValue;
-            i.max = control.autoAdjustMaxValue;
-          } else {
-            i.min = control.minValue;
-            i.max = control.maxValue;
-          }
+        if (!description && control.hasAutoAdjustable && cv.auto) {
+          description =
+            "A" + (value > 0 ? "+" + value : "") + (value < 0 ? value : "");
         }
         if (!description) {
           description = html;
