@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **ais:** stop the timeout sweep dropping vessels that just reported (#499) ([PR #499](https://github.com/MarineYachtRadar/mayara-server/pull/499))
 - **targets:** alarm guard zones on target promotion, not first blob (#502) ([PR #502](https://github.com/MarineYachtRadar/mayara-server/pull/502))
 - **controls:** keep guard zone range when only the angle is changed (#504) ([PR #504](https://github.com/MarineYachtRadar/mayara-server/pull/504))
+- **api:** list radars in a stable order (#512) ([PR #512](https://github.com/MarineYachtRadar/mayara-server/pull/512))
 
 ## [3.8.1] - 2026-08-04
 
