@@ -971,6 +971,36 @@ impl SharedControls {
     ) -> Result<(), RadarError> {
         match self.get(&control_value.id) {
             Some(c) => {
+                // Snap a requested number to the nearest settable value, so
+                // a client can ask for any range and get the closest one the
+                // radar has. Nearly every control is sent straight to the
+                // radar rather than stored locally, so the snap in
+                // Control::set only ever sees what the radar reports back —
+                // the request has to be normalised here too.
+                //
+                // Only when the client left the units to us, which is what
+                // they all do; a value in explicit units would have to be
+                // converted before it could be compared with valid_values,
+                // and the radar can deal with that rarity itself.
+                let control_value = if c.item.data_type == ControlDataType::Number
+                    && control_value.units.is_none()
+                {
+                    let snapped = control_value
+                        .value
+                        .as_ref()
+                        .and_then(|v| v.as_f64())
+                        .map(|v| c.snap_to_valid_value(v));
+                    match snapped {
+                        Some(v) => ControlValue {
+                            value: Some(v.into()),
+                            ..control_value
+                        },
+                        None => control_value,
+                    }
+                } else {
+                    control_value
+                };
+
                 let cv_orig = control_value.clone();
                 let (units, value) =
                     Self::convert_to_wire_number(control_value.units, control_value.value, &c)?;
@@ -2899,9 +2929,11 @@ impl Control {
             .min_by(|a, b| {
                 let da = (**a as f64 - value).abs();
                 let db = (**b as f64 - value).abs();
+                // total_cmp rather than partial_cmp: an unorderable
+                // distance must not be able to panic here.
                 // Ties go to the lower value, so the choice is stable
                 // rather than dependent on the order of the list.
-                da.partial_cmp(&db).unwrap().then(a.cmp(b))
+                da.total_cmp(&db).then(a.cmp(b))
             })
             .map(|v| *v as f64)
         else {
@@ -2971,6 +3003,16 @@ impl Control {
             value,
             self.item.units.unwrap_or(Units::None)
         );
+
+        // A NaN passes every comparison below — it is neither below the
+        // minimum nor above the maximum — so refuse it here rather than
+        // let it settle into a control as a value nothing can reason about.
+        if !value.is_finite() {
+            return Err(ControlError::Invalid(
+                self.item.control_id,
+                format!("{}", value),
+            ));
+        }
 
         // RANGE MAPPING
         if let (Some(min_value), Some(max_value)) = (self.item.min_value, self.item.max_value) {
@@ -3644,9 +3686,71 @@ mod test {
         assert_eq!(range.reported_auto(), None);
     }
 
-    /// A guard zone dragged by its start angle arrives as that one field.
-    /// The other three numbers and the enabled flag must survive, or the
-    /// zone collapses to 0-0 and can never trigger.
+    fn test_controls() -> SharedControls {
+        let (sk_tx, _sk_rx) = tokio::sync::broadcast::channel(16);
+        SharedControls::new(
+            "test".to_string(),
+            sk_tx,
+            &Cli::parse_from(["mayara-server"]),
+            HashMap::new(),
+        )
+    }
+
+    /// A client asking for a range the radar does not offer gets the
+    /// nearest one it does. Nearly every control is forwarded to the radar
+    /// rather than stored, so what matters is the value that leaves for
+    /// the radar — the local control only changes when the radar reports
+    /// back.
+    #[test]
+    fn a_client_request_for_an_unlisted_range_is_snapped() {
+        let controls = test_controls();
+        for v in [7408, 11112, 14816] {
+            controls.add_valid_value(&ControlId::Range, v);
+        }
+        let mut sent = controls.control_update_subscribe();
+        let (reply_tx, _reply_rx) = tokio::sync::mpsc::channel(8);
+
+        // 9888 m: between 4 nm and 6 nm, and in no table.
+        let cv = ControlValue::new(ControlId::Range, 9888.into());
+        controls.process_client_request(cv, reply_tx).unwrap();
+
+        let forwarded = sent.try_recv().expect("a request reaches the radar");
+        let value = forwarded
+            .control_value
+            .value
+            .and_then(|v| v.as_f64())
+            .expect("with a value");
+        assert_eq!(
+            value, 11112.,
+            "the radar is asked for the nearest settable range, not 9888"
+        );
+    }
+
+    /// The same path must still refuse an enum value the control does not
+    /// offer. Power lists Standby and Transmit; a request for Fault has no
+    /// nearest neighbour worth guessing, and guessing would start the
+    /// radar.
+    #[test]
+    fn a_client_request_for_an_unlisted_enum_is_refused() {
+        let controls = test_controls();
+        let (reply_tx, _reply_rx) = tokio::sync::mpsc::channel(8);
+
+        let cv = ControlValue::new(ControlId::Power, 4.into());
+        let result = controls.process_client_request(cv, reply_tx);
+
+        assert!(
+            matches!(
+                result,
+                Err(RadarError::ControlError(ControlError::Invalid(
+                    ControlId::Power,
+                    _
+                )))
+            ),
+            "a Fault request must be refused, not rounded to Transmit: {:?}",
+            result
+        );
+    }
+
     /// Navico radars driving their range from a chart overlay sweep
     /// whatever suits the chart: 9888 m sits between the 4 nm and 6 nm
     /// entries and is in no table at all. Observed on a HALO24 — 2700,
@@ -3697,6 +3801,9 @@ mod test {
         );
     }
 
+    /// A guard zone dragged by its start angle arrives as that one field.
+    /// The other three numbers and the enabled flag must survive, or the
+    /// zone collapses to 0-0 and can never trigger.
     #[test]
     fn partial_zone_update_keeps_unsupplied_fields() {
         let (_, mut zone) = new_zone(
