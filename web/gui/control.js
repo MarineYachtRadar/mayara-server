@@ -1362,6 +1362,37 @@ function buildSingleControl(k, v) {
 // Control Value Setting (from v1 setControl)
 // ============================================================================
 
+/**
+ * Render a control the radar has not reported a value for. The display shows
+ * a dash rather than a number, and any input is left untouched so it does not
+ * present an invented setting as the current one.
+ */
+function showUnsetControl(i, control, cv) {
+  if (control.isReadOnly || control.readOnly) {
+    i.innerHTML = "&mdash;";
+    return;
+  }
+  if (
+    control.dataType === "sector" ||
+    control.dataType === "zone" ||
+    control.dataType === "rect"
+  ) {
+    return;
+  }
+  const n =
+    document.getElementById(control_prefix + cv.id + "_display") ||
+    i.parentNode.querySelector(".myr_numeric");
+  if (n) {
+    n.innerHTML = "&mdash;";
+  }
+  const d =
+    document.getElementById(control_prefix + cv.id + "_desc") ||
+    i.parentNode.querySelector(".myr_description");
+  if (d) {
+    d.innerHTML = "";
+  }
+}
+
 function setControlValue(cv) {
   myr_control_values[cv.id] = cv;
 
@@ -1376,6 +1407,16 @@ function setControlValue(cv) {
       value = cv.autoValue;
     } else {
       value = cv.value;
+    }
+
+    // A control the radar has not reported yet carries no value at all — a
+    // Furuno dual-range B channel has no range until its first command
+    // activates it. Show a placeholder rather than letting `undefined` reach
+    // innerHTML, which renders the literal text "undefined" (or "undefined m"
+    // once units are appended).
+    if (value === undefined || value === null) {
+      showUnsetControl(i, control, cv);
+      return;
     }
 
     let html = value;
