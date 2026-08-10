@@ -52,11 +52,8 @@ const RECONNECT_BACKOFF_MAX: Duration = Duration::from_secs(60);
 /// A session that survived this long counts as stable: reset the backoff.
 const RECONNECT_STABLE_AFTER: Duration = Duration::from_secs(60);
 
-/// How the reconnect delay evolves after a control session ends.
-///
 /// Split out from the connection loop so the policy can be exercised without a
-/// radar: the loop supplies real elapsed times and sleeps, this decides what
-/// the next delay and short-lived-session count should be.
+/// radar: the loop supplies real elapsed times and sleeps.
 fn next_reconnect_backoff(
     current: Duration,
     session_lasted: Duration,
@@ -525,16 +522,18 @@ impl FurunoReportReceiver {
                 }
             }
 
+            // A setup failure (socket, login or command stream) never reached
+            // data_loop, so nothing escalated the backoff above. Treat it as a
+            // zero-length session — otherwise a radar refusing logins would be
+            // retried every second forever.
+            if !reached_data_loop {
+                (backoff, short_lived_sessions) =
+                    next_reconnect_backoff(backoff, Duration::ZERO, short_lived_sessions);
+            }
+
             tokio::select! {
                 _ = subsys.on_shutdown_requested() => return Ok(()),
                 _ = sleep(backoff) => {}
-            }
-            // A session that never reached data_loop (socket, login or command
-            // stream failed) has not updated the backoff above, so escalate
-            // here — otherwise a radar refusing logins would be retried every
-            // second forever.
-            if !reached_data_loop {
-                backoff = (backoff * 2).min(RECONNECT_BACKOFF_MAX);
             }
         }
     }
@@ -2187,6 +2186,26 @@ mod tests {
         let short = Duration::from_secs(1);
         let (capped, _) = next_reconnect_backoff(RECONNECT_BACKOFF_MAX, short, 9);
         assert_eq!(capped, RECONNECT_BACKOFF_MAX);
+    }
+
+    /// A radar that refuses the login, or whose sockets will not open, never
+    /// reaches the data loop. That path must still back off — retrying a
+    /// refusing radar every second is exactly the churn that exhausts the
+    /// firmware's session slots.
+    #[test]
+    fn reconnect_backoff_escalates_when_setup_never_reaches_the_data_loop() {
+        let mut backoff = RECONNECT_BACKOFF_MIN;
+        let mut count = 0;
+        for expected in [2u64, 4, 8, 16] {
+            // Duration::ZERO is how the loop reports "no session happened".
+            (backoff, count) = next_reconnect_backoff(backoff, Duration::ZERO, count);
+            assert_eq!(backoff, Duration::from_secs(expected));
+        }
+        // And it is still bounded.
+        for _ in 0..10 {
+            (backoff, count) = next_reconnect_backoff(backoff, Duration::ZERO, count);
+        }
+        assert_eq!(backoff, RECONNECT_BACKOFF_MAX);
     }
 
     /// Once a session has proven stable the next blip should reconnect
