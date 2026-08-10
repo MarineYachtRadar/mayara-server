@@ -11,7 +11,7 @@ use hyper;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     net::Ipv4Addr,
 };
 use strum::EnumCount;
@@ -232,7 +232,12 @@ struct RadarsResponse {
     #[schema(example = "3.4.0")]
     version: String,
     /// Discovered radars, keyed by radar ID.
-    radars: HashMap<String, RadarApiV3>,
+    ///
+    /// Ordered, not a hash map: JSON objects carry no order of their own,
+    /// so clients that take "the first radar" would otherwise get a
+    /// different one from request to request. On a dual-range radar that
+    /// means range A or range B at random.
+    radars: BTreeMap<String, RadarApiV3>,
 }
 
 #[utoipa::path(
@@ -249,7 +254,7 @@ struct RadarsResponse {
 )]
 async fn get_radars(State(state): State<Web>) -> Response {
     log::debug!("Radar list request");
-    let mut radars: HashMap<String, RadarApiV3> = HashMap::new();
+    let mut radars: BTreeMap<String, RadarApiV3> = BTreeMap::new();
     for info in state.radars.get_discovered() {
         radars.insert(info.key(), RadarApiV3::from(&info));
     }
@@ -1614,4 +1619,41 @@ async fn send_hello(socket: &mut WebSocket) -> Result<(), Error> {
     let ws_message = Message::Text(message.into());
 
     socket.send(ws_message).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn radar(name: &str) -> RadarApiV3 {
+        RadarApiV3 {
+            name: name.to_string(),
+            brand: "Navico".to_string(),
+            model: None,
+            radar_ip_address: Ipv4Addr::new(10, 56, 0, 24),
+            replay: false,
+        }
+    }
+
+    /// A dual-range radar offers two entries, and clients that take the
+    /// first one must get the same radar every time — otherwise the
+    /// operator sees range A or range B for reasons they cannot observe.
+    /// Issue #497.
+    #[test]
+    fn radars_are_listed_in_a_stable_order() {
+        let mut radars = BTreeMap::new();
+        // Inserted out of order: the response must not depend on this.
+        radars.insert("nav1034B".to_string(), radar("HALO 034 B"));
+        radars.insert("nav1034A".to_string(), radar("HALO 034 A"));
+
+        let response = RadarsResponse {
+            version: "3.4.0".to_string(),
+            radars,
+        };
+        let json = serde_json::to_string(&response).unwrap();
+
+        let a = json.find("nav1034A").expect("range A listed");
+        let b = json.find("nav1034B").expect("range B listed");
+        assert!(a < b, "radar ids must be serialised in order: {}", json);
+    }
 }
