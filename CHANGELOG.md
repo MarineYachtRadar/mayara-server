@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **furuno:** identify radars by MAC when they report no serial (#509) ([PR #509](https://github.com/MarineYachtRadar/mayara-server/pull/509))
+- **gui:** side-by-side view for dual-range radars (#479) ([PR #479](https://github.com/MarineYachtRadar/mayara-server/pull/479))
 
 ### Changed
 
