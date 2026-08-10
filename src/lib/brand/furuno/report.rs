@@ -52,6 +52,27 @@ const RECONNECT_BACKOFF_MAX: Duration = Duration::from_secs(60);
 /// A session that survived this long counts as stable: reset the backoff.
 const RECONNECT_STABLE_AFTER: Duration = Duration::from_secs(60);
 
+/// How the reconnect delay evolves after a control session ends.
+///
+/// Split out from the connection loop so the policy can be exercised without a
+/// radar: the loop supplies real elapsed times and sleeps, this decides what
+/// the next delay and short-lived-session count should be.
+fn next_reconnect_backoff(
+    current: Duration,
+    session_lasted: Duration,
+    short_lived_sessions: u32,
+) -> (Duration, u32) {
+    if session_lasted >= RECONNECT_STABLE_AFTER {
+        // Proven stable — start from scratch so a later blip reconnects fast.
+        (RECONNECT_BACKOFF_MIN, 0)
+    } else {
+        (
+            (current * 2).min(RECONNECT_BACKOFF_MAX),
+            short_lived_sessions + 1,
+        )
+    }
+}
+
 /// Furuno wire-format decoding mode. When Target Analyzer is active on NXT
 /// radars, each echo byte encodes `[dopplerClass:2 | intensity:4 | 00:2]`
 /// rather than a plain intensity in 0..PIXEL_VALUES. The report receiver
@@ -459,6 +480,7 @@ impl FurunoReportReceiver {
             self.multicast_socket = None;
             self.broadcast_socket = None;
 
+            let mut reached_data_loop = false;
             if let Err(e) = self.start_data_socket().await {
                 log::warn!("{}: Failed to start data sockets: {}", self.common.key, e);
             } else if let Err(e) = self.login_to_radar() {
@@ -466,6 +488,7 @@ impl FurunoReportReceiver {
             } else if let Err(e) = self.start_command_stream().await {
                 log::warn!("{}: Failed to start command stream: {}", self.common.key, e);
             } else {
+                reached_data_loop = true;
                 let started = Instant::now();
                 match self.data_loop(subsys).await {
                     Err(RadarError::Shutdown) => return Ok(()),
@@ -480,16 +503,15 @@ impl FurunoReportReceiver {
                     }
                     Ok(()) => {}
                 }
-                if started.elapsed() >= RECONNECT_STABLE_AFTER {
-                    backoff = RECONNECT_BACKOFF_MIN;
-                    short_lived_sessions = 0;
-                } else {
+                let was_stable = started.elapsed() >= RECONNECT_STABLE_AFTER;
+                (backoff, short_lived_sessions) =
+                    next_reconnect_backoff(backoff, started.elapsed(), short_lived_sessions);
+                if !was_stable {
                     // Furuno radars keep one control session per client IP.
                     // A pattern of sessions that die right after the radar has
                     // answered the initial requests means another client on
                     // THIS host (e.g. a second mayara instance) keeps taking
                     // the slot — name the cause instead of churning silently.
-                    short_lived_sessions += 1;
                     if short_lived_sessions == 3 {
                         log::error!(
                             "{}: three control sessions in a row died within seconds — \
@@ -507,7 +529,13 @@ impl FurunoReportReceiver {
                 _ = subsys.on_shutdown_requested() => return Ok(()),
                 _ = sleep(backoff) => {}
             }
-            backoff = (backoff * 2).min(RECONNECT_BACKOFF_MAX);
+            // A session that never reached data_loop (socket, login or command
+            // stream failed) has not updated the backoff above, so escalate
+            // here — otherwise a radar refusing logins would be retried every
+            // second forever.
+            if !reached_data_loop {
+                backoff = (backoff * 2).min(RECONNECT_BACKOFF_MAX);
+            }
         }
     }
 
@@ -2137,6 +2165,39 @@ async fn conditional_read(
 mod tests {
     use super::*;
     use crate::radar::Legend;
+
+    /// A radar that keeps dropping the control session must be backed off
+    /// exponentially: hammering relogins exhausts the firmware's session slot
+    /// table and locks out every client, which is the failure this policy
+    /// exists to avoid.
+    #[test]
+    fn reconnect_backoff_escalates_while_sessions_are_short_lived() {
+        let short = Duration::from_secs(1);
+        let (b1, n1) = next_reconnect_backoff(RECONNECT_BACKOFF_MIN, short, 0);
+        assert_eq!(b1, Duration::from_secs(2));
+        assert_eq!(n1, 1);
+
+        let (b2, n2) = next_reconnect_backoff(b1, short, n1);
+        assert_eq!(b2, Duration::from_secs(4));
+        assert_eq!(n2, 2);
+    }
+
+    #[test]
+    fn reconnect_backoff_is_capped() {
+        let short = Duration::from_secs(1);
+        let (capped, _) = next_reconnect_backoff(RECONNECT_BACKOFF_MAX, short, 9);
+        assert_eq!(capped, RECONNECT_BACKOFF_MAX);
+    }
+
+    /// Once a session has proven stable the next blip should reconnect
+    /// immediately rather than inherit a minute-long delay.
+    #[test]
+    fn reconnect_backoff_resets_after_a_stable_session() {
+        let (reset, count) =
+            next_reconnect_backoff(Duration::from_secs(32), RECONNECT_STABLE_AFTER, 5);
+        assert_eq!(reset, RECONNECT_BACKOFF_MIN);
+        assert_eq!(count, 0, "a stable session clears the churn counter");
+    }
 
     /// Minimal `Legend` shaped like a post-TA NXT: 120 intensity slots,
     /// 1 approaching slot, 1 receding slot, 1 rain slot, mirroring what

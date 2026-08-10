@@ -1,6 +1,6 @@
-/* ============================================
-   Dual Range View - two viewers side by side
-   ============================================ */
+/* Each pane hosts a full viewer in an iframe rather than a shared canvas: the
+   two ranges are independent radars with their own spoke streams, controls and
+   legends, so isolating them avoids one range's state leaking into the other. */
 
 .myr_dual_container {
   display: grid;
