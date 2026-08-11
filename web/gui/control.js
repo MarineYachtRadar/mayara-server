@@ -1362,6 +1362,37 @@ function buildSingleControl(k, v) {
 // Control Value Setting (from v1 setControl)
 // ============================================================================
 
+/**
+ * Render a control the radar has not reported a value for. The display shows
+ * a dash rather than a number, and any input is left untouched so it does not
+ * present an invented setting as the current one.
+ */
+function showUnsetControl(i, control, cv) {
+  if (control.isReadOnly || control.readOnly) {
+    i.innerHTML = "&mdash;";
+    return;
+  }
+  if (
+    control.dataType === "sector" ||
+    control.dataType === "zone" ||
+    control.dataType === "rect"
+  ) {
+    return;
+  }
+  const n =
+    document.getElementById(control_prefix + cv.id + "_display") ||
+    i.parentNode.querySelector(".myr_numeric");
+  if (n) {
+    n.innerHTML = "&mdash;";
+  }
+  const d =
+    document.getElementById(control_prefix + cv.id + "_desc") ||
+    i.parentNode.querySelector(".myr_description");
+  if (d) {
+    d.innerHTML = "";
+  }
+}
+
 function setControlValue(cv) {
   myr_control_values[cv.id] = cv;
 
@@ -1378,8 +1409,20 @@ function setControlValue(cv) {
       value = cv.value;
     }
 
+    // A control the radar has not reported yet carries no value at all — a
+    // Furuno dual-range B channel has no range until its first command
+    // activates it. Only the value rendering is skipped: `undefined` reaching
+    // innerHTML shows the literal text "undefined" (or "undefined m" once
+    // units are appended). Everything below — auto and enabled state, the
+    // allowed flag, errors, and the callbacks — still applies, because those
+    // are independent of whether a value has arrived.
+    const unset = value === undefined || value === null;
+    if (unset) {
+      showUnsetControl(i, control, cv);
+    }
+
     let html = value;
-    if (control.units && cv.id !== "range") {
+    if (!unset && control.units && cv.id !== "range") {
       [units, value] = toUser(control.units, value);
       if (control.stepValue) {
         value = roundToStep(value, control.stepValue, control.minValue ?? 0);
@@ -1393,7 +1436,8 @@ function setControlValue(cv) {
 
     // For read-only controls, update the element directly (it's a span with myr_info_value)
     if (control.isReadOnly || control.readOnly) {
-      i.innerHTML = html;
+      // showUnsetControl already wrote the placeholder here.
+      if (!unset) i.innerHTML = html;
     } else if (control && control.dataType === "sector") {
       updateSectorUI(cv.id, control, cv);
     } else if (control && control.dataType === "zone") {
@@ -1406,7 +1450,7 @@ function setControlValue(cv) {
       if (!n) {
         n = i.parentNode.querySelector(".myr_numeric");
       }
-      if (n) {
+      if (n && !unset) {
         n.innerHTML = html;
       }
 
@@ -1415,20 +1459,28 @@ function setControlValue(cv) {
       if (!d) {
         d = i.parentNode.querySelector(".myr_description");
       }
-      if (d) {
+      // The slider's bounds follow the auto mode, not the value: switching
+      // auto on an auto-adjustable control changes which range the slider
+      // spans. Applied even when unset, so a control still waiting for its
+      // first report has the right bounds the moment a value arrives — and
+      // regardless of whether a description element exists to render into.
+      if (control.hasAutoAdjustable) {
+        if (cv.auto) {
+          i.min = control.autoAdjustMinValue;
+          i.max = control.autoAdjustMaxValue;
+        } else {
+          i.min = control.minValue;
+          i.max = control.maxValue;
+        }
+      }
+
+      if (d && !unset) {
         let description = control.descriptions
           ? control.descriptions[value]
           : undefined;
-        if (!description && control.hasAutoAdjustable) {
-          if (cv.auto) {
-            description =
-              "A" + (value > 0 ? "+" + value : "") + (value < 0 ? value : "");
-            i.min = control.autoAdjustMinValue;
-            i.max = control.autoAdjustMaxValue;
-          } else {
-            i.min = control.minValue;
-            i.max = control.maxValue;
-          }
+        if (!description && control.hasAutoAdjustable && cv.auto) {
+          description =
+            "A" + (value > 0 ? "+" + value : "") + (value < 0 ? value : "");
         }
         if (!description) {
           description = html;
@@ -1436,8 +1488,9 @@ function setControlValue(cv) {
         d.innerHTML = description;
       }
 
-      // Set input value after setting min/max
-      i.value = value;
+      // Set input value after setting min/max. Left alone when unset, so the
+      // slider does not present an invented position as the current setting.
+      if (!unset) i.value = value;
 
       // Update tick marks for discrete sliders
       if (i.classList.contains("myr_slider_discrete")) {

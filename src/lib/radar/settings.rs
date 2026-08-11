@@ -2455,7 +2455,11 @@ pub(crate) fn new_numeric(control_id: ControlId, min_value: f64, max_value: f64)
     let control = Control::new(ControlDefinition::new(
         control_id,
         ControlDataType::Number,
-        min_value,
+        // No default: the minimum is a bound, not a reading. Seeding it made
+        // the control indistinguishable from one the radar had actually
+        // reported — a Furuno dual-range B channel published range 0 with a
+        // timestamp before it was ever activated.
+        None,
         None,
         false,
         min_value,
@@ -2486,7 +2490,8 @@ pub(crate) fn new_auto(
     let control = Control::new(ControlDefinition::new(
         control_id,
         ControlDataType::Number,
-        min_value,
+        // See new_numeric: the minimum is a bound, not a reading.
+        None,
         Some(automatic),
         false,
         min_value,
@@ -3806,6 +3811,39 @@ mod test {
             Some(4.),
             "a Fault report must stay a Fault, not become Transmit"
         );
+    }
+
+    /// A numeric control must start with no value at all. Seeding it with the
+    /// minimum made "never reported" indistinguishable from "the radar says
+    /// zero": a Furuno dual-range B channel published range 0, timestamped, on
+    /// a channel that had never been activated. Clients then either drew that
+    /// as a real range or, once a snap-to-nearest pass runs over reported
+    /// values, rounded it up to the shortest settable range.
+    #[test]
+    fn numeric_controls_start_without_a_value() {
+        let (_, range) = new_numeric(ControlId::Range, 0., 100_000.).take();
+        assert_eq!(range.value, None, "range must not report a phantom 0");
+        assert_eq!(
+            range.timestamp, None,
+            "and no timestamp — a stamped value is what made it look observed"
+        );
+        assert_eq!(
+            range.item.min_value,
+            Some(0.),
+            "the minimum is still a bound"
+        );
+
+        let (_, gain) = new_auto(ControlId::Gain, 0., 100., HAS_AUTO_NOT_ADJUSTABLE).take();
+        assert_eq!(gain.value, None, "auto-capable numerics too");
+        assert_eq!(gain.timestamp, None);
+        assert_eq!(gain.item.min_value, Some(0.), "its bound survives too");
+
+        // Enum controls still seed 0 and are deliberately left alone here: for
+        // an enum, 0 is usually a real option (the first list entry), so
+        // dropping it is a separate judgement per control rather than the
+        // clear-cut "a bound is not a reading" this change makes.
+        let (_, mode) = new_list(ControlId::Mode, &["Harbor", "Offshore"]).take();
+        assert_eq!(mode.value, Some(0.));
     }
 
     /// A guard zone dragged by its start angle arrives as that one field.
