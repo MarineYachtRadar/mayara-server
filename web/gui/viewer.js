@@ -27,11 +27,12 @@ import {
 } from "./control.js";
 import {
   detectMode,
-  fetchRadarIds,
+  fetchRadars,
   apiBase,
   apiFetch,
   wsBase,
 } from "./api.js";
+import { radarCombinations, multiViewUrl } from "./radar-list.js";
 import "./vendor/protobuf.min.js";
 
 import { WebGPURenderer } from "./render_webgpu.js";
@@ -65,6 +66,16 @@ var ppi; // The PPI display instance
 var renderer; // The backend renderer (WebGPU or WebGL)
 var capabilities;
 var renderMethod = "webgpu"; // "webgpu" or "webgl"
+
+// The radars as the API lists them: `{ id, name }` in the API's own order,
+// which keeps the ranges of one antenna adjacent. The radar selector in the
+// power lozenge offers them in exactly that order.
+var knownRadars = [];
+var currentRadarId = null;
+// True when this viewer is one pane of the combined view (multi.html). A
+// combined view picked from inside a pane must replace the whole page rather
+// than nest another layout inside the pane.
+var isPane = false;
 
 // Heading mode: "headingUp" or "northUp"
 var headingMode = "headingUp";
@@ -131,6 +142,7 @@ window.onload = async function () {
   const urlParams = new URLSearchParams(window.location.search);
   let id = urlParams.get("id");
   const requestedRenderer = urlParams.get("renderer");
+  isPane = urlParams.has("pane");
 
   // Determine which renderer to use
   renderMethod = await selectRenderer(requestedRenderer);
@@ -203,7 +215,12 @@ window.onload = async function () {
   // falling back to the first one, and send the operator to the index when
   // there are none.
   try {
-    const ids = await fetchRadarIds();
+    const radars = await fetchRadars();
+    knownRadars = Object.entries(radars).map(([radarId, radar]) => ({
+      id: radarId,
+      name: radar.name || radarId,
+    }));
+    const ids = knownRadars.map((radar) => radar.id);
     if (!id || !ids.includes(id)) {
       if (ids.length === 0) {
         window.location.href = "index.html";
@@ -215,6 +232,7 @@ window.onload = async function () {
       urlParams.set("id", id);
       history.replaceState(null, "", `?${urlParams}`);
     }
+    currentRadarId = id;
   } catch (e) {
     console.error(`Could not resolve radar id: ${e}`);
   }
@@ -1113,14 +1131,134 @@ function createPowerLozenge() {
     togglePower();
   });
 
-  const nameDisplay = document.createElement("div");
-  nameDisplay.id = "myr_power_lozenge_name";
-  nameDisplay.className = "myr_power_lozenge_name";
-  nameDisplay.textContent = getUserName() || "Radar";
+  const nameBtn = document.createElement("button");
+  nameBtn.type = "button";
+  nameBtn.id = "myr_power_lozenge_select";
+  nameBtn.className = "myr_power_lozenge_name";
+
+  const label = document.createElement("span");
+  label.id = "myr_power_lozenge_label";
+  label.textContent = getUserName() || "Radar";
+  nameBtn.appendChild(label);
+
+  // With a single radar there is nothing to choose between, so the name half
+  // of the lozenge stays inert.
+  if (knownRadars.length > 1) {
+    nameBtn.title = "Click to choose which radar to show";
+    nameBtn.setAttribute("aria-haspopup", "menu");
+    nameBtn.setAttribute("aria-expanded", "false");
+    nameBtn.insertAdjacentHTML(
+      "beforeend",
+      `<svg class="myr_power_lozenge_caret" viewBox="0 0 10 6">
+        <path d="M0 0h10L5 6z"/>
+      </svg>`,
+    );
+    nameBtn.addEventListener("click", toggleRadarMenu);
+    createRadarMenu(container);
+  } else {
+    nameBtn.disabled = true;
+  }
 
   lozenge.appendChild(powerBtn);
-  lozenge.appendChild(nameDisplay);
+  lozenge.appendChild(nameBtn);
   container.appendChild(lozenge);
+}
+
+// The radar selector: one row per radar in the order the API lists them,
+// then the combined views — consecutive pairs, which is where the two ranges
+// of one antenna land, and from three radars up all of them at once.
+function createRadarMenu(container) {
+  const menu = document.createElement("div");
+  menu.id = "myr_radar_menu";
+  menu.className = "myr_radar_menu";
+  menu.setAttribute("role", "menu");
+
+  for (const radar of knownRadars) {
+    menu.appendChild(
+      radarMenuRow(radar.name, radar.id === currentRadarId, () =>
+        showRadar(radar.id),
+      ),
+    );
+  }
+
+  const separator = document.createElement("div");
+  separator.className = "myr_radar_menu_separator";
+  menu.appendChild(separator);
+
+  for (const combination of radarCombinations(knownRadars)) {
+    menu.appendChild(
+      radarMenuRow(combination.label, false, () =>
+        showRadars(combination.ids),
+      ),
+    );
+  }
+
+  container.appendChild(menu);
+}
+
+function radarMenuRow(label, isCurrent, onSelect) {
+  const row = document.createElement("button");
+  row.type = "button";
+  row.className = "myr_radar_menu_row";
+  row.setAttribute("role", "menuitem");
+  if (isCurrent) {
+    row.classList.add("myr_radar_menu_current");
+    row.setAttribute("aria-current", "true");
+  }
+  row.textContent = label;
+  row.addEventListener("click", () => {
+    closeRadarMenu();
+    onSelect();
+  });
+  return row;
+}
+
+function toggleRadarMenu(event) {
+  // Without this the same click would immediately reach the outside-click
+  // listener below and close the menu again.
+  event.stopPropagation();
+
+  const menu = document.getElementById("myr_radar_menu");
+  if (menu.classList.contains("myr_radar_menu_open")) {
+    closeRadarMenu();
+    return;
+  }
+  setRadarMenuOpen(menu, true);
+  document.addEventListener("click", closeRadarMenu);
+  document.addEventListener("keydown", closeRadarMenuOnEscape);
+}
+
+function closeRadarMenu() {
+  setRadarMenuOpen(document.getElementById("myr_radar_menu"), false);
+  document.removeEventListener("click", closeRadarMenu);
+  document.removeEventListener("keydown", closeRadarMenuOnEscape);
+}
+
+function closeRadarMenuOnEscape(event) {
+  if (event.key === "Escape") {
+    closeRadarMenu();
+  }
+}
+
+function setRadarMenuOpen(menu, open) {
+  menu.classList.toggle("myr_radar_menu_open", open);
+  document
+    .getElementById("myr_power_lozenge_select")
+    .setAttribute("aria-expanded", String(open));
+}
+
+// Show a single radar. Reloading keeps every stream, control and renderer
+// setup on the one path that is exercised on a normal page load; the other
+// query parameters (renderer choice, pane membership) carry over.
+function showRadar(id) {
+  if (id === currentRadarId) return;
+  const params = new URLSearchParams(window.location.search);
+  params.set("id", id);
+  window.location.search = params.toString();
+}
+
+function showRadars(ids) {
+  (isPane ? window.parent : window).location.href = multiViewUrl(ids);
 }
 
 // Update the power lozenge state
@@ -1150,9 +1288,9 @@ function updatePowerLozenge(powerState, userName) {
   }
 
   if (userName !== undefined) {
-    const nameDisplay = document.getElementById("myr_power_lozenge_name");
-    if (nameDisplay) {
-      nameDisplay.textContent = userName || "Radar";
+    const label = document.getElementById("myr_power_lozenge_label");
+    if (label) {
+      label.textContent = userName || "Radar";
     }
   }
 }

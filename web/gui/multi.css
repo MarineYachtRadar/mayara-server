@@ -1,0 +1,35 @@
+/* Each pane hosts a full viewer in an iframe rather than a shared canvas: the
+   radars are independent, with their own spoke streams, controls and legends,
+   so isolating them avoids one pane's state leaking into another. */
+
+.myr_multi_container {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-auto-rows: 1fr;
+  gap: 1px;
+  background: rgb(3, 37, 37);
+  width: 100%;
+  height: 100%;
+}
+
+.myr_multi_pane {
+  width: 100%;
+  height: 100%;
+  border: none;
+  display: block;
+}
+
+/* Stacking is keyed on orientation, not width: in narrow landscape two
+   short stacked panes would be worse than two narrow side-by-side ones,
+   since each pane's own responsive layout already handles narrow widths.
+   Three or more panes stay in a grid either way — a portrait column of
+   four viewers leaves each one too short to be readable. */
+@media (orientation: portrait) {
+  .myr_multi_container[data-panes="2"] {
+    grid-template-columns: 1fr;
+  }
+}
+
+.myr_multi_error {
+  padding: 1em;
+}
