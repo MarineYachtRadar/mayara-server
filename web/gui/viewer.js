@@ -17,7 +17,6 @@ import {
   registerStreamMessageCallback,
   registerAcquireTargetModeCallback,
   getOperatingTime,
-  getUserName,
   togglePower,
   zoomIn,
   zoomOut,
@@ -1145,7 +1144,9 @@ function createPowerLozenge() {
 
   const label = document.createElement("span");
   label.id = "myr_power_lozenge_label";
-  label.textContent = getUserName() || "Radar";
+  // The control stream has not reported this radar's name yet, but the radar
+  // list already has it. A later rename still arrives via updatePowerLozenge.
+  label.textContent = radarName(currentRadarId);
   nameBtn.appendChild(label);
 
   // With a single radar there is nothing to choose between, so the name half
@@ -1169,6 +1170,10 @@ function createPowerLozenge() {
   lozenge.appendChild(powerBtn);
   lozenge.appendChild(nameBtn);
   container.appendChild(lozenge);
+}
+
+function radarName(id) {
+  return knownRadars.find((radar) => radar.id === id)?.name || "Radar";
 }
 
 // The radar selector: one row per radar in the order the API lists them,
