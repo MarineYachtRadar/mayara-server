@@ -70,19 +70,44 @@ export async function apiFetch(
   options = {},
   timeoutMs = REQUEST_TIMEOUT_MS
 ) {
-  try {
-    return await fetch(url, {
-      ...options,
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-  } catch (e) {
-    if (e.name === "TimeoutError") {
-      throw new Error(
+  const deadline = AbortSignal.timeout(timeoutMs);
+  // A caller's own signal is combined with the deadline rather than replaced,
+  // so passing one still cancels the request instead of being ignored.
+  const signal = options.signal
+    ? AbortSignal.any([deadline, options.signal])
+    : deadline;
+
+  // The deadline covers reading the body too, so a response that starts
+  // arriving and then stalls aborts inside `json()`/`blob()` rather than in
+  // `fetch()`. Classify both the same way, or that case reports an opaque
+  // AbortError instead of the timeout the caller is meant to see.
+  const asTimeout = (e) => {
+    if (e.name === "TimeoutError" || (e.name === "AbortError" && deadline.aborted)) {
+      return new Error(
         `${options.method || "GET"} ${url} timed out after ${timeoutMs} ms`
       );
     }
-    throw e;
+    return e;
+  };
+
+  let response;
+  try {
+    response = await fetch(url, { ...options, signal });
+  } catch (e) {
+    throw asTimeout(e);
   }
+
+  for (const read of ["json", "text", "blob", "arrayBuffer", "formData"]) {
+    const original = response[read].bind(response);
+    response[read] = async (...args) => {
+      try {
+        return await original(...args);
+      } catch (e) {
+        throw asTimeout(e);
+      }
+    };
+  }
+  return response;
 }
 
 // Detected mode (null = not detected yet)
