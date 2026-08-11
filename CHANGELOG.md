@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **controls:** keep guard zone range when only the angle is changed (#504) ([PR #504](https://github.com/MarineYachtRadar/mayara-server/pull/504))
 - **api:** list radars in a stable order (#512) ([PR #512](https://github.com/MarineYachtRadar/mayara-server/pull/512))
 - **controls:** stop numeric controls reporting a value they never had (#520) ([PR #520](https://github.com/MarineYachtRadar/mayara-server/pull/520))
+- **gui:** give every REST request a deadline (#517) ([PR #517](https://github.com/MarineYachtRadar/mayara-server/pull/517))
 
 ## [3.8.1] - 2026-08-04
 
