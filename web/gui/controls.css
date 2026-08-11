@@ -290,6 +290,19 @@ div.myr_range_buttons {
   background-color: #112;
 }
 
+/* The radar never reported this setting back, so what is shown is what was
+   asked for, not what the radar is doing. */
+.myr_control_unconfirmed {
+  border-color: #c84;
+  background-color: #221a11;
+}
+
+.myr_control_unconfirmed .myr_control_label::after {
+  content: " (unconfirmed)";
+  color: #fb6;
+  font-weight: normal;
+}
+
 .myr_control_header {
   display: flex;
   justify-content: space-between;
