@@ -35,6 +35,7 @@ mayara-server --openapi
 | GET    | `/signalk/v2/api/vessels/self/radars/diagnostics`            | Download a gzipped JSON network diagnostics snapshot |
 | GET    | `/signalk/v2/api/vessels/self/radars/{id}/capabilities`      | Get radar capabilities and legend                  |
 | GET    | `/signalk/v2/api/vessels/self/radars/{id}/controls`          | Get all control values                             |
+| PUT    | `/signalk/v2/api/vessels/self/radars/{id}/controls`          | Set several control values in one request          |
 | GET    | `/signalk/v2/api/vessels/self/radars/{id}/controls/{cid}`    | Get specific control value                         |
 | PUT    | `/signalk/v2/api/vessels/self/radars/{id}/controls/{cid}`    | Set control value                                  |
 | GET    | `/signalk/v2/api/vessels/self/radars/{id}/targets`           | List tracked targets                               |
