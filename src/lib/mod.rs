@@ -198,6 +198,20 @@ pub struct Cli {
     /// deployments where compression cost exceeds the bandwidth benefit.
     #[arg(long, default_value_t = false)]
     pub no_websocket_compression: bool,
+
+    /// Host name to claim on mDNS, so the GUI is reachable at
+    /// `http://<name>.local:<port>/`. Defaults to `mayara`. Give each server on
+    /// a network its own name; two claiming the same one contend for it, and
+    /// the loser is renamed.
+    #[arg(long, value_name = "NAME", conflicts_with = "no_mdns")]
+    pub mdns_hostname: Option<String>,
+
+    /// Do not advertise on mDNS at all: no service and no host name, so
+    /// `<name>.local` will not resolve to mayara and clients must be given its
+    /// address. Use this when the machine already runs its own mDNS responder
+    /// (Avahi, Bonjour) that should stay the sole authority.
+    #[arg(long, default_value_t = false)]
+    pub no_mdns: bool,
 }
 
 /// Static position data (latitude, longitude, heading)
