@@ -535,11 +535,7 @@ async fn test_openapi_spec() {
     assert!(paths.contains_key("/signalk/v2/api/vessels/self/radars"));
 }
 
-// ---------------------------------------------------------------------------
-// Bulk control PUT
-// ---------------------------------------------------------------------------
-//
-// These assert on controls the emulator actually applies (userName, range,
+// The bulk-PUT tests assert on controls the emulator actually applies (userName, range,
 // targetTrails). Gain is deliberately avoided: the emulator accepts a gain PUT
 // and reports success but never reflects the value, on the single-control path
 // as much as this one, so asserting a gain round-trip would test the emulator
@@ -624,14 +620,20 @@ async fn test_set_control_values_rejects_duplicate_control() {
     );
 }
 
+/// Covers the persistence branch of the bulk path — userName is one of the
+/// controls `control_needs_persistence` matches, so this is the case that
+/// reaches `save_persistence` — and checks the value is applied.
+///
+/// It does not prove the write reached disk: the read returns the live
+/// in-memory value, which is set either way. Proving that needs a restart
+/// between the PUT and the read, and these tests drive a server they did not
+/// start (see `MAYARA_TEST_URL`), so they cannot restart it.
 #[tokio::test]
 #[ignore = "requires running server"]
-async fn test_set_control_values_persists_a_persistent_control() {
+async fn test_set_control_values_applies_a_persistent_control() {
     let id = first_radar_id().await;
     let path = format!("/signalk/v2/api/vessels/self/radars/{}/controls", id);
 
-    // userName is written to disk; the bulk path must save persistence just as
-    // the single-control path does.
     let response = put_json(
         &path,
         &serde_json::json!({"userName": {"value": "BulkPersist"}}),
