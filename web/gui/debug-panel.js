@@ -11,7 +11,7 @@
 import { createEventTimeline, updateTimeline, selectEvent, clearEvents } from './event-timeline.js';
 import { createPacketView, showPacketDetails, clearPacketView } from './packet-view.js';
 import { createStateDiffView, showStateDiff } from './state-diff.js';
-import { apiBase, wsBase } from './api.js';
+import { apiBase, apiFetch, wsBase } from './api.js';
 
 // ============================================================================
 // State
@@ -49,7 +49,7 @@ const DEBUG_RECORDING_STOP_URL = apiBase('/v2/api/debug/recording/stop');
  */
 export async function isDebugAvailable() {
   try {
-    const response = await fetch(DEBUG_EVENTS_URL, { method: 'HEAD' });
+    const response = await apiFetch(DEBUG_EVENTS_URL, { method: 'HEAD' });
     return response.ok;
   } catch (e) {
     return false;
@@ -183,7 +183,7 @@ async function startRecording() {
       brand: r.brand
     }));
 
-    const response = await fetch(DEBUG_RECORDING_START_URL, {
+    const response = await apiFetch(DEBUG_RECORDING_START_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ radars: radarList })
@@ -203,7 +203,7 @@ async function startRecording() {
 
 async function stopRecording() {
   try {
-    const response = await fetch(DEBUG_RECORDING_STOP_URL, {
+    const response = await apiFetch(DEBUG_RECORDING_STOP_URL, {
       method: 'POST'
     });
 

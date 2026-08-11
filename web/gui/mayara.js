@@ -5,6 +5,7 @@ import {
   getDiagnosticsUrl,
   isStandaloneMode,
   detectMode,
+  apiFetch,
 } from "./api.js";
 
 const { a, tr, td, div, p, strong, details, summary, code, br, span, button } =
@@ -795,7 +796,7 @@ async function downloadDiagnostics(btn) {
     document.createTextNode("Generating diagnostics…")
   );
   try {
-    const resp = await fetch(getDiagnosticsUrl());
+    const resp = await apiFetch(getDiagnosticsUrl());
     if (!resp.ok) {
       throw new Error(`HTTP ${resp.status} ${resp.statusText}`);
     }

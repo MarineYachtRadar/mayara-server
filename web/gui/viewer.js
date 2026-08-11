@@ -29,6 +29,7 @@ import {
   detectMode,
   fetchRadarIds,
   apiBase,
+  apiFetch,
   wsBase,
 } from "./api.js";
 import "./vendor/protobuf.min.js";
@@ -484,7 +485,7 @@ async function pollUpstreamStatus() {
   let reachable = false;
   let message = null;
   try {
-    const res = await fetch(apiBase("/signalk"), {
+    const res = await apiFetch(apiBase("/signalk"), {
       headers: { Accept: "application/json" },
     });
     if (res.ok) {
@@ -607,7 +608,7 @@ async function subscribeToAisViaSignalK() {
 // silent (mayara standalone doesn't serve this endpoint).
 async function primeAisFromRestSnapshot() {
   try {
-    const res = await fetch(apiBase("/signalk/v1/api/vessels/"));
+    const res = await apiFetch(apiBase("/signalk/v1/api/vessels/"));
     if (!res.ok) return;
     const tree = await res.json();
     const URN = "urn:mrn:imo:mmsi:";
