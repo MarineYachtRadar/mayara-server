@@ -172,6 +172,13 @@ pub(crate) const STARTUP_REQUEST: [u8; 20] = [
     0x26, 0x72, 0xFF, 0x0D, // Request model code
 ];
 
+/// Standalone MAC address request. The radar answers with a `0xA7`
+/// status packet carrying its own MAC, on the same port discovery runs
+/// on — so the locator can ask for a radar's identity before it decides
+/// what to call it, rather than waiting for the report receiver's
+/// [`STARTUP_REQUEST`].
+pub(crate) const MAC_ADDRESS_REQUEST: [u8; 4] = [0x26, CMD_MAC_ADDRESS, 0x11, 0x0D];
+
 /// Keep-alive packet (4 bytes).
 pub(crate) const KEEPALIVE_PACKET: [u8; 4] = [0x26, 0x69, 0x22, 0x0D];
 

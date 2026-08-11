@@ -382,12 +382,21 @@ impl RaymarineLocator {
                         beacon_report
                     };
 
+                    // The beacons' link_id is the radar's own hardware
+                    // identity: stable across reboots, unique per unit, and
+                    // independent of the address it is reachable on. Its low
+                    // half identifies the unit and its high half the role
+                    // (0xd680 radar, 0xcbc0 the W3 bridge in the same
+                    // housing), so the tail of the formatted value is what
+                    // distinguishes one radar from another.
+                    let hardware_id = format!("{:08x}", link_id);
+
                     let location_info: RadarInfo = RadarInfo::new(
                         radars,
                         &self.args,
                         Brand::Raymarine,
                         None,
-                        None,
+                        Some(hardware_id.as_str()),
                         None,
                         0,
                         spokes_per_revolution,
@@ -800,6 +809,7 @@ pub(super) fn new(args: &Cli, addresses: &mut Vec<LocatorAddress>) {
 
 #[cfg(test)]
 mod tests {
+
     use std::net::{Ipv4Addr, SocketAddrV4};
 
     use clap::Parser;
@@ -1111,6 +1121,15 @@ mod tests {
             .expect("radar should be created");
         assert_eq!(model, BaseModel::RD);
         assert_eq!(info.controls.model_name(), Some("RD".to_string()));
+        // Identity comes from the beacons' link_id (0xb8c0c053), not from
+        // the address: this dome's IP changes with its DHCP lease, and its
+        // report address is a multicast group shared with its listeners.
+        assert_eq!(
+            info.hardware_id.as_deref(),
+            Some("b8c0c053"),
+            "the radar's identity must be its link_id"
+        );
+        assert_eq!(info.key(), "rayc053");
         assert_eq!(
             info.send_command_addr,
             SocketAddrV4::new(Ipv4Addr::new(10, 18, 106, 155), 2573)

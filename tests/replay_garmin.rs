@@ -77,6 +77,16 @@ async fn replay_garmin_xhd() {
                         if info.controls.model_name().is_some() && !info.ranges.all.is_empty() {
                             assert!(key.starts_with("gar"), "expected Garmin key, got: {}", key);
                             assert_eq!(info.brand, mayara::Brand::Garmin);
+                            // Keyed on the heartbeat's unique id (0x08d40aa0),
+                            // not the address: Garmin puts every radar on
+                            // 172.16.2.0, so the address tells radars apart
+                            // on no boat at all.
+                            assert_eq!(
+                                info.hardware_id.as_deref(),
+                                Some("08d40aa0"),
+                                "identity must come from the CDM heartbeat"
+                            );
+                            assert_eq!(key, "gar0aa0A", "dual-range radar keeps its range suffix");
                             let model = info.controls.model_name().unwrap();
                             assert!(model.contains("xHD"), "expected xHD model, got: {}", model);
                             assert!(!info.doppler, "xHD should not support Doppler");
