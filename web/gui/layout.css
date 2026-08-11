@@ -342,7 +342,7 @@ div.myr_ppi {
 .myr_power_lozenge_caret {
   width: 10px;
   height: 6px;
-  fill: currentColor;
+  fill: currentcolor;
 }
 
 /* Radar selector, opened from the name half of the power lozenge. Sits just

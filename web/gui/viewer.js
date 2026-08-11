@@ -232,10 +232,17 @@ window.onload = async function () {
       urlParams.set("id", id);
       history.replaceState(null, "", `?${urlParams}`);
     }
-    currentRadarId = id;
   } catch (e) {
     console.error(`Could not resolve radar id: ${e}`);
+    // No list and no id from the URL means there is nothing to load: without
+    // this the viewer would sit retrying capabilities for a null radar with
+    // nothing on screen. The overview page retries discovery and says so.
+    if (!id) {
+      window.location.href = "index.html";
+      return;
+    }
   }
+  currentRadarId = id;
 
   // Process any pending radar data that arrived before renderer was ready
   if (pendingRadarData) {
@@ -1145,7 +1152,7 @@ function createPowerLozenge() {
   // of the lozenge stays inert.
   if (knownRadars.length > 1) {
     nameBtn.title = "Click to choose which radar to show";
-    nameBtn.setAttribute("aria-haspopup", "menu");
+    nameBtn.setAttribute("aria-controls", "myr_radar_menu");
     nameBtn.setAttribute("aria-expanded", "false");
     nameBtn.insertAdjacentHTML(
       "beforeend",
@@ -1168,10 +1175,11 @@ function createPowerLozenge() {
 // then the combined views — consecutive pairs, which is where the two ranges
 // of one antenna land, and from three radars up all of them at once.
 function createRadarMenu(container) {
+  // A disclosed group of buttons rather than an ARIA menu: the rows are in tab
+  // order and Escape closes, so there is no arrow-key model to promise.
   const menu = document.createElement("div");
   menu.id = "myr_radar_menu";
   menu.className = "myr_radar_menu";
-  menu.setAttribute("role", "menu");
 
   for (const radar of knownRadars) {
     menu.appendChild(
@@ -1200,7 +1208,6 @@ function radarMenuRow(label, isCurrent, onSelect) {
   const row = document.createElement("button");
   row.type = "button";
   row.className = "myr_radar_menu_row";
-  row.setAttribute("role", "menuitem");
   if (isCurrent) {
     row.classList.add("myr_radar_menu_current");
     row.setAttribute("aria-current", "true");
@@ -1229,7 +1236,13 @@ function toggleRadarMenu(event) {
 }
 
 function closeRadarMenu() {
-  setRadarMenuOpen(document.getElementById("myr_radar_menu"), false);
+  const menu = document.getElementById("myr_radar_menu");
+  const trigger = document.getElementById("myr_power_lozenge_select");
+  // Hiding the row the keyboard is on would drop focus to the document.
+  if (menu.contains(document.activeElement)) {
+    trigger.focus();
+  }
+  setRadarMenuOpen(menu, false);
   document.removeEventListener("click", closeRadarMenu);
   document.removeEventListener("keydown", closeRadarMenuOnEscape);
 }

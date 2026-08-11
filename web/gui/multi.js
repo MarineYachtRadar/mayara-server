@@ -14,15 +14,16 @@ window.onload = async function () {
   const params = new URLSearchParams(window.location.search);
   const container = document.getElementById("myr_multi");
 
-  const ids = (params.get("ids") || "")
-    .split(",")
+  const ids = params
+    .getAll("ids")
     .map((id) => id.trim())
     .filter(Boolean);
 
   if (ids.length < 2 || new Set(ids).size !== ids.length) {
     fail(
       container,
-      "Combined view needs two or more distinct radar ids: multi.html?ids=<id>,<id>"
+      "Combined view needs two or more distinct radar ids: " +
+        "multi.html?ids=<id>&ids=<id>"
     );
     return;
   }

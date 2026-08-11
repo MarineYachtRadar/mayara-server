@@ -27,7 +27,13 @@ export function radarCombinations(radars) {
   return combinations;
 }
 
-/** Link to the combined view of `ids`, in that pane order. */
+/**
+ * Link to the combined view of `ids`, one pane per id in the order given.
+ * Repeated parameters rather than one delimited value: a radar id comes from
+ * the radar's own serial, so it cannot be assumed free of any separator.
+ */
 export function multiViewUrl(ids) {
-  return "multi.html?ids=" + ids.map(encodeURIComponent).join(",");
+  const params = new URLSearchParams();
+  ids.forEach((id) => params.append("ids", id));
+  return `multi.html?${params}`;
 }
