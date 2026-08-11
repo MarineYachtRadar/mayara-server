@@ -71,7 +71,7 @@ pub const BYTE_LOOKUP_LENGTH: usize = (u8::MAX as usize) + 1;
 
 #[derive(Error, Debug)]
 pub enum RadarError {
-    #[error("I/O operation failed")]
+    #[error("I/O operation failed: {0}")]
     Io(#[from] std::io::Error),
     #[error("Axum operation failed")]
     Axum(#[from] axum::Error),
@@ -464,6 +464,15 @@ fn radar_key(
     key
 }
 
+/// The radar key without the dual-range suffix appended by [`radar_key`]:
+/// identical for all ranges of one physical antenna.
+fn base_key<'a>(key: &'a str, dual: Option<&str>) -> &'a str {
+    match dual {
+        Some(dual) => key.strip_suffix(dual).unwrap_or(key),
+        None => key,
+    }
+}
+
 impl RadarInfo {
     #[allow(clippy::too_many_arguments)] // every radar field comes flat from per-brand discovery; the brands are the only callers
     pub fn new<F>(
@@ -563,6 +572,12 @@ impl RadarInfo {
     /// want the default user-visible name to match the key.
     pub(crate) fn discriminator(&self) -> Option<&str> {
         identity_discriminator(self.serial_no.as_deref(), self.hardware_id.as_deref())
+    }
+
+    /// The key without the dual-range suffix: identical for all ranges of one
+    /// physical antenna, so clients can group them into a combined view.
+    pub fn base_key(&self) -> &str {
+        base_key(&self.key, self.dual.as_deref())
     }
 
     /// True when this radar's data_loop is currently dropping decoded frames
@@ -2406,6 +2421,14 @@ mod tests {
             mac_identity(&[0x00, 0xd0, 0x1d, 0x05, 0x79, 0x03]).as_deref(),
             Some("00d01d057903")
         );
+    }
+
+    #[test]
+    fn base_key_strips_dual_suffix() {
+        // Both ranges of one antenna collapse onto the same base key.
+        assert_eq!(base_key("nav2452A", Some("A")), "nav2452");
+        assert_eq!(base_key("nav2452B", Some("B")), "nav2452");
+        assert_eq!(base_key("nav2452", None), "nav2452");
     }
 
     #[test]

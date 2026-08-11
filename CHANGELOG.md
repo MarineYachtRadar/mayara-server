@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **furuno:** identify radars by MAC when they report no serial (#509) ([PR #509](https://github.com/MarineYachtRadar/mayara-server/pull/509))
+- **gui:** side-by-side view for dual-range radars (#479) ([PR #479](https://github.com/MarineYachtRadar/mayara-server/pull/479))
+- **controls:** snap a numeric value to the nearest settable one (#515) ([PR #515](https://github.com/MarineYachtRadar/mayara-server/pull/515))
 
 ### Changed
 
@@ -22,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **targets:** alarm guard zones on target promotion, not first blob (#502) ([PR #502](https://github.com/MarineYachtRadar/mayara-server/pull/502))
 - **controls:** keep guard zone range when only the angle is changed (#504) ([PR #504](https://github.com/MarineYachtRadar/mayara-server/pull/504))
 - **api:** list radars in a stable order (#512) ([PR #512](https://github.com/MarineYachtRadar/mayara-server/pull/512))
+- **controls:** stop numeric controls reporting a value they never had (#520) ([PR #520](https://github.com/MarineYachtRadar/mayara-server/pull/520))
 
 ## [3.8.1] - 2026-08-04
 

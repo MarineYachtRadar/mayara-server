@@ -82,5 +82,16 @@ Unrecognized part codes still work with default capabilities. Please report the 
 **FAR shows "Unknown" model:**
 The part code is not in the lookup table. The radar will work with default capabilities. Report the part code from the log output so it can be added.
 
+**Controls stop working / radar flips between picture and OFF:**
+Furuno radars keep only **one control session per client IP address**. A second
+Mayara instance on the same machine (for example a containerized instance with
+host networking next to a development instance) fights the first one for that
+single slot: the radar serves each new login briefly and then closes it, both
+instances reconnect forever, and neither can hold the session. Spoke data is
+unaffected (it arrives via multicast), so the picture keeps painting while
+controls fail. Run only one Mayara instance per host when a Furuno radar is in
+use. Clients on other machines (TimeZero, MFDs) have their own IP and do not
+conflict.
+
 **Capturing traffic:**
 - For packet capture instructions used in bug reports, see [Capturing Radar Traffic](./capturing-traffic.md).

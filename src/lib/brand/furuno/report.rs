@@ -41,6 +41,35 @@ const CONTROL_KEEPALIVE_IDLE: Duration = Duration::from_secs(30);
 const CONTROL_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
 const CONTROL_KEEPALIVE_RETRIES: u32 = 3;
 
+/// Reconnect backoff after the radar drops the control session. Every login
+/// consumes a session slot in the radar's firmware; hammering relogins at a
+/// fixed short interval can exhaust the slot table and lock ALL clients out
+/// until the radar garbage-collects (observed on DRS4D-NXT: churn every ~6 s
+/// kept the table full indefinitely). Back off exponentially and reset only
+/// after a connection has proven stable.
+const RECONNECT_BACKOFF_MIN: Duration = Duration::from_secs(1);
+const RECONNECT_BACKOFF_MAX: Duration = Duration::from_secs(60);
+/// A session that survived this long counts as stable: reset the backoff.
+const RECONNECT_STABLE_AFTER: Duration = Duration::from_secs(60);
+
+/// Split out from the connection loop so the policy can be exercised without a
+/// radar: the loop supplies real elapsed times and sleeps.
+fn next_reconnect_backoff(
+    current: Duration,
+    session_lasted: Duration,
+    short_lived_sessions: u32,
+) -> (Duration, u32) {
+    if session_lasted >= RECONNECT_STABLE_AFTER {
+        // Proven stable — start from scratch so a later blip reconnects fast.
+        (RECONNECT_BACKOFF_MIN, 0)
+    } else {
+        (
+            (current * 2).min(RECONNECT_BACKOFF_MAX),
+            short_lived_sessions + 1,
+        )
+    }
+}
+
 /// Furuno wire-format decoding mode. When Target Analyzer is active on NXT
 /// radars, each echo byte encodes `[dopplerClass:2 | intensity:4 | 00:2]`
 /// rather than a plain intensity in 0..PIXEL_VALUES. The report receiver
@@ -379,6 +408,14 @@ impl FurunoReportReceiver {
                     match r {
                         Ok((len, addr)) => {
                             if self.verify_source_address(&addr) {
+                                // Spoke traffic proves the radar is alive even
+                                // while the TCP report session is down — keep
+                                // the silence watchdog from decaying a
+                                // transmitting radar to Off.
+                                self.common.info.mark_input();
+                                if let Some(ref cb) = self.common_b {
+                                    cb.info.mark_input();
+                                }
                                 // Idle mode: drain the recv but skip decoding.
                                 // Furuno radars emit spokes even in Standby;
                                 // when nobody is watching, decoding them costs
@@ -407,6 +444,10 @@ impl FurunoReportReceiver {
                     match r {
                         Ok((len, addr)) => {
                             if self.verify_source_address(&addr) {
+                                self.common.info.mark_input();
+                                if let Some(ref cb) = self.common_b {
+                                    cb.info.mark_input();
+                                }
                                 if !self.both_ranges_idle() {
                                     self.process_frame(&buf2[..len]);
                                 }
@@ -427,6 +468,8 @@ impl FurunoReportReceiver {
     }
 
     pub(super) async fn run(mut self, subsys: &mut SubsystemHandle) -> Result<(), RadarError> {
+        let mut backoff = RECONNECT_BACKOFF_MIN;
+        let mut short_lived_sessions = 0u32;
         loop {
             // Each time we start the loop, there is no stream
             // and none of the data sockets are open.
@@ -434,19 +477,63 @@ impl FurunoReportReceiver {
             self.multicast_socket = None;
             self.broadcast_socket = None;
 
+            let mut reached_data_loop = false;
             if let Err(e) = self.start_data_socket().await {
                 log::warn!("{}: Failed to start data sockets: {}", self.common.key, e);
             } else if let Err(e) = self.login_to_radar() {
                 log::warn!("{}: Failed to login to radar: {}", self.common.key, e);
             } else if let Err(e) = self.start_command_stream().await {
                 log::warn!("{}: Failed to start command stream: {}", self.common.key, e);
-            } else if let Err(RadarError::Shutdown) = self.data_loop(subsys).await {
-                return Ok(());
+            } else {
+                reached_data_loop = true;
+                let started = Instant::now();
+                match self.data_loop(subsys).await {
+                    Err(RadarError::Shutdown) => return Ok(()),
+                    Err(e) => {
+                        log::warn!(
+                            "{}: Radar control session ended after {:?}: {}; reconnecting in {:?}",
+                            self.common.key,
+                            started.elapsed(),
+                            e,
+                            backoff
+                        );
+                    }
+                    Ok(()) => {}
+                }
+                let was_stable = started.elapsed() >= RECONNECT_STABLE_AFTER;
+                (backoff, short_lived_sessions) =
+                    next_reconnect_backoff(backoff, started.elapsed(), short_lived_sessions);
+                if !was_stable {
+                    // Furuno radars keep one control session per client IP.
+                    // A pattern of sessions that die right after the radar has
+                    // answered the initial requests means another client on
+                    // THIS host (e.g. a second mayara instance) keeps taking
+                    // the slot — name the cause instead of churning silently.
+                    if short_lived_sessions == 3 {
+                        log::error!(
+                            "{}: three control sessions in a row died within seconds — \
+                             another client on this machine (a second mayara instance?) \
+                             is likely competing for the radar's single per-host control \
+                             session. Spoke data still flows; controls will not work \
+                             until only one instance talks to this radar.",
+                            self.common.key
+                        );
+                    }
+                }
+            }
+
+            // A setup failure (socket, login or command stream) never reached
+            // data_loop, so nothing escalated the backoff above. Treat it as a
+            // zero-length session — otherwise a radar refusing logins would be
+            // retried every second forever.
+            if !reached_data_loop {
+                (backoff, short_lived_sessions) =
+                    next_reconnect_backoff(backoff, Duration::ZERO, short_lived_sessions);
             }
 
             tokio::select! {
                 _ = subsys.on_shutdown_requested() => return Ok(()),
-                _ = sleep(Duration::from_millis(1000)) => {}
+                _ = sleep(backoff) => {}
             }
         }
     }
@@ -924,46 +1011,47 @@ impl FurunoReportReceiver {
                     2.0 // Rain
                 };
 
-                let drid = self.extract_drid(&command_id, &numbers);
-                let range_idx = if drid == 1 && self.common_b.is_some() {
-                    1
+                // Target Analyzer is shared between the ranges of a dual-range
+                // antenna: the firmware mirrors the state, and the radar only
+                // reports it for the range the controlling client addressed.
+                // Apply the report to both ranges so Range B's emission gate
+                // lifts even when the confirmation arrives as Range A.
+                let range_indices: &[u8] = if self.common_b.is_some() {
+                    &[0, 1]
                 } else {
-                    0
+                    &[0]
                 };
-                let old_mode = self.doppler_wire_mode_for(range_idx);
-                self.common_for_range(drid)
-                    .set_value(&ControlId::Doppler, value);
-                let new_mode = self.doppler_wire_mode_for(range_idx);
-                if old_mode != new_mode {
-                    let low_power = self.model.is_low_power();
-                    let legend = if range_idx == 1 {
-                        self.common_b.as_ref().unwrap().info.get_legend()
-                    } else {
-                        self.common.info.get_legend()
-                    };
-                    self.wire_to_legend[range_idx] =
-                        Self::wire_to_legend(&legend, new_mode, low_power);
+                for &range_idx in range_indices {
+                    let old_mode = self.doppler_wire_mode_for(range_idx as usize);
+                    self.common_for_range(range_idx)
+                        .set_value(&ControlId::Doppler, value);
+                    let new_mode = self.doppler_wire_mode_for(range_idx as usize);
                     let key = if range_idx == 1 {
                         &self.common_b.as_ref().unwrap().key
                     } else {
                         &self.common.key
                     };
-                    log::debug!("{}: Doppler wire mode changed to {:?}", key, new_mode);
-                }
-                // First `$NEF` for this range confirms the TA state, so the
-                // LUT is now trustworthy and spoke emission can resume.
-                if !self.target_analyzer_known[range_idx] {
-                    self.target_analyzer_known[range_idx] = true;
-                    let key = if range_idx == 1 {
-                        &self.common_b.as_ref().unwrap().key
-                    } else {
-                        &self.common.key
-                    };
-                    log::info!(
-                        "{}: Target Analyzer state confirmed (mode {:?}), spoke output enabled",
-                        key,
-                        self.doppler_wire_mode_for(range_idx)
-                    );
+                    if old_mode != new_mode {
+                        let low_power = self.model.is_low_power();
+                        let legend = if range_idx == 1 {
+                            self.common_b.as_ref().unwrap().info.get_legend()
+                        } else {
+                            self.common.info.get_legend()
+                        };
+                        self.wire_to_legend[range_idx as usize] =
+                            Self::wire_to_legend(&legend, new_mode, low_power);
+                        log::debug!("{}: Doppler wire mode changed to {:?}", key, new_mode);
+                    }
+                    // First `$NEF` confirms the TA state, so the LUT is now
+                    // trustworthy and spoke emission can resume.
+                    if !self.target_analyzer_known[range_idx as usize] {
+                        self.target_analyzer_known[range_idx as usize] = true;
+                        log::info!(
+                            "{}: Target Analyzer state confirmed (mode {:?}), spoke output enabled",
+                            key,
+                            self.doppler_wire_mode_for(range_idx as usize)
+                        );
+                    }
                 }
             }
 
@@ -2076,6 +2164,59 @@ async fn conditional_read(
 mod tests {
     use super::*;
     use crate::radar::Legend;
+
+    /// A radar that keeps dropping the control session must be backed off
+    /// exponentially: hammering relogins exhausts the firmware's session slot
+    /// table and locks out every client, which is the failure this policy
+    /// exists to avoid.
+    #[test]
+    fn reconnect_backoff_escalates_while_sessions_are_short_lived() {
+        let short = Duration::from_secs(1);
+        let (b1, n1) = next_reconnect_backoff(RECONNECT_BACKOFF_MIN, short, 0);
+        assert_eq!(b1, Duration::from_secs(2));
+        assert_eq!(n1, 1);
+
+        let (b2, n2) = next_reconnect_backoff(b1, short, n1);
+        assert_eq!(b2, Duration::from_secs(4));
+        assert_eq!(n2, 2);
+    }
+
+    #[test]
+    fn reconnect_backoff_is_capped() {
+        let short = Duration::from_secs(1);
+        let (capped, _) = next_reconnect_backoff(RECONNECT_BACKOFF_MAX, short, 9);
+        assert_eq!(capped, RECONNECT_BACKOFF_MAX);
+    }
+
+    /// A radar that refuses the login, or whose sockets will not open, never
+    /// reaches the data loop. That path must still back off — retrying a
+    /// refusing radar every second is exactly the churn that exhausts the
+    /// firmware's session slots.
+    #[test]
+    fn reconnect_backoff_escalates_when_setup_never_reaches_the_data_loop() {
+        let mut backoff = RECONNECT_BACKOFF_MIN;
+        let mut count = 0;
+        for expected in [2u64, 4, 8, 16] {
+            // Duration::ZERO is how the loop reports "no session happened".
+            (backoff, count) = next_reconnect_backoff(backoff, Duration::ZERO, count);
+            assert_eq!(backoff, Duration::from_secs(expected));
+        }
+        // And it is still bounded.
+        for _ in 0..10 {
+            (backoff, count) = next_reconnect_backoff(backoff, Duration::ZERO, count);
+        }
+        assert_eq!(backoff, RECONNECT_BACKOFF_MAX);
+    }
+
+    /// Once a session has proven stable the next blip should reconnect
+    /// immediately rather than inherit a minute-long delay.
+    #[test]
+    fn reconnect_backoff_resets_after_a_stable_session() {
+        let (reset, count) =
+            next_reconnect_backoff(Duration::from_secs(32), RECONNECT_STABLE_AFTER, 5);
+        assert_eq!(reset, RECONNECT_BACKOFF_MIN);
+        assert_eq!(count, 0, "a stable session clears the churn counter");
+    }
 
     /// Minimal `Legend` shaped like a post-TA NXT: 120 intensity slots,
     /// 1 approaching slot, 1 receding slot, 1 rain slot, mirroring what

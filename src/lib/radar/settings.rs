@@ -971,6 +971,36 @@ impl SharedControls {
     ) -> Result<(), RadarError> {
         match self.get(&control_value.id) {
             Some(c) => {
+                // Snap a requested number to the nearest settable value, so
+                // a client can ask for any range and get the closest one the
+                // radar has. Nearly every control is sent straight to the
+                // radar rather than stored locally, so the snap in
+                // Control::set only ever sees what the radar reports back —
+                // the request has to be normalised here too.
+                //
+                // Only when the client left the units to us, which is what
+                // they all do; a value in explicit units would have to be
+                // converted before it could be compared with valid_values,
+                // and the radar can deal with that rarity itself.
+                let control_value = if c.item.data_type == ControlDataType::Number
+                    && control_value.units.is_none()
+                {
+                    let snapped = control_value
+                        .value
+                        .as_ref()
+                        .and_then(|v| v.as_f64())
+                        .map(|v| c.snap_to_valid_value(v));
+                    match snapped {
+                        Some(v) => ControlValue {
+                            value: Some(v.into()),
+                            ..control_value
+                        },
+                        None => control_value,
+                    }
+                } else {
+                    control_value
+                };
+
                 let cv_orig = control_value.clone();
                 let (units, value) =
                     Self::convert_to_wire_number(control_value.units, control_value.value, &c)?;
@@ -992,8 +1022,13 @@ impl SharedControls {
                     cv
                 );
 
-                // Reject values not in the valid set (e.g. sparse capability bitmasks)
-                if let Some(ref valid_values) = c.item.valid_values
+                // Reject a value the control does not offer, when "nearest"
+                // would be a guess: an Enum's valid values are distinct
+                // options, not points on a scale. Numbers are snapped
+                // instead, further down in Control::set, so a client can
+                // ask for any range and get the closest one the radar has.
+                if c.item.data_type != ControlDataType::Number
+                    && let Some(ref valid_values) = c.item.valid_values
                     && let Some(ref v) = cv.value
                     && let Some(f) = v.as_f64()
                 {
@@ -1220,7 +1255,14 @@ impl SharedControls {
         if let Some(control) = self.get(&cv.id) {
             self.send_reply_to_client(reply_tx, &control, Some(e.to_string()))
                 .await?;
-            log::warn!("User tried to set invalid {}: {}", cv.id, e);
+            // An I/O error means the radar connection failed, not that the
+            // user's value was invalid — word the log accordingly.
+            match e {
+                RadarError::Io(_) => {
+                    log::warn!("Failed to send {} to radar: {}", cv.id, e)
+                }
+                _ => log::warn!("User tried to set invalid {}: {}", cv.id, e),
+            }
             Ok(())
         } else {
             Err(RadarError::CannotSetControlId(cv.id))
@@ -2413,7 +2455,11 @@ pub(crate) fn new_numeric(control_id: ControlId, min_value: f64, max_value: f64)
     let control = Control::new(ControlDefinition::new(
         control_id,
         ControlDataType::Number,
-        min_value,
+        // No default: the minimum is a bound, not a reading. Seeding it made
+        // the control indistinguishable from one the radar had actually
+        // reported — a Furuno dual-range B channel published range 0 with a
+        // timestamp before it was ever activated.
+        None,
         None,
         false,
         min_value,
@@ -2444,7 +2490,8 @@ pub(crate) fn new_auto(
     let control = Control::new(ControlDefinition::new(
         control_id,
         ControlDataType::Number,
-        min_value,
+        // See new_numeric: the minimum is a bound, not a reading.
+        None,
         Some(automatic),
         false,
         min_value,
@@ -2883,6 +2930,38 @@ impl Control {
     /// Return Ok(Some(())) when the value changed or it always needs
     /// to be broadcast to listeners.
     ///
+    /// The nearest value this control will accept, or `value` unchanged
+    /// when it accepts anything.
+    fn snap_to_valid_value(&self, value: f64) -> f64 {
+        let Some(valid) = self.item.valid_values.as_ref() else {
+            return value;
+        };
+        let Some(nearest) = valid
+            .iter()
+            .min_by(|a, b| {
+                let da = (**a as f64 - value).abs();
+                let db = (**b as f64 - value).abs();
+                // total_cmp rather than partial_cmp: an unorderable
+                // distance must not be able to panic here.
+                // Ties go to the lower value, so the choice is stable
+                // rather than dependent on the order of the list.
+                da.total_cmp(&db).then(a.cmp(b))
+            })
+            .map(|v| *v as f64)
+        else {
+            return value;
+        };
+        if nearest != value {
+            log::debug!(
+                "{}: snapped {} to the nearest settable value {}",
+                self.item.control_id,
+                value,
+                nearest
+            );
+        }
+        nearest
+    }
+
     pub fn set(
         &mut self,
         mut value: f64,
@@ -2937,6 +3016,16 @@ impl Control {
             self.item.units.unwrap_or(Units::None)
         );
 
+        // A NaN passes every comparison below — it is neither below the
+        // minimum nor above the maximum — so refuse it here rather than
+        // let it settle into a control as a value nothing can reason about.
+        if !value.is_finite() {
+            return Err(ControlError::Invalid(
+                self.item.control_id,
+                format!("{}", value),
+            ));
+        }
+
         // RANGE MAPPING
         if let (Some(min_value), Some(max_value)) = (self.item.min_value, self.item.max_value) {
             if self.item.wire_offset.unwrap_or(0.) == -1.
@@ -2976,6 +3065,21 @@ impl Control {
             }
         }
         log::trace!("{} map value to rounded {}", self.item.control_id, value);
+
+        // A numeric control's valid_values are points on a continuum, so a
+        // value between two of them means the nearest one. Radars report
+        // ranges that are in no table at all — a Navico driving its range
+        // from a chart overlay sweeps whatever suits the chart, 9888 m
+        // between the 4 and 6 nm entries — and clients should not each
+        // have to work out what that means.
+        //
+        // Only for numbers. An Enum's valid_values are distinct options,
+        // where "nearest" has no meaning: Power lists [1, 2] for Standby
+        // and Transmit, and rounding a stray 4 to the closest entry would
+        // start the radar transmitting.
+        if self.item.data_type == ControlDataType::Number {
+            value = self.snap_to_valid_value(value);
+        }
 
         if let Some(av) = auto_value {
             let si = self.item.wire_units.map(|u| u.to_si(av).1).unwrap_or(av);
@@ -3592,6 +3696,154 @@ mod test {
         // A control with no automatic mode reports no flag at all.
         let (_, range) = new_numeric(ControlId::Range, 0., 100_000.).take();
         assert_eq!(range.reported_auto(), None);
+    }
+
+    fn test_controls() -> SharedControls {
+        let (sk_tx, _sk_rx) = tokio::sync::broadcast::channel(16);
+        SharedControls::new(
+            "test".to_string(),
+            sk_tx,
+            &Cli::parse_from(["mayara-server"]),
+            HashMap::new(),
+        )
+    }
+
+    /// A client asking for a range the radar does not offer gets the
+    /// nearest one it does. Nearly every control is forwarded to the radar
+    /// rather than stored, so what matters is the value that leaves for
+    /// the radar — the local control only changes when the radar reports
+    /// back.
+    #[test]
+    fn a_client_request_for_an_unlisted_range_is_snapped() {
+        let controls = test_controls();
+        for v in [7408, 11112, 14816] {
+            controls.add_valid_value(&ControlId::Range, v);
+        }
+        let mut sent = controls.control_update_subscribe();
+        let (reply_tx, _reply_rx) = tokio::sync::mpsc::channel(8);
+
+        // 9888 m: between 4 nm and 6 nm, and in no table.
+        let cv = ControlValue::new(ControlId::Range, 9888.into());
+        controls.process_client_request(cv, reply_tx).unwrap();
+
+        let forwarded = sent.try_recv().expect("a request reaches the radar");
+        let value = forwarded
+            .control_value
+            .value
+            .and_then(|v| v.as_f64())
+            .expect("with a value");
+        assert_eq!(
+            value, 11112.,
+            "the radar is asked for the nearest settable range, not 9888"
+        );
+    }
+
+    /// The same path must still refuse an enum value the control does not
+    /// offer. Power lists Standby and Transmit; a request for Fault has no
+    /// nearest neighbour worth guessing, and guessing would start the
+    /// radar.
+    #[test]
+    fn a_client_request_for_an_unlisted_enum_is_refused() {
+        let controls = test_controls();
+        let (reply_tx, _reply_rx) = tokio::sync::mpsc::channel(8);
+
+        let cv = ControlValue::new(ControlId::Power, 4.into());
+        let result = controls.process_client_request(cv, reply_tx);
+
+        assert!(
+            matches!(
+                result,
+                Err(RadarError::ControlError(ControlError::Invalid(
+                    ControlId::Power,
+                    _
+                )))
+            ),
+            "a Fault request must be refused, not rounded to Transmit: {:?}",
+            result
+        );
+    }
+
+    /// Navico radars driving their range from a chart overlay sweep
+    /// whatever suits the chart: 9888 m sits between the 4 nm and 6 nm
+    /// entries and is in no table at all. Observed on a HALO24 — 2700,
+    /// 4517, 6543, 9888, 12645 m and more, none of them settable.
+    #[test]
+    fn a_numeric_control_snaps_a_reported_value_to_the_nearest_settable_one() {
+        let (_, mut range) = new_numeric(ControlId::Range, 57., 88896.).take();
+        range.set_valid_values(vec![7408, 11112, 14816]);
+
+        range.set(9888., None, None, None).unwrap();
+        assert_eq!(range.value, Some(11112.), "9888 is nearest 11112");
+
+        range.set(8000., None, None, None).unwrap();
+        assert_eq!(range.value, Some(7408.), "8000 is nearest 7408");
+
+        range.set(14816., None, None, None).unwrap();
+        assert_eq!(range.value, Some(14816.), "a settable value is untouched");
+    }
+
+    /// Ties go to the lower value so the result does not depend on the
+    /// order the radar happened to report its ranges in.
+    #[test]
+    fn snapping_breaks_ties_towards_the_lower_value() {
+        let (_, mut range) = new_numeric(ControlId::Range, 0., 100000.).take();
+        range.set_valid_values(vec![1000, 2000]);
+
+        range.set(1500., None, None, None).unwrap();
+        assert_eq!(range.value, Some(1000.));
+    }
+
+    /// An Enum's valid values are distinct options, where "nearest" means
+    /// nothing. Power offers [1, 2] — Standby and Transmit — so rounding a
+    /// stray Fault (4) to the closest entry would start the radar.
+    #[test]
+    fn an_enum_control_is_never_snapped() {
+        let (_, mut power) = new_list(
+            ControlId::Power,
+            &["Off", "Standby", "Transmit", "Preparing", "Fault"],
+        )
+        .take();
+        power.set_valid_values(vec![1, 2]);
+
+        power.set(4., None, None, None).unwrap();
+        assert_eq!(
+            power.value,
+            Some(4.),
+            "a Fault report must stay a Fault, not become Transmit"
+        );
+    }
+
+    /// A numeric control must start with no value at all. Seeding it with the
+    /// minimum made "never reported" indistinguishable from "the radar says
+    /// zero": a Furuno dual-range B channel published range 0, timestamped, on
+    /// a channel that had never been activated. Clients then either drew that
+    /// as a real range or, once a snap-to-nearest pass runs over reported
+    /// values, rounded it up to the shortest settable range.
+    #[test]
+    fn numeric_controls_start_without_a_value() {
+        let (_, range) = new_numeric(ControlId::Range, 0., 100_000.).take();
+        assert_eq!(range.value, None, "range must not report a phantom 0");
+        assert_eq!(
+            range.timestamp, None,
+            "and no timestamp — a stamped value is what made it look observed"
+        );
+        assert_eq!(
+            range.item.min_value,
+            Some(0.),
+            "the minimum is still a bound"
+        );
+
+        let (_, gain) = new_auto(ControlId::Gain, 0., 100., HAS_AUTO_NOT_ADJUSTABLE).take();
+        assert_eq!(gain.value, None, "auto-capable numerics too");
+        assert_eq!(gain.timestamp, None);
+        assert_eq!(gain.item.min_value, Some(0.), "its bound survives too");
+
+        // Enum controls still seed 0 and are deliberately left alone here: for
+        // an enum, 0 is usually a real option (the first list entry), so
+        // dropping it is a separate judgement per control rather than the
+        // clear-cut "a bound is not a reading" this change makes.
+        let (_, mode) = new_list(ControlId::Mode, &["Harbor", "Offshore"]).take();
+        assert_eq!(mode.value, Some(0.));
     }
 
     /// A guard zone dragged by its start angle arrives as that one field.

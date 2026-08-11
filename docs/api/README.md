@@ -43,6 +43,20 @@ mayara-server --openapi
 | DELETE | `/signalk/v2/api/vessels/self/radars/{id}/targets/{tid}`     | Delete tracked target                              |
 | GET    | `/signalk/v2/api/vessels/self/radars/resources/openapi.json` | OpenAPI specification                              |
 
+#### Dual-range radars
+
+A dual-range antenna (Furuno NXT, Navico 4G/HALO) appears in the radar list as
+two entries. Two optional fields on each entry identify that pairing:
+
+| Field       | Description                                                              |
+| ----------- | ------------------------------------------------------------------------ |
+| `dual`      | Which range of the antenna this entry serves — `"A"` or `"B"`             |
+| `dualGroup` | Shared key identifying the physical antenna; equal for both entries       |
+
+Both are omitted for single-range radars, so their absence means "not dual
+range" rather than "unknown". They are mayara extensions to the Signal K Radar
+API, listed as such in the API-parity allowlist.
+
 ### WebSocket Streams
 
 | Endpoint                                          | Description                                    |
