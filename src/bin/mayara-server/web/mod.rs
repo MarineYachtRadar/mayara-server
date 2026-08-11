@@ -182,15 +182,22 @@ impl Web {
         // reachable from the network at all.
         let bound_addr = listener.local_addr().map_err(WebError::Io)?;
         let bound_port = bound_addr.port();
-        let _advertiser = if embedded {
+        let _advertiser = if embedded || self.args.no_mdns {
             None
         } else {
-            match mayara::network::mdns_advertise::Advertiser::start(bound_port, self.tls) {
+            let hostname = self
+                .args
+                .mdns_hostname
+                .as_deref()
+                .unwrap_or(mayara::network::mdns_advertise::DEFAULT_HOSTNAME);
+            match mayara::network::mdns_advertise::Advertiser::start(bound_port, self.tls, hostname)
+            {
                 Ok(advertiser) => {
                     log::info!(
-                        "Advertising {} port {} on mDNS",
+                        "Advertising {} port {} on mDNS as {}",
                         advertiser.fullname(),
-                        bound_port
+                        bound_port,
+                        advertiser.hostname()
                     );
                     Some(advertiser)
                 }

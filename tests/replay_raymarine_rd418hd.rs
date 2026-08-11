@@ -46,6 +46,8 @@ fn test_args() -> Cli {
         emulator: false,
         merge_targets: false,
         no_websocket_compression: false,
+        mdns_hostname: None,
+        no_mdns: true,
         pcap_max_time: None,
     }
 }
