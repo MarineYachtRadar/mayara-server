@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **gui:** side-by-side view for dual-range radars (#479) ([PR #479](https://github.com/MarineYachtRadar/mayara-server/pull/479))
 - **controls:** snap a numeric value to the nearest settable one (#515) ([PR #515](https://github.com/MarineYachtRadar/mayara-server/pull/515))
 - **api:** accept a bulk PUT on /controls (#516) ([PR #516](https://github.com/MarineYachtRadar/mayara-server/pull/516))
+- **radar:** identify radars from their own protocol, not their address (#510) ([PR #510](https://github.com/MarineYachtRadar/mayara-server/pull/510))
 
 ### Changed
 
