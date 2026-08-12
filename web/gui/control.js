@@ -1587,8 +1587,12 @@ function do_change(v) {
   update.auto = auto;
   message.auto = auto;
   if (auto && control.hasAutoAdjustable) {
-    update.autoValue = storeValue;
-    message.autoValue = value;
+    // An auto adjustment is always a number, and the server only accepts one
+    // there — unlike `value`, which it takes as any JSON. A slider hands us
+    // its position as a string, so a control without units (Sea clutter, for
+    // one) would otherwise send `"-26"` and have the whole request rejected.
+    update.autoValue = Number(storeValue);
+    message.autoValue = Number(value);
   } else {
     update.value = storeValue;
     message.value = value;
