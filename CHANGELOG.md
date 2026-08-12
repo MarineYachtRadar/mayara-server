@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **ais:** drop vestigial AisVessel::status field (#498) ([PR #498](https://github.com/MarineYachtRadar/mayara-server/pull/498))
+- **readme:** list the applications that use Mayara for radar (#540) ([PR #540](https://github.com/MarineYachtRadar/mayara-server/pull/540))
 
 ### Fixed
 
