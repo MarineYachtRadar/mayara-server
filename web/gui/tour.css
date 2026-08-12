@@ -1,0 +1,104 @@
+/* ============================================
+   First-run tour - overlay, highlight, tooltip
+   ============================================ */
+
+/* Sits above the controls panel (z-index 200) so the panel can be part of
+   the tour. */
+.myr_tour {
+  position: fixed;
+  left: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 400;
+  pointer-events: none;
+  font-family: Verdana, Geneva, sans-serif;
+}
+
+/* Four panels dim everything around the highlight; together they also
+   swallow clicks aimed at the rest of the page. */
+.myr_tour_mask {
+  position: absolute;
+  background: rgba(0, 0, 0, 0.72);
+  pointer-events: auto;
+}
+
+.myr_tour_ring {
+  position: absolute;
+  border: 2px solid #8cf;
+  border-radius: 10px;
+  box-shadow: 0 0 12px rgba(136, 204, 255, 0.6);
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.myr_tour_tip {
+  position: absolute;
+  max-width: calc(100vw - 24px);
+  box-sizing: border-box;
+  padding: 14px 16px;
+  background: #111;
+  color: rgb(152, 217, 204);
+  border: 2px solid #446;
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
+  pointer-events: auto;
+}
+
+.myr_tour_tip_title {
+  color: #8cf;
+  font-size: 15px;
+  font-weight: bold;
+  margin-bottom: 8px;
+}
+
+.myr_tour_tip_text {
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.myr_tour_tip_footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.myr_tour_progress {
+  flex: 1;
+  color: #779;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.myr_tour_button {
+  padding: 6px 12px;
+  background: #222;
+  color: #8cf;
+  border: 1px solid #446;
+  border-radius: 6px;
+  font-family: Verdana, Geneva, sans-serif;
+  font-size: 12px;
+  font-weight: bold;
+  cursor: pointer;
+}
+
+.myr_tour_button:hover:not(:disabled) {
+  background: rgba(30, 40, 60, 0.9);
+  border-color: #668;
+  color: #adf;
+}
+
+.myr_tour_button:disabled {
+  color: #556;
+  cursor: default;
+}
+
+.myr_tour_skip {
+  color: #889;
+}
+
+.myr_tour_next {
+  background: #1a3350;
+  border-color: #668;
+}
