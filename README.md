@@ -16,6 +16,15 @@ Mayara translates proprietary radar network protocols into a well-described, ope
 
 Mayara can serve multiple clients simultaneously — PPI displays, chart applications with radar overlay, or autonomous navigation systems that act on the radar image.
 
+## Clients
+
+Besides Mayara's own GUI, these applications use it for radar support:
+
+- [**mayara_pi**](https://github.com/opencpn-radar-pi/mayara_pi) — OpenCPN plugin that draws the radar as a chart overlay and in a PPI window
+- [**Freeboard-SK**](https://github.com/SignalK/freeboard-sk) — Signal K chart plotter with a radar overlay
+- [**Binnacle**](https://github.com/NearlCrews/signalk-binnacle) — WebGL chart plotter for Signal K with a radar overlay and controls
+- [**signalk-beluga-core**](https://github.com/matztam/signalk-beluga-core) — Signal K plugin that forwards Mayara's radar to the ORCA app
+
 ## Radar support
 
 Fully supported and tested with real hardware:
