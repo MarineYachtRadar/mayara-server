@@ -49,6 +49,33 @@ async fn first_radar_id() -> String {
         .clone()
 }
 
+/// Send one request over the control stream and return the first answer to it,
+/// skipping the hello and any deltas that happen to be in flight.
+async fn stream_request(request: &Value) -> Value {
+    let url = format!("{}/signalk/v1/stream?subscribe=none", ws_url());
+    let (ws, _) = connect_async(&url).await.expect("Failed to connect");
+    let (mut write, mut read) = ws.split();
+
+    write
+        .send(text_msg(request))
+        .await
+        .expect("Failed to send request");
+
+    let deadline = Duration::from_secs(5);
+    loop {
+        let next = timeout(deadline, read.next())
+            .await
+            .expect("Timed out waiting for an answer to the request");
+
+        if let Some(Ok(Message::Text(text))) = next {
+            let json: Value = serde_json::from_str(&text).expect("Should be valid JSON");
+            if json.get("state").is_some() {
+                return json;
+            }
+        }
+    }
+}
+
 fn text_msg(v: &Value) -> Message {
     Message::Text(v.to_string().into())
 }
@@ -482,4 +509,75 @@ async fn test_subscribing_brings_the_definitions_with_the_values() {
     }
 
     panic!("subscribing produced no control values");
+}
+
+// ============================================================================
+// Signal K PUT over the stream
+// ============================================================================
+
+/// A Signal K client writes a value by sending a `put` over the stream and
+/// waiting for the answer that carries its `requestId` back. mayara used to
+/// drop the message on the floor: it matched none of the shapes the stream
+/// understood, and nothing was sent in reply, so the client waited forever.
+#[tokio::test]
+#[ignore = "requires running server"]
+async fn test_put_over_stream_is_answered() {
+    let id = first_radar_id().await;
+    let put = serde_json::json!({
+        "context": "vessels.self",
+        "requestId": "test-put-1",
+        "put": {
+            "path": format!("radars.{}.controls.rain", id),
+            "value": { "value": 30 }
+        }
+    });
+
+    let response = stream_request(&put).await;
+
+    assert_eq!(response["requestId"], "test-put-1");
+    assert_eq!(response["state"], "COMPLETED");
+    assert_eq!(response["statusCode"], 200);
+}
+
+/// A control that is only a number is written as one, the way a Signal K
+/// client writes any scalar path.
+#[tokio::test]
+#[ignore = "requires running server"]
+async fn test_put_over_stream_takes_a_bare_number() {
+    let id = first_radar_id().await;
+    let put = serde_json::json!({
+        "requestId": "test-put-2",
+        "put": { "path": format!("radars.{}.controls.rain", id), "value": 40 }
+    });
+
+    let response = stream_request(&put).await;
+
+    assert_eq!(response["state"], "COMPLETED");
+}
+
+#[tokio::test]
+#[ignore = "requires running server"]
+async fn test_put_over_stream_reports_an_unknown_radar() {
+    let put = serde_json::json!({
+        "requestId": "test-put-3",
+        "put": { "path": "radars.nosuchradar.controls.rain", "value": 30 }
+    });
+
+    let response = stream_request(&put).await;
+
+    assert_eq!(response["requestId"], "test-put-3");
+    assert_eq!(response["state"], "FAILED");
+    assert_eq!(response["statusCode"], 404);
+    assert!(response["message"].is_string());
+}
+
+/// Anything the stream cannot read at all is still answered, so a client is
+/// never left waiting on a request that was thrown away.
+#[tokio::test]
+#[ignore = "requires running server"]
+async fn test_unreadable_stream_request_is_answered() {
+    let response = stream_request(&serde_json::json!({"totally": "unrelated"})).await;
+
+    assert_eq!(response["state"], "FAILED");
+    assert_eq!(response["statusCode"], 400);
 }

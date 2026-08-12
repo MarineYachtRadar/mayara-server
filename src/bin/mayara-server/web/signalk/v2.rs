@@ -1604,6 +1604,82 @@ enum StreamRequest {
     RadarControlValue(RadarControlValue),
     Subscription(Subscription),
     Desubscription(Desubscription),
+    Put(StreamPut),
+}
+
+/// A Signal K PUT over the stream, which is how a client that talks to any
+/// Signal K server writes a value:
+///
+/// ```json
+/// {
+///   "context": "vessels.self",
+///   "requestId": "6b0e7f5a-...",
+///   "put": { "path": "radars.nav1034A.controls.sea", "value": { "auto": true, "autoValue": -20 } }
+/// }
+/// ```
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct StreamPut {
+    /// Echoed back so a client can match the answer to what it asked.
+    request_id: Option<String>,
+    put: PutBody,
+}
+
+#[derive(Deserialize, Debug)]
+struct PutBody {
+    path: String,
+    /// The control as a whole (`{"auto": true, "autoValue": -20}`) or, for a
+    /// control that is only a number, that number.
+    value: serde_json::Value,
+}
+
+/// The answer to a Signal K PUT, carrying the id of the request it belongs
+/// to — a client may have several outstanding on one socket.
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct StreamPutResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request_id: Option<String>,
+    state: &'static str,
+    status_code: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+}
+
+impl StreamPutResponse {
+    fn completed(request_id: Option<String>) -> Self {
+        Self {
+            request_id,
+            state: "COMPLETED",
+            status_code: StatusCode::OK.as_u16(),
+            message: None,
+        }
+    }
+
+    fn failed(request_id: Option<String>, status: StatusCode, message: String) -> Self {
+        Self {
+            request_id,
+            state: "FAILED",
+            status_code: status.as_u16(),
+            message: Some(message),
+        }
+    }
+}
+
+/// Turn a Signal K PUT into the control write mayara already knows how to do.
+///
+/// The path names the control and the value carries its fields, so the two
+/// combine into the same request a client writing to this stream directly
+/// would have sent.
+fn control_value_from_put(put: PutBody) -> Result<RadarControlValue, serde_json::Error> {
+    let mut body = match put.value {
+        Value::Object(fields) => Value::Object(fields),
+        // A control that is only a number is written as one.
+        scalar => serde_json::json!({ "value": scalar }),
+    };
+    body["path"] = Value::String(put.path);
+
+    serde_json::from_value(body)
 }
 
 //
@@ -1647,7 +1723,23 @@ async fn handle_client_request(
 
     log::info!("Decoded Stream request: {:?}", stream_request);
 
-    if let Ok(stream_request) = stream_request {
+    let stream_request = match stream_request {
+        Ok(stream_request) => stream_request,
+        Err(e) => {
+            // Saying nothing leaves a client waiting for an answer that is
+            // never coming, with no way to tell a rejected request from one
+            // still in flight.
+            let response = StreamPutResponse::failed(
+                None,
+                StatusCode::BAD_REQUEST,
+                format!("Cannot read this request: {e}"),
+            );
+            let _ = send_message(socket, response).await;
+            return;
+        }
+    };
+
+    {
         let r = match stream_request {
             StreamRequest::Subscription(subscription) => {
                 handle_subscription(socket, radars, subscriptions, subscription, meta_sent).await
@@ -1657,6 +1749,10 @@ async fn handle_client_request(
             }
             StreamRequest::RadarControlValue(rcv) => {
                 handle_control_request(message, radars, reply_tx, rcv).await
+            }
+            StreamRequest::Put(put) => {
+                handle_put_request(socket, message, radars, reply_tx, put).await;
+                return;
             }
         };
         match r {
@@ -1671,6 +1767,42 @@ async fn handle_client_request(
             }
         }
     }
+}
+
+/// Carry out a Signal K PUT and answer it, whichever way it went. A client
+/// waits on the answer to know its request was seen at all, so every path
+/// through here sends one.
+async fn handle_put_request(
+    socket: &mut WebSocket,
+    message: &str,
+    radars: &SharedRadars,
+    reply_tx: mpsc::Sender<ControlValue>,
+    put: StreamPut,
+) {
+    let request_id = put.request_id;
+
+    let response = match control_value_from_put(put.put) {
+        Err(e) => StreamPutResponse::failed(
+            request_id,
+            StatusCode::BAD_REQUEST,
+            format!("Cannot read the value to put: {e}"),
+        ),
+        Ok(rcv) => match handle_control_request(message, radars, reply_tx, rcv).await {
+            Ok(()) => StreamPutResponse::completed(request_id),
+            Err(e) => StreamPutResponse::failed(
+                request_id,
+                match e {
+                    RadarError::NoSuchRadar(_) | RadarError::CannotParseControlId(_) => {
+                        StatusCode::NOT_FOUND
+                    }
+                    _ => StatusCode::BAD_REQUEST,
+                },
+                e.to_string(),
+            ),
+        },
+    };
+
+    let _ = send_message(socket, response).await;
 }
 
 async fn handle_control_request(
