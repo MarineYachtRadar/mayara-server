@@ -158,13 +158,85 @@ pub(crate) fn api_endpoint_list() -> Vec<String> {
     endpoints
 }
 
+/// The answer Signal K servers give to a request that changes something.
+///
+/// Every server in the ecosystem replies in this shape, so a client can read
+/// one thing whether it is talking to signalk-server or to mayara — including
+/// when the request failed, which is when a plain-text body helps a client
+/// least.
+#[derive(Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SignalKResponse {
+    /// `COMPLETED` when the request was carried out, `FAILED` otherwise.
+    #[schema(example = "COMPLETED")]
+    state: &'static str,
+    /// Repeated from the HTTP status, as Signal K clients read it from here.
+    #[schema(example = 200)]
+    status_code: u16,
+    #[schema(example = "OK")]
+    message: String,
+}
+
+impl SignalKResponse {
+    fn ok() -> Response {
+        Self {
+            state: "COMPLETED",
+            status_code: StatusCode::OK.as_u16(),
+            message: "OK".to_string(),
+        }
+        .into_response()
+    }
+
+    fn failed(status: StatusCode, message: impl Into<String>) -> Response {
+        Self {
+            state: "FAILED",
+            status_code: status.as_u16(),
+            message: message.into(),
+        }
+        .into_response()
+    }
+}
+
+impl IntoResponse for SignalKResponse {
+    fn into_response(self) -> Response {
+        let status =
+            StatusCode::from_u16(self.status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        (status, Json(self)).into_response()
+    }
+}
+
+/// A JSON body that reports a malformed request the way the rest of the API
+/// does. Axum's own rejection answers 422 in plain text, where Signal K
+/// clients expect 400 and the response envelope.
+pub(crate) struct SignalKJson<T>(pub(crate) T);
+
+impl<T, S> extract::FromRequest<S> for SignalKJson<T>
+where
+    Json<T>: extract::FromRequest<S, Rejection = extract::rejection::JsonRejection>,
+    S: Send + Sync,
+{
+    type Rejection = Response;
+
+    async fn from_request(
+        req: extract::Request,
+        state: &S,
+    ) -> Result<Self, <Self as extract::FromRequest<S>>::Rejection> {
+        match Json::<T>::from_request(req, state).await {
+            Ok(Json(value)) => Ok(SignalKJson(value)),
+            Err(rejection) => Err(SignalKResponse::failed(
+                StatusCode::BAD_REQUEST,
+                rejection.body_text(),
+            )),
+        }
+    }
+}
+
 fn no_such_radar(radar_id: &str, radars: &SharedRadars) -> Response {
     let keys = radars.get_keys();
-    (
+    SignalKResponse::failed(
         StatusCode::NOT_FOUND,
         format!("Unknown radar '{}' -- use {:?} instead", radar_id, keys),
     )
-        .into_response()
 }
 
 async fn openapi_json() -> impl IntoResponse {
@@ -535,7 +607,7 @@ struct RadarControlIdParam {
 async fn set_control_value(
     Path(params): Path<RadarControlIdParam>,
     State(state): State<Web>,
-    extract::Json(request): extract::Json<BareControlValue>,
+    SignalKJson(request): SignalKJson<BareControlValue>,
 ) -> Response {
     let (radar_id, control_id) = (params.radar_id, params.control_id);
     log::info!(
@@ -559,11 +631,10 @@ async fn set_control_value(
                     Some(c) => c,
                     None => {
                         let all = radar.controls.get_control_keys();
-                        return (
+                        return SignalKResponse::failed(
                             StatusCode::NOT_FOUND,
                             format!("Unknown control '{}' -- use {:?} instead", control_id, all),
-                        )
-                            .into_response();
+                        );
                     }
                 };
 
@@ -586,7 +657,7 @@ async fn set_control_value(
 
     // Send the control request
     if let Err(e) = controls.process_client_request(control_value, reply_tx) {
-        return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
+        return SignalKResponse::failed(StatusCode::BAD_REQUEST, e.to_string());
     }
 
     // Save persistence for controls that need it
@@ -600,7 +671,7 @@ async fn set_control_value(
         reply = reply_rx.recv() => {
             match reply {
                 Some(cv) if cv.error.is_some() => {
-                    return (StatusCode::BAD_REQUEST, cv.error.unwrap()).into_response();
+                    return SignalKResponse::failed(StatusCode::BAD_REQUEST, cv.error.unwrap());
                 }
                 _ => {}
             }
@@ -610,7 +681,7 @@ async fn set_control_value(
         }
     }
 
-    StatusCode::OK.into_response()
+    SignalKResponse::ok()
 }
 
 // =============================================================================
@@ -697,7 +768,7 @@ struct AcquireTargetResponse {
 async fn acquire_target(
     Path(radar_id): Path<String>,
     State(state): State<Web>,
-    extract::Json(request): extract::Json<AcquireTargetRequest>,
+    SignalKJson(request): SignalKJson<AcquireTargetRequest>,
 ) -> Response {
     log::info!(
         "MARPA acquire_target request for radar {}: {:?}",
@@ -715,11 +786,10 @@ async fn acquire_target(
     let command_tx = match state.radars.get_tracker_command_tx() {
         Some(tx) => tx,
         None => {
-            return (
+            return SignalKResponse::failed(
                 StatusCode::BAD_REQUEST,
                 "Target tracking not enabled (use --targets arpa)".to_string(),
-            )
-                .into_response();
+            );
         }
     };
 
@@ -739,21 +809,19 @@ async fn acquire_target(
             let radar_pos = match navdata::get_radar_position() {
                 Some(pos) => pos,
                 None => {
-                    return (
+                    return SignalKResponse::failed(
                         StatusCode::BAD_REQUEST,
                         "No radar position available for bearing/distance conversion".to_string(),
-                    )
-                        .into_response();
+                    );
                 }
             };
             radar_pos.position_from_bearing(bearing, distance)
         }
         _ => {
-            return (
+            return SignalKResponse::failed(
                 StatusCode::BAD_REQUEST,
                 "Must provide either latitude/longitude or bearing/distance".to_string(),
-            )
-                .into_response();
+            );
         }
     };
 
@@ -775,11 +843,10 @@ async fn acquire_target(
     // Send to tracker
     if let Err(e) = command_tx.try_send(TrackerCommand::Marpa(marpa_request)) {
         log::error!("Failed to send MARPA request: {}", e);
-        return (
+        return SignalKResponse::failed(
             StatusCode::INTERNAL_SERVER_ERROR,
             "Failed to send acquisition request".to_string(),
-        )
-            .into_response();
+        );
     }
 
     // Return success - target will be tracked and updates broadcast via delta stream
@@ -822,11 +889,10 @@ async fn get_targets(Path(radar_id): Path<String>, State(state): State<Web>) -> 
     let command_tx = match state.radars.get_tracker_command_tx() {
         Some(tx) => tx,
         None => {
-            return (
+            return SignalKResponse::failed(
                 StatusCode::BAD_REQUEST,
                 "Target tracking not enabled (use --targets arpa)".to_string(),
-            )
-                .into_response();
+            );
         }
     };
 
@@ -843,11 +909,10 @@ async fn get_targets(Path(radar_id): Path<String>, State(state): State<Web>) -> 
         .await
     {
         log::error!("Failed to send get targets request: {}", e);
-        return (
+        return SignalKResponse::failed(
             StatusCode::INTERNAL_SERVER_ERROR,
             "Failed to send get targets request".to_string(),
-        )
-            .into_response();
+        );
     }
 
     // Wait for response
@@ -855,11 +920,10 @@ async fn get_targets(Path(radar_id): Path<String>, State(state): State<Web>) -> 
         Ok(targets) => Json(targets).into_response(),
         Err(e) => {
             log::error!("Failed to receive targets response: {}", e);
-            (
+            SignalKResponse::failed(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Failed to receive targets response".to_string(),
             )
-                .into_response()
         }
     }
 }
@@ -909,11 +973,10 @@ async fn delete_target(
     let command_tx = match state.radars.get_tracker_command_tx() {
         Some(tx) => tx,
         None => {
-            return (
+            return SignalKResponse::failed(
                 StatusCode::BAD_REQUEST,
                 "Target tracking not enabled (use --targets arpa)".to_string(),
-            )
-                .into_response();
+            );
         }
     };
 
@@ -923,14 +986,13 @@ async fn delete_target(
         target_id,
     }) {
         log::error!("Failed to send delete target request: {}", e);
-        return (
+        return SignalKResponse::failed(
             StatusCode::INTERNAL_SERVER_ERROR,
             "Failed to send delete request".to_string(),
-        )
-            .into_response();
+        );
     }
 
-    StatusCode::OK.into_response()
+    SignalKResponse::ok()
 }
 
 #[utoipa::path(
@@ -975,14 +1037,13 @@ async fn get_control_value(
                         control_id,
                         available
                     );
-                    (
+                    SignalKResponse::failed(
                         StatusCode::NOT_FOUND,
                         format!(
                             "Unknown control '{}' -- use {:?} instead",
                             control_id, available
                         ),
                     )
-                        .into_response()
                 }
             }
         }
@@ -1054,7 +1115,7 @@ async fn get_control_values(Path(radar_id): Path<String>, State(state): State<We
 async fn set_control_values(
     Path(radar_id): Path<String>,
     State(state): State<Web>,
-    extract::Json(request): extract::Json<BTreeMap<String, BareControlValue>>,
+    SignalKJson(request): SignalKJson<BTreeMap<String, BareControlValue>>,
 ) -> Response {
     log::info!("PUT {} controls for radar {}", request.len(), radar_id);
 
@@ -1080,11 +1141,10 @@ async fn set_control_values(
                     // rather than leave the radar half-updated.
                     unknown.sort();
                     let all = radar.controls.get_control_keys();
-                    return (
+                    return SignalKResponse::failed(
                         StatusCode::NOT_FOUND,
                         format!("Unknown control(s) {:?} -- use {:?} instead", unknown, all),
-                    )
-                        .into_response();
+                    );
                 }
                 // Distinct keys can name the same control, because control ids
                 // are parsed rather than matched literally. Applying both would
@@ -1097,11 +1157,10 @@ async fn set_control_values(
                     .map(|cv| format!("{:?}", cv.id))
                     .collect();
                 if !duplicates.is_empty() {
-                    return (
+                    return SignalKResponse::failed(
                         StatusCode::BAD_REQUEST,
                         format!("Control(s) {:?} named more than once", duplicates),
-                    )
-                        .into_response();
+                    );
                 }
                 (radar.controls.clone(), resolved, radar.key())
             }
@@ -1142,10 +1201,10 @@ async fn set_control_values(
     }
 
     if failures.is_empty() {
-        StatusCode::OK.into_response()
+        SignalKResponse::ok()
     } else {
         failures.sort();
-        (StatusCode::BAD_REQUEST, failures.join("; ")).into_response()
+        SignalKResponse::failed(StatusCode::BAD_REQUEST, failures.join("; "))
     }
 }
 
@@ -1315,28 +1374,26 @@ async fn control_stream_handler(
         Some("all") => Subscribe::All,
         Some("none") => Subscribe::None,
         _ => {
-            return (
+            return SignalKResponse::failed(
                 StatusCode::BAD_REQUEST,
                 format!(
                     "Unknown subscribe value '{}' -- use 'none', 'self' or 'all' instead",
                     params.subscribe.unwrap()
                 ),
-            )
-                .into_response();
+            );
         }
     };
     let send_cached_values = match params.send_cached_values.as_deref() {
         None | Some("true") => true,
         Some("false") => false,
         _ => {
-            return (
+            return SignalKResponse::failed(
                 StatusCode::BAD_REQUEST,
                 format!(
                     "Unknown sendCachedValues value '{}' -- use 'false' or 'true' instead",
                     params.send_cached_values.unwrap()
                 ),
-            )
-                .into_response();
+            );
         }
     };
 

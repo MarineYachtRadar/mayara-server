@@ -648,3 +648,95 @@ async fn test_set_control_values_applies_a_persistent_control() {
     let controls = get_json(&path).await;
     assert_eq!(controls["userName"]["value"], "BulkPersist");
 }
+
+// ============================================================================
+// Signal K response envelope
+// ============================================================================
+
+/// Every Signal K server answers a state-changing request in this shape, so a
+/// client can read one thing whether it is talking to signalk-server or here.
+fn assert_envelope(body: &Value, state: &str, status: u16) {
+    assert_eq!(body["state"], state, "state in {}", body);
+    assert_eq!(body["statusCode"], status, "statusCode in {}", body);
+    assert!(
+        body["message"].is_string(),
+        "message must be a string in {}",
+        body
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires running server"]
+async fn test_put_control_answers_with_completed_envelope() {
+    let id = first_radar_id().await;
+    let path = format!("/signalk/v2/api/vessels/self/radars/{}/controls/gain", id);
+
+    let response = put_json(&path, &serde_json::json!({"value": 50})).await;
+
+    assert_eq!(response.status(), 200);
+    assert_envelope(&response.json::<Value>().await.unwrap(), "COMPLETED", 200);
+}
+
+#[tokio::test]
+#[ignore = "requires running server"]
+async fn test_unknown_radar_fails_with_envelope() {
+    let response = put_json(
+        "/signalk/v2/api/vessels/self/radars/nosuchradar/controls/gain",
+        &serde_json::json!({"value": 50}),
+    )
+    .await;
+
+    assert_eq!(response.status(), 404);
+    assert_envelope(&response.json::<Value>().await.unwrap(), "FAILED", 404);
+}
+
+#[tokio::test]
+#[ignore = "requires running server"]
+async fn test_unknown_control_fails_with_envelope() {
+    let id = first_radar_id().await;
+    let response = put_json(
+        &format!(
+            "/signalk/v2/api/vessels/self/radars/{}/controls/nonexistent",
+            id
+        ),
+        &serde_json::json!({"value": 50}),
+    )
+    .await;
+
+    assert_eq!(response.status(), 404);
+    assert_envelope(&response.json::<Value>().await.unwrap(), "FAILED", 404);
+}
+
+/// A body the server cannot read is a bad request, not an unprocessable one:
+/// Signal K clients read 400 here, and the reason belongs in the envelope
+/// rather than in a plain-text body they have to guess at.
+#[tokio::test]
+#[ignore = "requires running server"]
+async fn test_malformed_body_fails_with_envelope() {
+    let id = first_radar_id().await;
+    let path = format!("/signalk/v2/api/vessels/self/radars/{}/controls/sea", id);
+
+    let response = put_json(&path, &serde_json::json!({"autoValue": "abc"})).await;
+
+    assert_eq!(response.status(), 400);
+    assert_envelope(&response.json::<Value>().await.unwrap(), "FAILED", 400);
+}
+
+/// The radar API specifies a bare control value, so reading one must not pick
+/// up the envelope that state-changing requests answer with.
+#[tokio::test]
+#[ignore = "requires running server"]
+async fn test_reading_a_control_stays_bare() {
+    let id = first_radar_id().await;
+    let control = get_json(&format!(
+        "/signalk/v2/api/vessels/self/radars/{}/controls/gain",
+        id
+    ))
+    .await;
+
+    assert!(
+        control.get("state").is_none() && control.get("statusCode").is_none(),
+        "a control read must stay as the spec documents it, got {}",
+        control
+    );
+}
