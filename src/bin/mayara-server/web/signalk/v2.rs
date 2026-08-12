@@ -1459,7 +1459,13 @@ async fn ws_signalk_delta(
     let mut subscriptions = ActiveSubscriptions::new(subscribe);
 
     let mut sk_delta = SignalKDelta::new();
-    sk_delta.add_meta_updates(&radars, &mut meta_radar_data_sent);
+
+    // A client that asked for nothing gets nothing, control definitions
+    // included — they describe data it has not subscribed to. Once it does
+    // subscribe, the definitions travel with the first values it receives.
+    if subscribe != Subscribe::None {
+        sk_delta.add_meta_updates(&radars, &mut meta_radar_data_sent);
+    }
 
     // Radar controls are own-ship data, so send the cached values on connect for
     // both `self` and `all` — only `none` waits for an explicit subscription.
