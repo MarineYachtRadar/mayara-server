@@ -17,6 +17,12 @@ use super::protocol::{
     INSTALL_TAG_ANTENNA_OFFSET, REQUEST_STATE_BATCH, REQUEST_STATE_PROPERTIES,
 };
 
+// Last byte of the HALO sea clutter command: which of the three things the
+// frame changes.
+const HALO_SEA_MODE: u8 = 0x01;
+const HALO_SEA_MANUAL: u8 = 0x02;
+const HALO_SEA_AUTO_OFFSET: u8 = 0x04;
+
 pub(crate) struct Command {
     key: String,
     info: RadarInfo,
@@ -86,6 +92,38 @@ impl Command {
 
     fn mod_deci_degrees(a: i32) -> i32 {
         (a + 7200) % 3600
+    }
+
+    /// Build the HALO sea clutter command.
+    ///
+    /// Both value bytes carry the same number — the one setting being changed:
+    /// the -50..+50 offset in auto mode, the 0..100 level in manual mode. The
+    /// first holds it only while it is positive, the second always, as a
+    /// signed byte. `setting` is `None` for a change of mode alone.
+    ///
+    /// Capture data from an MFD:
+    /// ```text
+    /// 11c101000004 = Auto      11c100646402 = 100
+    /// 11c10100ff04 = Auto-1    11c100000002 = 0
+    /// 11c10100ce04 = Auto-50   11c100000001 = Mode manual
+    /// 11c101323204 = Auto+50   11c101000001 = Mode auto
+    /// ```
+    fn halo_sea_command(auto: bool, setting: Option<f64>) -> [u8; 6] {
+        let mode = match (setting, auto) {
+            (None, _) => HALO_SEA_MODE,
+            (Some(_), false) => HALO_SEA_MANUAL,
+            (Some(_), true) => HALO_SEA_AUTO_OFFSET,
+        };
+        let setting = setting.unwrap_or(0.).round() as i8;
+
+        [
+            CMD_HALO_SEA,
+            CATEGORY_CONTROL,
+            auto as u8,
+            setting.max(0) as u8,
+            setting as u8,
+            mode,
+        ]
     }
 
     fn generate_fake_error(v: i32) -> Result<(), RadarError> {
@@ -220,34 +258,18 @@ impl CommandSender for Command {
             }
             ControlId::Sea => {
                 if self.model.is_halo() {
-                    // Capture data:
-                    // Data: 11c101000004 = Auto
-                    // Data: 11c10100ff04 = Auto-1
-                    // Data: 11c10100ce04 = Auto-50
-                    // Data: 11c101323204 = Auto+50
-                    // Data: 11c100646402 = 100
-                    // Data: 11c100000002 = 0
-                    // Data: 11c100000001 = Mode manual
-                    // Data: 11c101000001 = Mode auto
-
-                    cmd.extend_from_slice(&[CMD_HALO_SEA, CATEGORY_CONTROL, auto]);
-                    if cv.value.is_none() && cv.auto_value.is_none() {
-                        // Capture data:
-                        // Data: 11c101000004 = Auto
-                        // Data: 11c10100ff04 = Auto-1
-                        // Data: 11c10100ce04 = Auto-50
-                        // Data: 11c101323204 = Auto+50
-                        // Data: 11c100646402 = 100
-                        // Data: 11c100000002 = 0
-                        // Data: 11c100000001 = Mode manual
-                        // Data: 11c101000001 = Mode auto
-
-                        cmd.extend_from_slice(&[0x00, 0x00, 0x01]);
+                    // Which number the radar is being given depends on the
+                    // mode: the auto offset when on auto, the manual level
+                    // otherwise. Neither carries over into the other.
+                    let setting = if cv.value.is_none() && cv.auto_value.is_none() {
+                        None
                     } else if auto == 0 {
-                        cmd.extend_from_slice(&[value as u8, auto_value as i8 as u8, 0x02]);
+                        Some(value)
                     } else {
-                        cmd.extend_from_slice(&[value as u8, auto_value as i8 as u8, 0x04]);
-                    }
+                        Some(auto_value)
+                    };
+
+                    cmd.extend_from_slice(&Self::halo_sea_command(auto != 0, setting));
                 } else {
                     let v: u32 = Self::scale_100_to_byte(value) as u32;
                     let auto = auto as u32;
@@ -428,5 +450,68 @@ impl CommandSender for Command {
             return Self::generate_fake_error(value as i32);
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Command;
+
+    /// Every frame an MFD was captured sending for sea clutter, so a HALO is
+    /// told about a change the same way whoever sends it.
+    #[test]
+    fn halo_sea_command_matches_mfd_captures() {
+        // Mode alone, carrying no number.
+        assert_eq!(
+            Command::halo_sea_command(false, None),
+            [0x11, 0xc1, 0x00, 0x00, 0x00, 0x01]
+        );
+        assert_eq!(
+            Command::halo_sea_command(true, None),
+            [0x11, 0xc1, 0x01, 0x00, 0x00, 0x01]
+        );
+
+        // Auto, adjusted by an offset that is signed in the second byte and
+        // only present in the first while positive.
+        assert_eq!(
+            Command::halo_sea_command(true, Some(0.)),
+            [0x11, 0xc1, 0x01, 0x00, 0x00, 0x04]
+        );
+        assert_eq!(
+            Command::halo_sea_command(true, Some(-1.)),
+            [0x11, 0xc1, 0x01, 0x00, 0xff, 0x04]
+        );
+        assert_eq!(
+            Command::halo_sea_command(true, Some(-50.)),
+            [0x11, 0xc1, 0x01, 0x00, 0xce, 0x04]
+        );
+        assert_eq!(
+            Command::halo_sea_command(true, Some(50.)),
+            [0x11, 0xc1, 0x01, 0x32, 0x32, 0x04]
+        );
+
+        // Manual, where the level reaches 100 and both bytes carry it.
+        assert_eq!(
+            Command::halo_sea_command(false, Some(100.)),
+            [0x11, 0xc1, 0x00, 0x64, 0x64, 0x02]
+        );
+        assert_eq!(
+            Command::halo_sea_command(false, Some(0.)),
+            [0x11, 0xc1, 0x00, 0x00, 0x00, 0x02]
+        );
+    }
+
+    /// The manual level and the auto offset are separate settings; sending one
+    /// must never leak the other into the frame. This is what stopped auto
+    /// adjustments from taking effect: the first byte carried the manual
+    /// level, so the radar was handed an offset it had not been asked for.
+    #[test]
+    fn halo_sea_auto_offset_ignores_the_manual_level() {
+        let manual_level_is_irrelevant = Command::halo_sea_command(true, Some(-50.));
+
+        assert_eq!(
+            manual_level_is_irrelevant,
+            [0x11, 0xc1, 0x01, 0x00, 0xce, 0x04]
+        );
     }
 }
