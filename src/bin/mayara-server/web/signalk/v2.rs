@@ -627,15 +627,31 @@ async fn set_control_value(
 }))]
 struct AcquireTargetRequest {
     /// Target bearing in radians true [0, 2π).
+    #[serde(
+        default,
+        deserialize_with = "mayara::util::deserialize_optional_number"
+    )]
     #[schema(example = 1.0)]
     bearing: Option<f64>,
     /// Target distance in meters
+    #[serde(
+        default,
+        deserialize_with = "mayara::util::deserialize_optional_number"
+    )]
     #[schema(example = 1852.0)]
     distance: Option<f64>,
     /// Target latitude in decimal degrees (alternative to bearing/distance)
+    #[serde(
+        default,
+        deserialize_with = "mayara::util::deserialize_optional_number"
+    )]
     #[schema(example = 52.3702)]
     latitude: Option<f64>,
     /// Target longitude in decimal degrees (alternative to bearing/distance)
+    #[serde(
+        default,
+        deserialize_with = "mayara::util::deserialize_optional_number"
+    )]
     #[schema(example = 4.8952)]
     longitude: Option<f64>,
 }

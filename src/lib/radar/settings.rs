@@ -1880,13 +1880,29 @@ pub struct ControlValue {
     pub units: Option<Units>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auto: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::util::deserialize_optional_number"
+    )]
     pub auto_value: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::util::deserialize_optional_number"
+    )]
     pub end_value: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::util::deserialize_optional_number"
+    )]
     pub start_distance: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::util::deserialize_optional_number"
+    )]
     pub end_distance: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
@@ -1895,15 +1911,35 @@ pub struct ControlValue {
     #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     // Rectangular exclusion zone fields (corner-based, meters from radar position)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::util::deserialize_optional_number"
+    )]
     pub x1: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::util::deserialize_optional_number"
+    )]
     pub y1: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::util::deserialize_optional_number"
+    )]
     pub x2: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::util::deserialize_optional_number"
+    )]
     pub y2: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::util::deserialize_optional_number"
+    )]
     pub width: Option<f64>,
     /// Timestamp when the control value was last changed
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2072,18 +2108,34 @@ pub struct RadarControlValue {
     #[schema(example = false)]
     pub auto: Option<bool>,
     /// Current auto-computed value (read-only, server-to-client only)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::util::deserialize_optional_number"
+    )]
     pub auto_value: Option<f64>,
     /// End angle for guard zones (degrees)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::util::deserialize_optional_number"
+    )]
     #[schema(example = 90.0)]
     pub end_value: Option<f64>,
     /// Start distance for guard zones (meters)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::util::deserialize_optional_number"
+    )]
     #[schema(example = 100.0)]
     pub start_distance: Option<f64>,
     /// End distance for guard zones (meters)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::util::deserialize_optional_number"
+    )]
     #[schema(example = 500.0)]
     pub end_distance: Option<f64>,
     /// Enable/disable the control (for guard zones)
@@ -2097,23 +2149,43 @@ pub struct RadarControlValue {
     #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     /// First corner X for rectangular exclusion zones (meters from radar, positive = east)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::util::deserialize_optional_number"
+    )]
     #[schema(example = 100.0)]
     pub x1: Option<f64>,
     /// First corner Y for rectangular exclusion zones (meters from radar, positive = north)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::util::deserialize_optional_number"
+    )]
     #[schema(example = 200.0)]
     pub y1: Option<f64>,
     /// Second corner X for rectangular exclusion zones (meters from radar, positive = east)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::util::deserialize_optional_number"
+    )]
     #[schema(example = 300.0)]
     pub x2: Option<f64>,
     /// Second corner Y for rectangular exclusion zones (meters from radar, positive = north)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::util::deserialize_optional_number"
+    )]
     #[schema(example = 200.0)]
     pub y2: Option<f64>,
     /// Width of rectangular exclusion zone (perpendicular to edge, meters)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::util::deserialize_optional_number"
+    )]
     #[schema(example = 50.0)]
     pub width: Option<f64>,
     /// Timestamp when the control value was last changed (ISO 8601 format)
@@ -2229,19 +2301,35 @@ pub struct BareControlValue {
     #[schema(example = false)]
     pub auto: Option<bool>,
     /// Adjustment of the auto algorithm when auto=true
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::util::deserialize_optional_number"
+    )]
     #[schema(example = -5.0)]
     pub auto_value: Option<f64>,
     /// End angle for sector and zone (radians)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::util::deserialize_optional_number"
+    )]
     #[schema(example = 0.78593)]
     pub end_value: Option<f64>,
     /// Inner radius for zones (meters)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::util::deserialize_optional_number"
+    )]
     #[schema(example = 100.0)]
     pub start_distance: Option<f64>,
     /// Outer radius for zones (meters)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::util::deserialize_optional_number"
+    )]
     #[schema(example = 500.0)]
     pub end_distance: Option<f64>,
     /// Whether the user has enabled the control
@@ -2257,23 +2345,43 @@ pub struct BareControlValue {
     #[schema(read_only = true)]
     pub error: Option<String>,
     /// First corner X for rectangular exclusion zones (meters from radar, positive = east)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::util::deserialize_optional_number"
+    )]
     #[schema(example = 100.0)]
     pub x1: Option<f64>,
     /// First corner Y for rectangular exclusion zones (meters from radar, positive = north)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::util::deserialize_optional_number"
+    )]
     #[schema(example = 200.0)]
     pub y1: Option<f64>,
     /// Second corner X for rectangular exclusion zones (meters from radar, positive = east)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::util::deserialize_optional_number"
+    )]
     #[schema(example = 300.0)]
     pub x2: Option<f64>,
     /// Second corner Y for rectangular exclusion zones (meters from radar, positive = north)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::util::deserialize_optional_number"
+    )]
     #[schema(example = 200.0)]
     pub y2: Option<f64>,
     /// Width of rectangular exclusion zone (perpendicular to edge, meters)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::util::deserialize_optional_number"
+    )]
     #[schema(example = 50.0)]
     pub width: Option<f64>,
     /// Timestamp when the control value was last changed (ISO 8601 format)
@@ -4137,5 +4245,37 @@ mod test {
             controls.get(&ControlId::Power).unwrap().item.valid_values,
             Some(vec![0, 1, 2])
         );
+    }
+
+    /// The GUI builds a request from slider positions, which are strings. A
+    /// control adjustment used to be refused outright over the quotes, so the
+    /// whole request failed and the radar was never told anything.
+    #[test]
+    fn control_request_accepts_numbers_written_as_strings() {
+        let quoted: BareControlValue =
+            serde_json::from_str(r#"{"auto": true, "autoValue": "-26"}"#).unwrap();
+        let bare: BareControlValue =
+            serde_json::from_str(r#"{"auto": true, "autoValue": -26}"#).unwrap();
+
+        assert_eq!(quoted.auto_value, Some(-26.));
+        assert_eq!(quoted.auto_value, bare.auto_value);
+        assert_eq!(quoted.auto, Some(true));
+    }
+
+    /// Guard zone geometry arrives from the same kind of form input, and is
+    /// spread over several numeric fields that each have to give.
+    #[test]
+    fn control_request_accepts_string_geometry() {
+        let zone: BareControlValue = serde_json::from_str(
+            r#"{"value": "0.5", "endValue": "1.5", "startDistance": "100", "endDistance": "500"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(zone.end_value, Some(1.5));
+        assert_eq!(zone.start_distance, Some(100.));
+        assert_eq!(zone.end_distance, Some(500.));
+        // `value` takes any JSON and is converted where it is read, so it is
+        // left exactly as sent.
+        assert_eq!(zone.value, Some(serde_json::json!("0.5")));
     }
 }
