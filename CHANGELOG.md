@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **gui:** give every REST request a deadline (#517) ([PR #517](https://github.com/MarineYachtRadar/mayara-server/pull/517))
 - **gui:** flag controls the radar never confirmed (#518) ([PR #518](https://github.com/MarineYachtRadar/mayara-server/pull/518))
 - **navico:** apply sea clutter auto adjustments on HALO (#532) ([PR #532](https://github.com/MarineYachtRadar/mayara-server/pull/532))
+- **api:** accept numbers sent as strings (#534) ([PR #534](https://github.com/MarineYachtRadar/mayara-server/pull/534))
 
 ## [3.8.1] - 2026-08-04
 
