@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **api:** accept a bulk PUT on /controls (#516) ([PR #516](https://github.com/MarineYachtRadar/mayara-server/pull/516))
 - **radar:** identify radars from their own protocol, not their address (#510) ([PR #510](https://github.com/MarineYachtRadar/mayara-server/pull/510))
 - **mdns:** let the advertised host name be renamed or turned off (#524) ([PR #524](https://github.com/MarineYachtRadar/mayara-server/pull/524))
+- **gui:** welcome first-time users with a tour of the PPI (#531) ([PR #531](https://github.com/MarineYachtRadar/mayara-server/pull/531))
 
 ### Changed
 
@@ -30,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **controls:** stop numeric controls reporting a value they never had (#520) ([PR #520](https://github.com/MarineYachtRadar/mayara-server/pull/520))
 - **gui:** give every REST request a deadline (#517) ([PR #517](https://github.com/MarineYachtRadar/mayara-server/pull/517))
 - **gui:** flag controls the radar never confirmed (#518) ([PR #518](https://github.com/MarineYachtRadar/mayara-server/pull/518))
+- **navico:** apply sea clutter auto adjustments on HALO (#532) ([PR #532](https://github.com/MarineYachtRadar/mayara-server/pull/532))
 
 ## [3.8.1] - 2026-08-04
 
