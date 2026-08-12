@@ -37,6 +37,7 @@ import "./vendor/protobuf.min.js";
 import { WebGPURenderer } from "./render_webgpu.js";
 import { WebGLRenderer } from "./render_webgl.js";
 import { PPI } from "./ppi.js";
+import { startTourIfFirstVisit } from "./tour.js";
 
 var webSocket;
 var headingSocket;
@@ -262,6 +263,9 @@ window.onload = async function () {
 
   // Create range lozenge
   createRangeLozenge();
+
+  // Walk a first-time visitor around the controls just created.
+  startTourIfFirstVisit();
 
   window.onresize = function () {
     ppi.redrawCanvas();
