@@ -9,6 +9,10 @@ const SEEN_KEY = "mayaraTourSeen";
 // measured while the panel is still moving and lands off the panel.
 const PANEL_SETTLE_MS = 300;
 
+// One mask per side of the highlight; `positionMasks` takes them in this
+// order.
+const MASK_COUNT = 4;
+
 // Highlight ring padding around its target, and the gap between ring and
 // tooltip.
 const RING_PADDING = 6;
@@ -117,7 +121,7 @@ function buildOverlay() {
   root.className = "myr_tour";
 
   const masks = [];
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < MASK_COUNT; i++) {
     const mask = document.createElement("div");
     mask.className = "myr_tour_mask";
     root.appendChild(mask);
@@ -312,7 +316,7 @@ function back() {
 function onKeyDown(event) {
   if (event.key === "Escape") {
     end();
-  } else if (event.key === "ArrowRight" || event.key === "Enter") {
+  } else if (event.key === "ArrowRight") {
     next();
   } else if (event.key === "ArrowLeft") {
     back();
