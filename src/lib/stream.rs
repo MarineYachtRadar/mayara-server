@@ -554,6 +554,14 @@ fn pattern_covers(pattern: &str, path: &str) -> bool {
     pattern == path || (pattern.contains('*') && WildMatch::new(pattern).matches(path))
 }
 
+/// The shorthand for a published control path, if it is one: `radars.{id}.gain`
+/// alongside `radars.{id}.controls.gain`. `None` for anything that is not a
+/// control, which is how the caller tells them apart.
+fn control_shorthand(path: &str) -> Option<String> {
+    let (radar_id, control_id) = path.strip_prefix("radars.")?.split_once(".controls.")?;
+    Some(format!("radars.{}.{}", radar_id, control_id))
+}
+
 /// The path a control is published under, and the shorthand a client may name
 /// it by. `radars.{id}.gain` has always been accepted for
 /// `radars.{id}.controls.gain`, so both forms are offered to the patterns.
@@ -661,21 +669,20 @@ impl ActiveSubscriptions {
         let (Some(radar_id), Some(control_id)) = (rcv.radar_id.as_deref(), &rcv.control_id) else {
             panic!("Invalid use of is_subscribed(), can only be done on internal RCV");
         };
-        let paths = control_paths(radar_id, control_id);
+        let [canonical, shorthand] = control_paths(radar_id, control_id);
 
-        let terms = self.terms_for(&paths);
-        let Some(terms) = terms else {
+        let Some(terms) = self.terms_for(&[&canonical, &shorthand]) else {
             return false;
         };
 
-        self.allow_now(&paths[0], &terms, full)
+        self.allow_now(&canonical, &terms, full)
     }
 
     /// The terms every covering request agrees to answer on, taking the most
     /// permissive of each: a client that asked for something instantly gets it
     /// instantly, and a broad slow subscription can never quieten a narrow
     /// fast one it happens to overlap.
-    fn terms_for(&self, paths: &[String]) -> Option<Terms> {
+    fn terms_for(&self, paths: &[&str]) -> Option<Terms> {
         let mut terms: Option<Terms> = None;
         for path in paths {
             for request in self.covering(path) {
@@ -740,9 +747,12 @@ impl ActiveSubscriptions {
         }
 
         // A control is throttled by the terms it was asked on; everything else
-        // goes out whenever it changes.
-        if path.starts_with("radars.") && path.contains(".controls.") {
-            let Some(terms) = self.terms_for(std::slice::from_ref(&path.to_string())) else {
+        // goes out whenever it changes. Both the path a control is published
+        // under and the shorthand a client may have named it by are offered,
+        // the same pair `is_subscribed` uses — a client that subscribed the
+        // short way must not be answered on connect and then go quiet.
+        if let Some(shorthand) = control_shorthand(path) {
+            let Some(terms) = self.terms_for(&[path, &shorthand]) else {
                 return false;
             };
             return self.allow_now(path, &terms, full);
@@ -1036,6 +1046,35 @@ mod test {
     /// A wildcard subscription has to be as easy to take back as it was to
     /// make: whatever asking for it added, unasking has to remove, or a client
     /// keeps receiving what it just said it no longer wants.
+    /// A control may be named without its `controls.` segment, and a client
+    /// that names it that way has to keep receiving it — not just be answered
+    /// once on connect and then go quiet as its changes are filtered out.
+    #[test]
+    fn the_shorthand_form_receives_changes_too() {
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
+        subs.subscribe(Subscription {
+            subscribe: vec![path("radars.nav1.gain")],
+        })
+        .unwrap();
+
+        assert!(subs.is_subscribed_path("radars.nav1.controls.gain", false));
+        assert!(!subs.is_subscribed_path("radars.nav1.controls.rain", false));
+    }
+
+    /// The same when the shorthand carries a wildcard.
+    #[test]
+    fn a_shorthand_wildcard_receives_changes_too() {
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
+        subs.subscribe(Subscription {
+            subscribe: vec![path("*.gain")],
+        })
+        .unwrap();
+
+        assert!(subs.is_subscribed_path("radars.nav1.controls.gain", false));
+        assert!(subs.is_subscribed_path("radars.nav2.controls.gain", false));
+        assert!(!subs.is_subscribed_path("radars.nav1.controls.rain", false));
+    }
+
     /// A broad, slow subscription must never quieten a narrow, fast one it
     /// happens to cover: the client asked for gain instantly, and adding a
     /// throttled subscription over every radar does not take that back.
@@ -1095,9 +1134,7 @@ mod test {
 
     /// Two wildcards covering the same ground are two subscriptions, not one
     /// shared entry, so taking the narrower one back leaves the wider one
-    /// doing its job. This is what #548 changed: before it, the narrower
-    /// desubscribe took the shared entry with it and the wider subscription
-    /// silently stopped delivering.
+    /// doing its job.
     #[test]
     fn overlapping_wildcards_compose() {
         let mut subs = ActiveSubscriptions::new(Subscribe::None);
@@ -1185,7 +1222,7 @@ mod test {
     }
 
     #[test]
-    fn target_desubscribe_removes_pattern_and_empty_bucket() {
+    fn taking_back_one_target_pattern_leaves_the_other() {
         let mut subs = ActiveSubscriptions::new(Subscribe::None);
         subs.subscribe(Subscription {
             subscribe: vec![path("radars.nav1.targets.*"), path("radars.nav1.targets.5")],
