@@ -605,3 +605,69 @@ async fn test_unreadable_stream_request_is_answered() {
     assert_eq!(response["state"], "FAILED");
     assert_eq!(response["statusCode"], 400);
 }
+
+/// How long a test will wait for the server to introduce itself.
+const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
+
+async fn hello() -> Value {
+    let url = format!("{}/signalk/v1/stream?subscribe=none", ws_url());
+    let (ws, _) = connect_async(&url).await.expect("Failed to connect");
+    let (_, mut read) = ws.split();
+
+    let first = timeout(HELLO_TIMEOUT, read.next())
+        .await
+        .expect("Timed out waiting for the hello");
+
+    match first {
+        Some(Ok(Message::Text(text))) => serde_json::from_str(&text).expect("Should be valid JSON"),
+        other => panic!("Expected a hello, got {other:?}"),
+    }
+}
+
+/// A client that reconnects and finds a different id knows the values it
+/// cached came from an instance that is gone.
+#[tokio::test]
+#[ignore = "requires running server"]
+async fn test_hello_carries_a_server_start_id() {
+    let first = hello().await;
+    let id = first["serverStartId"]
+        .as_str()
+        .expect("the hello must carry a serverStartId");
+    assert!(!id.is_empty());
+
+    let second = hello().await;
+    assert_eq!(
+        second["serverStartId"], first["serverStartId"],
+        "the id identifies the run, so it must not change between connections"
+    );
+}
+
+/// Every other Signal K server stamps the hello with milliseconds and a `Z`,
+/// so that is the form clients are known to read. mayara used to send an
+/// offset and nanoseconds, which is valid RFC 3339 and unlike everyone else.
+#[tokio::test]
+#[ignore = "requires running server"]
+async fn test_hello_timestamp_is_the_shape_clients_read() {
+    let hello = hello().await;
+    let timestamp = hello["timestamp"].as_str().expect("hello has a timestamp");
+
+    assert!(
+        !timestamp.contains("+00:00"),
+        "timestamp should not carry an offset, got {timestamp}"
+    );
+
+    // `Z` on its own would also be satisfied by a whole-second stamp, and the
+    // precision is the half of this that clients actually parse.
+    let (_, fraction) = timestamp
+        .rsplit_once('.')
+        .unwrap_or_else(|| panic!("timestamp should carry a fraction, got {timestamp}"));
+    assert_eq!(
+        fraction.len(),
+        4,
+        "expected three millisecond digits and a Z, got {timestamp}"
+    );
+    assert!(
+        fraction.ends_with('Z') && fraction[..3].chars().all(|c| c.is_ascii_digit()),
+        "expected three millisecond digits and a Z, got {timestamp}"
+    );
+}

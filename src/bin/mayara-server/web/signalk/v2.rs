@@ -1969,14 +1969,35 @@ struct SignalKHello {
     #[serde(serialize_with = "to_rfc3339")]
     timestamp: DateTime<Utc>,
     roles: Vec<&'static str>,
+    /// Identifies this run of the server. A client that reconnects and finds a
+    /// different one knows the values it cached came from an instance that is
+    /// gone, so anything the new one has not sent again may never arrive.
+    #[serde(rename = "serverStartId")]
+    server_start_id: &'static str,
 }
 
-// Helper that turns a `DateTime` into an RFC‑3339 string when serializing
+/// A value that is the same for every hello this process sends and different
+/// after a restart, which is all a client needs from it. Signal K leaves the
+/// contents opaque; the pid and the moment it started are enough to tell two
+/// runs apart without pulling in a UUID crate to say the same thing.
+fn server_start_id() -> &'static str {
+    static ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    ID.get_or_init(|| {
+        format!(
+            "{:x}-{:x}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        )
+    })
+}
+
+// Milliseconds and a `Z`: the form every other Signal K server sends, and
+// therefore the one every client is known to read.
 fn to_rfc3339<S>(dt: &DateTime<Utc>, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
-    serializer.serialize_str(&dt.to_rfc3339())
+    serializer.serialize_str(&dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
 }
 
 async fn send_hello(socket: &mut WebSocket) -> Result<(), Error> {
@@ -1985,7 +2006,10 @@ async fn send_hello(socket: &mut WebSocket) -> Result<(), Error> {
         version: VERSION,
         self_context: navdata::get_own_ship_context().unwrap_or_else(|| "vessels.self".to_string()),
         timestamp: Utc::now(),
+        // Not "main": that is the vessel's primary server, and mayara is a
+        // radar source that normally sits behind one.
         roles: vec!["master"],
+        server_start_id: server_start_id(),
     };
     let message: String = serde_json::to_string(&message).unwrap();
     let ws_message = Message::Text(message.into());
