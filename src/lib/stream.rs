@@ -1323,6 +1323,42 @@ mod test {
     /// A wildcard subscription has to be as easy to take back as it was to
     /// make: whatever asking for it added, unasking has to remove, or a client
     /// keeps receiving what it just said it no longer wants.
+    /// Overlapping wildcards share one entry rather than each owning their
+    /// own, so taking back the narrower one takes the shared entry with it
+    /// even though the wider one still wants it. Controls have always behaved
+    /// this way; targets match them, deliberately, rather than one half of the
+    /// model composing and the other half not.
+    ///
+    /// Pinned so the day someone makes overlap compose, this test fails and
+    /// says where to look — the fix belongs to controls and targets together.
+    #[test]
+    fn overlapping_wildcards_share_one_subscription() {
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
+        subs.subscribe(Subscription {
+            subscribe: vec![path("*")],
+        })
+        .unwrap();
+        subs.subscribe(Subscription {
+            subscribe: vec![path("radars.*")],
+        })
+        .unwrap();
+
+        subs.desubscribe(Desubscription {
+            desubscribe: vec![path("radars.*")],
+        })
+        .unwrap();
+
+        assert!(!subs.is_subscribed_path("radars.nav1.targets.5", false));
+        assert!(
+            !subs.is_subscribed_path("radars.nav1.controls.gain", false),
+            "controls share the same limitation; targets must not diverge from them"
+        );
+        assert!(
+            subs.is_subscribed_path("navigation.headingTrue", false),
+            "a category the narrower wildcard never named is untouched"
+        );
+    }
+
     #[test]
     fn a_radar_wildcard_can_be_taken_back() {
         let mut subs = ActiveSubscriptions::new(Subscribe::None);
