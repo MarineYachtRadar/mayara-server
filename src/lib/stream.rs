@@ -605,17 +605,15 @@ impl ActiveSubscriptions {
 
     pub fn subscribe(&mut self, subscription: Subscription) -> Result<bool, RadarError> {
         let mut period = u64::MAX;
-        let mut ais_subscribed = false;
+
+        // Answering `true` makes the caller send every vessel it knows of, so
+        // it means "newly asked for", not "asked for". A client repeating a
+        // subscription it already holds is not asking again.
+        let asked_before = self.asks_for_vessels();
 
         for path_subscription in subscription.subscribe {
             let path = &path_subscription.path;
             log::debug!("Subscribing to path: {}", path);
-
-            // A vessel is another ship, never part of the own-ship baseline, so
-            // the caller has to know when one has just been asked for.
-            if path == "*" || path.starts_with("vessels.") {
-                ais_subscribed = true;
-            }
 
             if let Some(p) = path_subscription.min_period {
                 period = min(p, period);
@@ -637,7 +635,15 @@ impl ActiveSubscriptions {
         }
         self.set_timeout(period);
 
-        Ok(ais_subscribed)
+        Ok(!asked_before && self.asks_for_vessels())
+    }
+
+    /// Whether any request covers another vessel's data. `*` covers it, as it
+    /// covers everything.
+    fn asks_for_vessels(&self) -> bool {
+        self.requests
+            .iter()
+            .any(|r| r.path == "*" || r.path.starts_with("vessels."))
     }
 
     pub fn desubscribe(&mut self, subscription: Desubscription) -> Result<(), RadarError> {
