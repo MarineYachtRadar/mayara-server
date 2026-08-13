@@ -1734,7 +1734,9 @@ async fn handle_client_request(
                 StatusCode::BAD_REQUEST,
                 format!("Cannot read this request: {e}"),
             );
-            let _ = send_message(socket, response).await;
+            if let Err(e) = send_message(socket, response).await {
+                log::warn!("Cannot tell the client its request was unreadable: {e}");
+            }
             return;
         }
     };
@@ -1802,7 +1804,9 @@ async fn handle_put_request(
         },
     };
 
-    let _ = send_message(socket, response).await;
+    if let Err(e) = send_message(socket, response).await {
+        log::warn!("Cannot answer a put over the stream: {e}");
+    }
 }
 
 async fn handle_control_request(

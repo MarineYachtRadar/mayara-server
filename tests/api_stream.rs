@@ -49,8 +49,15 @@ async fn first_radar_id() -> String {
         .clone()
 }
 
+/// How long any one of these tests will wait for the server to say something.
+const REPLY_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Send one request over the control stream and return the first answer to it,
 /// skipping the hello and any deltas that happen to be in flight.
+///
+/// The wait is one deadline for the whole answer, not one per frame: a stream
+/// with traffic on it would otherwise keep resetting the clock and never give
+/// up. A closed socket ends the wait rather than being read again forever.
 async fn stream_request(request: &Value) -> Value {
     let url = format!("{}/signalk/v1/stream?subscribe=none", ws_url());
     let (ws, _) = connect_async(&url).await.expect("Failed to connect");
@@ -61,19 +68,22 @@ async fn stream_request(request: &Value) -> Value {
         .await
         .expect("Failed to send request");
 
-    let deadline = Duration::from_secs(5);
-    loop {
-        let next = timeout(deadline, read.next())
-            .await
-            .expect("Timed out waiting for an answer to the request");
-
-        if let Some(Ok(Message::Text(text))) = next {
-            let json: Value = serde_json::from_str(&text).expect("Should be valid JSON");
-            if json.get("state").is_some() {
-                return json;
+    let answer = timeout(REPLY_TIMEOUT, async {
+        while let Some(frame) = read.next().await {
+            let frame = frame.expect("Stream failed while waiting for an answer");
+            if let Message::Text(text) = frame {
+                let json: Value = serde_json::from_str(&text).expect("Should be valid JSON");
+                if json.get("state").is_some() {
+                    return Some(json);
+                }
             }
         }
-    }
+        None
+    })
+    .await
+    .expect("Timed out waiting for an answer to the request");
+
+    answer.expect("Stream closed before answering the request")
 }
 
 fn text_msg(v: &Value) -> Message {
@@ -510,11 +520,6 @@ async fn test_subscribing_brings_the_definitions_with_the_values() {
 
     panic!("subscribing produced no control values");
 }
-
-// ============================================================================
-// Signal K PUT over the stream
-// ============================================================================
-
 /// A Signal K client writes a value by sending a `put` over the stream and
 /// waiting for the answer that carries its `requestId` back. mayara used to
 /// drop the message on the floor: it matched none of the shapes the stream
@@ -569,6 +574,25 @@ async fn test_put_over_stream_reports_an_unknown_radar() {
     assert_eq!(response["state"], "FAILED");
     assert_eq!(response["statusCode"], 404);
     assert!(response["message"].is_string());
+}
+
+/// A path that names no control it recognises is the other way a put can be
+/// answered 404, and it reaches that answer through a different error than an
+/// unknown radar does.
+#[tokio::test]
+#[ignore = "requires running server"]
+async fn test_put_over_stream_reports_an_unknown_control() {
+    let id = first_radar_id().await;
+    let put = serde_json::json!({
+        "requestId": "test-put-5",
+        "put": { "path": format!("radars.{}.controls.nosuchcontrol", id), "value": 30 }
+    });
+
+    let response = stream_request(&put).await;
+
+    assert_eq!(response["requestId"], "test-put-5");
+    assert_eq!(response["state"], "FAILED");
+    assert_eq!(response["statusCode"], 404);
 }
 
 /// Anything the stream cannot read at all is still answered, so a client is
