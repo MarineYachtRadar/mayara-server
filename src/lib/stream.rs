@@ -718,6 +718,21 @@ impl ActiveSubscriptions {
         for path_desubscription in subscription.desubscribe {
             let path = &path_desubscription.path;
 
+            // Mirror of the fan-out in `subscribe`: `*` put a wildcard in every
+            // category, so taking it back has to remove it from every category.
+            // Falls through to the control handler below, as the fan-out does.
+            if path == "*" {
+                log::debug!("Desubscribing from all paths");
+                for list in [
+                    &mut self.navigation_subscriptions,
+                    &mut self.notification_subscriptions,
+                    &mut self.vessel_subscriptions,
+                ] {
+                    list.retain(|p| p != "*");
+                }
+                desubscribe_targets(&mut self.target_subscriptions, "*", "*");
+            }
+
             // Handle navigation desubscriptions (e.g., "navigation.headingTrue")
             if path.starts_with("navigation.") {
                 log::debug!("Desubscribing from navigation path: {}", path);
@@ -733,12 +748,7 @@ impl ActiveSubscriptions {
                     radar_id,
                     target_pattern
                 );
-                if let Some(patterns) = self.target_subscriptions.get_mut(radar_id) {
-                    patterns.retain(|p| p != target_pattern);
-                    if patterns.is_empty() {
-                        self.target_subscriptions.remove(radar_id);
-                    }
-                }
+                desubscribe_targets(&mut self.target_subscriptions, radar_id, target_pattern);
                 continue;
             }
 
@@ -758,6 +768,12 @@ impl ActiveSubscriptions {
 
             // Handle control desubscriptions (existing logic)
             let (radar_id, control_id) = extract_path(path);
+
+            // The counterpart of subscribing to everything about a radar.
+            if control_id == "*" {
+                desubscribe_targets(&mut self.target_subscriptions, radar_id, "*");
+            }
+
             let paths = self.paths.get_mut(radar_id);
             if paths.is_none() {
                 continue;
@@ -1015,6 +1031,21 @@ impl ActiveSubscriptions {
     }
 }
 
+/// Drop a target subscription, and the radar's bucket with it once nothing is
+/// left in it, so an empty bucket never reads as "subscribed to this radar".
+fn desubscribe_targets(
+    subscriptions: &mut HashMap<String, Vec<String>>,
+    radar_id: &str,
+    pattern: &str,
+) {
+    if let Some(patterns) = subscriptions.get_mut(radar_id) {
+        patterns.retain(|p| p != pattern);
+        if patterns.is_empty() {
+            subscriptions.remove(radar_id);
+        }
+    }
+}
+
 /// Record a target subscription, keyed by radar id, without duplicating a
 /// pattern the client already asked for.
 fn subscribe_targets(
@@ -1245,10 +1276,9 @@ mod test {
         assert_eq!(patterns[0], "targets.*");
     }
 
-    /// `radars.*` is how a client asks for everything a radar has, and it is
-    /// what the Signal K plugin subscribes with. It used to register controls
-    /// alone, so targets never reached the Signal K data model at all and the
-    /// only way to see one was to name `.targets.` outright.
+    /// `radars.*` asks for everything a radar has, which is more than its
+    /// controls: a client that subscribes that way — as the Signal K plugin
+    /// does — must receive tracked targets without naming `.targets.` itself.
     #[test]
     fn a_radar_wildcard_covers_targets_as_well_as_controls() {
         let mut subs = ActiveSubscriptions::new(Subscribe::None);
@@ -1277,9 +1307,7 @@ mod test {
         );
     }
 
-    /// Subscribing to everything has to mean everything: the fan-out seeded
-    /// navigation, notifications and vessels but left targets out, so even `*`
-    /// delivered none.
+    /// Subscribing to everything has to mean everything, targets included.
     #[test]
     fn subscribing_to_everything_includes_targets() {
         let mut subs = ActiveSubscriptions::new(Subscribe::None);
@@ -1290,6 +1318,67 @@ mod test {
 
         assert!(subs.is_subscribed_path("radars.nav1.targets.5", false));
         assert!(subs.is_subscribed_path("radars.nav1.controls.gain", false));
+    }
+
+    /// A wildcard subscription has to be as easy to take back as it was to
+    /// make: whatever asking for it added, unasking has to remove, or a client
+    /// keeps receiving what it just said it no longer wants.
+    #[test]
+    fn a_radar_wildcard_can_be_taken_back() {
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
+        subs.subscribe(Subscription {
+            subscribe: vec![path("radars.*")],
+        })
+        .unwrap();
+        assert!(subs.is_subscribed_path("radars.nav1.targets.5", false));
+
+        subs.desubscribe(Desubscription {
+            desubscribe: vec![path("radars.*")],
+        })
+        .unwrap();
+
+        assert!(!subs.is_subscribed_path("radars.nav1.targets.5", false));
+        assert!(!subs.is_subscribed_path("radars.nav1.controls.gain", false));
+    }
+
+    /// The same for the everything wildcard, which reaches further: it seeds
+    /// navigation, notifications and vessels alongside the radar categories.
+    #[test]
+    fn everything_can_be_taken_back() {
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
+        subs.subscribe(Subscription {
+            subscribe: vec![path("*")],
+        })
+        .unwrap();
+        assert!(subs.is_subscribed_path("radars.nav1.targets.5", false));
+        assert!(subs.is_subscribed_path("navigation.headingTrue", false));
+
+        subs.desubscribe(Desubscription {
+            desubscribe: vec![path("*")],
+        })
+        .unwrap();
+
+        assert!(!subs.is_subscribed_path("radars.nav1.targets.5", false));
+        assert!(!subs.is_subscribed_path("navigation.headingTrue", false));
+        assert!(!subs.is_subscribed_path("radars.nav1.controls.gain", false));
+    }
+
+    /// Taking back one radar must leave the others alone.
+    #[test]
+    fn taking_back_one_radar_leaves_another_subscribed() {
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
+        subs.subscribe(Subscription {
+            subscribe: vec![path("radars.nav1.*"), path("radars.nav2.*")],
+        })
+        .unwrap();
+
+        subs.desubscribe(Desubscription {
+            desubscribe: vec![path("radars.nav1.*")],
+        })
+        .unwrap();
+
+        assert!(!subs.is_subscribed_path("radars.nav1.targets.5", false));
+        assert!(subs.is_subscribed_path("radars.nav2.targets.5", false));
     }
 
     #[test]
