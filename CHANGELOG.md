@@ -37,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **api:** accept numbers sent as strings (#534) ([PR #534](https://github.com/MarineYachtRadar/mayara-server/pull/534))
 - **api:** answer requests the way a Signal K server does (#537) ([PR #537](https://github.com/MarineYachtRadar/mayara-server/pull/537))
 - **stream:** say nothing to a client that subscribed to nothing (#539) ([PR #539](https://github.com/MarineYachtRadar/mayara-server/pull/539))
+- **signalk:** introduce the server the way Signal K servers do (#543) ([PR #543](https://github.com/MarineYachtRadar/mayara-server/pull/543))
 
 ## [3.8.1] - 2026-08-04
 
