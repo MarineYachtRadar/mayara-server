@@ -327,8 +327,10 @@ struct Endpoints {
 #[derive(Serialize, ToSchema)]
 struct Endpoint {
     version: String,
-    #[serde(rename = "signalk-http")]
-    http: String,
+    /// Absent for `v1`: mayara serves the v1 stream but not the v1 REST tree,
+    /// and pointing a client at an address that answers nothing helps nobody.
+    #[serde(rename = "signalk-http", skip_serializing_if = "Option::is_none")]
+    http: Option<String>,
     #[serde(rename = "signalk-ws")]
     ws: String,
 }
@@ -585,12 +587,31 @@ async fn endpoints(State(state): State<Web>, headers: hyper::header::HeaderMap) 
         },
         nav: mayara::navdata::nav_status(&state.args),
     };
+    let stream = format!("{}://{}{}", ws_scheme, host, signalk::v2::CONTROL_URI);
+
+    // A Signal K client looks for the stream under the version of the API it
+    // speaks, and the stream mayara serves is `/signalk/v1/stream`. Advertising
+    // it only under `v2` left it undiscoverable to every client that does what
+    // the rest of the ecosystem does.
+    endpoints.endpoints.insert(
+        "v1".to_string(),
+        Endpoint {
+            version: VERSION.to_string(),
+            http: None,
+            ws: stream.clone(),
+        },
+    );
     endpoints.endpoints.insert(
         "v2".to_string(),
         Endpoint {
             version: mayara::SIGNALK_RADAR_API_VERSION.to_string(),
-            http: format!("{}://{}{}", http_scheme, host, signalk::v2::BASE_URI),
-            ws: format!("{}://{}{}", ws_scheme, host, signalk::v2::CONTROL_URI),
+            http: Some(format!(
+                "{}://{}{}",
+                http_scheme,
+                host,
+                signalk::v2::BASE_URI
+            )),
+            ws: stream,
         },
     );
 

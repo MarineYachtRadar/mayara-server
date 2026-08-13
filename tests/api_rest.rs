@@ -740,3 +740,35 @@ async fn test_reading_a_control_stays_bare() {
         control
     );
 }
+
+/// A Signal K client looks for the stream under the version of the API it
+/// speaks. mayara serves `/signalk/v1/stream`, so a client reading
+/// `endpoints.v1` has to find it there — advertising it only under `v2` left
+/// it undiscoverable to anything that follows the usual convention.
+#[tokio::test]
+#[ignore = "requires running server"]
+async fn test_discovery_advertises_the_stream_under_v1() {
+    let json = get_json("/signalk").await;
+    let v1 = &json["endpoints"]["v1"];
+
+    let ws = v1["signalk-ws"]
+        .as_str()
+        .expect("v1 must advertise the stream");
+    assert!(
+        ws.ends_with("/signalk/v1/stream"),
+        "v1 stream should be the v1 stream, got {ws}"
+    );
+    assert!(v1.get("version").is_some());
+}
+
+/// mayara serves no v1 REST tree, so it must not name an address for one.
+#[tokio::test]
+#[ignore = "requires running server"]
+async fn test_discovery_claims_no_v1_rest_tree() {
+    let json = get_json("/signalk").await;
+
+    assert!(
+        json["endpoints"]["v1"].get("signalk-http").is_none(),
+        "v1 must not advertise a REST tree mayara does not serve"
+    );
+}
