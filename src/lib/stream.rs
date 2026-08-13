@@ -311,11 +311,21 @@ impl SignalKDelta {
         }
     }
 
-    pub fn build(self) -> Option<Self> {
-        if !self.updates.is_empty() {
-            return Some(self);
+    /// The delta to send, or nothing when there is nothing left to say.
+    ///
+    /// Filtering a delta against a client's subscriptions empties the values
+    /// it did not ask for, which can leave an update carrying only a source
+    /// and a timestamp. Sending that tells the client nothing, and a client
+    /// subscribed to little enough receives a steady stream of it, so drop
+    /// updates that carry neither values nor meta before deciding.
+    pub fn build(mut self) -> Option<Self> {
+        self.updates
+            .retain(|update| !update.values.is_empty() || !update.meta.is_empty());
+
+        if self.updates.is_empty() {
+            return None;
         }
-        None
+        Some(self)
     }
 }
 
@@ -1455,5 +1465,78 @@ mod test {
 
         assert!(!subs.is_subscribed_path("radars.nav1.controls.gain", false));
         assert_eq!(last_sent_of(&subs, "nav1", ControlId::Gain), Some(pinned));
+    }
+}
+
+#[cfg(test)]
+mod build_tests {
+    use super::*;
+    use crate::radar::settings::new_numeric;
+
+    fn update(values: Vec<DeltaValue>) -> DeltaUpdate {
+        DeltaUpdate {
+            source: Some(PACKAGE.to_string()),
+            timestamp: Some(Utc::now()),
+            meta: Vec::new(),
+            values,
+        }
+    }
+
+    fn navigation_value() -> DeltaValue {
+        DeltaValue::Navigation {
+            path: "navigation.headingTrue".to_string(),
+            value: 1.5,
+        }
+    }
+
+    fn delta_of(updates: Vec<DeltaUpdate>) -> SignalKDelta {
+        let mut delta = SignalKDelta::new();
+        delta.updates = updates;
+        delta
+    }
+
+    /// Filtering a delta against a subscription empties the values the client
+    /// did not ask for, leaving an update carrying only a source and a
+    /// timestamp. Sending that says nothing, and a client subscribed to little
+    /// enough gets a steady stream of it — `subscribe=none` turned every
+    /// own-ship update into one.
+    #[test]
+    fn an_update_with_nothing_left_in_it_is_not_sent() {
+        let delta = delta_of(vec![update(vec![])]);
+
+        assert!(delta.build().is_none());
+    }
+
+    #[test]
+    fn a_delta_with_values_is_sent() {
+        let delta = delta_of(vec![update(vec![navigation_value()])]);
+
+        assert_eq!(delta.build().map(|d| d.updates.len()), Some(1));
+    }
+
+    /// A control is described before its value ever changes, so an update
+    /// carrying only meta still has something to say.
+    #[test]
+    fn a_delta_carrying_only_meta_is_sent() {
+        let (_, control) = new_numeric(ControlId::Gain, 0., 100.).take();
+        let mut delta = SignalKDelta::new();
+        delta.add_meta_for_control("nav1034A", &control);
+
+        assert_eq!(delta.build().map(|d| d.updates.len()), Some(1));
+    }
+
+    /// An emptied update must not take a full one down with it, nor survive
+    /// alongside it.
+    #[test]
+    fn only_the_emptied_updates_are_dropped() {
+        let delta = delta_of(vec![
+            update(vec![]),
+            update(vec![navigation_value()]),
+            update(vec![]),
+        ]);
+
+        let built = delta.build().expect("a delta with values is sent");
+        assert_eq!(built.updates.len(), 1);
+        assert_eq!(built.updates[0].values.len(), 1);
     }
 }

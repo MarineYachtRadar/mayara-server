@@ -38,7 +38,15 @@ async fn first_radar_id() -> String {
         .json()
         .await
         .unwrap();
-    json.as_object().unwrap().keys().next().unwrap().clone()
+    // The document is `{"version": ..., "radars": {...}}`, so the ids are one
+    // level in — taking the first key of the document itself yields "radars".
+    json["radars"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .next()
+        .unwrap()
+        .clone()
 }
 
 fn text_msg(v: &Value) -> Message {
@@ -167,16 +175,29 @@ async fn test_control_stream_set_control_via_stream() {
     write.send(text_msg(&msg)).await.unwrap();
     let _ = timeout(Duration::from_secs(2), read.next()).await;
 
-    // Set a control value via the stream
-    let msg = json!({
-        "updates": [{"values": [{"path": format!("radars.{}.controls.gain", id), "value": {"value": 60}}]}]
-    });
+    // Set a control value via the stream. The stream takes the control value
+    // itself, not a delta wrapped around it — the shape this used to send
+    // matched no request at all, and the frame that made the test pass was
+    // unrelated traffic that happened to arrive.
+    let path = format!("radars.{}.controls.gain", id);
+    let msg = json!({ "path": path, "value": 60 });
     write.send(text_msg(&msg)).await.unwrap();
 
-    let result = timeout(Duration::from_secs(5), read.next()).await;
+    // The radar reporting the new value back is what says the write landed.
+    let mut reported = false;
+    for _ in 0..10 {
+        let Ok(Some(Ok(Message::Text(text)))) = timeout(Duration::from_secs(2), read.next()).await
+        else {
+            break;
+        };
+        if text.contains(&path) {
+            reported = true;
+            break;
+        }
+    }
     assert!(
-        result.is_ok(),
-        "Should receive response after setting control"
+        reported,
+        "the control set over the stream was never reported"
     );
 }
 
@@ -383,4 +404,82 @@ async fn test_websocket_without_deflate() {
         response.headers().get("sec-websocket-extensions").is_none(),
         "Server should not negotiate deflate when client doesn't offer it"
     );
+}
+
+/// How long to watch a stream that should have nothing to say.
+const SILENCE_WINDOW: Duration = Duration::from_secs(2);
+
+/// `subscribe=none` means what it says: after introducing itself the server
+/// stops until asked for something. Filtering used to empty each update
+/// without dropping it, so a client that had asked for nothing still received
+/// a message for every own-ship update on the boat.
+#[tokio::test]
+#[ignore = "requires running server"]
+async fn test_subscribe_none_says_nothing_after_the_hello() {
+    let url = format!("{}/signalk/v1/stream?subscribe=none", ws_url());
+    let (ws, _) = connect_async(&url).await.expect("Failed to connect");
+    let (_, mut read) = ws.split();
+
+    let hello = timeout(Duration::from_secs(5), read.next())
+        .await
+        .expect("Timed out waiting for the hello");
+    match hello {
+        Some(Ok(Message::Text(text))) => {
+            let json: Value = serde_json::from_str(&text).expect("Should be valid JSON");
+            assert!(json.get("self").is_some(), "expected the hello, got {json}");
+        }
+        other => panic!("Expected a hello, got {other:?}"),
+    }
+
+    match timeout(SILENCE_WINDOW, read.next()).await {
+        Err(_) => {} // Nothing said, which is the whole point.
+        Ok(Some(Ok(Message::Text(text)))) => {
+            panic!("a client that subscribed to nothing was sent: {text}")
+        }
+        Ok(other) => panic!("unexpected frame on a silent stream: {other:?}"),
+    }
+}
+
+/// A control cannot be read without knowing what it is, so the definitions
+/// have to arrive no later than the values they describe — they are held back
+/// on connect only until the client asks for the data.
+#[tokio::test]
+#[ignore = "requires running server"]
+async fn test_subscribing_brings_the_definitions_with_the_values() {
+    let url = format!("{}/signalk/v1/stream?subscribe=none", ws_url());
+    let (ws, _) = connect_async(&url).await.expect("Failed to connect");
+    let (mut write, mut read) = ws.split();
+
+    let subscribe = json!({
+        "subscribe": [{"path": "radars.*.controls.*", "policy": "instant"}]
+    });
+    write
+        .send(text_msg(&subscribe))
+        .await
+        .expect("Failed to subscribe");
+
+    let mut seen_meta = false;
+    for _ in 0..10 {
+        let frame = match timeout(Duration::from_secs(2), read.next()).await {
+            Ok(Some(Ok(Message::Text(text)))) => text,
+            _ => break,
+        };
+        let json: Value = serde_json::from_str(&frame).expect("Should be valid JSON");
+        let Some(updates) = json["updates"].as_array() else {
+            continue;
+        };
+
+        if updates.iter().any(|u| u.get("meta").is_some()) {
+            seen_meta = true;
+        }
+        if updates.iter().any(|u| u.get("values").is_some()) {
+            assert!(
+                seen_meta,
+                "control values arrived before anything said what they are: {frame}"
+            );
+            return;
+        }
+    }
+
+    panic!("subscribing produced no control values");
 }

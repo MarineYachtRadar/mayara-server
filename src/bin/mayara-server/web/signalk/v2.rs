@@ -1459,7 +1459,13 @@ async fn ws_signalk_delta(
     let mut subscriptions = ActiveSubscriptions::new(subscribe);
 
     let mut sk_delta = SignalKDelta::new();
-    sk_delta.add_meta_updates(&radars, &mut meta_radar_data_sent);
+
+    // A client that asked for nothing gets nothing, control definitions
+    // included — they describe data it has not subscribed to. Once it does
+    // subscribe, the definitions travel with the first values it receives.
+    if subscribe != Subscribe::None {
+        sk_delta.add_meta_updates(&radars, &mut meta_radar_data_sent);
+    }
 
     // Radar controls are own-ship data, so send the cached values on connect for
     // both `self` and `all` — only `none` waits for an explicit subscription.
@@ -1538,7 +1544,7 @@ async fn ws_signalk_delta(
                     Some(Ok(message)) => {
                         match message {
                             Message::Text(message) => {
-                                handle_client_request(socket, message.as_str(), &mut subscriptions, &radars, reply_tx.clone()).await;
+                                handle_client_request(socket, message.as_str(), &mut subscriptions, &radars, reply_tx.clone(), &mut meta_radar_data_sent).await;
                             },
                             _ => {
                                 log::debug!("Dropping unexpected message {:?}", message);
@@ -1558,7 +1564,7 @@ async fn ws_signalk_delta(
             }
 
             _ = tokio::time::sleep(subscriptions.get_timeout()) => {
-                if let Err(e) = send_all_subscribed(socket, &radars, &mut subscriptions).await
+                if let Err(e) = send_all_subscribed(socket, &radars, &mut subscriptions, &mut meta_radar_data_sent).await
                 {
                     log::warn!("Cannot send subscribed data to websocket");
                     break Err(e);
@@ -1633,6 +1639,7 @@ async fn handle_client_request(
     subscriptions: &mut ActiveSubscriptions,
     radars: &SharedRadars,
     reply_tx: mpsc::Sender<ControlValue>,
+    meta_sent: &mut HashSet<String>,
 ) {
     log::info!("Stream request: {}", message);
 
@@ -1643,7 +1650,7 @@ async fn handle_client_request(
     if let Ok(stream_request) = stream_request {
         let r = match stream_request {
             StreamRequest::Subscription(subscription) => {
-                handle_subscription(socket, radars, subscriptions, subscription).await
+                handle_subscription(socket, radars, subscriptions, subscription, meta_sent).await
             }
             StreamRequest::Desubscription(desubscription) => {
                 subscriptions.desubscribe(desubscription)
@@ -1714,9 +1721,10 @@ async fn handle_subscription(
     radars: &SharedRadars,
     subscriptions: &mut ActiveSubscriptions,
     subscription: Subscription,
+    meta_sent: &mut HashSet<String>,
 ) -> Result<(), RadarError> {
     let ais_subscribed = subscriptions.subscribe(subscription)?;
-    send_all_subscribed(socket, radars, subscriptions).await?;
+    send_all_subscribed(socket, radars, subscriptions, meta_sent).await?;
 
     // If AIS was just subscribed, send all known AIS vessels
     if ais_subscribed {
@@ -1765,6 +1773,7 @@ async fn send_all_subscribed(
     socket: &mut WebSocket,
     radars: &SharedRadars,
     subscriptions: &mut ActiveSubscriptions,
+    meta_sent: &mut HashSet<String>,
 ) -> Result<(), RadarError> {
     let mut rcvs: Vec<RadarControlValue> = Vec::with_capacity(80);
 
@@ -1780,6 +1789,10 @@ async fn send_all_subscribed(
     if !rcvs.is_empty() {
         let mut delta: SignalKDelta = SignalKDelta::new();
         delta.add_updates(rcvs);
+        // A value means nothing without the definition that says what it is,
+        // and a client subscribing after `subscribe=none` has been told
+        // nothing yet — these are the first values it has seen.
+        delta.add_meta_from_updates(radars, meta_sent);
         send_message(socket, delta.build().unwrap()).await?;
     }
 
