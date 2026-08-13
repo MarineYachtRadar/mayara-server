@@ -39,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **stream:** say nothing to a client that subscribed to nothing (#539) ([PR #539](https://github.com/MarineYachtRadar/mayara-server/pull/539))
 - **signalk:** introduce the server the way Signal K servers do (#543) ([PR #543](https://github.com/MarineYachtRadar/mayara-server/pull/543))
 - **stream:** let a radar wildcard reach that radar's targets (#545) ([PR #545](https://github.com/MarineYachtRadar/mayara-server/pull/545))
+- **stream:** let overlapping subscriptions compose (#550) ([PR #550](https://github.com/MarineYachtRadar/mayara-server/pull/550))
 
 ## [3.8.1] - 2026-08-04
 
