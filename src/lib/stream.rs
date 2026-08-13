@@ -7,7 +7,7 @@ use std::{
     str::FromStr,
     time::{Duration, SystemTime},
 };
-use strum::{EnumString, IntoEnumIterator, VariantNames};
+use strum::{EnumString, VariantNames};
 use utoipa::ToSchema;
 use wildmatch::WildMatch;
 
@@ -537,31 +537,48 @@ pub enum Subscribe {
 pub struct ActiveSubscriptions {
     pub mode: Subscribe,
     timeout: Duration,
-    paths: HashMap<String, HashMap<ControlId, PathSubscribe>>,
-    /// Target subscriptions: radar_id -> wildcard pattern (e.g., "targets.*")
-    target_subscriptions: HashMap<String, Vec<String>>,
-    /// Navigation path subscriptions (e.g., "navigation.headingTrue")
-    navigation_subscriptions: Vec<String>,
-    /// Vessel (AIS) path subscriptions (e.g., "vessels.*")
-    vessel_subscriptions: Vec<String>,
-    /// Signal K `notifications.*` path subscriptions (e.g.,
-    /// `notifications.radar.*`, `notifications.radar.nav1.guardZone.1`).
-    /// Without this list `apply_subscriptions` would drop every emitted
-    /// notification delta because the generic control-path matcher
-    /// rejects the `notifications.` prefix as an unknown control id.
-    notification_subscriptions: Vec<String>,
+    /// What the client asked for, kept as it asked for it rather than expanded
+    /// into the paths it covers. Two requests that cover the same ground stay
+    /// two requests, so taking one back leaves the other doing its job.
+    requests: Vec<PathSubscribe>,
+    /// When each path last went out, keyed by the path itself. Throttling is a
+    /// property of the data, not of whichever request asked for it, so it
+    /// outlives any one subscription.
+    last_sent: HashMap<String, SystemTime>,
+}
+
+/// Does `pattern` cover `path`? Signal K subscription paths use `*` for any
+/// run of characters, so `radars.*` covers a control and a target alike, and
+/// `*` covers everything.
+fn pattern_covers(pattern: &str, path: &str) -> bool {
+    pattern == path || (pattern.contains('*') && WildMatch::new(pattern).matches(path))
+}
+
+/// The shorthand for a published control path, if it is one: `radars.{id}.gain`
+/// alongside `radars.{id}.controls.gain`. `None` for anything that is not a
+/// control, which is how the caller tells them apart.
+fn control_shorthand(path: &str) -> Option<String> {
+    let (radar_id, control_id) = path.strip_prefix("radars.")?.split_once(".controls.")?;
+    Some(format!("radars.{}.{}", radar_id, control_id))
+}
+
+/// The path a control is published under, and the shorthand a client may name
+/// it by. `radars.{id}.gain` has always been accepted for
+/// `radars.{id}.controls.gain`, so both forms are offered to the patterns.
+fn control_paths(radar_id: &str, control_id: &ControlId) -> [String; 2] {
+    [
+        format!("radars.{}.controls.{}", radar_id, control_id),
+        format!("radars.{}.{}", radar_id, control_id),
+    ]
 }
 
 impl ActiveSubscriptions {
     pub fn new(mode: Subscribe) -> ActiveSubscriptions {
         ActiveSubscriptions {
             mode,
-            paths: HashMap::new(),
             timeout: Duration::from_secs(99999999),
-            target_subscriptions: HashMap::new(),
-            navigation_subscriptions: Vec::new(),
-            vessel_subscriptions: Vec::new(),
-            notification_subscriptions: Vec::new(),
+            requests: Vec::new(),
+            last_sent: HashMap::new(),
         }
     }
 
@@ -578,284 +595,143 @@ impl ActiveSubscriptions {
         self.timeout
     }
 
-    /// Subscribe to paths. Returns true if a new AIS vessel subscription was
-    /// added. Additive: it adds explicit path subscriptions without changing the
-    /// query baseline (`none`/`self`/`all`), matching Signal K semantics.
+    /// Every request that covers `path`, which is how overlapping
+    /// subscriptions compose: they are all still here to be asked.
+    fn covering(&self, path: &str) -> impl Iterator<Item = &PathSubscribe> {
+        self.requests
+            .iter()
+            .filter(move |r| pattern_covers(&r.path, path))
+    }
+
     pub fn subscribe(&mut self, subscription: Subscription) -> Result<bool, RadarError> {
         let mut period = u64::MAX;
-        let mut ais_subscribed = false;
+
+        // Answering `true` makes the caller send every vessel it knows of, so
+        // it means "newly asked for", not "asked for". A client repeating a
+        // subscription it already holds is not asking again.
+        let asked_before = self.asks_for_vessels();
+
         for path_subscription in subscription.subscribe {
             let path = &path_subscription.path;
+            log::debug!("Subscribing to path: {}", path);
 
-            // Signal K's subscribe-everything wildcard — what mayara itself
-            // sends to its upstream Signal K server, and so what a client can
-            // send to either server. It is not a control path: fan it out to
-            // every category, then fall through so the control handler below
-            // sees it too.
-            if path == "*" {
-                log::debug!("Subscribing to all paths");
-                for list in [
-                    &mut self.navigation_subscriptions,
-                    &mut self.notification_subscriptions,
-                ] {
-                    if !list.iter().any(|p| p == "*") {
-                        list.push("*".to_string());
-                    }
-                }
-                subscribe_targets(&mut self.target_subscriptions, "*", "*");
-                if !self.vessel_subscriptions.iter().any(|p| p == "*") {
-                    self.vessel_subscriptions.push("*".to_string());
-                    ais_subscribed = true;
-                }
+            if let Some(p) = path_subscription.min_period {
+                period = min(p, period);
+            }
+            if let Some(p) = path_subscription.period {
+                period = min(p, period);
             }
 
-            // Handle navigation subscriptions (e.g., "navigation.headingTrue")
-            if path.starts_with("navigation.") {
-                log::debug!("Subscribing to navigation path: {}", path);
-                if !self.navigation_subscriptions.contains(path) {
-                    self.navigation_subscriptions.push(path.clone());
-                }
-                continue;
-            }
-
-            // Handle target subscriptions (e.g., "radars.nav1.targets.*")
-            if path.contains(".targets.") {
-                let (radar_id, target_pattern) = extract_path(path);
-                log::debug!(
-                    "Subscribing to targets for radar '{}' pattern '{}'",
-                    radar_id,
-                    target_pattern
-                );
-                subscribe_targets(&mut self.target_subscriptions, radar_id, target_pattern);
-                continue;
-            }
-
-            // Handle vessel (AIS) subscriptions (e.g., "vessels.*")
-            if path.starts_with("vessels.") {
-                log::debug!("Subscribing to vessel path: {}", path);
-                if !self.vessel_subscriptions.contains(path) {
-                    self.vessel_subscriptions.push(path.clone());
-                    ais_subscribed = true;
-                }
-                continue;
-            }
-
-            // Handle Signal K notification subscriptions
-            // (e.g., "notifications.radar.*", "notifications.radar.nav1.guardZone.1").
-            if path.starts_with("notifications.") {
-                log::debug!("Subscribing to notification path: {}", path);
-                if !self.notification_subscriptions.contains(path) {
-                    self.notification_subscriptions.push(path.clone());
-                }
-                continue;
-            }
-
-            // Handle control subscriptions (existing logic)
-            let (radar_id, control_id) = extract_path(path);
-
-            // `radars.*` and `radars.<id>.*` ask for everything a radar has,
-            // which is more than its controls: without this, a client asking
-            // that way is quietly given controls alone, and the only way to
-            // reach targets is to name `.targets.` outright.
-            if control_id == "*" {
-                subscribe_targets(&mut self.target_subscriptions, radar_id, "*");
-            }
-            let mut paths = self.paths.get_mut(radar_id);
-            if paths.is_none() {
-                log::debug!("Creating radar '{}' self", radar_id);
-                self.paths.insert(radar_id.to_string(), HashMap::new());
-                paths = self.paths.get_mut(radar_id);
-            }
-            let paths = paths.unwrap();
-
-            if control_id.contains("*") {
-                for id in ControlId::iter() {
-                    let matcher = WildMatch::new(control_id);
-                    if matcher.matches(&id.to_string()) {
-                        log::trace!("{} matches {}", id, control_id);
-                        paths.insert(id, path_subscription.clone());
-                    }
-                }
-                if let Some(p) = path_subscription.min_period {
-                    period = min(p, period);
-                }
-                if let Some(p) = path_subscription.period {
-                    period = min(p, period);
-                }
-            } else {
-                match ControlId::from_str(control_id) {
-                    Ok(control_id) => {
-                        if let Some(p) = path_subscription.min_period {
-                            period = min(p, period);
-                        }
-                        if let Some(p) = path_subscription.period {
-                            period = min(p, period);
-                        }
-                        paths.insert(control_id, path_subscription);
-                    }
-                    Err(_e) => {
-                        // Not a control mayara knows. Signal K answers a
-                        // subscription for a path it has no data for by simply
-                        // never sending it, so do the same rather than failing
-                        // the whole subscribe — one unrecognised leaf must not
-                        // cost the client the paths it asked for alongside it.
-                        log::debug!(
-                            "Ignoring subscription to radar '{}' path '{}': not a known control",
-                            radar_id,
-                            control_id,
-                        );
-                        continue;
-                    }
-                }
+            // Asking twice for the same thing is one subscription, but asking
+            // for it differently is not — the terms may differ.
+            if !self.requests.iter().any(|r| {
+                r.path == *path
+                    && r.policy == path_subscription.policy
+                    && r.period == path_subscription.period
+                    && r.min_period == path_subscription.min_period
+            }) {
+                self.requests.push(path_subscription);
             }
         }
         self.set_timeout(period);
 
-        Ok(ais_subscribed)
+        Ok(!asked_before && self.asks_for_vessels())
+    }
+
+    /// Whether any request covers another vessel's data. `*` covers it, as it
+    /// covers everything.
+    fn asks_for_vessels(&self) -> bool {
+        self.requests
+            .iter()
+            .any(|r| r.path == "*" || r.path.starts_with("vessels."))
     }
 
     pub fn desubscribe(&mut self, subscription: Desubscription) -> Result<(), RadarError> {
         for path_desubscription in subscription.desubscribe {
             let path = &path_desubscription.path;
+            log::debug!("Desubscribing from path: {}", path);
 
-            // Mirror of the fan-out in `subscribe`: `*` put a wildcard in every
-            // category, so taking it back has to remove it from every category.
-            // Falls through to the control handler below, as the fan-out does.
-            if path == "*" {
-                log::debug!("Desubscribing from all paths");
-                for list in [
-                    &mut self.navigation_subscriptions,
-                    &mut self.notification_subscriptions,
-                    &mut self.vessel_subscriptions,
-                ] {
-                    list.retain(|p| p != "*");
-                }
-                desubscribe_targets(&mut self.target_subscriptions, "*", "*");
-            }
-
-            // Handle navigation desubscriptions (e.g., "navigation.headingTrue")
-            if path.starts_with("navigation.") {
-                log::debug!("Desubscribing from navigation path: {}", path);
-                self.navigation_subscriptions.retain(|p| p != path);
-                continue;
-            }
-
-            // Handle target desubscriptions (e.g., "radars.nav1.targets.*")
-            if path.contains(".targets.") {
-                let (radar_id, target_pattern) = extract_path(path);
-                log::debug!(
-                    "Desubscribing from targets for radar '{}' pattern '{}'",
-                    radar_id,
-                    target_pattern
-                );
-                desubscribe_targets(&mut self.target_subscriptions, radar_id, target_pattern);
-                continue;
-            }
-
-            // Handle vessel (AIS) desubscriptions (e.g., "vessels.*")
-            if path.starts_with("vessels.") {
-                log::debug!("Desubscribing from vessel path: {}", path);
-                self.vessel_subscriptions.retain(|p| p != path);
-                continue;
-            }
-
-            // Handle Signal K notification desubscriptions.
-            if path.starts_with("notifications.") {
-                log::debug!("Desubscribing from notification path: {}", path);
-                self.notification_subscriptions.retain(|p| p != path);
-                continue;
-            }
-
-            // Handle control desubscriptions (existing logic)
-            let (radar_id, control_id) = extract_path(path);
-
-            // The counterpart of subscribing to everything about a radar.
-            if control_id == "*" {
-                desubscribe_targets(&mut self.target_subscriptions, radar_id, "*");
-            }
-
-            let paths = self.paths.get_mut(radar_id);
-            if paths.is_none() {
-                continue;
-            }
-            let paths = paths.unwrap();
-
-            if control_id.contains("*") {
-                for id in ControlId::iter() {
-                    let matcher = WildMatch::new(control_id);
-                    if matcher.matches(&id.to_string()) {
-                        paths.remove(&id);
-                    }
-                }
-            } else {
-                match ControlId::from_str(control_id) {
-                    Ok(id) => {
-                        paths.remove(&id);
-                    }
-                    Err(_e) => {
-                        log::warn!(
-                            "Cannot desubscribe context '{}' path '{}': does not exist",
-                            radar_id,
-                            path_desubscription.path
-                        );
-                        return Err(RadarError::CannotParseControlId(control_id.to_string()));
-                    }
-                }
-            }
+            // Take back what was asked for, leaving anything else that happens
+            // to cover the same ground still asked for.
+            self.requests.retain(|r| r.path != *path);
         }
 
         Ok(())
     }
 
-    //
-    // This is called with a RadarControlValue generated internally, with a fixed path and no wildcards
-    // and a control_id filled in.
-    //
+    /// Whether this control goes out now, which is both whether the client
+    /// asked for it and whether the terms it asked on allow it yet.
     pub fn is_subscribed(&mut self, rcv: &RadarControlValue, full: bool) -> bool {
         match self.mode {
-            // Radar control values are own-ship data, so they are in the baseline
-            // for both `self` and `all`.
-            Subscribe::All | Subscribe::SelfOnly => {
+            Subscribe::All => {
+                return true;
+            }
+            Subscribe::SelfOnly => {
                 return true;
             }
             Subscribe::None => {}
         }
-        if let (Some(radar_id), Some(control_id)) = (rcv.radar_id.as_deref(), &rcv.control_id) {
-            for key in [radar_id, "*"] {
-                if let Some(paths) = self.paths.get_mut(key)
-                    && let Some(path) = paths.get_mut(control_id)
-                {
-                    let policy = path.policy.as_ref().unwrap_or(&Policy::Instant);
-                    let now = SystemTime::now();
 
-                    if *policy == Policy::Fixed {
-                        if !full {
-                            return false;
-                        }
-                        if let Some(period) = path.period
-                            && let Some(last) = path.last_sent
-                            && last + Duration::from_micros(period) > now
-                        {
-                            return false;
-                        }
-                    }
-
-                    if let Some(min_period) = path.min_period
-                        && let Some(last) = path.last_sent
-                        && last + Duration::from_micros(min_period) > now
-                    {
-                        return false;
-                    }
-
-                    path.last_sent = Some(now);
-                    return true;
-                }
-            }
-        } else {
+        let (Some(radar_id), Some(control_id)) = (rcv.radar_id.as_deref(), &rcv.control_id) else {
             panic!("Invalid use of is_subscribed(), can only be done on internal RCV");
+        };
+        let [canonical, shorthand] = control_paths(radar_id, control_id);
+
+        let Some(terms) = self.terms_for(&[&canonical, &shorthand]) else {
+            return false;
+        };
+
+        self.allow_now(&canonical, &terms, full)
+    }
+
+    /// The terms every covering request agrees to answer on, taking the most
+    /// permissive of each: a client that asked for something instantly gets it
+    /// instantly, and a broad slow subscription can never quieten a narrow
+    /// fast one it happens to overlap.
+    fn terms_for(&self, paths: &[&str]) -> Option<Terms> {
+        let mut terms: Option<Terms> = None;
+        for path in paths {
+            for request in self.covering(path) {
+                let found = terms.get_or_insert(Terms {
+                    policy: Policy::Fixed,
+                    period: None,
+                    min_period: None,
+                });
+                let policy = request.policy.clone().unwrap_or(Policy::Instant);
+                if policy.permits_more_than(&found.policy) {
+                    found.policy = policy;
+                }
+                found.period = least(found.period, request.period);
+                found.min_period = least(found.min_period, request.min_period);
+            }
+        }
+        terms
+    }
+
+    /// Whether the terms allow sending now, and if so record that we did.
+    fn allow_now(&mut self, path: &str, terms: &Terms, full: bool) -> bool {
+        let now = SystemTime::now();
+        let last = self.last_sent.get(path).copied();
+
+        if terms.policy == Policy::Fixed {
+            if !full {
+                return false;
+            }
+            if let (Some(period), Some(last)) = (terms.period, last)
+                && last + Duration::from_micros(period) > now
+            {
+                return false;
+            }
         }
 
-        false
+        if let (Some(min_period), Some(last)) = (terms.min_period, last)
+            && last + Duration::from_micros(min_period) > now
+        {
+            return false;
+        }
+
+        self.last_sent.insert(path.to_string(), now);
+        true
     }
 
     pub fn is_subscribed_path(&mut self, path: &str, full: bool) -> bool {
@@ -876,204 +752,48 @@ impl ActiveSubscriptions {
             Subscribe::None => {}
         }
 
-        // Handle navigation paths (e.g., "navigation.headingTrue")
-        if path.starts_with("navigation.") {
-            return self.is_subscribed_navigation_path(path);
-        }
-
-        // Handle target paths (e.g., "radars.nav1.targets.5")
-        if path.contains(".targets.") {
-            return self.is_subscribed_target_path(path);
-        }
-
-        // Handle vessel (AIS) paths (e.g., "vessels.227334400")
-        if path.starts_with("vessels.") {
-            return self.is_subscribed_vessel_path(path);
-        }
-
-        // Handle Signal K notifications paths (e.g.,
-        // "notifications.radar.nav1.guardZone.1").
-        if path.starts_with("notifications.") {
-            return self.is_subscribed_notification_path(path);
-        }
-
-        // Handle control paths (existing logic)
-        let (radar_id, control_id) = extract_path(path);
-        let control_id = match ControlId::from_str(control_id) {
-            Ok(c) => c,
-            Err(_) => {
+        // A control is throttled by the terms it was asked on; everything else
+        // goes out whenever it changes. Both the path a control is published
+        // under and the shorthand a client may have named it by are offered,
+        // the same pair `is_subscribed` uses — a client that subscribed the
+        // short way must not be answered on connect and then go quiet.
+        if let Some(shorthand) = control_shorthand(path) {
+            let Some(terms) = self.terms_for(&[path, &shorthand]) else {
                 return false;
-            }
-        };
-
-        for key in [radar_id, "*"] {
-            if let Some(paths) = self.paths.get_mut(key)
-                && let Some(path) = paths.get_mut(&control_id)
-            {
-                let policy = path.policy.as_ref().unwrap_or(&Policy::Instant);
-                let now = SystemTime::now();
-
-                if *policy == Policy::Fixed {
-                    if !full {
-                        return false;
-                    }
-                    if let Some(period) = path.period
-                        && let Some(last) = path.last_sent
-                        && last + Duration::from_micros(period) > now
-                    {
-                        return false;
-                    }
-                }
-
-                if let Some(min_period) = path.min_period
-                    && let Some(last) = path.last_sent
-                    && last + Duration::from_micros(min_period) > now
-                {
-                    return false;
-                }
-
-                path.last_sent = Some(now);
-                return true;
-            }
+            };
+            return self.allow_now(path, &terms, full);
         }
 
-        false
+        self.covering(path).next().is_some()
     }
 
-    /// Check if subscribed to a navigation path
-    fn is_subscribed_navigation_path(&self, path: &str) -> bool {
-        for subscribed_path in &self.navigation_subscriptions {
-            if subscribed_path == path {
-                return true;
-            }
-            // Support wildcard matching (e.g., "navigation.*")
-            if subscribed_path.contains('*') {
-                let matcher = WildMatch::new(subscribed_path);
-                if matcher.matches(path) {
-                    return true;
-                }
-            }
-        }
-        false
-    }
-
-    /// Check if subscribed to a target path
-    fn is_subscribed_target_path(&self, path: &str) -> bool {
-        // Extract radar_id and target part from path like "radars.nav1.targets.5"
-        let (radar_id, target_part) = extract_path(path);
-
-        // Check both specific radar and wildcard subscriptions
-        for key in [radar_id, "*"] {
-            if let Some(patterns) = self.target_subscriptions.get(key) {
-                for pattern in patterns {
-                    if pattern == target_part {
-                        return true;
-                    }
-                    // Support wildcard matching (e.g., "targets.*" matches "targets.5")
-                    if pattern.contains('*') {
-                        let matcher = WildMatch::new(pattern);
-                        if matcher.matches(target_part) {
-                            return true;
-                        }
-                    }
-                }
-            }
-        }
-        false
-    }
-
-    /// Check if subscribed to a vessel (AIS) path
     /// Whether the client wants AIS data for `context` (e.g.
     /// `vessels.urn:mrn:imo:mmsi:431004411`). Another vessel's data is never in
     /// the `self` baseline, so outside `subscribe=all` it takes an explicit
     /// `vessels.*` subscription — matching Signal K, where `self` means own
     /// ship only.
     fn is_subscribed_ais(&self, context: &str) -> bool {
-        match self.mode {
-            Subscribe::All => true,
-            Subscribe::SelfOnly | Subscribe::None => self.is_subscribed_vessel_path(context),
+        if self.mode == Subscribe::All {
+            return true;
         }
-    }
-
-    fn is_subscribed_vessel_path(&self, path: &str) -> bool {
-        for subscribed_path in &self.vessel_subscriptions {
-            if subscribed_path == path {
-                return true;
-            }
-            // Support wildcard matching (e.g., "vessels.*" matches "vessels.227334400")
-            if subscribed_path.contains('*') {
-                let matcher = WildMatch::new(subscribed_path);
-                if matcher.matches(path) {
-                    return true;
-                }
-            }
-        }
-        false
-    }
-
-    /// Check if subscribed to a Signal K notification path. Same exact /
-    /// wildcard semantics as the navigation and vessel helpers so a
-    /// subscription to `notifications.radar.*` covers every per-radar /
-    /// per-zone leaf path mayara emits.
-    fn is_subscribed_notification_path(&self, path: &str) -> bool {
-        for subscribed_path in &self.notification_subscriptions {
-            if subscribed_path == path {
-                return true;
-            }
-            if subscribed_path.contains('*') {
-                let matcher = WildMatch::new(subscribed_path);
-                if matcher.matches(path) {
-                    return true;
-                }
-            }
-        }
-        false
+        self.covering(context).next().is_some()
     }
 }
 
-/// Drop a target subscription, and the radar's bucket with it once nothing is
-/// left in it, so an empty bucket never reads as "subscribed to this radar".
-fn desubscribe_targets(
-    subscriptions: &mut HashMap<String, Vec<String>>,
-    radar_id: &str,
-    pattern: &str,
-) {
-    if let Some(patterns) = subscriptions.get_mut(radar_id) {
-        patterns.retain(|p| p != pattern);
-        if patterns.is_empty() {
-            subscriptions.remove(radar_id);
-        }
-    }
+/// The terms a path goes out on, resolved from every request covering it.
+struct Terms {
+    policy: Policy,
+    period: Option<u64>,
+    min_period: Option<u64>,
 }
 
-/// Record a target subscription, keyed by radar id, without duplicating a
-/// pattern the client already asked for.
-fn subscribe_targets(
-    subscriptions: &mut HashMap<String, Vec<String>>,
-    radar_id: &str,
-    pattern: &str,
-) {
-    let patterns = subscriptions.entry(radar_id.to_string()).or_default();
-    if !patterns.iter().any(|p| p == pattern) {
-        patterns.push(pattern.to_string());
+/// The smaller of two optional periods, treating absence as no limit.
+fn least(a: Option<u64>, b: Option<u64>) -> Option<u64> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(min(a, b)),
+        (Some(a), None) => Some(a),
+        (None, b) => b,
     }
-}
-
-fn extract_path(mut path: &str) -> (&str, &str) {
-    if path.starts_with("radars.") {
-        path = &path["radars.".len()..];
-    }
-    if path == "*" {
-        return ("*", "*");
-    }
-    if let Some((radar, mut control)) = path.split_once('.') {
-        if control.starts_with("controls.") {
-            control = &control["controls.".len()..];
-        }
-        return (radar, control);
-    }
-
-    ("*", path)
 }
 
 /// Client-to-server message to subscribe to control value updates
@@ -1118,9 +838,23 @@ pub struct PathSubscribe {
     /// Minimum period between updates in milliseconds
     #[schema(example = 200)]
     min_period: Option<u64>,
-    #[serde(skip)]
-    #[schema(ignore)]
-    last_sent: Option<SystemTime>,
+}
+
+impl Policy {
+    /// How freely this policy lets data through, so the most permissive of
+    /// several can be picked: instant sends on every change, ideal holds to a
+    /// floor between sends, fixed only speaks on its own schedule.
+    fn permissiveness(&self) -> u8 {
+        match self {
+            Policy::Instant => 2,
+            Policy::Ideal => 1,
+            Policy::Fixed => 0,
+        }
+    }
+
+    fn permits_more_than(&self, other: &Policy) -> bool {
+        self.permissiveness() > other.permissiveness()
+    }
 }
 
 /// Subscription delivery policy
@@ -1165,14 +899,12 @@ mod test {
                     period: None,
                     policy: Some(Policy::Ideal),
                     min_period: Some(50),
-                    last_sent: None,
                 },
                 PathSubscribe {
                     path: "radars.2.controls.gain".to_string(),
                     period: Some(1000),
                     policy: Some(Policy::Instant),
                     min_period: None,
-                    last_sent: None,
                 },
             ],
         };
@@ -1258,7 +990,6 @@ mod test {
             period: None,
             policy: None,
             min_period: None,
-            last_sent: None,
         }
     }
 
@@ -1271,9 +1002,7 @@ mod test {
             })
             .unwrap();
         }
-        let patterns = subs.target_subscriptions.get("nav1").unwrap();
-        assert_eq!(patterns.len(), 1);
-        assert_eq!(patterns[0], "targets.*");
+        assert!(subs.is_subscribed_path("radars.nav1.targets.5", false));
     }
 
     /// `radars.*` asks for everything a radar has, which is more than its
@@ -1323,16 +1052,97 @@ mod test {
     /// A wildcard subscription has to be as easy to take back as it was to
     /// make: whatever asking for it added, unasking has to remove, or a client
     /// keeps receiving what it just said it no longer wants.
-    /// Overlapping wildcards share one entry rather than each owning their
-    /// own, so taking back the narrower one takes the shared entry with it
-    /// even though the wider one still wants it. Controls have always behaved
-    /// this way; targets match them, deliberately, rather than one half of the
-    /// model composing and the other half not.
-    ///
-    /// Pinned so the day someone makes overlap compose, this test fails and
-    /// says where to look — the fix belongs to controls and targets together.
+    /// A control may be named without its `controls.` segment, and a client
+    /// that names it that way has to keep receiving it — not just be answered
+    /// once on connect and then go quiet as its changes are filtered out.
     #[test]
-    fn overlapping_wildcards_share_one_subscription() {
+    fn the_shorthand_form_receives_changes_too() {
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
+        subs.subscribe(Subscription {
+            subscribe: vec![path("radars.nav1.gain")],
+        })
+        .unwrap();
+
+        assert!(subs.is_subscribed_path("radars.nav1.controls.gain", false));
+        assert!(!subs.is_subscribed_path("radars.nav1.controls.rain", false));
+    }
+
+    /// The same when the shorthand carries a wildcard.
+    #[test]
+    fn a_shorthand_wildcard_receives_changes_too() {
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
+        subs.subscribe(Subscription {
+            subscribe: vec![path("*.gain")],
+        })
+        .unwrap();
+
+        assert!(subs.is_subscribed_path("radars.nav1.controls.gain", false));
+        assert!(subs.is_subscribed_path("radars.nav2.controls.gain", false));
+        assert!(!subs.is_subscribed_path("radars.nav1.controls.rain", false));
+    }
+
+    /// A broad, slow subscription must never quieten a narrow, fast one it
+    /// happens to cover: the client asked for gain instantly, and adding a
+    /// throttled subscription over every radar does not take that back.
+    #[test]
+    fn the_most_permissive_terms_win() {
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
+        subs.subscribe(Subscription {
+            subscribe: vec![throttled_path(
+                "radars.*.controls.*",
+                Policy::Fixed,
+                Some(1_000_000_000),
+                None,
+            )],
+        })
+        .unwrap();
+        subs.subscribe(Subscription {
+            subscribe: vec![throttled_path(
+                "radars.nav1.controls.gain",
+                Policy::Instant,
+                None,
+                None,
+            )],
+        })
+        .unwrap();
+
+        // Twice in a row: instant means every change, so neither is held back.
+        assert!(subs.is_subscribed_path("radars.nav1.controls.gain", true));
+        assert!(subs.is_subscribed_path("radars.nav1.controls.gain", true));
+
+        // A control only the slow subscription covers still obeys it.
+        assert!(subs.is_subscribed_path("radars.nav1.controls.rain", true));
+        assert!(!subs.is_subscribed_path("radars.nav1.controls.rain", true));
+    }
+
+    /// Throttling follows the data, not the subscription that asked for it, so
+    /// two radars covered by one wildcard do not share a deadline.
+    #[test]
+    fn radars_are_throttled_apart() {
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
+        subs.subscribe(Subscription {
+            subscribe: vec![throttled_path(
+                "radars.*.controls.gain",
+                Policy::Fixed,
+                Some(1_000_000_000),
+                None,
+            )],
+        })
+        .unwrap();
+
+        assert!(subs.is_subscribed_path("radars.nav1.controls.gain", true));
+        assert!(
+            subs.is_subscribed_path("radars.nav2.controls.gain", true),
+            "another radar's first update must not be swallowed by the first radar's"
+        );
+        assert!(!subs.is_subscribed_path("radars.nav1.controls.gain", true));
+    }
+
+    /// Two wildcards covering the same ground are two subscriptions, not one
+    /// shared entry, so taking the narrower one back leaves the wider one
+    /// doing its job.
+    #[test]
+    fn overlapping_wildcards_compose() {
         let mut subs = ActiveSubscriptions::new(Subscribe::None);
         subs.subscribe(Subscription {
             subscribe: vec![path("*")],
@@ -1348,15 +1158,15 @@ mod test {
         })
         .unwrap();
 
-        assert!(!subs.is_subscribed_path("radars.nav1.targets.5", false));
         assert!(
-            !subs.is_subscribed_path("radars.nav1.controls.gain", false),
-            "controls share the same limitation; targets must not diverge from them"
+            subs.is_subscribed_path("radars.nav1.targets.5", false),
+            "the everything wildcard still wants targets"
         );
         assert!(
-            subs.is_subscribed_path("navigation.headingTrue", false),
-            "a category the narrower wildcard never named is untouched"
+            subs.is_subscribed_path("radars.nav1.controls.gain", false),
+            "and controls, which is the half that was wrong first"
         );
+        assert!(subs.is_subscribed_path("navigation.headingTrue", false));
     }
 
     #[test]
@@ -1418,27 +1228,26 @@ mod test {
     }
 
     #[test]
-    fn target_desubscribe_removes_pattern_and_empty_bucket() {
+    fn taking_back_one_target_pattern_leaves_the_other() {
         let mut subs = ActiveSubscriptions::new(Subscribe::None);
         subs.subscribe(Subscription {
             subscribe: vec![path("radars.nav1.targets.*"), path("radars.nav1.targets.5")],
         })
         .unwrap();
-        assert_eq!(subs.target_subscriptions.get("nav1").unwrap().len(), 2);
+        assert!(subs.is_subscribed_path("radars.nav1.targets.5", false));
 
         subs.desubscribe(Desubscription {
             desubscribe: vec![path("radars.nav1.targets.*")],
         })
         .unwrap();
-        let remaining = subs.target_subscriptions.get("nav1").unwrap();
-        assert_eq!(remaining.len(), 1);
-        assert_eq!(remaining[0], "targets.5");
+        assert!(subs.is_subscribed_path("radars.nav1.targets.5", false));
+        assert!(!subs.is_subscribed_path("radars.nav1.targets.9", false));
 
         subs.desubscribe(Desubscription {
             desubscribe: vec![path("radars.nav1.targets.5")],
         })
         .unwrap();
-        assert!(!subs.target_subscriptions.contains_key("nav1"));
+        assert!(!subs.is_subscribed_path("radars.nav1.targets.5", false));
     }
 
     #[test]
@@ -1448,13 +1257,15 @@ mod test {
             subscribe: vec![path("navigation.headingTrue"), path("navigation.position")],
         })
         .unwrap();
-        assert_eq!(subs.navigation_subscriptions.len(), 2);
+        assert!(subs.is_subscribed_path("navigation.position", false));
+        assert!(subs.is_subscribed_path("navigation.headingTrue", false));
 
         subs.desubscribe(Desubscription {
             desubscribe: vec![path("navigation.headingTrue")],
         })
         .unwrap();
-        assert_eq!(subs.navigation_subscriptions, vec!["navigation.position"]);
+        assert!(subs.is_subscribed_path("navigation.position", false));
+        assert!(!subs.is_subscribed_path("navigation.headingTrue", false));
     }
 
     #[test]
@@ -1490,16 +1301,13 @@ mod test {
             subscribe: vec![path("notifications.radar.*"), path("notifications.foo")],
         })
         .unwrap();
-        assert_eq!(subs.notification_subscriptions.len(), 2);
+        assert!(subs.is_subscribed_path("notifications.radar.nav1.guardZone.1", false));
 
         subs.desubscribe(Desubscription {
             desubscribe: vec![path("notifications.foo")],
         })
         .unwrap();
-        assert_eq!(
-            subs.notification_subscriptions,
-            vec!["notifications.radar.*"]
-        );
+        assert!(!subs.is_subscribed_path("notifications.foo", false));
         assert!(subs.is_subscribed_path("notifications.radar.fur6424A.guardZone.1", false));
     }
 
@@ -1540,7 +1348,6 @@ mod test {
             period,
             policy: Some(policy),
             min_period,
-            last_sent: None,
         }
     }
 
@@ -1549,10 +1356,9 @@ mod test {
         radar: &str,
         control: ControlId,
     ) -> Option<SystemTime> {
-        subs.paths
-            .get(radar)
-            .and_then(|m| m.get(&control))
-            .and_then(|p| p.last_sent)
+        subs.last_sent
+            .get(&format!("radars.{}.controls.{}", radar, control))
+            .copied()
     }
 
     fn set_last_sent(
@@ -1561,11 +1367,8 @@ mod test {
         control: ControlId,
         ts: SystemTime,
     ) {
-        subs.paths
-            .get_mut(radar)
-            .and_then(|m| m.get_mut(&control))
-            .unwrap()
-            .last_sent = Some(ts);
+        subs.last_sent
+            .insert(format!("radars.{}.controls.{}", radar, control), ts);
     }
 
     #[test]
