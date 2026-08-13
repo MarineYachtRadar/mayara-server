@@ -602,6 +602,7 @@ impl ActiveSubscriptions {
                         list.push("*".to_string());
                     }
                 }
+                subscribe_targets(&mut self.target_subscriptions, "*", "*");
                 if !self.vessel_subscriptions.iter().any(|p| p == "*") {
                     self.vessel_subscriptions.push("*".to_string());
                     ais_subscribed = true;
@@ -625,13 +626,7 @@ impl ActiveSubscriptions {
                     radar_id,
                     target_pattern
                 );
-                let patterns = self
-                    .target_subscriptions
-                    .entry(radar_id.to_string())
-                    .or_default();
-                if !patterns.iter().any(|p| p == target_pattern) {
-                    patterns.push(target_pattern.to_string());
-                }
+                subscribe_targets(&mut self.target_subscriptions, radar_id, target_pattern);
                 continue;
             }
 
@@ -657,6 +652,14 @@ impl ActiveSubscriptions {
 
             // Handle control subscriptions (existing logic)
             let (radar_id, control_id) = extract_path(path);
+
+            // `radars.*` and `radars.<id>.*` ask for everything a radar has,
+            // which is more than its controls: without this, a client asking
+            // that way is quietly given controls alone, and the only way to
+            // reach targets is to name `.targets.` outright.
+            if control_id == "*" {
+                subscribe_targets(&mut self.target_subscriptions, radar_id, "*");
+            }
             let mut paths = self.paths.get_mut(radar_id);
             if paths.is_none() {
                 log::debug!("Creating radar '{}' self", radar_id);
@@ -1012,6 +1015,19 @@ impl ActiveSubscriptions {
     }
 }
 
+/// Record a target subscription, keyed by radar id, without duplicating a
+/// pattern the client already asked for.
+fn subscribe_targets(
+    subscriptions: &mut HashMap<String, Vec<String>>,
+    radar_id: &str,
+    pattern: &str,
+) {
+    let patterns = subscriptions.entry(radar_id.to_string()).or_default();
+    if !patterns.iter().any(|p| p == pattern) {
+        patterns.push(pattern.to_string());
+    }
+}
+
 fn extract_path(mut path: &str) -> (&str, &str) {
     if path.starts_with("radars.") {
         path = &path["radars.".len()..];
@@ -1227,6 +1243,53 @@ mod test {
         let patterns = subs.target_subscriptions.get("nav1").unwrap();
         assert_eq!(patterns.len(), 1);
         assert_eq!(patterns[0], "targets.*");
+    }
+
+    /// `radars.*` is how a client asks for everything a radar has, and it is
+    /// what the Signal K plugin subscribes with. It used to register controls
+    /// alone, so targets never reached the Signal K data model at all and the
+    /// only way to see one was to name `.targets.` outright.
+    #[test]
+    fn a_radar_wildcard_covers_targets_as_well_as_controls() {
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
+        subs.subscribe(Subscription {
+            subscribe: vec![path("radars.*")],
+        })
+        .unwrap();
+
+        assert!(subs.is_subscribed_path("radars.nav1.controls.gain", false));
+        assert!(subs.is_subscribed_path("radars.nav1.targets.5", false));
+    }
+
+    /// The same asked of one radar rather than all of them.
+    #[test]
+    fn a_single_radar_wildcard_covers_its_targets() {
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
+        subs.subscribe(Subscription {
+            subscribe: vec![path("radars.nav1.*")],
+        })
+        .unwrap();
+
+        assert!(subs.is_subscribed_path("radars.nav1.targets.5", false));
+        assert!(
+            !subs.is_subscribed_path("radars.nav2.targets.5", false),
+            "a wildcard under one radar must not reach another"
+        );
+    }
+
+    /// Subscribing to everything has to mean everything: the fan-out seeded
+    /// navigation, notifications and vessels but left targets out, so even `*`
+    /// delivered none.
+    #[test]
+    fn subscribing_to_everything_includes_targets() {
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
+        subs.subscribe(Subscription {
+            subscribe: vec![path("*")],
+        })
+        .unwrap();
+
+        assert!(subs.is_subscribed_path("radars.nav1.targets.5", false));
+        assert!(subs.is_subscribed_path("radars.nav1.controls.gain", false));
     }
 
     #[test]
