@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **radar:** identify radars from their own protocol, not their address (#510) ([PR #510](https://github.com/MarineYachtRadar/mayara-server/pull/510))
 - **mdns:** let the advertised host name be renamed or turned off (#524) ([PR #524](https://github.com/MarineYachtRadar/mayara-server/pull/524))
 - **gui:** welcome first-time users with a tour of the PPI (#531) ([PR #531](https://github.com/MarineYachtRadar/mayara-server/pull/531))
+- **stream:** answer a Signal K put over the stream (#542) ([PR #542](https://github.com/MarineYachtRadar/mayara-server/pull/542))
 
 ### Changed
 
