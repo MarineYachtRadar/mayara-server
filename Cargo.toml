@@ -1,6 +1,6 @@
 [package]
 name = "mayara"
-version = "3.8.1"
+version = "3.9.0"
 edition = "2024"
 rust-version = "1.90"
 description = "Marine radar server with REST API and WebSocket support"
