@@ -218,3 +218,61 @@ th {
   font-size: 0.9rem;
   color: var(--myr_dim);
 }
+
+/* Diagrams */
+figure {
+  margin: 1.5rem 0;
+}
+
+figure svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+figcaption {
+  color: var(--myr_dim);
+  font-size: 0.9rem;
+  margin-top: 0.5rem;
+}
+
+.myr_svg_label {
+  font: 13px Verdana, Geneva, sans-serif;
+  fill: var(--myr_text);
+}
+
+.myr_svg_sub {
+  font: 11px Verdana, Geneva, sans-serif;
+  fill: var(--myr_dim);
+}
+
+.myr_svg_key {
+  font: 11px Verdana, Geneva, sans-serif;
+  fill: var(--myr_accent);
+  letter-spacing: 0.08em;
+}
+
+.myr_svg_box {
+  fill: var(--myr_panel);
+  stroke: var(--myr_accent);
+  stroke-width: 1.5;
+}
+
+.myr_svg_line {
+  stroke: var(--myr_accent);
+  stroke-width: 2;
+  fill: none;
+}
+
+.myr_svg_wifi {
+  stroke: var(--myr_warn_text);
+  stroke-width: 2;
+  fill: none;
+}
+
+.myr_svg_dash {
+  stroke: var(--myr_dim);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 5;
+  fill: none;
+}
