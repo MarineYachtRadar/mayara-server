@@ -320,9 +320,78 @@ div.myr_ppi {
 .myr_power_lozenge_name {
   display: flex;
   align-items: center;
+  gap: 6px;
   padding: 0 14px 0 10px;
+  background: none;
+  border: none;
+  font: inherit;
   color: #8cf;
   white-space: nowrap;
+  cursor: pointer;
+}
+
+/* Inert with a single radar: nothing to select between. */
+.myr_power_lozenge_name:disabled {
+  cursor: default;
+}
+
+.myr_power_lozenge_name:not(:disabled):hover {
+  background: #333;
+}
+
+.myr_power_lozenge_caret {
+  width: 10px;
+  height: 6px;
+  fill: currentcolor;
+}
+
+/* Radar selector, opened from the name half of the power lozenge. Sits just
+   below it: 20px offset + 36px lozenge + its 2px borders. */
+.myr_radar_menu {
+  position: absolute;
+  top: 62px;
+  left: 20px;
+  display: none;
+  flex-direction: column;
+  min-width: 160px;
+  background: rgba(0, 0, 0, 0.85);
+  border: 2px solid #446;
+  border-radius: 10px;
+  font-family: Verdana, Geneva, sans-serif;
+  font-size: 13px;
+  overflow: hidden;
+  z-index: 101;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.myr_radar_menu_open {
+  display: flex;
+}
+
+.myr_radar_menu_row {
+  padding: 8px 14px;
+  background: none;
+  border: none;
+  font: inherit;
+  color: #8cf;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.myr_radar_menu_row:hover {
+  background: #333;
+}
+
+.myr_radar_menu_current {
+  color: #fff;
+  font-weight: bold;
+}
+
+.myr_radar_menu_separator {
+  height: 1px;
+  background: #446;
 }
 
 /* ============================================
