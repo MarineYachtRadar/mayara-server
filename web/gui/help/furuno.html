@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <title>Furuno Setup — Mayara</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link type="text/css" rel="stylesheet" href="help.css?v=1" />
+  </head>
+  <body>
+    <div class="myr_help">
+      <div class="myr_nav"><a href="index.html">&larr; Setup guides</a></div>
+
+      <h1>Furuno radar setup</h1>
+      <p class="myr_lead">
+        DRS4W, DRS, DRS-NXT, X-Class, and FAR commercial series
+      </p>
+
+      <h2>What you need</h2>
+      <ul class="myr_needs">
+        <li>An address on the <code>172.31.0.0/16</code> subnet on the Mayara machine</li>
+        <li>A wired Ethernet connection to the radar (except the DRS4W, which is WiFi)</li>
+        <li>For a FAR-2xx7: IMO mode B, C or W — not mode A</li>
+      </ul>
+
+      <div class="myr_box myr_box_warn">
+        <span class="myr_box_title">The subnet is mandatory</span>
+        <p>
+          All Furuno radars live on <code>172.31.0.0/16</code>. If the machine
+          running Mayara has no address in that range, the radar is never
+          detected — there is no discovery mechanism that works around it.
+          The <em>Interfaces</em> button on Mayara's radar list shows which
+          interfaces Mayara is listening on for each brand.
+        </p>
+      </div>
+
+      <h3>Recommended configuration</h3>
+      <ul>
+        <li>Address: <code>172.31.3.150</code>, or any unused <code>172.31.x.x</code></li>
+        <li>Netmask: <code>255.255.0.0</code></li>
+        <li>No default gateway — this is a local subnet only</li>
+      </ul>
+      <pre><code>ip addr add 172.31.3.150/16 dev eth1</code></pre>
+
+      <div class="myr_box myr_box_bad">
+        <span class="myr_box_title">A wired Furuno belongs on wired Ethernet</span>
+        <p>
+          A DRS compresses its spokes, so it is not a heavy talker by radar
+          standards — roughly 200 to 400 bytes per spoke. 
+          That does not rescue it on WiFi. Spoke data
+          is multicast, and WiFi carries multicast at the base rate with no
+          retransmissions, so what is lost is lost.
+          <a href="networking.html#wifi">The full explanation.</a>
+        </p>
+        <p>
+          The DRS4W below is the exception, and it shows what a WiFi radar
+          actually costs: it sends 16 to 24 bytes per spoke, roughly a
+          fifteenth of what a wired Furuno sends — and about a twenty-fifth per
+          revolution, because it sends fewer spokes as well. Furuno designed it
+          that way from the start.
+        </p>
+      </div>
+
+      <h3>Traffic</h3>
+      <div class="myr_scroll_x">
+        <table>
+          <thead>
+            <tr><th>Purpose</th><th>Address</th><th>Notes</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Discovery</td>
+              <td><code>172.31.255.255:10010</code></td>
+              <td>Broadcast beacon</td>
+            </tr>
+            <tr>
+              <td>Spokes, wired</td>
+              <td><code>239.255.0.2:10024</code></td>
+              <td>Multicast, DRS / NXT / FAR</td>
+            </tr>
+            <tr>
+              <td>Spokes, DRS4W</td>
+              <td><code>172.31.255.255:10024</code></td>
+              <td>Broadcast</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        Make sure the host firewall accepts inbound UDP on ports 10010 and
+        10024, TCP on 10010 for the login handshake, and UDP on the
+        report/command port the radar hands out during that login — 10100 in
+        every capture we have.
+      </p>
+
+      <h2>DRS and DRS-NXT series</h2>
+      <p>
+        DRS4D-NXT, DRS6A-NXT, DRS12A-NXT, DRS25A-NXT and the older DRS and
+        X-Class models work as soon as the subnet is right. Nothing has to be
+        changed on the radar itself; it broadcasts discovery beacons and Mayara
+        identifies the model from them.
+      </p>
+
+      <h3>Model detection</h3>
+      <p>
+        Mayara reads the 7-digit part code from the <code>$N96</code> Modules
+        response:
+      </p>
+      <div class="myr_scroll_x">
+        <table>
+          <thead>
+            <tr><th>Part code</th><th>Model</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>0359235</td><td>DRS</td></tr>
+            <tr><td>0359338</td><td>DRS4DL</td></tr>
+            <tr><td>0359367</td><td>DRS4DL</td></tr>
+            <tr><td>0359360</td><td>DRS4DNXT</td></tr>
+            <tr><td>0359329</td><td>DRS4W</td></tr>
+            <tr><td>0359421</td><td>DRS6ANXT</td></tr>
+            <tr><td>0359355</td><td>DRS6AXCLASS</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>DRS4W "1st Watch"</h2>
+      <p>
+        The DRS4W is its own access point. Connect the Mayara machine to the
+        radar's WiFi network and start Mayara with <code>--allow-wifi</code> so
+        it does not skip the wireless interface.
+      </p>
+      <p>
+        In our testing the DRS4W also handed out an IP address by DHCP, so no
+        network settings need to be changed.
+      </p>
+      <p>
+        Multiple clients are allowed at once, so you can keep using the standard
+        Marine Radar iOS application alongside Mayara.
+      </p>
+
+      <h2>FAR series (FAR-2xx7, FAR-15x3, FAR-3000)</h2>
+
+      <h3>IMO mode</h3>
+      <p>
+        A FAR-2xx7 must be in <strong>IMO mode B, C or W</strong> for network
+        access; mode W is the one to pick. In mode A the radar is standalone and
+        ignores the network completely.
+      </p>
+      <ol>
+        <li>Hold the <strong>HL OFF</strong> button.</li>
+        <li>While holding it, press <strong>MENU</strong> five times.</li>
+        <li>Go to <strong>Installation</strong> → <strong>Type</strong>.</li>
+        <li>Select <strong>W</strong> (recommended), <strong>B</strong> or <strong>C</strong>.</li>
+        <li>Restart the radar.</li>
+      </ol>
+
+      <h3>Model detection</h3>
+      <div class="myr_scroll_x">
+        <table>
+          <thead>
+            <tr><th>Part code</th><th>Model</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>0359397</td><td>FAR-14x6</td></tr>
+            <tr><td>0359255</td><td>FAR-14x7</td></tr>
+            <tr><td>0359321</td><td>FAR-14x7</td></tr>
+            <tr><td>0359344</td><td>FAR-15x3</td></tr>
+            <tr><td>0359204</td><td>FAR-21x7</td></tr>
+            <tr><td>0359560</td><td>FAR-21x7</td></tr>
+            <tr><td>0359281</td><td>FAR-3000</td></tr>
+            <tr><td>0359286</td><td>FAR-3000</td></tr>
+            <tr><td>0359477</td><td>FAR-3000</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        An unrecognised part code still works, with default capabilities. Please
+        report the code and the model so it can be added.
+      </p>
+
+      <h2>Troubleshooting</h2>
+
+      <h3>Radar not detected</h3>
+      <p><strong>DRS4W:</strong> confirm you are on the radar's WiFi and
+        started Mayara with <code>--allow-wifi</code>.</p>
+      <p><strong>Wired radars:</strong></p>
+      <ol>
+        <li>Confirm the Mayara machine has a <code>172.31.x.x</code> address.</li>
+        <li>Confirm the Ethernet cable reaches the radar's network port.</li>
+        <li>For a FAR-2xx7, confirm IMO mode is W and not A.</li>
+        <li>Check the firewall — the radar uses UDP broadcast and multicast.</li>
+      </ol>
+
+      <h3>FAR shows an unknown model</h3>
+      <p>
+        The part code is not in the lookup table yet. The radar still works with
+        default capabilities; report the code from the log so it can be added.
+      </p>
+
+      <h3>Controls stop working, or the radar flips between picture and OFF</h3>
+      <p>
+        Furuno radars keep only <strong>one control session per client IP
+        address</strong>. A second Mayara instance on the same machine — a
+        container using host networking next to a development instance, for
+        example — fights the first one for that single slot. The radar serves
+        each new login briefly, then closes it; both instances reconnect
+        forever and neither holds the session.
+      </p>
+      <p>
+        Spoke data is unaffected, because it arrives by multicast, so the
+        picture keeps painting while the controls fail. Run one Mayara instance
+        per host when a Furuno radar is in use. Clients on other machines —
+        TimeZero, an MFD — have their own IP and do not conflict.
+      </p>
+
+      <div class="myr_footer">
+        <a href="index.html">Setup guides</a> &middot;
+        <a href="networking.html">Radar networking</a> &middot;
+        <a href="https://github.com/MarineYachtRadar/mayara-server/blob/main/docs/capturing-traffic.md">Capturing radar traffic</a>
+      </div>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <title>Radar Networking — Mayara</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link type="text/css" rel="stylesheet" href="help.css?v=1" />
+  </head>
+  <body>
+    <div class="myr_help">
+      <div class="myr_nav"><a href="index.html">&larr; Setup guides</a></div>
+
+      <h1>Radar networking</h1>
+      <p class="myr_lead">
+        How radars put data on the network, why the radar itself belongs on
+        wired Ethernet, and what to check when nothing is detected.
+      </p>
+
+      <h2>How a radar reaches Mayara</h2>
+      <p>
+        Almost every network radar announces itself and sends its picture using
+        <strong>UDP multicast</strong> (Koden and the Furuno DRS4W use UDP
+        broadcast, which behaves the same way for our purposes). The radar sends
+        one copy of each spoke to a group address; every interested listener on
+        the same Ethernet segment receives it. No connection is set up, nothing
+        is acknowledged, and nothing is ever retransmitted.
+      </p>
+      <p>
+        That design is why the radar's traffic cannot cross a subnet boundary, a
+        VPN, or a mesh WiFi backhaul: multicast stays on the local segment unless
+        a network administrator has deliberately configured it to be routed.
+        Mayara and the radar must share a network segment.
+      </p>
+      <p>
+        "Same segment" is about switching, not about hardware. The LAN ports of
+        a typical boat WiFi router are a built-in switch, so plugging both the
+        radar and the Mayara machine into them is fine — the traffic never gets
+        routed. What breaks it is the radar and Mayara ending up on
+        <em>different</em> subnets or VLANs, the radar sitting behind the
+        router's WAN port, or a tunnel of any kind between the two.
+      </p>
+
+      <h2 id="wifi">Why the radar itself must be wired</h2>
+      <p>
+        On wired Ethernet, multicast is delivered at full wire speed with no
+        overhead. On WiFi it is a different story. Multicast frames have no
+        single recipient, so the access point cannot use the fast data rate it
+        negotiated with an individual client. Instead it must fall back to the
+        <strong>base rate</strong> — the lowest mandatory rate of the standard —
+        so that every associated client can still decode the frame.
+      </p>
+
+      <div class="myr_scroll_x">
+        <table>
+          <thead>
+            <tr>
+              <th>Standard</th>
+              <th>Band</th>
+              <th>Base rate</th>
+              <th>Typical max rate</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>802.11b</td><td>2.4 GHz</td><td>1 Mbit/s</td><td>11 Mbit/s</td></tr>
+            <tr><td>802.11g</td><td>2.4 GHz</td><td>6 Mbit/s</td><td>54 Mbit/s</td></tr>
+            <tr><td>802.11n (WiFi 4)</td><td>2.4 / 5 GHz</td><td>6 Mbit/s</td><td>600 Mbit/s</td></tr>
+            <tr><td>802.11ac (WiFi 5)</td><td>5 GHz</td><td>6 Mbit/s</td><td>6.9 Gbit/s</td></tr>
+            <tr><td>802.11ax (WiFi 6)</td><td>2.4 / 5 / 6 GHz</td><td>6 Mbit/s</td><td>9.6 Gbit/s</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        A Navico radar produces roughly 1 MB/s (about 8 Mbit/s) of spoke data.
+        At the 802.11b base rate of 1 Mbit/s that is simply impossible. Even at
+        the 6 Mbit/s base rate of modern standards, the radar alone consumes
+        most of the available multicast bandwidth before WiFi framing overhead —
+        and since multicast is never retransmitted, everything that does not fit
+        is lost for good.
+      </p>
+
+      <div class="myr_box myr_box_bad">
+        <span class="myr_box_title">What a WiFi radar path actually looks like</span>
+        <p>
+          Missing spokes and wedge-shaped gaps in the picture, an image that
+          freezes and jumps, and a WiFi network that becomes slow for everyone
+          else on the same access point — because multicast at the base rate
+          eats airtime out of all proportion to its transfer rate. In the worst case
+          the radar is discovered but no usable picture ever appears.
+        </p>
+      </div>
+
+      <h2>How much data each radar sends</h2>
+      <p>
+        Volume differs enormously between brands, and the deciding factor is
+        whether the radar compresses its spokes. Navico sends them raw, which is
+        why it is the heaviest thing on a typical radar network. Furuno and
+        Raymarine Quantum compress, and send far less.
+      </p>
+
+      <div class="myr_scroll_x">
+        <table>
+          <thead>
+            <tr>
+              <th>Radar</th>
+              <th>Spokes sent per revolution</th>
+              <th>Bytes per spoke</th>
+              <th>Per revolution</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Navico BR24 / 3G / 4G / HALO</td>
+              <td>2048</td>
+              <td>512, uncompressed</td>
+              <td>~1 MB</td>
+            </tr>
+            <tr>
+              <td>Furuno DRS4D-NXT</td>
+              <td>~860</td>
+              <td>~200–400, compressed</td>
+              <td>~0.2–0.35 MB</td>
+            </tr>
+            <tr>
+              <td>Raymarine Quantum</td>
+              <td>250</td>
+              <td>up to 252 samples, compressed</td>
+              <td>~0.06 MB</td>
+            </tr>
+            <tr>
+              <td>Furuno DRS4W</td>
+              <td>~630</td>
+              <td>~16–24, compressed</td>
+              <td>~0.01 MB</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        These are the radars we have wire captures for; the others are not
+        listed rather than guessed at. Rotation rate multiplies all of it — a
+        HALO at 48 rpm puts its megabyte on the network twice as often as a
+        radar turning at 24 rpm, which is how a Navico installation reaches the
+        1 MB/s quoted above.
+      </p>
+      <p>
+        Note what the bottom of that table implies: the Furuno DRS4W is a WiFi
+        radar, and it gets there by sending about a hundredth of what a Navico
+        sends. A radar designed for WiFi has to be built that way from the
+        start. Putting a radar that was not on a WiFi link does not scale it
+        down — it just loses the difference. We leave it to you to consider
+        what this does to the sharpness and quality of the picture.
+      </p>
+
+      <h2>The right topology</h2>
+      <div class="myr_box myr_box_ok">
+        <p>
+          Run Mayara on a machine with a <strong>wired</strong> connection to
+          the radar network — a Raspberry Pi on the radar switch is the classic
+          setup. Then reach the Mayara web interface from phones, tablets and
+          laptops over WiFi. Mayara serves the processed picture as ordinary
+          unicast HTTP/WebSocket, which uses the full negotiated WiFi rate and
+          behaves perfectly.
+        </p>
+      </div>
+      <p>
+        Some access points let you raise the minimum multicast rate above the
+        standard base rate, and with a high enough setting radar data may
+        technically fit. Even then the multicast traffic consumes a large share
+        of the airtime and slows down every other WiFi user on that access
+        point. Wiring the radar path avoids the whole problem.
+      </p>
+      <p>
+        Mayara skips wireless interfaces entirely unless you start it with
+        <code>--allow-wifi</code>. That flag concerns
+        <em>Mayara's own network interfaces</em>; it exists for the handful of
+        radars that are wireless by design (Furuno DRS4W, Raymarine Quantum).
+        It never connects Mayara to a radar and never asks for credentials.
+      </p>
+
+      <h2>Checks that apply to every brand</h2>
+      <ul>
+        <li>
+          <strong>Same segment.</strong> Mayara and the radar must be on the
+          same Ethernet network — the same subnet, not separated by a routed
+          hop. Sharing the LAN ports of a WiFi router counts as the same
+          network; sitting on different subnets or VLANs does not.
+        </li>
+        <li>
+          <strong>Addressing.</strong> Some brands need Mayara's interface to
+          sit in a specific subnet, others need a DHCP server on the network for
+          the radar. Check the brand page.
+        </li>
+        <li>
+          <strong>IGMP snooping.</strong> Managed switches may filter multicast
+          they do not think anyone wants. An unmanaged switch never has this
+          problem; on a managed one, either disable IGMP snooping or make sure a
+          querier is active.
+        </li>
+        <li>
+          <strong>Firewall.</strong> The host running Mayara must accept
+          inbound UDP on the ports listed on the brand page.
+        </li>
+        <li>
+          <strong>Interface selection.</strong> On a machine with several
+          networks, you can help Mayara by just using the right one with
+          <code>mayara-server -i &lt;device&gt;</code>. This prevents Mayara
+          from sending (pointless) query requests on the other ethernet devices.
+        </li>
+        <li>
+          <strong>Look at the traffic.</strong> <code>mayara-server -vv</code>
+          logs discovery packets as they arrive, which immediately separates
+          "the radar is silent" from "the radar is talking and we are not
+          listening".
+        </li>
+      </ul>
+
+      <div class="myr_footer">
+        <a href="index.html">Setup guides</a> &middot;
+        <a href="https://github.com/MarineYachtRadar/mayara-server/blob/main/docs/capturing-traffic.md">Capturing radar traffic</a>
+      </div>
+    </div>
+  </body>
+</html>

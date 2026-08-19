@@ -34,15 +34,39 @@ const NETWORK_REQUIREMENTS = {
   },
   raymarine: {
     ipRange: "232.1.1.x (multicast)",
-    description: "Raymarine radars use multicast.",
+    description:
+      "Raymarine radars use multicast, and they get their IP address by DHCP. " +
+      "The radar network needs a DHCP server — an MFD, a router, or a DHCP " +
+      "service on this machine — or the radar never announces itself. A wired " +
+      "Quantum needs no pairing and no WiFi credentials.",
     setup: ["Ensure your network supports multicast routing"],
   },
   garmin: {
     ipRange: "239.254.2.x (multicast)",
-    description: "Garmin xHD radars use multicast.",
+    description:
+      "Garmin radars use multicast and require the host to have an IP address " +
+      "in the 172.16.x.x - 172.31.x.x range.",
     setup: ["Ensure your network supports multicast routing"],
   },
+  koden: {
+    ipRange: "255.255.255.255:10001 (broadcast)",
+    description:
+      "Koden radars use UDP broadcast on port 10001. The host must be on the " +
+      "same subnet as the radar, typically 192.168.0.x.",
+    setup: ["Ensure UDP port 10001 is not blocked"],
+  },
 };
+
+// Brands whose network help is a single paragraph plus a link to the full
+// guide. Furuno is rendered separately because it also carries setup steps.
+const OTHER_BRANDS = [
+  ["navico", "Navico (Simrad, Lowrance, B&G)"],
+  ["raymarine", "Raymarine"],
+  ["garmin", "Garmin"],
+  ["koden", "Koden"],
+];
+
+const brandName = (brand) => brand[0].toUpperCase() + brand.slice(1);
 
 // Detect operating system
 function detectOS() {
@@ -559,10 +583,17 @@ function radarsLoaded(d) {
         summary("Network Configuration Help"),
         div(
           { class: "myr_help_content" },
-          // Furuno section
-          div(
+          p(
+            "Wired radars must be reached over wired Ethernet. ",
+            a({ href: "help/networking.html" }, "Why WiFi does not carry radar data"),
+            "."
+          ),
+
+          // Furuno gets the extra subnet configuration steps inline; it is by
+          // far the most common reason a radar stays undetected.
+          details(
             { class: "myr_brand_section" },
-            div(
+            summary(
               { class: "myr_brand_header" },
               "Furuno DRS (DRS4D-NXT, DRS6A-NXT, etc.)"
             ),
@@ -576,29 +607,22 @@ function radarsLoaded(d) {
             div(
               { class: "myr_code_example" },
               code(NETWORK_REQUIREMENTS.furuno.example)
-            )
-          ),
-
-          // Other brands
-          div(
-            { class: "myr_brand_section myr_brand_other" },
-            div(
-              { class: "myr_brand_header" },
-              "Navico (Simrad, Lowrance, B&G)"
             ),
-            p(NETWORK_REQUIREMENTS.navico.description)
+            p(a({ href: "help/furuno.html" }, "Full Furuno setup guide"))
           ),
 
-          div(
-            { class: "myr_brand_section myr_brand_other" },
-            div({ class: "myr_brand_header" }, "Raymarine"),
-            p(NETWORK_REQUIREMENTS.raymarine.description)
-          ),
-
-          div(
-            { class: "myr_brand_section myr_brand_other" },
-            div({ class: "myr_brand_header" }, "Garmin xHD"),
-            p(NETWORK_REQUIREMENTS.garmin.description)
+          OTHER_BRANDS.map(([brand, header]) =>
+            details(
+              { class: "myr_brand_section myr_brand_other" },
+              summary({ class: "myr_brand_header" }, header),
+              p(NETWORK_REQUIREMENTS[brand].description),
+              p(
+                a(
+                  { href: `help/${brand}.html` },
+                  `Full ${brandName(brand)} setup guide`
+                )
+              )
+            )
           )
         )
       )

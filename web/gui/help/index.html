@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <title>Setup Guides — Mayara</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link type="text/css" rel="stylesheet" href="help.css?v=1" />
+  </head>
+  <body>
+    <div class="myr_help">
+      <div class="myr_nav"><a href="../index.html">&larr; Radar list</a></div>
+
+      <h1>Setup guides</h1>
+      <p class="myr_lead">
+        What each brand of radar needs from your network, and what to check when
+        Mayara does not find it.
+      </p>
+
+      <div class="myr_box">
+        <span class="myr_box_title">Start here if the radar is not detected</span>
+        <p>
+          <a href="networking.html">Radar networking</a> — why the radar itself
+          must be on wired Ethernet, what multicast needs from your switch, and
+          the checks that apply to every brand.
+        </p>
+      </div>
+
+      <h2>By brand</h2>
+      <div class="myr_cards">
+        <a class="myr_card" href="navico.html">
+          <span class="myr_card_title">Navico</span>
+          <span class="myr_card_note">
+            Simrad, Lowrance, B&amp;G — BR24, 3G, 4G, HALO. Any subnet, wired
+            only.
+          </span>
+        </a>
+        <a class="myr_card" href="furuno.html">
+          <span class="myr_card_title">Furuno</span>
+          <span class="myr_card_note">
+            DRS-NXT, DRS/X-Class, FAR series, DRS4W. Needs a
+            <code>172.31.x.x</code> address.
+          </span>
+        </a>
+        <a class="myr_card" href="raymarine.html">
+          <span class="myr_card_title">Raymarine</span>
+          <span class="myr_card_note">
+            Quantum, Cyclone, RD series, Magnum. Needs DHCP on the radar
+            network.
+          </span>
+        </a>
+        <a class="myr_card" href="garmin.html">
+          <span class="myr_card_title">Garmin</span>
+          <span class="myr_card_note">
+            GMR HD, xHD, xHD2, xHD3, Fantom, Fantom Pro. Needs a
+            wired <code>172.16.x.x</code> address.
+          </span>
+        </a>
+        <a class="myr_card" href="koden.html">
+          <span class="myr_card_title">Koden</span>
+          <span class="myr_card_note">
+            MDS-R series via RADARpc control boxes. Untested — reports welcome.
+          </span>
+        </a>
+      </div>
+
+      <h2>Reaching the radar picture</h2>
+      <p>
+        Mayara belongs on a machine wired to the radar network. Everything you
+        look at afterwards — the built-in web interface, a Signal K server, a
+        chart plotter app — talks to Mayara over ordinary HTTP and WebSocket,
+        and works fine over WiFi.
+      </p>
+
+      <div class="myr_footer">
+        <a href="../index.html">Radar list</a> &middot;
+        <a href="https://github.com/MarineYachtRadar/mayara-server">Mayara on GitHub</a>
+      </div>
+    </div>
+  </body>
+</html>

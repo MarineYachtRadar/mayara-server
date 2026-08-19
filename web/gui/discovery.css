@@ -177,7 +177,8 @@
   overflow: hidden;
 }
 
-.myr_network_help summary {
+/* Direct child only — the per-brand sections nest their own <summary>. */
+.myr_network_help > summary {
   padding: 15px 20px;
   cursor: pointer;
   font-weight: bold;
@@ -186,12 +187,16 @@
   transition: background 0.2s ease;
 }
 
-.myr_network_help summary:hover {
+.myr_network_help > summary:hover {
   background: rgba(100, 200, 180, 0.15);
 }
 
 .myr_help_content {
   padding: 20px;
+  /* The page itself does not scroll, so keep the help panel inside the
+     viewport and let it scroll on its own once a brand is expanded. */
+  max-height: 60vh;
+  overflow-y: auto;
 }
 
 .myr_brand_section {
@@ -210,8 +215,12 @@
 .myr_brand_header {
   font-weight: bold;
   color: rgb(100, 200, 180);
-  margin-bottom: 10px;
   font-size: 15px;
+  cursor: pointer;
+}
+
+.myr_brand_section[open] > .myr_brand_header {
+  margin-bottom: 10px;
 }
 
 .myr_brand_section p {

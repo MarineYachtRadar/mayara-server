@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <title>Koden Setup — Mayara</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link type="text/css" rel="stylesheet" href="help.css?v=1" />
+  </head>
+  <body>
+    <div class="myr_help">
+      <div class="myr_nav"><a href="index.html">&larr; Setup guides</a></div>
+
+      <h1>Koden radar setup</h1>
+      <p class="myr_lead">
+        MDS-R series radars connected through a RADARpc Ethernet control box
+        (MDS-5R, MDS-6R, MDS-11R).
+      </p>
+
+      <div class="myr_box myr_box_bad">
+        <span class="myr_box_title">Untested</span>
+        <p>
+          Koden support has not been tested against a real radar at all. It is
+          built entirely from second-hand knowledge of the protocol. If you have
+          a Koden radar, please get in touch — we would very much like to hear
+          what happens.
+        </p>
+      </div>
+
+      <h2>What you need</h2>
+      <ul class="myr_needs">
+        <li>An Ethernet port on the MDS control box</li>
+        <li>The Mayara machine on the same subnet as the radar</li>
+        <li>UDP port 10001 open on the host firewall</li>
+      </ul>
+
+      <h2>Network requirements</h2>
+      <p>
+        Koden radars talk over UDP broadcast on port 10001, so the Mayara
+        machine has to sit on the same subnet as the radar. The default radar
+        address is usually in the <code>192.168.0.x</code> range; give the
+        Mayara machine a static address on that subnet.
+      </p>
+
+      <div class="myr_box myr_box_bad">
+        <span class="myr_box_title">WiFi will not work for the radar</span>
+        <p>
+          Spoke data arrives as UDP broadcast, which WiFi handles exactly like
+          multicast: base rate, no retransmissions, heavy airtime cost. Wire the
+          radar to Mayara and view Mayara over WiFi.
+          <a href="networking.html#wifi">The full explanation.</a>
+        </p>
+      </div>
+
+      <h3>Traffic</h3>
+      <div class="myr_scroll_x">
+        <table>
+          <thead>
+            <tr><th>Purpose</th><th>Address</th><th>Notes</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Discovery, commands, spokes</td>
+              <td><code>255.255.255.255:10001</code></td>
+              <td>Everything shares one broadcast port</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>Supported models</h2>
+      <div class="myr_scroll_x">
+        <table>
+          <thead>
+            <tr>
+              <th>Model code</th><th>Model</th><th>Power</th>
+              <th>Antenna</th><th>Control box</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>0</td><td>MDS-50R</td><td>2 kW</td><td>Dome</td><td>MDS-5R</td></tr>
+            <tr><td>1</td><td>MDS-51R</td><td>4 kW</td><td>Dome</td><td>MDS-5R</td></tr>
+            <tr><td>2</td><td>MDS-52R</td><td>4 kW</td><td>Open array</td><td>MDS-5R</td></tr>
+            <tr><td>3</td><td>MDS-61R</td><td>6 kW</td><td>Open array</td><td>MDS-6R</td></tr>
+            <tr><td>4</td><td>MDS-62R</td><td>12 kW</td><td>Open array</td><td>MDS-6R</td></tr>
+            <tr><td>5</td><td>MDS-63R</td><td>25 kW</td><td>Open array</td><td>MDS-6R</td></tr>
+            <tr><td>6</td><td>MDS-1R / 8R</td><td>2 kW</td><td>Dome</td><td>—</td></tr>
+            <tr><td>10</td><td>MDS-10R</td><td>4 kW</td><td>Open array</td><td>—</td></tr>
+            <tr><td>14</td><td>MDS-9R</td><td>4 kW</td><td>Dome</td><td>—</td></tr>
+            <tr><td>15</td><td>MDS-5R</td><td>—</td><td>Interface only</td><td>MDS-5R</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        The model is detected automatically from the radar's model-code
+        response. As far as we know every control box speaks the same protocol,
+        so any combination with an Ethernet port on the MDS box should work. We
+        do not know which model code the newer MDS-11R control box reports —
+        please tell us if you find out.
+      </p>
+      <p>
+        Koden radars driven by a Koden display unit appear not to use Ethernet
+        at all for features such as dual display units, so those cannot be
+        supported.
+      </p>
+
+      <h2>Controls</h2>
+      <ul>
+        <li><strong>Power</strong> — standby or transmit</li>
+        <li><strong>Gain</strong> — manual (0–100%) or auto</li>
+        <li><strong>Sea clutter (STC)</strong> — manual (0–100%)</li>
+        <li><strong>Rain clutter (FTC)</strong> — manual (0–100%)</li>
+        <li><strong>Sea state</strong> — manual, auto or harbour</li>
+        <li><strong>Interference rejection</strong> — off, low, medium, high</li>
+        <li><strong>Target expansion</strong> — on or off</li>
+        <li><strong>Scan speed</strong> — normal or fast</li>
+        <li><strong>Tune</strong> — coarse (0–255), manual or auto</li>
+        <li><strong>Fine tune</strong> — 0–15</li>
+        <li><strong>Pulse width</strong> — short or long</li>
+        <li><strong>Display timing</strong> — trigger delay for cable length (0–124)</li>
+        <li><strong>No-transmit sector</strong> — blanking start and end angles</li>
+        <li><strong>Park position</strong> — antenna park angle</li>
+      </ul>
+
+      <h2>Troubleshooting</h2>
+
+      <h3>Radar not detected</h3>
+      <ul>
+        <li>Confirm the machine and the radar are on the same subnet.</li>
+        <li>Confirm nothing is blocking UDP port 10001.</li>
+        <li>Limit detection to Koden to cut down the noise: <code>mayara-server --brand koden</code></li>
+      </ul>
+
+      <h3>No spokes displayed</h3>
+      <p>
+        The radar has to be transmitting. Switch it from standby to transmit
+        with the power control. A new radar may need a warm-up period first.
+      </p>
+
+      <div class="myr_footer">
+        <a href="index.html">Setup guides</a> &middot;
+        <a href="networking.html">Radar networking</a> &middot;
+        <a href="https://github.com/MarineYachtRadar/mayara-server/blob/main/docs/capturing-traffic.md">Capturing radar traffic</a>
+      </div>
+    </div>
+  </body>
+</html>
