@@ -243,6 +243,42 @@
 
       <h2>Troubleshooting</h2>
 
+      <h3>The picture works but no control does</h3>
+      <p>
+        If the radar paints, the ranges are right and the status updates, but
+        power, gain, sea and range do nothing at all, the radar is almost
+        certainly on a different IP subnet from the machine running Mayara.
+      </p>
+      <p>
+        This is normal on Raymarine networks and it particularly affects the
+        <strong>RD and HD radomes</strong>. Those radars address themselves in
+        the <code>10.x.x.x</code> range, while a chartplotter's DHCP server
+        hands your Mayara machine an address in <code>198.18.x.x</code>. The two
+        share one cable but not one subnet. The chartplotters cope because they
+        give themselves an address in <em>both</em> ranges; an ordinary computer
+        has only the one it was given.
+      </p>
+      <p>
+        The radar's picture and status still arrive, because those are
+        multicast and are delivered whatever the addressing. Controls are sent
+        straight to the radar's own address, so they leave by whichever network
+        connection the machine thinks is the way out — never the radar. Mayara
+        logs a warning naming the two addresses when it spots this.
+      </p>
+      <p>
+        The fix is to give the Mayara machine an address on the radar's subnet
+        as well. Find the radar's address in Mayara's log, then, on Linux:
+      </p>
+      <pre><code># the radar is, say, 10.18.203.88 and your radar network card is eth0
+sudo ip addr add 10.0.0.2/8 dev eth0</code></pre>
+      <p>
+        Pick an address in <code>10.x.x.x</code> that nothing else is using.
+        Adding a route to the radar alone also works:
+        <code>sudo ip route add 10.18.203.88/32 dev eth0</code>. Either way the
+        change is not permanent — put it in your network configuration so it
+        survives a reboot.
+      </p>
+
       <h3>Radar not detected</h3>
       <ul>
         <li>Check the DHCP lease list and confirm the radar actually has an address.</li>

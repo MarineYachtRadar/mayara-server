@@ -4,7 +4,7 @@ use tokio::net::UdpSocket;
 
 use super::BaseModel;
 use crate::brand::CommandSender;
-use crate::network::create_multicast_send;
+use crate::network::{self, create_multicast_send};
 use crate::radar::range::Ranges;
 use crate::radar::settings::{ControlValue, SharedControls};
 use crate::radar::{RadarError, RadarInfo};
@@ -68,6 +68,7 @@ impl Command {
                     self.info.send_command_addr,
                     self.info.nic_addr
                 );
+                self.warn_if_command_addr_offlink();
                 self.sock = Some(Arc::new(sock));
 
                 Ok(())
@@ -83,6 +84,44 @@ impl Command {
                 Err(RadarError::Io(e))
             }
         }
+    }
+
+    /// Warn when the radar's command address cannot be reached from the
+    /// interface it was discovered on.
+    ///
+    /// Reports arrive by multicast and are delivered whatever the addressing,
+    /// so the radar looks perfectly healthy — ranges, status and spokes all
+    /// work — while every command silently disappears. RD radomes make this
+    /// routine: they are addressed in 10/8 while a host on the RayNet network
+    /// is given 198.18.x, so the two share a wire but not a subnet, and the
+    /// unicast command leaves via whatever the routing table prefers.
+    ///
+    /// Nothing can be done about it from inside the process — the host needs
+    /// an address or a route on the radar's subnet — so say so plainly rather
+    /// than failing silently.
+    fn warn_if_command_addr_offlink(&self) {
+        let dst = *self.info.send_command_addr.ip();
+        let Some((ifname, netmask)) = network::interface_for(&self.info.nic_addr) else {
+            return;
+        };
+        if !network::is_offlink(&self.info.nic_addr, &netmask, &dst) {
+            return;
+        }
+        log::warn!(
+            "{}: radar command address {} is not on the same subnet as {} on interface '{}'. \
+             Spokes and status will work, but every control will be routed away from the radar \
+             and silently ignored. Give this host an address on the radar's subnet, for example \
+             `ip addr add {}/8 dev {}` with an unused address, or add a route to the radar: \
+             `ip route add {}/32 dev {}`.",
+            self.key,
+            dst,
+            self.info.nic_addr,
+            ifname,
+            dst,
+            ifname,
+            dst,
+            ifname,
+        );
     }
 
     pub async fn send(&mut self, message: &[u8]) -> Result<(), RadarError> {
