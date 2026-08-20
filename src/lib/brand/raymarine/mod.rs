@@ -777,20 +777,20 @@ fn beacon_request_packets() -> Vec<&'static [u8]> {
 
 /// Register the Raymarine locator's beacon/wake multicast groups.
 ///
-/// The wired/RayNet group (`224.0.0.1:5800`) is always registered; the WiFi
-/// group (`232.1.1.1:5800`) is added on top when `--allow-wifi` is set. No-op
-/// if a Raymarine locator is already registered.
+/// Both groups are always registered: the wired/RayNet group
+/// (`224.0.0.1:5800`) and the Quantum group (`232.1.1.1:5800`). No-op if a
+/// Raymarine locator is already registered.
 pub(super) fn new(args: &Cli, addresses: &mut Vec<LocatorAddress>) {
     if !addresses.iter().any(|i| i.id == LocatorId::Raymarine) {
-        // The wired/RayNet beacon group is always needed — radomes and MFDs on
-        // RayNet announce and listen on 224.0.0.1:5800. `--allow-wifi`
-        // additionally enables the WiFi discovery group (232.1.1.1:5800); it
-        // must *add* that group, not replace the wired one, or enabling WiFi
-        // support would silently stop wired/RayNet discovery and wake.
-        let mut beacon_addresses = vec![&RAYMARINE_BEACON_ADDRESS];
-        if args.allow_wifi {
-            beacon_addresses.push(&RAYMARINE_QUANTUM_WIFI_ADDRESS);
-        }
+        // Both groups, unconditionally. RayNet radomes and MFDs announce on
+        // 224.0.0.1:5800; a Quantum reports on 232.1.1.1:5800 even when its
+        // own link to the MFD is WiFi and mayara sits on the wired side, so
+        // that group has to be joined on a purely wired host too.
+        //
+        // This deliberately does not depend on `--allow-wifi`: that flag is
+        // about which of *mayara's own* interfaces are used, and says nothing
+        // about which multicast groups a radar announces on.
+        let beacon_addresses = [&RAYMARINE_BEACON_ADDRESS, &RAYMARINE_QUANTUM_WIFI_ADDRESS];
 
         for beacon_address in beacon_addresses {
             addresses.push(
@@ -833,21 +833,25 @@ mod tests {
     }
 
     #[test]
-    fn default_beacons_to_wired_group_only() {
+    fn both_beacon_groups_are_registered_by_default() {
+        // A Quantum reports on 232.1.1.1:5800 even when mayara is wired, so
+        // that group must be joined without asking for it.
         let groups = raymarine_beacon_groups(&[]);
-        assert_eq!(groups, vec![RAYMARINE_BEACON_ADDRESS]);
-    }
-
-    #[test]
-    fn allow_wifi_adds_wifi_group_without_dropping_wired() {
-        // --allow-wifi must *add* the WiFi discovery group, not replace the
-        // wired/RayNet one — otherwise enabling WiFi support silently stops
-        // wired discovery and wake (the radar/MFD listen on 224.0.0.1:5800).
-        let groups = raymarine_beacon_groups(&["--allow-wifi"]);
         assert_eq!(
             groups,
             vec![RAYMARINE_BEACON_ADDRESS, RAYMARINE_QUANTUM_WIFI_ADDRESS],
-            "--allow-wifi must register exactly the wired group plus the WiFi group, with no duplicates or extra groups"
+            "both the RayNet and Quantum groups must be registered by default"
+        );
+    }
+
+    #[test]
+    fn allow_wifi_does_not_change_the_beacon_groups() {
+        // --allow-wifi selects which of mayara's own interfaces are used; it
+        // has nothing to say about which groups a radar announces on.
+        assert_eq!(
+            raymarine_beacon_groups(&["--allow-wifi"]),
+            raymarine_beacon_groups(&[]),
+            "--allow-wifi must not change the set of Raymarine beacon groups"
         );
     }
 
@@ -855,8 +859,8 @@ mod tests {
     fn wol_wake_is_sent_as_burst() {
         // An Axiom wakes a radar with a burst of WOLs, never a single one —
         // a lone multicast datagram to a dozing WiFi radar is routinely lost.
-        // Every Raymarine beacon group (wired, and the WiFi group added by
-        // --allow-wifi) must get the MFD announce and wake literal once each,
+        // Every Raymarine beacon group (RayNet and Quantum) must get the MFD
+        // announce and wake literal once each,
         // the WOL magic packet repeated as a burst, and the relay TTL.
         for extra_args in [&[][..], &["--allow-wifi"][..]] {
             let args = Cli::parse_from(std::iter::once("mayara-server").chain(extra_args.to_vec()));
