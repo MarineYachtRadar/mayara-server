@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **raymarine:** always listen on the Quantum discovery group (#561) ([PR #561](https://github.com/MarineYachtRadar/mayara-server/pull/561))
+- **raymarine:** warn when the radar is on an unreachable subnet (#565) ([PR #565](https://github.com/MarineYachtRadar/mayara-server/pull/565))
 
 ## [3.9.0] - 2026-08-14
 
