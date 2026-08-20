@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **api:** drop the dual and dualGroup radar fields (#530) ([PR #530](https://github.com/MarineYachtRadar/mayara-server/pull/530))
+- **gui:** serve radar setup guides from Mayara itself (#562) ([PR #562](https://github.com/MarineYachtRadar/mayara-server/pull/562))
 
 ### Fixed
 
