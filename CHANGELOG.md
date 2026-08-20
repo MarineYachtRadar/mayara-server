@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **gui:** choose which radar or radars to view (#529) ([PR #529](https://github.com/MarineYachtRadar/mayara-server/pull/529))
+
+### Changed
+
+- **api:** drop the dual and dualGroup radar fields (#530) ([PR #530](https://github.com/MarineYachtRadar/mayara-server/pull/530))
+
 ## [3.9.0] - 2026-08-14
 
 ### Added
@@ -372,6 +382,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **ci:** use PR for changelog commit to respect branch protection (#73) ([PR #73](https://github.com/MarineYachtRadar/mayara-server/pull/73))
 - **ci:** fall back to immediate merge when auto-merge not needed (#77) ([PR #77](https://github.com/MarineYachtRadar/mayara-server/pull/77))
 
+[Unreleased]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.9.0...HEAD
 [3.9.0]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.8.1...v3.9.0
 [3.8.1]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.8.0...v3.8.1
 [3.8.0]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.7.0...v3.8.0

@@ -5,6 +5,7 @@
 /* Touch-friendly: larger touch targets */
 @media (pointer: coarse) {
   .myr_power_button,
+  .myr_radar_menu_row,
   .myr_range_button,
   .myr_toggle_button,
   .myr_enum_button,

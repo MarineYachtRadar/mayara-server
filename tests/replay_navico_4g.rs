@@ -94,11 +94,10 @@ async fn replay_navico_4g() {
 
                 // The 4G beacon advertises two scanners. Replay keeps only
                 // range A (see SharedRadars::add), but that instance must
-                // carry the dual-range antenna grouping data.
+                // carry the dual-range antenna data.
                 let a = radars.get_by_key("nav2452A").expect("range A discovered");
                 assert!(a.dual_range, "4G should be dual-range capable");
                 assert_eq!(a.dual.as_deref(), Some("A"));
-                assert_eq!(a.base_key(), "nav2452");
 
                 subsys.request_shutdown();
                 Ok::<(), miette::Report>(())

@@ -464,15 +464,6 @@ fn radar_key(
     key
 }
 
-/// The radar key without the dual-range suffix appended by [`radar_key`]:
-/// identical for all ranges of one physical antenna.
-fn base_key<'a>(key: &'a str, dual: Option<&str>) -> &'a str {
-    match dual {
-        Some(dual) => key.strip_suffix(dual).unwrap_or(key),
-        None => key,
-    }
-}
-
 /// The key a radar has when nothing identifies it but its address.
 ///
 /// Used to find settings saved before the radar had a hardware identity.
@@ -588,12 +579,6 @@ impl RadarInfo {
     /// want the default user-visible name to match the key.
     pub(crate) fn discriminator(&self) -> Option<&str> {
         identity_discriminator(self.serial_no.as_deref(), self.hardware_id.as_deref())
-    }
-
-    /// The key without the dual-range suffix: identical for all ranges of one
-    /// physical antenna, so clients can group them into a combined view.
-    pub fn base_key(&self) -> &str {
-        base_key(&self.key, self.dual.as_deref())
     }
 
     /// True when this radar's data_loop is currently dropping decoded frames
@@ -2449,14 +2434,6 @@ mod tests {
             mac_identity(&[0x00, 0xd0, 0x1d, 0x05, 0x79, 0x03]).as_deref(),
             Some("00d01d057903")
         );
-    }
-
-    #[test]
-    fn base_key_strips_dual_suffix() {
-        // Both ranges of one antenna collapse onto the same base key.
-        assert_eq!(base_key("nav2452A", Some("A")), "nav2452");
-        assert_eq!(base_key("nav2452B", Some("B")), "nav2452");
-        assert_eq!(base_key("nav2452", None), "nav2452");
     }
 
     #[test]
