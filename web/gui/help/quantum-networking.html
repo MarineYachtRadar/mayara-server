@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <title>Quantum Networking — Mayara</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link type="text/css" rel="stylesheet" href="help.css?v=2" />
+  </head>
+  <body>
+    <div class="myr_help">
+      <div class="myr_nav"><a href="index.html">&larr; Setup guides</a></div>
+
+      <h1>Quantum networking explained</h1>
+      <p class="myr_lead">
+        Every Raymarine Quantum is a WiFi radar inside, even the ones you
+        connect with a cable. Once you know why, several odd things about them
+        stop being odd.
+      </p>
+
+      <h2>The problem: getting a picture off something that spins</h2>
+      <p>
+        A radar antenna turns, typically 24 to 48 times a minute, for years on
+        end. The electronics that generate and process the picture sit up there
+        with it, turning too. Somehow the picture has to reach the fixed part of
+        the radar, and from there your chart plotter.
+      </p>
+      <p>
+        The traditional answer is a <strong>slip ring</strong>: a stack of metal
+        rings on the rotating shaft with brushes pressed against them, carrying
+        power and data across the joint. It works, and it is a wear item —
+        brushes wear down, contacts corrode in salt air, and a noisy contact
+        puts noise straight into the signal.
+      </p>
+
+      <h2>Raymarine's answer: don't cross the joint at all</h2>
+      <p>
+        A Quantum sends its picture across the gap by <strong>2.4&nbsp;GHz
+        WiFi</strong>. The rotating head has a radio, and the picture flies off
+        it through the air. Only power goes through the joint, and power is the
+        easy part — no signal integrity to worry about, and far more tolerant of
+        a worn contact.
+      </p>
+      <p>
+        Where that picture lands depends on the model. On a wireless Quantum it
+        goes straight to your chart plotter. On a cable-capable one it lands on
+        a small bridge board a few centimetres below, in the radar's own base,
+        which then pushes it out of the socket.
+      </p>
+
+      <figure>
+        <svg viewBox="0 0 640 348" role="img"
+             aria-label="Cross-section of a Quantum radar. The rotating head contains the antenna, transmitter, processing and a radio. The fixed base contains the power supply, a second radio and the connector. Only power crosses the rotating joint; the radar picture crosses as WiFi.">
+          <!-- rotating head -->
+          <rect class="myr_svg_box" x="70" y="40" width="500" height="72" rx="8" />
+          <text class="myr_svg_key" x="90" y="64">ROTATING HEAD</text>
+          <text class="myr_svg_sub" x="90" y="84">antenna array &#183; transmitter &#183; processing</text>
+          <text class="myr_svg_sub" x="90" y="100">&#183; radio</text>
+
+          <!-- rotation arrow -->
+          <path class="myr_svg_line" d="M 250 28 A 70 20 0 0 1 390 28" />
+          <path class="myr_svg_line" d="M 390 28 l -9 -6 M 390 28 l -3 -10" />
+          <text class="myr_svg_sub" x="290" y="18">24&#8211;48 rpm</text>
+
+          <!-- pedestal / joint -->
+          <path class="myr_svg_line" d="M 285 112 L 285 200 M 355 112 L 355 200" />
+          <line class="myr_svg_dash" x1="240" y1="156" x2="400" y2="156" />
+          <text class="myr_svg_sub" x="408" y="152">rotating joint</text>
+          <text class="myr_svg_sub" x="408" y="168">(bearing)</text>
+
+          <!-- fixed base -->
+          <rect class="myr_svg_box" x="70" y="200" width="500" height="96" rx="8" />
+          <text class="myr_svg_key" x="90" y="224">FIXED BASE</text>
+          <text class="myr_svg_sub" x="90" y="244">power supply &#183; connector</text>
+          <text class="myr_svg_sub" x="90" y="262">on cable-capable models, a bridge board hosting</text>
+          <text class="myr_svg_label" x="90" y="282">Quantum_W3_1234567</text>
+
+          <!-- power crossing the joint -->
+          <path class="myr_svg_line" d="M 318 200 L 318 112" />
+          <path class="myr_svg_line" d="M 318 112 l -5 9 M 318 112 l 5 9" />
+          <text class="myr_svg_label" x="200" y="150">power only</text>
+
+          <!-- wifi across the gap -->
+          <g class="myr_svg_wifi">
+            <path d="M 470 190 A 26 26 0 0 0 470 122" />
+            <path d="M 486 196 A 42 42 0 0 0 486 116" />
+            <path d="M 502 202 A 58 58 0 0 0 502 110" />
+          </g>
+          <text class="myr_svg_label" x="512" y="150">the radar</text>
+          <text class="myr_svg_label" x="512" y="168">picture,</text>
+          <text class="myr_svg_label" x="512" y="186">over the air</text>
+
+          <!-- baseline -->
+          <line class="myr_svg_dash" x1="70" y1="312" x2="570" y2="312" />
+          <text class="myr_svg_sub" x="90" y="328">mounting surface</text>
+        </svg>
+        <figcaption>
+          Nothing but power crosses the rotating joint. There is no data slip
+          ring in a Quantum, because there is no data on the joint to carry.
+        </figcaption>
+      </figure>
+
+      <h2>Two ways to get the picture out of the base</h2>
+      <p>
+        Once the picture has landed in the fixed base, it has to reach your
+        chart plotter — and this is where the two Quantum variants differ. The
+        wireless-only model simply keeps going over the air. The cable-capable
+        models add a small bridge board in the base that joins the radar's own
+        internal network and pushes the picture out of the socket.
+      </p>
+      <div class="myr_box">
+        <span class="myr_box_title">Nearly every current Quantum is cable-capable</span>
+        <p>
+          Which one you have is mostly a question of vintage. The WiFi-only
+          radome — the <strong>Q24W</strong> — has been discontinued. The
+          radomes sold since, the <strong>Quantum Q24C</strong> and the
+          <strong>Quantum 2 Q24D</strong>, all carry a RayNet socket alongside
+          their WiFi, and so do the Cyclone open arrays.
+        </p>
+        <p>
+          The practical consequence: on most installations today there is a
+          bridge board sitting in the radar's base <em>whether or not you use
+          the cable</em>. That is why the internal network described below turns
+          up in WiFi scans on boats whose owners are certain their radar is
+          "wired".
+        </p>
+      </div>
+
+      <figure>
+        <svg viewBox="0 0 640 200" role="img"
+             aria-label="Wireless installation: the rotating head sends the picture by WiFi directly to the chart plotter's own WiFi network, which Mayara can also join.">
+          <text class="myr_svg_key" x="20" y="24">WIRELESS INSTALLATION</text>
+
+          <rect class="myr_svg_box" x="20" y="46" width="150" height="66" rx="8" />
+          <text class="myr_svg_label" x="36" y="74">Rotating head</text>
+          <text class="myr_svg_sub" x="36" y="94">radio</text>
+
+          <g class="myr_svg_wifi">
+            <path d="M 196 92 A 24 24 0 0 1 232 92" />
+            <path d="M 188 104 A 40 40 0 0 1 240 104" />
+            <path d="M 180 116 A 56 56 0 0 1 248 116" />
+          </g>
+          <text class="myr_svg_sub" x="182" y="140">2.4 GHz</text>
+          <text class="myr_svg_sub" x="20" y="166">looks for the network named</text>
+          <text class="myr_svg_label" x="20" y="184">Quantum_1234567</text>
+          <text class="myr_svg_sub" x="274" y="166">takes that name while pairing, then</text>
+          <text class="myr_svg_sub" x="274" y="184">hands over its own network details</text>
+
+          <rect class="myr_svg_box" x="274" y="46" width="160" height="66" rx="8" />
+          <text class="myr_svg_label" x="290" y="74">Chart plotter</text>
+          <text class="myr_svg_sub" x="290" y="94">provides the network</text>
+
+          <path class="myr_svg_line" d="M 434 79 L 486 79" />
+          <path class="myr_svg_line" d="M 486 79 l -9 -5 M 486 79 l -9 5" />
+
+          <rect class="myr_svg_box" x="490" y="46" width="130" height="66" rx="8" />
+          <text class="myr_svg_label" x="506" y="74">Mayara</text>
+          <text class="myr_svg_sub" x="506" y="94">on the same network</text>
+        </svg>
+        <figcaption>
+          A wireless Quantum joins the chart plotter's WiFi. Mayara reaches it by
+          being on that same network.
+        </figcaption>
+      </figure>
+
+      <figure>
+        <svg viewBox="0 0 640 224" role="img"
+             aria-label="Wired installation: the rotating head sends the picture by WiFi to a bridge board inside the base, which passes it out of the RayNet socket onto the wired network where the chart plotter and Mayara are.">
+          <text class="myr_svg_key" x="20" y="24">WIRED INSTALLATION</text>
+
+          <rect class="myr_svg_box" x="20" y="46" width="140" height="66" rx="8" />
+          <text class="myr_svg_label" x="36" y="74">Rotating head</text>
+          <text class="myr_svg_sub" x="36" y="94">radio</text>
+
+          <g class="myr_svg_wifi">
+            <path d="M 184 92 A 22 22 0 0 1 216 92" />
+            <path d="M 176 104 A 36 36 0 0 1 224 104" />
+          </g>
+          <text class="myr_svg_sub" x="172" y="132">2.4 GHz</text>
+          <text class="myr_svg_label" x="96" y="154">Quantum_W3_1234567</text>
+          <text class="myr_svg_sub" x="96" y="172">the radar's own internal network</text>
+
+          <rect class="myr_svg_box" x="248" y="34" width="160" height="90" rx="8" />
+          <text class="myr_svg_label" x="264" y="60">Bridge board</text>
+          <text class="myr_svg_sub" x="264" y="80">in the radar's base</text>
+          <text class="myr_svg_sub" x="264" y="96">joins the radar's</text>
+          <text class="myr_svg_sub" x="264" y="112">own network</text>
+
+          <path class="myr_svg_line" d="M 408 79 L 470 79" />
+          <path class="myr_svg_line" d="M 470 79 l -9 -5 M 470 79 l -9 5" />
+          <text class="myr_svg_sub" x="410" y="70">RayNet cable</text>
+
+          <rect class="myr_svg_box" x="474" y="34" width="146" height="90" rx="8" />
+          <text class="myr_svg_label" x="490" y="60">Wired network</text>
+          <text class="myr_svg_sub" x="490" y="80">chart plotter</text>
+          <text class="myr_svg_sub" x="490" y="96">Mayara</text>
+
+          <line class="myr_svg_dash" x1="20" y1="192" x2="620" y2="192" />
+          <text class="myr_svg_sub" x="20" y="212">The cable does not start at the radar &#8212; it starts one step after a WiFi link.</text>
+        </svg>
+        <figcaption>
+          On a cable-capable Quantum the base contains a bridge: the picture
+          still crosses the joint by WiFi, and only then reaches copper.
+        </figcaption>
+      </figure>
+
+      <div class="myr_box myr_box_ok">
+        <span class="myr_box_title">Why this is a neat piece of design</span>
+        <p>
+          The wear item is gone. There is no data slip ring to corrode, and the
+          rotating joint carries only power. It also means the wireless model is
+          the <em>simpler</em> product, not the cut-down one — a wired Quantum is
+          the same radar plus one extra board. And because the internal link is
+          the same WiFi the outside world uses, the same radio does both jobs on
+          wireless installations.
+        </p>
+      </div>
+
+      <h2>The two network names</h2>
+      <p>
+        Both are built from the radar's seven-digit serial number, and they do
+        completely different jobs. Neither is something you normally need to
+        touch.
+      </p>
+      <div class="myr_scroll_x">
+        <table>
+          <thead>
+            <tr><th>Name</th><th>Who puts it on the air</th><th>When you see it</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>Quantum_1234567</code></td>
+              <td>Your chart plotter, while it is pairing</td>
+              <td>It is the name printed on the radar's label, and it is the
+                network the radar goes looking for. During pairing the chart
+                plotter puts a network of exactly that name on the air so the
+                radar will join it; once the radar is paired the plotter hands
+                over its real network details and switches back to its own name.
+                Raymarine also documents that a never-paired radar can be found
+                by scanning for this name, if you have lost the label.</td>
+            </tr>
+            <tr>
+              <td><code>Quantum_W3_1234567</code></td>
+              <td>The bridge board in the radar's base — present on every
+                cable-capable model, which is nearly all of them now</td>
+              <td>It is the internal link between the spinning head and the
+                base. It is not printed on the label, it is not part of setup,
+                and it is normally present the whole time the radar is powered.
+                The exact name can vary; this is the usual form.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        So if you scan for WiFi networks near a Quantum and see a name with the
+        radar's serial number in it, nothing is wrong — you are looking at the
+        radar's plumbing, not at a network you are meant to join.
+      </p>
+
+      <h2>What this means for you</h2>
+      <ul>
+        <li>
+          <strong>2.4&nbsp;GHz congestion can cost you picture quality even on a
+          wired radar.</strong> Microwave ovens, Bluetooth, a crowded marina, or
+          your own boat WiFi on a clashing channel all share that band. If a
+          Quantum's picture goes patchy, moving your WiFi to a quieter channel
+          is a real fix — and that advice applies just as much to a cabled
+          installation, which surprises people.
+        </li>
+        <li>
+          <strong>It explains why a Quantum sends so little data.</strong> A
+          radar whose only data path is a modest WiFi link on a spinning
+          platform has to be frugal. A Quantum sends fewer and shorter spokes
+          than any other radar Mayara supports, and compresses them on top of
+          that. <a href="networking.html">How much each radar sends.</a>
+        </li>
+        <li>
+          <strong>A WiFi scan near a wired Quantum may still show a network
+          named after the radar</strong> — typically
+          <code>Quantum_W3_1234567</code>, with your radar's serial. That is the
+          internal link described above. It is entirely normal, it is not
+          something you need to join, and joining it will not hand you a radar
+          picture on its own.
+        </li>
+        <li>
+          <strong>Siting matters more than for other radars.</strong> Height and
+          a clear line of sight help the radar; on a wireless installation, the
+          distance and obstructions between the radar and your chart plotter are
+          part of the radar's data path, not just a convenience.
+        </li>
+      </ul>
+
+      <h2>Setting one up</h2>
+      <p>
+        This page is about <em>why</em> a Quantum behaves the way it does. For
+        what to actually plug in, how pairing works, and what Mayara can and
+        cannot do with a wireless one, see the
+        <a href="raymarine.html">Raymarine setup guide</a>.
+      </p>
+
+      <div class="myr_footer">
+        <a href="index.html">Setup guides</a> &middot;
+        <a href="raymarine.html">Raymarine setup</a> &middot;
+        <a href="networking.html">Radar networking</a>
+      </div>
+    </div>
+  </body>
+</html>

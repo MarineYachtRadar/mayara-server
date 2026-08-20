@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <title>Navico Setup — Mayara</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link type="text/css" rel="stylesheet" href="help.css?v=2" />
+  </head>
+  <body>
+    <div class="myr_help">
+      <div class="myr_nav"><a href="index.html">&larr; Setup guides</a></div>
+
+      <h1>Navico radar setup</h1>
+      <p class="myr_lead">
+        Simrad, Lowrance and B&amp;G radars: BR24, Broadband 3G and 4G, and all
+        HALO models.
+      </p>
+
+      <h2>What you need</h2>
+      <ul class="myr_needs">
+        <li>The radar and the Mayara machine on the same wired Ethernet network</li>
+        <li>Any IP subnet — Navico radars have no subnet requirement</li>
+        <li>A switch that passes multicast (every unmanaged switch does) or has multicast IGMP support</li>
+        <li>For HALO Doppler: a heading source</li>
+      </ul>
+
+      <div class="myr_box myr_box_bad">
+        <span class="myr_box_title">WiFi will not work for the radar</span>
+        <p>
+          A Navico radar pushes roughly 1 MB/s (about 8 Mbit/s) of multicast
+          spoke data. WiFi sends multicast at the base rate — 1 to 6 Mbit/s —
+          and never retransmits it, so the picture arrives full of gaps while
+          the access point's airtime is consumed for everyone else. Wire the
+          radar to Mayara, then view Mayara over WiFi.
+          <a href="networking.html#wifi">The full explanation.</a>
+        </p>
+      </div>
+
+      <h2>Network requirements</h2>
+      <p>
+        Navico radars come up with their own address and announce themselves by
+        multicast, so there is nothing to configure: no DHCP server is required,
+        no static address needs assigning, and the radar does not care what
+        subnet Mayara is on. All that matters is that the radar and Mayara sit
+        on the same Ethernet segment.
+      </p>
+      <p>
+        Plugging both into the LAN ports of your boat's WiFi router is exactly
+        that, and works fine — a router's LAN ports are a built-in switch, and
+        traffic between them is switched, not routed. What does not work is
+        anything that makes the radar's traffic actually cross a router: the
+        radar on one subnet or VLAN and Mayara on another, the radar behind the
+        router's WAN port, or a VPN or mesh WiFi backhaul between the two.
+        Multicast stops at those boundaries unless someone has deliberately
+        configured it to cross.
+      </p>
+
+      <h3>Traffic</h3>
+      <div class="myr_scroll_x">
+        <table>
+          <thead>
+            <tr><th>Purpose</th><th>Address</th><th>Notes</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Discovery</td>
+              <td><code>236.6.7.5:6878</code></td>
+              <td>Radar announces itself; Mayara also asks here</td>
+            </tr>
+            <tr>
+              <td>Reports and spokes</td>
+              <td><code>236.6.7.x</code>, ports 6xxx</td>
+              <td>Exact groups come from the radar's own announcement</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>Supported models</h2>
+      <div class="myr_scroll_x">
+        <table>
+          <thead>
+            <tr><th>Family</th><th>Models</th><th>Dual range</th><th>Doppler</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>BR24</td><td>BR24</td><td>No</td><td>No</td></tr>
+            <tr><td>3G</td><td>Broadband 3G</td><td>No</td><td>No</td></tr>
+            <tr><td>4G</td><td>Broadband 4G</td><td>Yes</td><td>No</td></tr>
+            <tr><td>HALO dome</td><td>HALO 20</td><td>No</td><td>Yes</td></tr>
+            <tr><td>HALO dome</td><td>HALO 20+, HALO 24</td><td>Yes</td><td>Yes</td></tr>
+            <tr><td>HALO open array</td><td>HALO 2000, 3000, 4000, 5000, 6000</td><td>Yes</td><td>Yes</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        All models are recognised from the radar's beacon. There is nothing to
+        select by hand.
+      </p>
+
+      <h2>Heading and navigation data</h2>
+      <p>
+        HALO radars need heading data before they will enable Doppler
+        (VelocityTrack). Mayara forwards heading, position and speed to the
+        radar automatically once a navigation source is configured:
+      </p>
+      <pre><code># Auto-discover a Signal K server via mDNS
+mayara-server
+
+# Or name the Signal K server
+mayara-server -n tcp:192.168.1.100:3000
+
+# Or feed NMEA 0183 in
+mayara-server --nmea0183 -n udp:0.0.0.0:10110</code></pre>
+      <p>Without heading data, HALO Doppler mode stays off.</p>
+
+      <h2>Dual range</h2>
+      <p>
+        4G and most HALO radars can run two independent range windows at once.
+        Mayara presents each as its own radar, suffixed A and B; both appear in
+        the radar list and are controlled separately.
+      </p>
+
+      <h2>Troubleshooting</h2>
+
+      <h3>Radar not detected</h3>
+      <ul>
+        <li>Confirm Mayara is on the same wired network as the radar.</li>
+        <li>Confirm the radar has power — the dome or array should be turning, or its status light active.</li>
+        <li>On a machine with several interfaces, name the right one: <code>mayara-server -i eth0</code></li>
+        <li>On a managed switch, check that IGMP snooping is not filtering the radar's multicast.</li>
+        <li>Run <code>mayara-server -vv</code> and watch for discovery traffic.</li>
+      </ul>
+
+      <h3>Doppler not working on a HALO</h3>
+      <ul>
+        <li>Check that a heading source is connected — Signal K or NMEA 0183.</li>
+        <li>Confirm heading values actually arrive: they show up in the log with <code>-v</code>.</li>
+        <li>Most HALO firmware supports Doppler, but very old HALO24 firmware may not.</li>
+      </ul>
+
+      <div class="myr_footer">
+        <a href="index.html">Setup guides</a> &middot;
+        <a href="networking.html">Radar networking</a> &middot;
+        <a href="https://github.com/MarineYachtRadar/mayara-server/blob/main/docs/capturing-traffic.md">Capturing radar traffic</a>
+      </div>
+    </div>
+  </body>
+</html>

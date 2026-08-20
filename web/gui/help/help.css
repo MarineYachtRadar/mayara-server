@@ -1,0 +1,278 @@
+/* ============================================
+   Help pages - scrollable document styling
+   ============================================ */
+
+:root {
+  color-scheme: dark;
+  --myr_bg: #000;
+  --myr_panel: rgb(3, 37, 37);
+  --myr_text: rgb(152, 217, 204);
+  --myr_dim: rgb(120, 170, 165);
+  --myr_accent: rgb(100, 200, 180);
+  --myr_good: rgb(150, 220, 150);
+  --myr_warn_text: rgb(255, 200, 100);
+  --myr_warn_bg: rgb(60, 50, 10);
+  --myr_bad_text: rgb(230, 150, 150);
+  --myr_bad_bg: rgb(60, 25, 25);
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--myr_bg);
+  color: var(--myr_text);
+  font: normal 16px/1.6 Verdana, Geneva, sans-serif;
+}
+
+.myr_help {
+  max-width: 52rem;
+  margin: 0 auto;
+  padding: 1.5rem 1.25rem 4rem;
+}
+
+h1,
+h2,
+h3 {
+  color: var(--myr_accent);
+  line-height: 1.25;
+}
+
+h1 {
+  font-size: 1.6rem;
+  margin: 0 0 0.25rem;
+}
+
+h2 {
+  font-size: 1.2rem;
+  margin: 2rem 0 0.5rem;
+  border-bottom: 1px solid rgba(100, 200, 180, 0.3);
+  padding-bottom: 0.3rem;
+}
+
+h3 {
+  font-size: 1rem;
+  margin: 1.25rem 0 0.4rem;
+}
+
+.myr_lead {
+  color: var(--myr_dim);
+  margin: 0 0 1.5rem;
+}
+
+a {
+  color: var(--myr_accent);
+}
+
+code {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.9em;
+  background: rgba(100, 200, 180, 0.12);
+  border-radius: 3px;
+  padding: 0.1em 0.35em;
+}
+
+pre {
+  background: var(--myr_panel);
+  border-left: 3px solid var(--myr_accent);
+  border-radius: 4px;
+  padding: 0.75rem 1rem;
+  overflow-x: auto;
+}
+
+pre code {
+  background: none;
+  padding: 0;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.75rem 0;
+  font-size: 0.92rem;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid rgba(100, 200, 180, 0.2);
+  vertical-align: top;
+}
+
+th {
+  color: var(--myr_accent);
+  font-weight: normal;
+  border-bottom-color: rgba(100, 200, 180, 0.45);
+}
+
+.myr_scroll_x {
+  overflow-x: auto;
+}
+
+/* Verdict / callout boxes */
+.myr_box {
+  border-radius: 5px;
+  padding: 0.75rem 1rem;
+  margin: 1rem 0;
+  background: var(--myr_panel);
+  border-left: 4px solid var(--myr_accent);
+}
+
+.myr_box p:first-child {
+  margin-top: 0;
+}
+
+.myr_box p:last-child {
+  margin-bottom: 0;
+}
+
+.myr_box_ok {
+  border-left-color: var(--myr_good);
+}
+
+.myr_box_warn {
+  background: var(--myr_warn_bg);
+  color: var(--myr_warn_text);
+  border-left-color: var(--myr_warn_text);
+}
+
+.myr_box_bad {
+  background: var(--myr_bad_bg);
+  color: var(--myr_bad_text);
+  border-left-color: var(--myr_bad_text);
+}
+
+.myr_box_title {
+  display: block;
+  color: inherit;
+  font-weight: bold;
+  margin-bottom: 0.25rem;
+}
+
+/* Requirement checklist */
+.myr_needs {
+  list-style: none;
+  padding: 0;
+  margin: 0.75rem 0;
+}
+
+.myr_needs li {
+  padding: 0.35rem 0 0.35rem 1.6rem;
+  position: relative;
+}
+
+.myr_needs li::before {
+  content: "\2713";
+  color: var(--myr_good);
+  position: absolute;
+  left: 0;
+}
+
+/* Brand index cards */
+.myr_cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 0.75rem;
+  margin: 1rem 0;
+}
+
+.myr_card {
+  display: block;
+  background: var(--myr_panel);
+  border: 1px solid rgba(100, 200, 180, 0.3);
+  border-radius: 5px;
+  padding: 0.85rem 1rem;
+  text-decoration: none;
+  color: var(--myr_text);
+}
+
+.myr_card:hover {
+  border-color: var(--myr_accent);
+  background: rgba(100, 200, 180, 0.1);
+}
+
+.myr_card_title {
+  display: block;
+  color: var(--myr_accent);
+  font-weight: bold;
+  margin-bottom: 0.2rem;
+}
+
+.myr_card_note {
+  display: block;
+  color: var(--myr_dim);
+  font-size: 0.88rem;
+}
+
+/* Navigation */
+.myr_nav {
+  font-size: 0.9rem;
+  margin-bottom: 1.5rem;
+}
+
+.myr_footer {
+  margin-top: 3rem;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(100, 200, 180, 0.25);
+  font-size: 0.9rem;
+  color: var(--myr_dim);
+}
+
+/* Diagrams */
+figure {
+  margin: 1.5rem 0;
+}
+
+figure svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+figcaption {
+  color: var(--myr_dim);
+  font-size: 0.9rem;
+  margin-top: 0.5rem;
+}
+
+.myr_svg_label {
+  font: 13px Verdana, Geneva, sans-serif;
+  fill: var(--myr_text);
+}
+
+.myr_svg_sub {
+  font: 11px Verdana, Geneva, sans-serif;
+  fill: var(--myr_dim);
+}
+
+.myr_svg_key {
+  font: 11px Verdana, Geneva, sans-serif;
+  fill: var(--myr_accent);
+  letter-spacing: 0.08em;
+}
+
+.myr_svg_box {
+  fill: var(--myr_panel);
+  stroke: var(--myr_accent);
+  stroke-width: 1.5;
+}
+
+.myr_svg_line {
+  stroke: var(--myr_accent);
+  stroke-width: 2;
+  fill: none;
+}
+
+.myr_svg_wifi {
+  stroke: var(--myr_warn_text);
+  stroke-width: 2;
+  fill: none;
+}
+
+.myr_svg_dash {
+  stroke: var(--myr_dim);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 5;
+  fill: none;
+}

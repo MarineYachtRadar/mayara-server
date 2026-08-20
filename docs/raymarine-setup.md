@@ -1,57 +1,24 @@
 # Raymarine Radar Setup
 
-This guide covers connecting Mayara to Raymarine radars: Quantum, RD-series, Magnum, and Cyclone.
+Quantum and Quantum 2, Cyclone, the RD radome series, Magnum and the open arrays.
 
 ## Network Requirements
 
-Raymarine radars have no specific IP subnet requirement, but they do require a **DHCP server** on the network. The radar obtains its IP address via DHCP. The DHCP server can be:
+The radar and the Mayara machine must be on the same wired Ethernet network, and that network **must have a DHCP server**. A Raymarine radar has no fallback address: until it gets a lease it stays silent.
 
-- A Raymarine chartplotter (MFD) on the same network
-- A network router with DHCP enabled
-- A DHCP service running on the Mayara machine or another computer
+## Full guide
 
-Without DHCP, the radar will not acquire an IP address and will not be detected.
+The complete setup guide is served by Mayara itself, so it is available on the boat with no internet connection:
 
-## Supported Models
+```
+http://<mayara-host>:6502/gui/help/raymarine.html
+```
 
-### Quantum (solid-state FMCW)
+It is also reachable from the "Network Configuration Help" panel on Mayara's radar list page. The source file is [`web/gui/help/raymarine.html`](../web/gui/help/raymarine.html) — edit that, not this file.
 
-| Model          | Doppler |
-| -------------- | ------- |
-| Quantum Q24C   | No      |
-| Quantum Q24D   | Yes     |
-| Quantum 2 Q24D | Yes     |
-| Cyclone        | Yes     |
-| Cyclone Pro    | Yes     |
+It covers wired (RayNet) setup, the Quantum WiFi credentials trap, the multicast groups and ports, supported models, and troubleshooting.
 
-Quantum radars are auto-detected on both wired Ethernet and WiFi.
+## See also
 
-**WiFi support:** Quantum radars can connect via WiFi. Start Mayara with `--allow-wifi` to enable radar discovery on wireless interfaces. Note that WiFi performance may be limited for sustained radar data, but Quantum radars send quite small radar images so it should be
-okay. Let us know how it works for you!
-
-### RD Series (magnetron)
-
-| Model              | Notes                                   |
-| ------------------ | --------------------------------------- |
-| RD418HD, RD424HD   | HD resolution (1024 samples/spoke)      |
-| RD418D, RD424D     | Standard resolution (512 samples/spoke) |
-| Magnum 4kW, 12kW   | Open array                              |
-| Open Array HD, SHD | High-definition open array              |
-
-RD-series radars are wired Ethernet only.
-
-## Troubleshooting
-
-**Radar not detected:**
-- Verify a DHCP server is active on the radar's network.
-- Check that the Mayara machine is on the same network as the radar.
-- For Quantum via WiFi: ensure `--allow-wifi` is specified.
-- Try specifying the network interface: `mayara-server -i eth0`
-- Use `-vv` to see discovery traffic in the log.
-
-**Quantum WiFi unreliable:**
-- WiFi performance depends on signal strength and interference. For best results, use a wired connection when possible.
-- If spokes are missing, move the Mayara machine closer to the radar or switch to a wired connection.
-
-**Capturing traffic:**
-- For packet capture instructions used in bug reports, see [Capturing Radar Traffic](./capturing-traffic.md).
+- [Radar networking](../web/gui/help/networking.html) — why the radar itself must be wired
+- [Capturing Radar Traffic](./capturing-traffic.md) — packet captures for bug reports

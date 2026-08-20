@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <title>Raymarine Setup — Mayara</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link type="text/css" rel="stylesheet" href="help.css?v=2" />
+  </head>
+  <body>
+    <div class="myr_help">
+      <div class="myr_nav"><a href="index.html">&larr; Setup guides</a></div>
+
+      <h1>Raymarine radar setup</h1>
+      <p class="myr_lead">
+        RDxxx and RDxxxHD radomes, Quantum and Quantum 2, Cyclone, Magnum and the
+        open arrays.
+      </p>
+
+      <h2>What you need</h2>
+      <ul class="myr_needs">
+        <li>The radar and the Mayara machine on the same wired Ethernet network</li>
+        <li>A DHCP server on that network — this is the one hard requirement</li>
+        <li>A RayNet-to-RJ45 adapter cable, unless the radar already reaches a switch</li>
+      </ul>
+
+      <div class="myr_box myr_box_warn">
+        <span class="myr_box_title">DHCP is not optional</span>
+        <p>
+          A Raymarine radar has no fallback address. It asks for one by DHCP,
+          and until it gets a lease it stays silent — no beacons, nothing for
+          Mayara to find. The DHCP server can be a Raymarine MFD, your router,
+          or a DHCP service on the Mayara machine itself. If the radar is not
+          detected, check your router's lease list first: if the radar is not in
+          it, nothing else you change will help.
+        </p>
+      </div>
+
+      <h2>Wired (RayNet)</h2>
+      <p>
+        A wired radar needs <strong>no pairing, no WiFi credentials, and no
+        extra Mayara options</strong>. Connect it to the same network as Mayara,
+        make sure DHCP is available, and it is discovered automatically. An MFD
+        is not required — Mayara wakes and drives the radar itself (Mayara 3.7.0
+        and later).
+      </p>
+      <p>
+        If your radar is wired you can skip the pairing section below — but not
+        the WiFi story altogether, because a Quantum is a WiFi radar inside
+        whatever you connect to it. See
+        <a href="quantum-networking.html">Quantum networking explained</a>.
+      </p>
+
+      <h3>Traffic</h3>
+      <div class="myr_scroll_x">
+        <table>
+          <thead>
+            <tr><th>Purpose</th><th>Address</th><th>Notes</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Discovery, wired</td>
+              <td><code>224.0.0.1:5800</code></td>
+              <td>Radar, MFD and Mayara all announce here</td>
+            </tr>
+            <tr>
+              <td>Discovery, WiFi</td>
+              <td><code>232.1.1.1:5800</code></td>
+              <td>Only joined when <code>--allow-wifi</code> is given</td>
+            </tr>
+            <tr>
+              <td>Reports and spokes</td>
+              <td><code>232.1.x.x</code>, port 2574</td>
+              <td>Group comes from the radar's own announcement</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        Those <code>232.x.x.x</code> groups sit in a range some managed switches
+        treat differently from ordinary multicast. If the radar is discovered
+        but no picture appears, IGMP snooping on a managed switch is a prime
+        suspect.
+      </p>
+
+      <h2>WiFi (Quantum)</h2>
+      <p>
+        A Quantum announces itself on two multicast groups: the RayNet one that
+        every Raymarine radar uses, and a second one it uses when its own link
+        to the chartplotter is WiFi. <strong>Mayara listens on both, always.</strong>
+        A radar whose link to the chartplotter is wireless is still perfectly
+        findable from a Mayara that is wired to RayNet, and needs no extra
+        options.
+      </p>
+
+      <h3>What is supported</h3>
+      <div class="myr_scroll_x">
+        <table>
+          <thead>
+            <tr><th>Your setup</th><th>Works</th><th><code>--allow-wifi</code>?</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Mayara on RayNet, radar wired to RayNet</td>
+              <td>Yes</td>
+              <td>Not needed</td>
+            </tr>
+            <tr>
+              <td>Mayara on RayNet, radar connected to the chartplotter over WiFi</td>
+              <td>Yes</td>
+              <td>Not needed</td>
+            </tr>
+            <tr>
+              <td>Mayara and the radar both on the chartplotter's WiFi</td>
+              <td>Yes</td>
+              <td><strong>Yes</strong></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        The flag is only about <em>Mayara's own network interfaces</em>: by
+        default Mayara ignores the wireless interfaces of the machine it runs
+        on, so if the only path to the radar is over your own WiFi adapter you
+        have to allow it. It never connects Mayara to a radar and never asks for
+        credentials — and it has nothing to do with whether the <em>radar</em>
+        is wireless.
+      </p>
+
+      <div class="myr_box myr_box_warn">
+        <span class="myr_box_title">Why the WiFi credentials on the label rarely work</span>
+        <p>
+          They do work — but only for as long as the radar has never been paired
+          with a chartplotter. A brand-new Quantum puts its own network on the
+          air, named after its serial number, and repeats that briefly every ten
+          seconds so an installer can find it. That is the network the label
+          describes.
+        </p>
+        <p>
+          Pairing turns it around. You type the label's name and passcode into
+          the chartplotter, the chartplotter briefly presents a network by that
+          name, and the radar joins it. The chartplotter then hands the radar the
+          details of every chartplotter's own WiFi on the boat and goes back to
+          its normal network name. From then on the radar is a client: it stops
+          advertising, and at each power-up it joins whichever chartplotter has
+          the strongest signal.
+        </p>
+        <p>
+          So on an already-installed boat, scanning for the name on the label
+          finds nothing — the radar is not offering a network any more, it is on
+          the chartplotter's. And an unpaired radar gives up and goes to sleep
+          about an hour after power-up, so even a fresh one is only findable for
+          a while.
+        </p>
+        <p>
+          Mayara, at this time, can work with wireless Quantum radars in the
+          following manners:
+        </p>
+        <ol>
+          <li>Mayara wired to the RayNet network the MFD is on, with the radar
+            also wired. Nothing special is needed.</li>
+          <li>Mayara wired to RayNet, with the radar reaching the MFD over
+            WiFi. The MFD bridges the radar onto the wired network, and again
+            nothing special is needed on Mayara's side.</li>
+          <li>Mayara joined to the WiFi network the MFD creates, alongside the
+            radar. This one needs <code>--allow-wifi</code>, because Mayara
+            itself is on a wireless interface.</li>
+        </ol>
+        <p>
+          In all three the MFD has to remain <em>on</em>: it is the MFD that
+          provides the network the radar joined, and it does not hand that job
+          over.
+        </p>
+        <p>
+          A radar that has never been paired is the interesting case, because
+          there it is the radar offering the network and no chartplotter is
+          involved at all. If you have a wireless Quantum — paired or not — and
+          are willing to experiment, please get in touch. What we will not rush
+          is handing a radar a different network to join: get that wrong and the
+          radar stops talking to the boat's own chartplotter.
+        </p>
+      </div>
+
+      <h2 id="inside">Every Quantum is a WiFi radar inside</h2>
+      <p>
+        The part of a Quantum that spins — antenna, transmitter and the
+        processing behind them — reaches the fixed base by
+        <strong>2.4&nbsp;GHz WiFi</strong>. Nothing but power crosses the
+        rotating joint. On a cable-capable model a bridge board in the base
+        joins that internal network and pushes the picture out of the socket, so
+        the cable does not start at the radar: it starts one step after a WiFi
+        link.
+      </p>
+      <p>
+        That has consequences worth knowing — chiefly that 2.4&nbsp;GHz
+        congestion can cost you picture quality <em>even on a wired radar</em>,
+        and that a WiFi scan near one may show a network named after it.
+        <a href="quantum-networking.html">Quantum networking explained</a> walks
+        through it with diagrams.
+      </p>
+
+      <h2>Supported models</h2>
+
+      <h3>Quantum (solid-state FMCW)</h3>
+      <div class="myr_scroll_x">
+        <table>
+          <thead>
+            <tr><th>Model</th><th>Doppler</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Quantum Q24C</td><td>No</td></tr>
+            <tr><td>Quantum Q24W (WiFi)</td><td>No</td></tr>
+            <tr><td>Quantum Q24D</td><td>Yes</td></tr>
+            <tr><td>Quantum 2 Q24D</td><td>Yes</td></tr>
+            <tr><td>Cyclone</td><td>Yes</td></tr>
+            <tr><td>Cyclone Pro</td><td>Yes</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        Only the <strong>Q24W</strong> was WiFi-only, and it is discontinued.
+        The Q24C, the Quantum 2 Q24D and the Cyclones all have a RayNet socket
+        as well as WiFi, so a modern Quantum can always be wired — see
+        <a href="quantum-networking.html">Quantum networking explained</a> for
+        what that does and does not change.
+      </p>
+
+      <h3>RD series (magnetron)</h3>
+      <div class="myr_scroll_x">
+        <table>
+          <thead>
+            <tr><th>Models</th><th>Notes</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>RD418HD, RD424HD</td><td>HD resolution, 1024 samples per spoke</td></tr>
+            <tr><td>RD418D, RD424D</td><td>Standard resolution, 512 samples per spoke</td></tr>
+            <tr><td>Magnum 4 kW, 12 kW</td><td>Open array</td></tr>
+            <tr><td>Open Array HD, SHD</td><td>High-definition open array</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>RD-series radars are wired Ethernet only.</p>
+
+      <h2>Troubleshooting</h2>
+
+      <h3>Radar not detected</h3>
+      <ul>
+        <li>Check the DHCP lease list and confirm the radar actually has an address.</li>
+        <li>Confirm Mayara is on the same network as the radar.</li>
+        <li>On a managed switch, check IGMP snooping against the <code>232.x.x.x</code> groups above.</li>
+        <li>If <em>Mayara</em> is on WiFi rather than wired, confirm
+          <code>--allow-wifi</code> is set. A radar that is on WiFi does not by
+          itself need the flag.</li>
+        <li>Name the interface if the machine has several: <code>mayara-server -i eth0</code></li>
+        <li>Run <code>mayara-server -vv</code> and watch for beacons.</li>
+      </ul>
+
+      <h3>Wired Quantum is detected but never wakes</h3>
+      <p>
+        Upgrade to Mayara 3.7.0 or later. Earlier versions did not wake a Quantum
+        and required a Raymarine MFD to be present on the network.
+      </p>
+
+      <h3>Quantum over WiFi is unreliable</h3>
+      <ul>
+        <li>Signal strength and interference decide everything here. Move the Mayara machine closer, or switch to wired.</li>
+        <li>Missing spokes are the classic symptom of a marginal WiFi link.</li>
+      </ul>
+
+      <div class="myr_footer">
+        <a href="index.html">Setup guides</a> &middot;
+        <a href="quantum-networking.html">Quantum networking</a> &middot;
+        <a href="networking.html">Radar networking</a> &middot;
+        <a href="https://github.com/MarineYachtRadar/mayara-server/blob/main/docs/capturing-traffic.md">Capturing radar traffic</a>
+      </div>
+    </div>
+  </body>
+</html>
