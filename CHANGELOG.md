@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **api:** drop the dual and dualGroup radar fields (#530) ([PR #530](https://github.com/MarineYachtRadar/mayara-server/pull/530))
 
+### Fixed
+
+- **raymarine:** always listen on the Quantum discovery group (#561) ([PR #561](https://github.com/MarineYachtRadar/mayara-server/pull/561))
+
 ## [3.9.0] - 2026-08-14
 
 ### Added
