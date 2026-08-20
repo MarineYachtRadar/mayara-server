@@ -7,6 +7,7 @@ import {
   detectMode,
   apiFetch,
 } from "./api.js";
+import { radarCombinations, multiViewUrl } from "./radar-list.js";
 
 const { a, tr, td, div, p, strong, details, summary, code, br, span, button } =
   van.tags;
@@ -488,23 +489,6 @@ const RadarEntry = (radar) => {
     );
   }
 
-  // Both ranges of a dual-range antenna side by side, this radar on the left
-  if (radar.dualSibling) {
-    actions.push(
-      a(
-        {
-          href:
-            "dual.html?a=" +
-            encodeURIComponent(radar.id) +
-            "&b=" +
-            encodeURIComponent(radar.dualSibling),
-          class: "myr_radar_link myr_radar_link_secondary",
-        },
-        "Dual Range Display"
-      )
-    );
-  }
-
   return tr(
     { class: "myr_radar_row" },
     td({ class: "myr_radar_name" }, displayName),
@@ -512,17 +496,23 @@ const RadarEntry = (radar) => {
   );
 };
 
-// The other range of `id`'s dual-range antenna, or null. Radars report a
-// shared dualGroup id per physical antenna; a pane pair only makes sense
-// when the group has exactly two members.
-function dualSiblingId(radars, id) {
-  const group = radars[id].dualGroup;
-  if (!group) return null;
-  const members = Object.keys(radars).filter(
-    (k) => radars[k].dualGroup === group
+// Several radars at once, in one window. The panes pick their own renderer,
+// so there is no alternate-display variant to offer here.
+const CombinationEntry = (combination) =>
+  tr(
+    { class: "myr_radar_row myr_radar_row_combined" },
+    td({ class: "myr_radar_name" }, combination.label),
+    td(
+      { class: "myr_radar_actions" },
+      a(
+        {
+          href: multiViewUrl(combination.ids),
+          class: "myr_radar_link myr_radar_link_primary",
+        },
+        "Open Combined Display"
+      )
+    )
   );
-  return members.length === 2 ? members.find((k) => k !== id) : null;
-}
 
 // Track previous radar count to avoid unnecessary DOM rebuilds
 let previousRadarCount = -1;
@@ -557,11 +547,13 @@ function radarsLoaded(d) {
     table.className = "myr_radar_table";
     r.appendChild(table);
 
-    radarIds.sort().forEach(function (v, i) {
-      // Pass the full radar object (includes id, name, brand, model)
-      const radar = { ...d[v], id: v, dualSibling: dualSiblingId(d, v) };
-      van.add(table, RadarEntry(radar));
-    });
+    // The API's own order, which the viewer's radar selector follows too and
+    // which keeps the ranges of one antenna adjacent.
+    const radars = radarIds.map((v) => ({ ...d[v], id: v }));
+    radars.forEach((radar) => van.add(table, RadarEntry(radar)));
+    radarCombinations(radars).forEach((combination) =>
+      van.add(table, CombinationEntry(combination))
+    );
 
     // Radar found, poll less frequently
     setTimeout(loadRadars, 15000);

@@ -16,7 +16,6 @@ export {
   getControl,
   getOperatingTime,
   isPlaybackMode,
-  getUserName,
   togglePower,
   zoomIn,
   zoomOut,
@@ -2067,10 +2066,6 @@ function getOperatingTime() {
 
 function isPlaybackMode() {
   return playbackMode;
-}
-
-function getUserName() {
-  return myr_control_values.userName?.value || "";
 }
 
 // Power states: 0 = off, 1 = standby, 2 = transmit.

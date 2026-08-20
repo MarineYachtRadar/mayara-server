@@ -36,9 +36,7 @@ use std::{
 
 /// mayara's documented `RadarInfo` extensions: present in mayara, but not part
 /// of the shared surface (and absent from signalk-server). Clients ignore them.
-/// `dual`/`dualGroup` pair the ranges of a dual-range antenna for the GUI's
-/// side-by-side view.
-const MAYARA_RADARINFO_EXTENSIONS: &[&str] = &["replay", "dual", "dualGroup"];
+const MAYARA_RADARINFO_EXTENSIONS: &[&str] = &["replay"];
 
 #[test]
 fn radar_api_surface_identical_across_projects() {

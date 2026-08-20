@@ -124,6 +124,16 @@
   background: rgba(100, 200, 180, 0.1);
 }
 
+/* Combined views, listed below the radars they are made of, with a single
+   rule separating the two groups. */
+.myr_radar_row_combined td {
+  border-top: 1px solid rgba(100, 200, 180, 0.2);
+}
+
+.myr_radar_row_combined + .myr_radar_row_combined td {
+  border-top: none;
+}
+
 .myr_radar_name {
   padding: 15px 20px;
   font-weight: bold;
