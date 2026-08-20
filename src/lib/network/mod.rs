@@ -322,6 +322,37 @@ pub(crate) fn match_ipv4(addr: &Ipv4Addr, bcast: &Ipv4Addr, netmask: &Ipv4Addr) 
     r == b
 }
 
+/// True when a unicast destination cannot be reached directly on the wire the
+/// interface `nic`/`netmask` sits on.
+///
+/// Binding a socket to a source address does not pin the outgoing interface:
+/// the kernel routes by destination, so an off-link destination silently
+/// leaves via whichever interface the routing table prefers — usually the
+/// default route, and never the radar. Multicast and broadcast are exempt;
+/// they are delivered on the wire regardless of subnet.
+pub(crate) fn is_offlink(nic: &Ipv4Addr, netmask: &Ipv4Addr, dst: &Ipv4Addr) -> bool {
+    !dst.is_multicast() && !dst.is_broadcast() && !match_ipv4(dst, nic, netmask)
+}
+
+/// Find the name and netmask of the interface carrying `nic_addr`.
+///
+/// `None` when no interface has that address, in which case nothing can be
+/// concluded about reachability.
+pub(crate) fn interface_for(nic_addr: &Ipv4Addr) -> Option<(String, Ipv4Addr)> {
+    use network_interface::{NetworkInterface, NetworkInterfaceConfig};
+
+    for itf in NetworkInterface::show().ok()? {
+        for addr in &itf.addr {
+            if let (IpAddr::V4(ip), Some(IpAddr::V4(mask))) = (addr.ip(), addr.netmask())
+                && ip == *nic_addr
+            {
+                return Some((itf.name.clone(), mask));
+            }
+        }
+    }
+    None
+}
+
 #[cfg(target_os = "macos")]
 pub(crate) use macos::is_wireless_interface;
 #[cfg(target_os = "macos")]
@@ -336,3 +367,40 @@ pub(crate) use linux::spawn_wait_for_ip_addr_change;
 pub(crate) use windows::is_wireless_interface;
 #[cfg(target_os = "windows")]
 pub(crate) use windows::spawn_wait_for_ip_addr_change;
+
+#[cfg(test)]
+mod reachability_tests {
+    use super::is_offlink;
+    use std::net::Ipv4Addr;
+
+    #[test]
+    fn rd_radar_on_another_subnet_is_offlink() {
+        // Wire-observed: RD radomes are addressed in 10/8 while a host on the
+        // RayNet network gets 198.18.x from the MFD's DHCP server. Commands
+        // are unicast, so they never reach the radar.
+        assert!(is_offlink(
+            &Ipv4Addr::new(198, 18, 1, 200),
+            &Ipv4Addr::new(255, 255, 0, 0),
+            &Ipv4Addr::new(10, 18, 203, 88)
+        ));
+    }
+
+    #[test]
+    fn quantum_on_the_same_subnet_is_reachable() {
+        // A Quantum is addressed in 198.18.x like the host, which is why
+        // Quantum control has always worked.
+        assert!(!is_offlink(
+            &Ipv4Addr::new(198, 18, 7, 45),
+            &Ipv4Addr::new(255, 255, 0, 0),
+            &Ipv4Addr::new(198, 18, 0, 158)
+        ));
+    }
+
+    #[test]
+    fn multicast_and_broadcast_are_never_offlink() {
+        let nic = Ipv4Addr::new(198, 18, 1, 200);
+        let mask = Ipv4Addr::new(255, 255, 0, 0);
+        assert!(!is_offlink(&nic, &mask, &Ipv4Addr::new(232, 1, 1, 1)));
+        assert!(!is_offlink(&nic, &mask, &Ipv4Addr::new(255, 255, 255, 255)));
+    }
+}
