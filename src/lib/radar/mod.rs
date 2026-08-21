@@ -986,12 +986,16 @@ impl SharedRadars {
                 continue;
             };
             let offlink = crate::network::is_offlink(&info.nic_addr, &netmask, &dst);
+            // Never name a concrete address to configure: the only address
+            // known here is the radar's own, and telling the user to assign
+            // that to the host would collide with the radar. The prefix length
+            // is unknown too. A host route to the radar is safe to suggest
+            // because it names the radar as a destination, not as our address.
             let reason = format!(
                 "radar address {} is not on the same subnet as {} on interface '{}'. \
-                 Give this host an address on the radar's subnet, for example \
-                 `ip addr add {}/8 dev {}` with an unused address, or add a route: \
-                 `ip route add {}/32 dev {}`",
-                dst, info.nic_addr, ifname, dst, ifname, dst, ifname
+                 Give this host an unused address in the radar's subnet, or add a \
+                 route to it: `ip route add {}/32 dev {}`",
+                dst, info.nic_addr, ifname, dst, ifname
             );
             if info.controls.set_command_reachable(!offlink, &reason) {
                 if offlink {
@@ -1777,8 +1781,14 @@ impl CommonRadar {
                 match cv.id {
                     ControlId::GuardZone1 | ControlId::GuardZone2 => {
                         self.update();
-                        // Send to hardware if the brand supports it (e.g. Furuno)
-                        if let Some(command_sender) = command_sender {
+                        // Send to hardware if the brand supports it (e.g. Furuno).
+                        // Mayara evaluates the zone itself either way, so an
+                        // unreachable radar keeps a working guard zone; only the
+                        // optional hardware copy is skipped.
+                        if let Some(command_sender) = command_sender
+                            .as_mut()
+                            .filter(|_| self.info.controls.command_reachable())
+                        {
                             match command_sender.set_control(&cv, &self.info.controls).await {
                                 Ok(()) => {}
                                 Err(RadarError::CannotSetControlId(_)) => {}

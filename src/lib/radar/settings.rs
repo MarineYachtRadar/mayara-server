@@ -615,12 +615,38 @@ pub struct Controls {
     command_reachable: bool,
 }
 
+/// Whether a control must appear read-only to clients: because it always is,
+/// because this is a replay, or because the radar cannot currently be commanded
+/// and this control would be sent to it.
+///
+/// The single place that decides, so insertion, redefinition and reachability
+/// transitions cannot drift apart.
+fn effective_read_only(
+    replay: bool,
+    command_reachable: bool,
+    control_id: ControlId,
+    item: &ControlDefinition,
+) -> bool {
+    item.intrinsic_read_only
+        || replay
+        || (!command_reachable && control_id.get_destination() == ControlDestination::Command)
+}
+
 impl Controls {
     fn insert(&mut self, control_id: ControlId, value: Control) {
+        let item = ControlDefinition {
+            intrinsic_read_only: value.item.intrinsic_read_only || value.item.is_read_only,
+            ..value.item
+        };
         let v = Control {
             item: ControlDefinition {
-                is_read_only: self.replay || value.item.is_read_only,
-                ..value.item
+                is_read_only: effective_read_only(
+                    self.replay,
+                    self.command_reachable,
+                    control_id,
+                    &item,
+                ),
+                ..item
             },
             ..value
         };
@@ -821,7 +847,10 @@ impl SharedControls {
 
     pub(crate) fn add(&mut self, control_builder: ControlBuilder) {
         let (id, control) = control_builder.take();
-        self.controls.write().unwrap().controls.insert(id, control);
+        // Via Controls::insert, so a control added while the radar is in
+        // replay or cannot be commanded is born read-only rather than
+        // appearing settable until the next transition.
+        self.controls.write().unwrap().insert(id, control);
     }
 
     /// Replace a control's definition (auto flags, min/max, etc.) while
@@ -831,12 +860,17 @@ impl SharedControls {
     pub(crate) fn update_definition(&mut self, control_builder: ControlBuilder) {
         let (id, new_control) = control_builder.take();
         let mut locked = self.controls.write().unwrap();
+        let (replay, reachable) = (locked.replay, locked.command_reachable);
         if let Some(existing) = locked.controls.get_mut(&id) {
-            let was_read_only = existing.item.is_read_only;
+            let was_intrinsic = existing.item.intrinsic_read_only;
             existing.item = new_control.item;
-            existing.item.is_read_only |= was_read_only;
+            // Carry the intrinsic flag across a redefinition, but recompute
+            // what clients see — ORing the old *effective* flag would make
+            // "unreachable" stick forever once a brand redefines a control.
+            existing.item.intrinsic_read_only |= was_intrinsic;
+            existing.item.is_read_only = effective_read_only(replay, reachable, id, &existing.item);
         } else {
-            locked.controls.insert(id, new_control);
+            locked.insert(id, new_control);
         }
     }
 
@@ -1269,12 +1303,14 @@ impl SharedControls {
                 .copied()
                 .filter(|id| id.get_destination() == ControlDestination::Command)
                 .collect();
+            let replay = locked.replay;
             for id in ids {
                 if let Some(control) = locked.controls.get_mut(&id) {
-                    if control.item.is_read_only == !reachable {
+                    let want = effective_read_only(replay, reachable, id, &control.item);
+                    if control.item.is_read_only == want {
                         continue;
                     }
-                    control.item.is_read_only = !reachable;
+                    control.item.is_read_only = want;
                     delta.add_meta_for_control(&radar_id, &control.clone());
                 }
             }
@@ -2550,6 +2586,7 @@ pub(crate) struct ControlBuilder {
 impl ControlBuilder {
     pub(crate) fn read_only(mut self, is_read_only: bool) -> Self {
         self.control.item.is_read_only = is_read_only;
+        self.control.item.intrinsic_read_only = is_read_only;
 
         self
     }
@@ -3670,8 +3707,15 @@ pub struct ControlDefinition {
     pub(crate) descriptions: Option<HashMap<i32, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) valid_values: Option<Vec<i32>>,
+    /// What clients see: the control cannot be set right now.
     #[serde(skip_serializing_if = "is_false")]
     is_read_only: bool,
+    /// Whether the control is read-only by its own nature, as opposed to
+    /// because of a condition that can lift — replay, or a radar that cannot
+    /// currently be commanded. Kept separately so recovering from such a
+    /// condition cannot make an intrinsically read-only control settable.
+    #[serde(skip)]
+    intrinsic_read_only: bool,
     #[serde(skip)]
     is_send_always: bool, // Whether the controlvalue is sent out to client in all state messages
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3730,6 +3774,7 @@ impl ControlDefinition {
             descriptions,
             valid_values,
             is_read_only,
+            intrinsic_read_only: is_read_only,
             is_send_always,
             max_distance: None,
         }
@@ -3910,14 +3955,35 @@ mod test {
 
     /// The sweep that drives this runs on every watchdog tick, so repeating a
     /// state must be free of side effects — no meta storm, no notification
-    /// storm.
+    /// storm — while every real transition must reach clients exactly once.
     #[test]
     fn reachability_only_reports_transitions() {
-        let controls = test_controls();
+        let (controls, mut sk_rx) = test_controls_with_deltas();
+
+        // Already reachable: nothing changed, nothing sent.
         assert!(!controls.set_command_reachable(true, ""));
-        assert!(controls.set_command_reachable(false, "gone"));
-        assert!(!controls.set_command_reachable(false, "gone"));
+        assert!(sk_rx.try_recv().is_err());
+
+        assert!(controls.set_command_reachable(false, "on another subnet"));
+        let delta = sent_delta(&mut sk_rx);
+        assert!(delta.contains("notifications.radar.test.unreachable"));
+        assert!(delta.contains("on another subnet"));
+        assert!(delta.contains(&format!("radars.test.controls.{}", ControlId::Range)));
+        assert!(
+            sk_rx.try_recv().is_err(),
+            "a transition is a single delta, not one per control"
+        );
+
+        // Repeating the state says nothing at all.
+        assert!(!controls.set_command_reachable(false, "on another subnet"));
+        assert!(sk_rx.try_recv().is_err());
+
         assert!(controls.set_command_reachable(true, ""));
+        let delta = sent_delta(&mut sk_rx);
+        assert!(delta.contains("notifications.radar.test.unreachable"));
+        assert!(delta.contains(&format!("radars.test.controls.{}", ControlId::Range)));
+        assert!(sk_rx.try_recv().is_err());
+
         assert_eq!(
             controls
                 .get_controls()
@@ -3928,14 +3994,66 @@ mod test {
         );
     }
 
+    /// A control that is read-only by its own nature must stay read-only when
+    /// the radar comes back: recovery lifts only what unreachability imposed.
+    #[test]
+    fn recovery_keeps_intrinsically_read_only_controls_read_only() {
+        let (mut controls, _sk_rx) = test_controls_with_deltas();
+        controls.update_definition(new_numeric(ControlId::Range, 0., 100_000.).read_only(true));
+
+        let read_only = |controls: &SharedControls| {
+            controls
+                .get_controls()
+                .get(&ControlId::Range)
+                .map(|c| c.item().is_read_only)
+        };
+        assert_eq!(read_only(&controls), Some(true));
+
+        controls.set_command_reachable(false, "on another subnet");
+        assert_eq!(read_only(&controls), Some(true));
+        controls.set_command_reachable(true, "");
+        assert_eq!(read_only(&controls), Some(true));
+    }
+
+    /// A control that turns up while the radar cannot be commanded must be
+    /// born read-only, rather than looking settable until the next transition.
+    #[test]
+    fn controls_added_while_unreachable_are_read_only() {
+        let (mut controls, _sk_rx) = test_controls_with_deltas();
+        controls.set_command_reachable(false, "on another subnet");
+
+        controls.add(new_numeric(ControlId::Rain, 0., 100.));
+        assert_eq!(
+            controls
+                .get_controls()
+                .get(&ControlId::Rain)
+                .map(|c| c.item().is_read_only),
+            Some(true)
+        );
+    }
+
+    /// What a client would have received, as JSON — the delta's own fields are
+    /// private, and the wire form is what these tests are about anyway.
+    fn sent_delta(sk_rx: &mut tokio::sync::broadcast::Receiver<SignalKDelta>) -> String {
+        serde_json::to_string(&sk_rx.try_recv().expect("a delta was sent")).unwrap()
+    }
+
     fn test_controls() -> SharedControls {
-        let (sk_tx, _sk_rx) = tokio::sync::broadcast::channel(16);
-        SharedControls::new(
+        test_controls_with_deltas().0
+    }
+
+    fn test_controls_with_deltas() -> (
+        SharedControls,
+        tokio::sync::broadcast::Receiver<SignalKDelta>,
+    ) {
+        let (sk_tx, sk_rx) = tokio::sync::broadcast::channel(16);
+        let controls = SharedControls::new(
             "test".to_string(),
             sk_tx,
             &Cli::parse_from(["mayara-server"]),
             HashMap::new(),
-        )
+        );
+        (controls, sk_rx)
     }
 
     /// A client asking for a range the radar does not offer gets the

@@ -170,7 +170,13 @@ condition holds and `normal` when it clears, and `message` is human-readable.
 has no address on. The radar's picture and status still arrive, because those
 are multicast, but commands are unicast and would be routed away, so mayara
 refuses them and marks the radar's controls `isReadOnly` until the addressing is
-fixed. The message carries the two addresses and the command that resolves it.
+fixed. The message names both addresses and the interface, and suggests how to
+reach the radar — give this host an address in the radar's subnet, or add a host
+route to it.
+
+When this state changes, mayara pushes the affected control definitions again as
+`meta` deltas, so a client that renders controls from `meta` must be prepared for
+those to arrive at any time, not only on connection.
 
 ### Client → Server: Set Control Value
 
