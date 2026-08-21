@@ -664,10 +664,18 @@ pub async fn start_session(
         },
     ));
 
+    let (tx_ip_change, _rx_ip_change) = broadcast::channel(1);
+
     // Decay a radar's power state to Off once it stops sending (issue #432): a
     // powered-off radar goes silent, so without this its GUI icon would hold the
     // last state it reported (standby/transmit) forever.
+    //
+    // The same loop re-checks whether each radar can still be commanded. That
+    // depends on this host's addressing, so it is driven by address changes as
+    // well as by the tick — the tick alone would still catch it, but only after
+    // a delay, and a radar discovered between ticks needs evaluating too.
     let watchdog_radars = radars.clone();
+    let mut watchdog_rx_ip_change = tx_ip_change.subscribe();
     subsystem.start(SubsystemBuilder::new(
         "Radar Watchdog",
         async move |subsys: &mut SubsystemHandle| {
@@ -678,8 +686,13 @@ pub async fn start_session(
                         log::debug!("Radar watchdog shutdown");
                         break;
                     },
+                    _ = watchdog_rx_ip_change.recv() => {
+                        log::debug!("Radar watchdog: address change, re-checking reachability");
+                        watchdog_radars.refresh_command_reachability();
+                    },
                     _ = interval.tick() => {
                         watchdog_radars.mark_silent_radars_off();
+                        watchdog_radars.refresh_command_reachability();
                     }
                 }
             }
@@ -688,8 +701,6 @@ pub async fn start_session(
     ));
 
     let locator = Locator::new(args.clone(), radars.clone());
-
-    let (tx_ip_change, _rx_ip_change) = broadcast::channel(1);
     let mut navdata = navdata::NavigationData::new(args.clone());
 
     let rx_ip_change_clone = tx_ip_change.subscribe();

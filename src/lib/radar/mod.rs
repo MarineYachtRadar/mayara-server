@@ -85,6 +85,11 @@ pub enum RadarError {
     Timeout,
     #[error("Shutdown")]
     Shutdown,
+    #[error(
+        "Radar at {0} cannot be reached from {1}: it is on a different subnet, so controls are unavailable. \
+         Give this host an address on the radar's subnet."
+    )]
+    CannotReachRadar(std::net::Ipv4Addr, std::net::Ipv4Addr),
     #[error("No such control '{0}'")]
     InvalidControlId(String),
     #[error("{0}")]
@@ -951,6 +956,56 @@ impl SharedRadars {
             > 0
     }
 
+    /// Re-evaluate, for every known radar, whether its command address can be
+    /// reached from the interface it was discovered on.
+    ///
+    /// Binding a socket to a source address does not pin the outgoing
+    /// interface — the kernel routes by destination — so a radar addressed on
+    /// a subnet this host has no address on receives none of our commands
+    /// while its multicast picture and status arrive perfectly. Raymarine RD
+    /// and HD radomes make this routine: they address themselves in 10/8 while
+    /// a host on the RayNet network is given 198.18.x by the chartplotter.
+    ///
+    /// Cheap to call repeatedly: [`SharedControls::set_command_reachable`]
+    /// only acts on a change of state, so this is driven both by the radar
+    /// watchdog and by address-change events.
+    pub(crate) fn refresh_command_reachability(&self) {
+        let infos: Vec<RadarInfo> = {
+            let radars = self.radars.read().unwrap();
+            radars.info.values().cloned().collect()
+        };
+
+        for info in infos {
+            let dst = *info.send_command_addr.ip();
+            // Multicast and broadcast reach the wire whatever the addressing.
+            if dst.is_multicast() || dst.is_broadcast() {
+                continue;
+            }
+            let Some((ifname, netmask)) = crate::network::interface_for(&info.nic_addr) else {
+                // The interface went away; say nothing rather than guess.
+                continue;
+            };
+            let offlink = crate::network::is_offlink(&info.nic_addr, &netmask, &dst);
+            let reason = format!(
+                "radar address {} is not on the same subnet as {} on interface '{}'. \
+                 Give this host an address on the radar's subnet, for example \
+                 `ip addr add {}/8 dev {}` with an unused address, or add a route: \
+                 `ip route add {}/32 dev {}`",
+                dst, info.nic_addr, ifname, dst, ifname, dst, ifname
+            );
+            if info.controls.set_command_reachable(!offlink, &reason) {
+                if offlink {
+                    log::warn!("{}: controls disabled: {}", info.key(), reason);
+                } else {
+                    log::info!(
+                        "{}: radar is reachable again; controls restored",
+                        info.key()
+                    );
+                }
+            }
+        }
+    }
+
     /// A radar is considered powered off once no packet has been received from
     /// it for this long. A standby radar still emits periodic status reports, so
     /// only a genuinely silent (powered-off or disconnected) radar decays to
@@ -1788,6 +1843,21 @@ impl CommonRadar {
                 };
             }
             ControlDestination::Command => {
+                // A radar we cannot reach swallows commands silently: the
+                // datagram is routed away and both connect() and send()
+                // succeed. Refuse the set instead, so the client is told why
+                // rather than watching the control snap back.
+                if !self.info.controls.command_reachable() {
+                    let e = RadarError::CannotReachRadar(
+                        *self.info.send_command_addr.ip(),
+                        self.info.nic_addr,
+                    );
+                    return self
+                        .info
+                        .controls
+                        .send_error_to_client(reply_tx, &cv, &e)
+                        .await;
+                }
                 if let Some(command_sender) = command_sender {
                     if let Err(e) = command_sender.set_control(&cv, &self.info.controls).await {
                         return self

@@ -1789,6 +1789,11 @@ function connectStateStream(streamUrl, radarIdParam) {
       const message = JSON.parse(event.data);
 
       if (message.updates) {
+        // A control's definition can change while we are connected — the
+        // server marks controls read-only when it discovers the radar cannot
+        // be commanded, and settable again when it can. Rebuild the panel when
+        // that happens rather than leaving stale widgets on screen.
+        let metaChanged = false;
         for (const update of message.updates) {
           if (update.meta) {
             for (const item of update.meta) {
@@ -1809,6 +1814,7 @@ function connectStateStream(streamUrl, radarIdParam) {
                     `meta data changed: ${controlId} from ${oldc} to ${newc}`
                   );
                   myr_capabilities.controls[controlId] = control;
+                  metaChanged = true;
                 } else {
                   console.log(`No change to meta data for ${controlId}`);
                 }
@@ -1842,6 +1848,12 @@ function connectStateStream(streamUrl, radarIdParam) {
               });
             }
           }
+        }
+        if (metaChanged) {
+          // Rebuilding empties the panel, so put the values we already know
+          // straight back; the stream only re-sends them when they change.
+          buildControls();
+          Object.values(myr_control_values).forEach(setControlValue);
         }
       } else if (message.name && message.version) {
         console.log("Connected to " + message.name + " v" + message.version);
