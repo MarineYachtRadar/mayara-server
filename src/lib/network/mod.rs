@@ -301,7 +301,20 @@ pub(crate) fn create_connected_unicast(
     UdpSocket::from_std(socket.into())
 }
 
-pub(crate) fn create_multicast_send(
+/// A UDP socket for sending to `addr` out of the interface holding `nic_addr`.
+///
+/// Works for a multicast group or a unicast peer alike — nothing here is
+/// multicast-specific, and half the callers send to a radar's own address.
+///
+/// Note that the local port is bound to the *destination's* port, not an
+/// ephemeral one: the radars expect commands to arrive from the port they are
+/// sent to, and reply there.
+///
+/// Binding to `nic_addr` fixes the source address but not the outgoing
+/// interface — the kernel still routes by destination. For a unicast peer this
+/// host has no route to, `connect` fails here; for one reachable only by some
+/// other interface it succeeds and the datagrams quietly go the wrong way.
+pub(crate) fn create_connected_send(
     addr: &SocketAddrV4,
     nic_addr: &Ipv4Addr,
 ) -> io::Result<UdpSocket> {

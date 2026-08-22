@@ -683,7 +683,7 @@ async fn send_beacon_request(
             log::debug!("Sending beacon request to {} via all interfaces", addr);
 
             for nic_addr in interface_addresses {
-                match network::create_multicast_send(addr, nic_addr) {
+                match network::create_connected_send(addr, nic_addr) {
                     Ok(sock) => {
                         sock.set_broadcast(true)?;
                         if let Some(ttl) = multicast_ttl {
