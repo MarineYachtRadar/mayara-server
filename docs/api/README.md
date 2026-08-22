@@ -138,14 +138,45 @@ The stream opens with a hello carrying `name`, `version`, `roles`, and `self`
 (the own-ship context). On first connection (when `sendCachedValues=true`),
 metadata describing each control is sent in a `meta` array.
 
+**A `meta` array can arrive at any time, not only on connection.** A control's
+definition is not fixed for the life of the stream: mayara marks controls
+`isReadOnly` when it discovers the radar cannot be commanded, and settable
+again when it can, and range and value limits are narrowed once a radar's model
+is known. Clients must apply meta updates as they arrive and re-render
+accordingly — a client that reads the definitions once at connect time will
+show controls that no longer match the radar.
+
 **Subscribable path prefixes:**
 
 | Prefix           | Data                                    | Context   |
 | ---------------- | --------------------------------------- | --------- |
 | `radars.*`       | radar controls and ARPA targets         | own-ship  |
 | `navigation.*`   | own-ship heading, position, COG/SOG     | own-ship  |
-| `notifications.*`| radar alarms (e.g. guard zones)         | own-ship  |
+| `notifications.*`| radar alarms and reachability           | own-ship  |
 | `vessels.*`      | AIS vessels                             | other     |
+
+### Notifications
+
+Notifications follow Signal K conventions: `state` is `alarm` while the
+condition holds and `normal` when it clears, and `message` is human-readable.
+
+| Path                                          | Meaning                                                                   |
+| --------------------------------------------- | ------------------------------------------------------------------------ |
+| `notifications.radar.{id}.error.{code}`        | A fault **the radar reported about itself**; `code` is the vendor's code  |
+| `notifications.radar.{id}.unreachable`         | The radar cannot be commanded from this host — see below                  |
+| `notifications.radar.{id}.guardZone.{n}`       | A guard zone alarm                                                        |
+
+`unreachable` is raised when a radar's command address is on a subnet this host
+has no address on. The radar's picture and status still arrive, because those
+are multicast, but commands are unicast and would be routed away, so mayara
+refuses them and marks the radar's controls `isReadOnly` until the addressing is
+fixed. The message names both addresses and the interface, and suggests how to
+reach the radar — give this host an address in the radar's subnet, or add a host
+route to it.
+
+When this state changes, mayara pushes the affected control definitions again as
+`meta` deltas, so a client that renders controls from `meta` must be prepared for
+those to arrive at any time, not only on connection.
 
 ### Client → Server: Set Control Value
 

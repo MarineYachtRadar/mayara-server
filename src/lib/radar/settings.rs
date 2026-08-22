@@ -21,7 +21,7 @@ use super::range::Range;
 use super::units::Units;
 use crate::Cli;
 use crate::config::GuardZone;
-use crate::stream::SignalKDelta;
+use crate::stream::{NotificationMethod, NotificationState, NotificationValue, SignalKDelta};
 use crate::{
     TargetMode,
     radar::{Power, RadarError, range::Ranges},
@@ -607,6 +607,25 @@ pub struct Controls {
     sk_client_tx: tokio::sync::broadcast::Sender<SignalKDelta>,
     #[serde(skip)]
     control_update_tx: tokio::sync::broadcast::Sender<ControlUpdate>,
+
+    /// False when this radar's command address cannot be reached from the
+    /// interface it was discovered on. Its controls are then marked read-only
+    /// and sets are refused rather than sent into the void.
+    #[serde(skip)]
+    command_reachable: bool,
+}
+
+/// A copy of `control` as clients should see it: read-only if it is stored that
+/// way, or if it would be sent to a radar that cannot currently be commanded.
+///
+/// Derived on the way out rather than written into the control, so a radar
+/// going unreachable and coming back cannot leave a stale flag behind.
+fn effective(command_reachable: bool, control: &Control) -> Control {
+    let mut control = control.clone();
+    control.item.is_read_only |= !command_reachable
+        && control.item.control_id.get_destination() == ControlDestination::Command;
+
+    control
 }
 
 impl Controls {
@@ -711,6 +730,7 @@ impl Controls {
             all_clients_tx,
             sk_client_tx,
             control_update_tx,
+            command_reachable: true,
         }
     }
 }
@@ -814,7 +834,9 @@ impl SharedControls {
 
     pub(crate) fn add(&mut self, control_builder: ControlBuilder) {
         let (id, control) = control_builder.take();
-        self.controls.write().unwrap().controls.insert(id, control);
+        // Via Controls::insert, so a control added after startup is subject to
+        // the same read-only rules as one added during it.
+        self.controls.write().unwrap().insert(id, control);
     }
 
     /// Replace a control's definition (auto flags, min/max, etc.) while
@@ -829,7 +851,7 @@ impl SharedControls {
             existing.item = new_control.item;
             existing.item.is_read_only |= was_read_only;
         } else {
-            locked.controls.insert(id, new_control);
+            locked.insert(id, new_control);
         }
     }
 
@@ -841,8 +863,13 @@ impl SharedControls {
 
     pub fn get_controls(&self) -> HashMap<ControlId, Control> {
         let locked = self.controls.read().unwrap();
+        let reachable = locked.command_reachable;
 
-        locked.controls.clone()
+        locked
+            .controls
+            .iter()
+            .map(|(id, control)| (*id, effective(reachable, control)))
+            .collect()
     }
 
     pub(crate) fn new_client_subscription(&self) -> tokio::sync::broadcast::Receiver<ControlValue> {
@@ -1168,7 +1195,10 @@ impl SharedControls {
                 .controls
                 .get(&ControlId::Range)
                 .expect("Range should always be set");
-            sk_delta.add_meta_for_control(&locked.radar_id, range_control);
+            sk_delta.add_meta_for_control(
+                &locked.radar_id,
+                &effective(locked.command_reachable, range_control),
+            );
             log::debug!("meta: {:?}", sk_delta);
         }
         sk_delta.add_updates(vec![radar_control_value]);
@@ -1194,8 +1224,6 @@ impl SharedControls {
         name: Option<&str>,
         active: bool,
     ) {
-        use crate::stream::{NotificationMethod, NotificationState, NotificationValue};
-
         let locked = self.controls.read().unwrap();
         let path = format!("notifications.radar.{}.error.{:#x}", locked.radar_id, code);
         let (state, method, message) = if active {
@@ -1225,6 +1253,77 @@ impl SharedControls {
         if let Err(e) = locked.sk_client_tx.send(delta) {
             log::trace!("Failed to broadcast radar error notification: {}", e);
         }
+    }
+
+    /// True while this radar's command address is reachable from the interface
+    /// it was discovered on.
+    pub(crate) fn command_reachable(&self) -> bool {
+        self.controls.read().unwrap().command_reachable
+    }
+
+    /// Record whether the radar can be commanded, and make that visible.
+    ///
+    /// A radar on a subnet this host has no address on still delivers its
+    /// picture and status, because those are multicast — only the unicast
+    /// commands are lost, silently, which makes the radar look healthy and
+    /// broken at the same time. When that is detected every control that would
+    /// be sent to the radar is marked read-only, updated definitions are
+    /// pushed as Signal K meta deltas, and a notification carries the reason.
+    /// All of it is undone when the radar becomes reachable again.
+    ///
+    /// Returns true when the state changed.
+    pub(crate) fn set_command_reachable(&self, reachable: bool, reason: &str) -> bool {
+        let mut delta = SignalKDelta::new();
+        let radar_id;
+        {
+            let mut locked = self.controls.write().unwrap();
+            if locked.command_reachable == reachable {
+                return false;
+            }
+            locked.command_reachable = reachable;
+            radar_id = locked.radar_id.clone();
+
+            // Controls handled inside mayara (trails, targets, guard zones)
+            // keep working and stay settable; only those that end up as a
+            // datagram to the radar read differently now. Ones that are stored
+            // read-only anyway did not change, so clients need not hear of them.
+            for (id, control) in locked.controls.iter() {
+                if id.get_destination() == ControlDestination::Command && !control.item.is_read_only
+                {
+                    delta.add_meta_for_control(&radar_id, &effective(reachable, control));
+                }
+            }
+        }
+
+        let path = format!("notifications.radar.{}.unreachable", radar_id);
+        let (state, method, message) = if reachable {
+            (
+                NotificationState::Normal,
+                Vec::new(),
+                "Radar is reachable again; controls restored".to_string(),
+            )
+        } else {
+            (
+                NotificationState::Alarm,
+                vec![NotificationMethod::Visual],
+                format!("Radar cannot be controlled: {}", reason),
+            )
+        };
+        delta.add_notification_update(
+            &path,
+            NotificationValue {
+                state,
+                method,
+                message,
+            },
+            "mayara",
+        );
+
+        let locked = self.controls.read().unwrap();
+        if let Err(e) = locked.sk_client_tx.send(delta) {
+            log::trace!("Failed to broadcast reachability change: {}", e);
+        }
+        true
     }
 
     pub async fn send_reply_to_client(
@@ -3586,6 +3685,10 @@ pub struct ControlDefinition {
     pub(crate) descriptions: Option<HashMap<i32, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) valid_values: Option<Vec<i32>>,
+    /// Read-only for a reason that will not change while mayara runs: the
+    /// control is informational, or this is a replay. A radar that cannot
+    /// currently be commanded also reads as read-only to clients, but that is
+    /// derived at egress rather than stored here — see [`effective`].
     #[serde(skip_serializing_if = "is_false")]
     is_read_only: bool,
     #[serde(skip)]
@@ -3806,14 +3909,129 @@ mod test {
         assert_eq!(range.reported_auto(), None);
     }
 
+    /// A radar that cannot be commanded must say so rather than accept sets
+    /// that go nowhere: the controls it would send to the radar become
+    /// read-only, and the ones mayara handles itself keep working.
+    #[test]
+    fn unreachable_radar_marks_only_command_controls_read_only() {
+        let controls = test_controls();
+        assert!(controls.command_reachable());
+
+        assert!(controls.set_command_reachable(false, "on another subnet"));
+        assert!(!controls.command_reachable());
+
+        let all = controls.get_controls();
+        let read_only = |id: &ControlId| all.get(id).map(|c| c.item().is_read_only);
+        // Range is sent to the radar; a guard zone is evaluated inside mayara.
+        assert_eq!(read_only(&ControlId::Range), Some(true));
+        assert_eq!(read_only(&ControlId::GuardZone1), Some(false));
+    }
+
+    /// The sweep that drives this runs on every watchdog tick, so repeating a
+    /// state must be free of side effects — no meta storm, no notification
+    /// storm — while every real transition must reach clients exactly once.
+    #[test]
+    fn reachability_only_reports_transitions() {
+        let (controls, mut sk_rx) = test_controls_with_deltas();
+
+        // Already reachable: nothing changed, nothing sent.
+        assert!(!controls.set_command_reachable(true, ""));
+        assert!(sk_rx.try_recv().is_err());
+
+        assert!(controls.set_command_reachable(false, "on another subnet"));
+        let delta = sent_delta(&mut sk_rx);
+        assert!(delta.contains("notifications.radar.test.unreachable"));
+        assert!(delta.contains(r#""state":"alarm""#));
+        assert!(delta.contains("on another subnet"));
+        assert!(delta.contains(&format!("radars.test.controls.{}", ControlId::Range)));
+        assert!(
+            sk_rx.try_recv().is_err(),
+            "a transition is a single delta, not one per control"
+        );
+
+        // Repeating the state says nothing at all.
+        assert!(!controls.set_command_reachable(false, "on another subnet"));
+        assert!(sk_rx.try_recv().is_err());
+
+        // Clearing is the same path at state `normal` — that is how Signal K
+        // retracts a notification, so the path alone proves nothing here.
+        assert!(controls.set_command_reachable(true, ""));
+        let delta = sent_delta(&mut sk_rx);
+        assert!(delta.contains("notifications.radar.test.unreachable"));
+        assert!(delta.contains(r#""state":"normal""#));
+        assert!(delta.contains(&format!("radars.test.controls.{}", ControlId::Range)));
+        assert!(sk_rx.try_recv().is_err());
+
+        assert_eq!(
+            controls
+                .get_controls()
+                .get(&ControlId::Range)
+                .map(|c| c.item().is_read_only),
+            Some(false),
+            "controls must become settable again when the radar comes back"
+        );
+    }
+
+    /// A control that is read-only by its own nature must stay read-only when
+    /// the radar comes back: recovery lifts only what unreachability imposed.
+    #[test]
+    fn recovery_keeps_intrinsically_read_only_controls_read_only() {
+        let (mut controls, _sk_rx) = test_controls_with_deltas();
+        controls.update_definition(new_numeric(ControlId::Range, 0., 100_000.).read_only(true));
+
+        let read_only = |controls: &SharedControls| {
+            controls
+                .get_controls()
+                .get(&ControlId::Range)
+                .map(|c| c.item().is_read_only)
+        };
+        assert_eq!(read_only(&controls), Some(true));
+
+        controls.set_command_reachable(false, "on another subnet");
+        assert_eq!(read_only(&controls), Some(true));
+        controls.set_command_reachable(true, "");
+        assert_eq!(read_only(&controls), Some(true));
+    }
+
+    /// A control that turns up while the radar cannot be commanded must be
+    /// born read-only, rather than looking settable until the next transition.
+    #[test]
+    fn controls_added_while_unreachable_are_read_only() {
+        let (mut controls, _sk_rx) = test_controls_with_deltas();
+        controls.set_command_reachable(false, "on another subnet");
+
+        controls.add(new_numeric(ControlId::Rain, 0., 100.));
+        assert_eq!(
+            controls
+                .get_controls()
+                .get(&ControlId::Rain)
+                .map(|c| c.item().is_read_only),
+            Some(true)
+        );
+    }
+
+    /// What a client would have received, as JSON — the delta's own fields are
+    /// private, and the wire form is what these tests are about anyway.
+    fn sent_delta(sk_rx: &mut tokio::sync::broadcast::Receiver<SignalKDelta>) -> String {
+        serde_json::to_string(&sk_rx.try_recv().expect("a delta was sent")).unwrap()
+    }
+
     fn test_controls() -> SharedControls {
-        let (sk_tx, _sk_rx) = tokio::sync::broadcast::channel(16);
-        SharedControls::new(
+        test_controls_with_deltas().0
+    }
+
+    fn test_controls_with_deltas() -> (
+        SharedControls,
+        tokio::sync::broadcast::Receiver<SignalKDelta>,
+    ) {
+        let (sk_tx, sk_rx) = tokio::sync::broadcast::channel(16);
+        let controls = SharedControls::new(
             "test".to_string(),
             sk_tx,
             &Cli::parse_from(["mayara-server"]),
             HashMap::new(),
-        )
+        );
+        (controls, sk_rx)
     }
 
     /// A client asking for a range the radar does not offer gets the

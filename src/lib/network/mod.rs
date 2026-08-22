@@ -322,16 +322,42 @@ pub(crate) fn match_ipv4(addr: &Ipv4Addr, bcast: &Ipv4Addr, netmask: &Ipv4Addr) 
     r == b
 }
 
-/// True when a unicast destination cannot be reached directly on the wire the
-/// interface `nic`/`netmask` sits on.
+/// Whether a unicast command sent to `dst` would actually leave by the
+/// interface the radar was discovered on.
 ///
 /// Binding a socket to a source address does not pin the outgoing interface:
-/// the kernel routes by destination, so an off-link destination silently
-/// leaves via whichever interface the routing table prefers — usually the
-/// default route, and never the radar. Multicast and broadcast are exempt;
-/// they are delivered on the wire regardless of subnet.
-pub(crate) fn is_offlink(nic: &Ipv4Addr, netmask: &Ipv4Addr, dst: &Ipv4Addr) -> bool {
-    !dst.is_multicast() && !dst.is_broadcast() && !match_ipv4(dst, nic, netmask)
+/// the kernel routes by destination, so a destination the routing table does
+/// not send that way leaves via whichever interface it prefers — usually the
+/// default route, and never the radar.
+///
+/// The kernel is asked rather than the netmask compared, because the two
+/// answers differ exactly where it matters. A user who fixes this by adding an
+/// address in the radar's range, or a host route to the radar, changes the
+/// routing table but not the address mayara discovered the radar on; comparing
+/// subnets would keep calling the radar unreachable after the problem is
+/// solved. Connecting a UDP socket performs the route lookup and sends
+/// nothing.
+///
+/// `None` when nothing can be concluded — the interface went away, or the
+/// source address the kernel picked belongs to no interface we can see.
+pub(crate) fn can_reach(nic_addr: &Ipv4Addr, dst: &SocketAddrV4) -> Option<bool> {
+    let (ifname, _) = interface_for(nic_addr)?;
+
+    let probe = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
+    if probe.connect(*dst).is_err() {
+        // No route at all to that destination.
+        return Some(false);
+    }
+    let SocketAddr::V4(local) = probe.local_addr().ok()? else {
+        return None;
+    };
+
+    // The source address the kernel chose identifies the interface it would
+    // send from. If that is not the radar's interface, the command would go
+    // out of the wrong one and be lost.
+    let (chosen, _) = interface_for(local.ip())?;
+
+    Some(chosen == ifname)
 }
 
 /// Find the name and netmask of the interface carrying `nic_addr`.
@@ -370,37 +396,46 @@ pub(crate) use windows::spawn_wait_for_ip_addr_change;
 
 #[cfg(test)]
 mod reachability_tests {
-    use super::is_offlink;
-    use std::net::Ipv4Addr;
+    use super::can_reach;
+    use std::net::{Ipv4Addr, SocketAddrV4};
 
+    /// Loopback is the only pair guaranteed to exist wherever the tests run.
     #[test]
-    fn rd_radar_on_another_subnet_is_offlink() {
-        // Wire-observed: RD radomes are addressed in 10/8 while a host on the
-        // RayNet network gets 198.18.x from the MFD's DHCP server. Commands
-        // are unicast, so they never reach the radar.
-        assert!(is_offlink(
-            &Ipv4Addr::new(198, 18, 1, 200),
-            &Ipv4Addr::new(255, 255, 0, 0),
-            &Ipv4Addr::new(10, 18, 203, 88)
-        ));
+    fn a_destination_on_our_own_interface_is_reachable() {
+        assert_eq!(
+            can_reach(
+                &Ipv4Addr::LOCALHOST,
+                &SocketAddrV4::new(Ipv4Addr::LOCALHOST, 2573)
+            ),
+            Some(true)
+        );
     }
 
+    /// The case this exists for: the radar is not on the interface it was
+    /// discovered on, so the command would leave by the default route (or by
+    /// nothing at all) and never arrive. Either way it is not reachable
+    /// *from loopback*, which is what is being asked.
     #[test]
-    fn quantum_on_the_same_subnet_is_reachable() {
-        // A Quantum is addressed in 198.18.x like the host, which is why
-        // Quantum control has always worked.
-        assert!(!is_offlink(
-            &Ipv4Addr::new(198, 18, 7, 45),
-            &Ipv4Addr::new(255, 255, 0, 0),
-            &Ipv4Addr::new(198, 18, 0, 158)
-        ));
+    fn a_destination_reached_by_another_interface_is_not() {
+        assert_eq!(
+            can_reach(
+                &Ipv4Addr::LOCALHOST,
+                &SocketAddrV4::new(Ipv4Addr::new(198, 18, 1, 200), 2573)
+            ),
+            Some(false)
+        );
     }
 
+    /// Nothing can be said when we do not hold the address the radar was
+    /// found on, so the caller must not act.
     #[test]
-    fn multicast_and_broadcast_are_never_offlink() {
-        let nic = Ipv4Addr::new(198, 18, 1, 200);
-        let mask = Ipv4Addr::new(255, 255, 0, 0);
-        assert!(!is_offlink(&nic, &mask, &Ipv4Addr::new(232, 1, 1, 1)));
-        assert!(!is_offlink(&nic, &mask, &Ipv4Addr::new(255, 255, 255, 255)));
+    fn an_address_we_do_not_hold_concludes_nothing() {
+        assert_eq!(
+            can_reach(
+                &Ipv4Addr::new(192, 0, 2, 1),
+                &SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 2), 2573)
+            ),
+            None
+        );
     }
 }
