@@ -471,14 +471,23 @@ mod send_socket_tests {
     /// The all-hosts group. Any multicast destination proves the point; this
     /// one is guaranteed to exist wherever the tests run.
     const ALL_HOSTS_GROUP: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 1);
-    /// Arbitrary — nothing is ever sent, so the port only has to be bindable.
-    const ANY_PORT: u16 = 5800;
+
+    /// A loopback port nothing else holds. The socket binds locally to the
+    /// *destination's* port, so a fixed one here could collide with a real
+    /// service or with another test running alongside.
+    fn a_free_port() -> u16 {
+        std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+            .expect("a loopback port should be available")
+            .local_addr()
+            .expect("a bound socket has an address")
+            .port()
+    }
 
     /// Multicast commands must leave by the interface the radar was found on,
     /// not by whichever one happens to hold the default route.
     #[tokio::test]
     async fn a_send_socket_pins_multicast_to_the_given_interface() {
-        let dst = SocketAddrV4::new(ALL_HOSTS_GROUP, ANY_PORT);
+        let dst = SocketAddrV4::new(ALL_HOSTS_GROUP, a_free_port());
         let sock = create_connected_send(&dst, &Ipv4Addr::LOCALHOST)
             .expect("send socket should be creatable");
 
