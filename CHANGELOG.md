@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **radar:** mark a radar read-only when it cannot be commanded (#569) ([PR #569](https://github.com/MarineYachtRadar/mayara-server/pull/569))
 
+### Changed
+
+- **raymarine:** explain which addresses a Raymarine network uses (#570) ([PR #570](https://github.com/MarineYachtRadar/mayara-server/pull/570))
+
 ## [3.10.0] - 2026-08-20
 
 ### Added
