@@ -981,24 +981,29 @@ impl SharedRadars {
             if dst.is_multicast() || dst.is_broadcast() {
                 continue;
             }
-            let Some((ifname, netmask)) = crate::network::interface_for(&info.nic_addr) else {
-                // The interface went away; say nothing rather than guess.
+            let Some(reachable) =
+                crate::network::can_reach(&info.nic_addr, &info.send_command_addr)
+            else {
+                // The interface went away, or the route leads somewhere we
+                // cannot identify; say nothing rather than guess.
                 continue;
             };
-            let offlink = crate::network::is_offlink(&info.nic_addr, &netmask, &dst);
+            let ifname = crate::network::interface_for(&info.nic_addr)
+                .map(|(name, _)| name)
+                .unwrap_or_else(|| "the radar interface".to_string());
             // Never name a concrete address to configure: the only address
             // known here is the radar's own, and telling the user to assign
             // that to the host would collide with the radar. The prefix length
             // is unknown too. A host route to the radar is safe to suggest
             // because it names the radar as a destination, not as our address.
             let reason = format!(
-                "radar address {} is not on the same subnet as {} on interface '{}'. \
+                "radar address {} cannot be reached from {} on interface '{}'. \
                  Give this host an unused address in the radar's subnet, or add a \
                  route to it: `ip route add {}/32 dev {}`",
                 dst, info.nic_addr, ifname, dst, ifname
             );
-            if info.controls.set_command_reachable(!offlink, &reason) {
-                if offlink {
+            if info.controls.set_command_reachable(reachable, &reason) {
+                if !reachable {
                     log::warn!("{}: controls disabled: {}", info.key(), reason);
                 } else {
                     log::info!(
