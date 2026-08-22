@@ -3967,6 +3967,7 @@ mod test {
         assert!(controls.set_command_reachable(false, "on another subnet"));
         let delta = sent_delta(&mut sk_rx);
         assert!(delta.contains("notifications.radar.test.unreachable"));
+        assert!(delta.contains(r#""state":"alarm""#));
         assert!(delta.contains("on another subnet"));
         assert!(delta.contains(&format!("radars.test.controls.{}", ControlId::Range)));
         assert!(
@@ -3978,9 +3979,12 @@ mod test {
         assert!(!controls.set_command_reachable(false, "on another subnet"));
         assert!(sk_rx.try_recv().is_err());
 
+        // Clearing is the same path at state `normal` — that is how Signal K
+        // retracts a notification, so the path alone proves nothing here.
         assert!(controls.set_command_reachable(true, ""));
         let delta = sent_delta(&mut sk_rx);
         assert!(delta.contains("notifications.radar.test.unreachable"));
+        assert!(delta.contains(r#""state":"normal""#));
         assert!(delta.contains(&format!("radars.test.controls.{}", ControlId::Range)));
         assert!(sk_rx.try_recv().is_err());
 
