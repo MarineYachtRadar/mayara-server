@@ -8,7 +8,7 @@ The radar and the Mayara machine must be on the same wired Ethernet network.
 
 A **Quantum** needs a DHCP server on that network: it has no fallback address and stays silent until it gets a lease. An **RD or HD radome** never asks for one — it gives itself a fixed `10.x.x.x` address and keeps it forever, which is why it needs the Mayara machine to hold an address in that range too.
 
-Where a chartplotter is involved the network must be `198.18.0.0/21`. Give the Mayara machine an address between `198.18.4.0` and `198.18.7.254` — chartplotters claim addresses below that for themselves without checking.
+Where a chartplotter is involved the network must be `198.18.0.0/21` (netmask `255.255.248.0`). Let DHCP place the Mayara machine if you can; if you set its address by hand, use `198.18.0.2`–`198.18.0.19`. Never give it a fixed address in `198.18.0.32`–`198.18.3.255` — chartplotters claim those for themselves without checking whether anything already has one.
 
 ## Full guide
 

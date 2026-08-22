@@ -79,25 +79,38 @@
               <td>The DHCP server, if you run your own. It must be exactly this address.</td>
             </tr>
             <tr>
+              <td><code>198.18.0.2</code> – <code>198.18.0.19</code></td>
+              <td><strong>Fixed addresses for non-Raymarine equipment.</strong> This is where a hand-configured Mayara machine belongs.</td>
+            </tr>
+            <tr>
+              <td><code>198.18.0.20</code> – <code>198.18.0.31</code></td>
+              <td>Not spoken for, and not documented either. Leave it alone.</td>
+            </tr>
+            <tr>
               <td><code>198.18.0.32</code> – <code>198.18.3.255</code></td>
               <td><strong>Chartplotters only.</strong> They pick their own address here without asking anyone. Never put anything else in this range.</td>
             </tr>
             <tr>
               <td><code>198.18.4.0</code> – <code>198.18.7.254</code></td>
-              <td>Everything else, including the Mayara machine. A non-Raymarine DHCP server must hand out addresses only from here.</td>
+              <td>What a non-Raymarine DHCP server must hand out. Fine for Mayara if it gets its address automatically.</td>
             </tr>
           </tbody>
         </table>
       </div>
       <div class="myr_box myr_box_bad">
-        <span class="myr_box_title">Do not give Mayara an address below 198.18.4.0</span>
+        <span class="myr_box_title">Never give Mayara a fixed address in 198.18.0.32 – 198.18.3.255</span>
         <p>
-          A chartplotter chooses its own address in the lower range and does not
-          check whether anything already has it. If you gave the Mayara machine
-          a fixed address there, a plotter can quietly claim the same one, and
-          from then on both behave erratically in ways that look like a failing
-          cable. Put Mayara at <code>198.18.4.x</code> through
-          <code>198.18.7.x</code>, or let the network's DHCP server place it.
+          A chartplotter chooses its own address from that range and does not
+          check whether anything already has it. If the Mayara machine is
+          sitting on the address a plotter picks, both behave erratically
+          afterwards, in ways that look like a failing cable rather than an
+          address clash.
+        </p>
+        <p>
+          Best is to let the network's DHCP server give Mayara an address. If
+          you must set one by hand, use <code>198.18.0.2</code> through
+          <code>198.18.0.19</code> — the range Raymarine suggests for fixed
+          non-Raymarine equipment — with netmask <code>255.255.248.0</code>.
         </p>
       </div>
       <p>
