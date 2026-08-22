@@ -19,19 +19,29 @@
       <h2>What you need</h2>
       <ul class="myr_needs">
         <li>The radar and the Mayara machine on the same wired Ethernet network</li>
-        <li>A DHCP server on that network — this is the one hard requirement</li>
+        <li>A DHCP server on that network, if your radar is a Quantum</li>
         <li>A RayNet-to-RJ45 adapter cable, unless the radar already reaches a switch</li>
       </ul>
 
       <div class="myr_box myr_box_warn">
-        <span class="myr_box_title">DHCP is not optional</span>
+        <span class="myr_box_title">A Quantum needs DHCP; an RD radome does not</span>
         <p>
-          A Raymarine radar has no fallback address. It asks for one by DHCP,
-          and until it gets a lease it stays silent — no beacons, nothing for
-          Mayara to find. The DHCP server can be a Raymarine MFD, your router,
-          or a DHCP service on the Mayara machine itself. If the radar is not
-          detected, check your router's lease list first: if the radar is not in
-          it, nothing else you change will help.
+          A <strong>Quantum</strong> asks for its address by DHCP, and until it
+          gets a lease it stays silent — no beacons, nothing for Mayara to find.
+          The DHCP server can be a Raymarine chartplotter, your router, or a
+          DHCP service on the Mayara machine itself. If a Quantum is not
+          detected, check the lease list first: if the radar is not in it,
+          nothing else you change will help.
+        </p>
+        <p>
+          An <strong>RD or HD radome</strong> never asks. It gives itself a
+          fixed address in the <code>10.x.x.x</code> range and uses it forever.
+          That address is worked out from the radar's own hardware, so it never
+          changes — but it also means the radar takes no notice of your DHCP
+          server, and will not join the network your chartplotter set up. That
+          is the single most common reason an RD radar paints a picture but
+          ignores every control. See
+          <a href="#addresses">Addresses on a Raymarine network</a> below.
         </p>
       </div>
 
@@ -50,6 +60,53 @@
         <a href="quantum-networking.html">Quantum networking explained</a>.
       </p>
 
+      <h3 id="addresses">Addresses on a Raymarine network</h3>
+      <p>
+        Raymarine networks do not use the usual home-network numbers. If a
+        chartplotter is involved the network <strong>must</strong> be
+        <code>198.18.0.0</code> with netmask <code>255.255.248.0</code> — that
+        is everything from <code>198.18.0.0</code> to <code>198.18.7.255</code>.
+        Raymarine divides it up, and where you put the Mayara machine matters.
+      </p>
+      <div class="myr_scroll_x">
+        <table>
+          <thead>
+            <tr><th>Range</th><th>Who it belongs to</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>198.18.0.1</code></td>
+              <td>The DHCP server, if you run your own. It must be exactly this address.</td>
+            </tr>
+            <tr>
+              <td><code>198.18.0.32</code> – <code>198.18.3.255</code></td>
+              <td><strong>Chartplotters only.</strong> They pick their own address here without asking anyone. Never put anything else in this range.</td>
+            </tr>
+            <tr>
+              <td><code>198.18.4.0</code> – <code>198.18.7.254</code></td>
+              <td>Everything else, including the Mayara machine. A non-Raymarine DHCP server must hand out addresses only from here.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="myr_box myr_box_bad">
+        <span class="myr_box_title">Do not give Mayara an address below 198.18.4.0</span>
+        <p>
+          A chartplotter chooses its own address in the lower range and does not
+          check whether anything already has it. If you gave the Mayara machine
+          a fixed address there, a plotter can quietly claim the same one, and
+          from then on both behave erratically in ways that look like a failing
+          cable. Put Mayara at <code>198.18.4.x</code> through
+          <code>198.18.7.x</code>, or let the network's DHCP server place it.
+        </p>
+      </div>
+      <p>
+        RD and HD radomes sit outside all of this on <code>10.x.x.x</code>, so
+        on a mixed network the Mayara machine usually needs an address in both
+        ranges. That is covered under
+        <a href="#nocontrol">The picture works but no control does</a>.
+      </p>
+
       <h3>Traffic</h3>
       <div class="myr_scroll_x">
         <table>
@@ -65,7 +122,7 @@
             <tr>
               <td>Discovery, WiFi</td>
               <td><code>232.1.1.1:5800</code></td>
-              <td>Only joined when <code>--allow-wifi</code> is given</td>
+              <td>Always joined — a Quantum reports here even when Mayara is wired</td>
             </tr>
             <tr>
               <td>Reports and spokes</td>
@@ -243,7 +300,7 @@
 
       <h2>Troubleshooting</h2>
 
-      <h3>The picture works but no control does</h3>
+      <h3 id="nocontrol">The picture works but no control does</h3>
       <p>
         If the radar paints, the ranges are right and the status updates, but
         power, gain, sea and range do nothing at all, the radar is almost
@@ -273,6 +330,10 @@
 sudo ip addr add 10.0.0.2/8 dev eth0</code></pre>
       <p>
         Pick an address in <code>10.x.x.x</code> that nothing else is using.
+        This is an <em>extra</em> address — keep the
+        <code>198.18.x.x</code> one the network gave you, and if you are
+        setting that one by hand see
+        <a href="#addresses">Addresses on a Raymarine network</a>.
         Adding a route to the radar alone also works:
         <code>sudo ip route add 10.18.203.88/32 dev eth0</code>. Either way the
         change is not permanent — put it in your network configuration so it
