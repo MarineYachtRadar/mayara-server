@@ -74,7 +74,7 @@ impl Command {
             }
             Err(e) => {
                 log::debug!(
-                    "{} {} via {}: create multicast failed: {}",
+                    "{} {} via {}: send socket failed: {}",
                     self.key,
                     self.info.send_command_addr,
                     self.info.nic_addr,

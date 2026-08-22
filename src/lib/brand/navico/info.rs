@@ -148,7 +148,7 @@ impl Information {
             }
             Err(e) => {
                 log::debug!(
-                    "{} {} via {}: create multicast failed: {}",
+                    "{} {} via {}: send socket failed: {}",
                     self.key,
                     SOCKET_ADDRESS[index],
                     self.nic_addr,

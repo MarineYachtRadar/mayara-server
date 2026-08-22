@@ -710,7 +710,7 @@ async fn send_beacon_request(
                     }
                     Err(e) => {
                         log::warn!(
-                            "{} via {}: Failed to create multicast socket: {}",
+                            "{} via {}: Failed to create send socket: {}",
                             addr,
                             nic_addr,
                             e
