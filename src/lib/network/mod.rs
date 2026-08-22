@@ -314,7 +314,8 @@ pub(crate) fn create_connected_unicast(
 /// `nic_addr` fixes the source address but not the outgoing interface, and the
 /// kernel still routes by destination. For a unicast peer this host has no
 /// route to, `connect` fails here; for one reachable only by some other
-/// interface it succeeds and the datagrams quietly go the wrong way.
+/// interface it succeeds and the datagrams quietly go the wrong way — see
+/// [`can_reach`].
 pub(crate) fn create_connected_send(
     addr: &SocketAddrV4,
     nic_addr: &Ipv4Addr,
