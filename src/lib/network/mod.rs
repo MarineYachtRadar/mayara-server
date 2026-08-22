@@ -465,31 +465,41 @@ mod reachability_tests {
 
 #[cfg(test)]
 mod send_socket_tests {
-    use super::create_connected_send;
+    use super::{UdpSocket, create_connected_send};
     use std::net::{Ipv4Addr, SocketAddrV4};
 
     /// The all-hosts group. Any multicast destination proves the point; this
     /// one is guaranteed to exist wherever the tests run.
     const ALL_HOSTS_GROUP: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 1);
 
-    /// A loopback port nothing else holds. The socket binds locally to the
-    /// *destination's* port, so a fixed one here could collide with a real
-    /// service or with another test running alongside.
-    fn a_free_port() -> u16 {
-        std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
-            .expect("a loopback port should be available")
-            .local_addr()
-            .expect("a bound socket has an address")
-            .port()
+    /// The socket under test, on whichever local port we can get.
+    ///
+    /// [`create_connected_send`] binds locally to the *destination's* port, so
+    /// this needs a port to itself. A port cannot be reserved and handed over —
+    /// asking the OS for a free one releases it again the moment we look at it
+    /// — and a duplicate bind is refused even with `SO_REUSEADDR`. Tests run in
+    /// parallel processes under nextest, so losing the race is reachable rather
+    /// than theoretical: on a collision, simply try another port.
+    fn a_send_socket_on_some_free_port() -> UdpSocket {
+        for _ in 0..16 {
+            let port = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+                .expect("a loopback port should be available")
+                .local_addr()
+                .expect("a bound socket has an address")
+                .port();
+            let dst = SocketAddrV4::new(ALL_HOSTS_GROUP, port);
+            if let Ok(sock) = create_connected_send(&dst, &Ipv4Addr::LOCALHOST) {
+                return sock;
+            }
+        }
+        panic!("no local port stayed free long enough to bind");
     }
 
     /// Multicast commands must leave by the interface the radar was found on,
     /// not by whichever one happens to hold the default route.
     #[tokio::test]
     async fn a_send_socket_pins_multicast_to_the_given_interface() {
-        let dst = SocketAddrV4::new(ALL_HOSTS_GROUP, a_free_port());
-        let sock = create_connected_send(&dst, &Ipv4Addr::LOCALHOST)
-            .expect("send socket should be creatable");
+        let sock = a_send_socket_on_some_free_port();
 
         assert_eq!(
             socket2::SockRef::from(&sock).multicast_if_v4().unwrap(),
