@@ -310,15 +310,23 @@ pub(crate) fn create_connected_unicast(
 /// ephemeral one: the radars expect commands to arrive from the port they are
 /// sent to, and reply there.
 ///
-/// Binding to `nic_addr` fixes the source address but not the outgoing
-/// interface — the kernel still routes by destination. For a unicast peer this
-/// host has no route to, `connect` fails here; for one reachable only by some
-/// other interface it succeeds and the datagrams quietly go the wrong way.
+/// Multicast is pinned to `nic_addr`'s interface. Unicast cannot be: binding to
+/// `nic_addr` fixes the source address but not the outgoing interface, and the
+/// kernel still routes by destination. For a unicast peer this host has no
+/// route to, `connect` fails here; for one reachable only by some other
+/// interface it succeeds and the datagrams quietly go the wrong way.
 pub(crate) fn create_connected_send(
     addr: &SocketAddrV4,
     nic_addr: &Ipv4Addr,
 ) -> io::Result<UdpSocket> {
     let socket: socket2::Socket = new_socket()?;
+
+    // Send multicast out of the radar's own interface. Without this the kernel
+    // chooses one by route, which on a boat with both WiFi and Ethernet — or a
+    // cellular dongle holding the default route — is usually not the radar's
+    // network, and the commands leave the wrong way. Unicast is unaffected by
+    // this option; it is set unconditionally because it costs nothing.
+    socket.set_multicast_if_v4(nic_addr)?;
 
     let socketaddr = SocketAddr::new(IpAddr::V4(*addr.ip()), addr.port());
     let socketaddr_nic = SocketAddr::new(IpAddr::V4(*nic_addr), addr.port());
@@ -449,6 +457,26 @@ mod reachability_tests {
                 &SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 2), 2573)
             ),
             None
+        );
+    }
+}
+
+#[cfg(test)]
+mod send_socket_tests {
+    use super::create_connected_send;
+    use std::net::{Ipv4Addr, SocketAddrV4};
+
+    /// Multicast commands must leave by the interface the radar was found on,
+    /// not by whichever one happens to hold the default route.
+    #[tokio::test]
+    async fn a_send_socket_pins_multicast_to_the_given_interface() {
+        let dst = SocketAddrV4::new(Ipv4Addr::new(224, 0, 0, 1), 5800);
+        let sock = create_connected_send(&dst, &Ipv4Addr::LOCALHOST)
+            .expect("send socket should be creatable");
+
+        assert_eq!(
+            socket2::SockRef::from(&sock).multicast_if_v4().unwrap(),
+            Ipv4Addr::LOCALHOST
         );
     }
 }
