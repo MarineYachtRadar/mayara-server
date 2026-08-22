@@ -399,7 +399,6 @@ mod reachability_tests {
     use super::can_reach;
     use std::net::{Ipv4Addr, SocketAddrV4};
 
-    /// A destination on the same interface as the source is reachable.
     /// Loopback is the only pair guaranteed to exist wherever the tests run.
     #[test]
     fn a_destination_on_our_own_interface_is_reachable() {

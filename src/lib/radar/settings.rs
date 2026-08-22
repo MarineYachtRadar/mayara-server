@@ -3688,7 +3688,7 @@ pub struct ControlDefinition {
     /// Read-only for a reason that will not change while mayara runs: the
     /// control is informational, or this is a replay. A radar that cannot
     /// currently be commanded also reads as read-only to clients, but that is
-    /// derived at egress rather than stored here — see `effective_read_only`.
+    /// derived at egress rather than stored here — see [`effective`].
     #[serde(skip_serializing_if = "is_false")]
     is_read_only: bool,
     #[serde(skip)]
