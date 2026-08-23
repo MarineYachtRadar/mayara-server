@@ -466,11 +466,17 @@ mod reachability_tests {
 #[cfg(test)]
 mod send_socket_tests {
     use super::{UdpSocket, create_connected_send};
+    use std::io;
     use std::net::{Ipv4Addr, SocketAddrV4};
 
     /// The all-hosts group. Any multicast destination proves the point; this
     /// one is guaranteed to exist wherever the tests run.
     const ALL_HOSTS_GROUP: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 1);
+
+    /// How many ports to try before giving up. Losing the race below once is
+    /// plausible; losing it this many times in a row means something other
+    /// than a collision is wrong.
+    const PORT_ATTEMPTS: usize = 16;
 
     /// The socket under test, on whichever local port we can get.
     ///
@@ -481,18 +487,23 @@ mod send_socket_tests {
     /// parallel processes under nextest, so losing the race is reachable rather
     /// than theoretical: on a collision, simply try another port.
     fn a_send_socket_on_some_free_port() -> UdpSocket {
-        for _ in 0..16 {
+        for _ in 0..PORT_ATTEMPTS {
             let port = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
                 .expect("a loopback port should be available")
                 .local_addr()
                 .expect("a bound socket has an address")
                 .port();
             let dst = SocketAddrV4::new(ALL_HOSTS_GROUP, port);
-            if let Ok(sock) = create_connected_send(&dst, &Ipv4Addr::LOCALHOST) {
-                return sock;
+            match create_connected_send(&dst, &Ipv4Addr::LOCALHOST) {
+                Ok(sock) => return sock,
+                // Somebody took the port between our look and our bind.
+                Err(e) if e.kind() == io::ErrorKind::AddrInUse => continue,
+                // Anything else is the failure the test exists to catch, so
+                // say what it was rather than blame the port.
+                Err(e) => panic!("send socket could not be created: {e}"),
             }
         }
-        panic!("no local port stayed free long enough to bind");
+        panic!("no local port stayed free after {PORT_ATTEMPTS} attempts");
     }
 
     /// Multicast commands must leave by the interface the radar was found on,
