@@ -303,9 +303,8 @@ pub(crate) fn create_connected_unicast(
 
 /// A UDP socket connected to `addr`, sourced from `nic_addr`.
 ///
-/// Works for a multicast group or a unicast peer alike — nothing here is
-/// multicast-specific, and half the callers send to a radar's own address.
-/// Only multicast is pinned to `nic_addr`'s interface; see below.
+/// Takes a multicast group or a unicast peer alike — half the callers send to
+/// a radar's own address — but only multicast is pinned to an interface.
 ///
 /// Note that the local port is bound to the *destination's* port, not an
 /// ephemeral one: the radars expect commands to arrive from the port they are
