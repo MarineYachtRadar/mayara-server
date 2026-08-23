@@ -45,11 +45,32 @@ const CAP_BODY_PREFIX: [u8; CAP_BODY_FIRST_WORD_OFFSET] =
 /// Capability bit identifiers. Numeric values match the per-bit indices
 /// used by the Garmin MFD; the multi-byte u64 layout is hidden inside
 /// [`GarminCapabilities::has`].
+///
+/// Not every bit gates a control of its own. Three kinds occur:
+///
+/// * **Command gates** — one bit per control, checked by the MFD's
+///   `Radar_Manager_Command_*` wrapper before it sends that command.
+/// * **Group bits** — one bit per block of related controls. The MFD tests
+///   `group && control`, so a control bit on its own is never acted on.
+/// * **Class bits** — `RANGE_MODE`, `QUICK_ADJUST_GAIN`, `QUICK_ADJUST_SEA`,
+///   `CLASS_6`, `CLASS_7`, `ENHANCED_PROTOCOL` and `HIGH_CLASS`, which the MFD
+///   reduces to a radar class that decides, with `COLOR_PALETTE`, which
+///   palette the picture is drawn in.
 #[allow(non_camel_case_types)]
 pub(crate) mod cap {
     // ---- Operational ----
     pub(crate) const RANGE_MODE: u32 = 0x02;
+    /// Slots of the on-screen quick-adjust panel, which `QUICK_ADJUST_PANEL`
+    /// gates. Both are also inputs to the radar class.
+    pub(crate) const QUICK_ADJUST_GAIN: u32 = 0x03;
+    pub(crate) const QUICK_ADJUST_SEA: u32 = 0x04;
+    /// Never checked on their own: these two exist only as class inputs.
+    pub(crate) const CLASS_6: u32 = 0x06;
+    pub(crate) const CLASS_7: u32 = 0x07;
     pub(crate) const RANGE_MODE_TOGGLE: u32 = 0x09;
+    /// Master flag of the enhanced (xHD and newer) protocol, and a class
+    /// input. Gates the dual-range and range-channel menus.
+    pub(crate) const ENHANCED_PROTOCOL: u32 = 0x0b;
     pub(crate) const RPM_MODE: u32 = 0x0c;
     pub(crate) const TRANSMIT_MODE: u32 = 0x13;
     pub(crate) const FRONT_OF_BOAT: u32 = 0x1c;
@@ -61,8 +82,23 @@ pub(crate) mod cap {
     pub(crate) const SENTRY_MODE: u32 = 0x24;
     pub(crate) const SENTRY_TRANSMIT_TIME: u32 = 0x28;
     pub(crate) const SENTRY_STANDBY_TIME: u32 = 0x29;
+    pub(crate) const QUICK_ADJUST_PANEL: u32 = 0x2d;
     pub(crate) const DITHER_MODE: u32 = 0x37;
     pub(crate) const NOISE_BLANKER_MODE: u32 = 0x38;
+
+    // ---- Group bits, each gating a block of the controls below ----
+    pub(crate) const GAIN_GROUP: u32 = 0x2a;
+    pub(crate) const RAIN_GROUP: u32 = 0x3e;
+    pub(crate) const SEA_GROUP: u32 = 0x42;
+    pub(crate) const FTC_GROUP: u32 = 0x9b;
+    /// Both bits are needed: the MFD tests them as `(a & b) == 1`.
+    pub(crate) const DOPPLER_GROUP_A: u32 = 0xa0;
+    pub(crate) const DOPPLER_GROUP_B: u32 = 0xa2;
+    pub(crate) const ECHO_TRAIL_GROUP: u32 = 0xa5;
+    pub(crate) const PULSE_EXPANSION_GROUP: u32 = 0xaa;
+    pub(crate) const TARGET_SIZE_GROUP: u32 = 0xb7;
+    pub(crate) const DOPPLER_SENSITIVITY_GROUP: u32 = 0xc2;
+    pub(crate) const SCAN_AVERAGE_GROUP: u32 = 0xc9;
 
     // ---- Range A ----
     pub(crate) const RANGE_A: u32 = 0x4a;
@@ -92,7 +128,11 @@ pub(crate) mod cap {
     pub(crate) const AFC_COARSE: u32 = 0x65;
 
     // ---- Hardware ----
+    /// Raises the radar class from 2 to 3. A GMR xHD sets it.
+    pub(crate) const HIGH_CLASS: u32 = 0x9a;
     pub(crate) const ANTENNA_SIZE: u32 = 0x9c;
+    /// Picks the second of the two non-legacy palettes the MFD renders with.
+    pub(crate) const COLOR_PALETTE: u32 = 0x9f;
 
     // ---- Doppler / MotionScope (Fantom) ----
     pub(crate) const DOPPLER_RANGE_A: u32 = 0xa3;

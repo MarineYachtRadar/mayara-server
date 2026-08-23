@@ -117,11 +117,25 @@ becomes 50%.
 ## What is not emulated
 
 The `0x09B1` capability bitmap is what a display reads to decide which controls
-to offer, so `EMULATED_CAPABILITIES` in `status.rs` lists exactly the features
-the bridge translates — transmit, range, and the gain, sea and rain controls of
-range A — and `GarminCapabilities::to_body()` serializes them. A bit claimed
-there but ignored in `command.rs` would be a knob on the plotter that does
-nothing, so the list is the honest one rather than a capture replayed verbatim.
+to offer, so `emulated_capabilities()` in `status.rs` builds it from the
+controls the source radar actually has, rather than from a fixed list or a
+capture replayed verbatim. A radar with no rain control does not get a rain
+menu on the plotter; a gain that cannot be switched to automatic does not get a
+gain mode. Three kinds of bit go into it (see
+`research/garmin/feature-detection.md`):
+
+- **Command gates**, one per control the bridge translates — transmit, range,
+  and the gain, sea and rain controls of range A. A bit claimed here but
+  ignored in `command.rs` would be a knob on the plotter that does nothing.
+- **Group bits**, one per block of controls. The MFD checks a control bit and
+  its group bit together, so `RANGE_A_GAIN` without `GAIN_GROUP` is a gain the
+  plotter never sends.
+- **Class bits**, `CLASS_CAPABILITIES`, which say what protocol is being
+  spoken rather than what can be adjusted. The MFD reduces them to a radar
+  class and draws anything below class 2 with the legacy two-colour ramp
+  however many bits per sample the spokes carry, so the bridge always claims
+  them — a real GMR xHD does too.
+
 For comparison, `capabilities::LEGACY_HD_BITS` is what a Garmin MFD hardcodes
 for a legacy HD radar, which is likewise single-range and Doppler-less.
 
@@ -138,3 +152,6 @@ Left out, and why:
 - **Bearing alignment.** Deliberate: the source radar has already applied its
   own before it hands over a spoke, so the emulated radar reports itself as
   aligned and offers no control to change that.
+- **The quick-adjust panel.** `QUICK_ADJUST_PANEL` gates the on-screen
+  sliders, but which control each of its three slots adjusts is not known, and
+  a slot guessed wrong is a slider that moves the wrong setting.

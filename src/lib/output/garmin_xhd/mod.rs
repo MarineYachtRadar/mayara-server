@@ -316,11 +316,23 @@ pub(super) mod tests {
 
     /// Controls of a radar that offers everything the bridge can translate.
     pub(super) fn controls() -> SharedControls {
+        controls_with(
+            &[ControlId::Range],
+            &[ControlId::Gain, ControlId::Sea, ControlId::Rain],
+        )
+    }
+
+    /// Controls as a brand registers them: those in `manual` have no automatic
+    /// mode, those in `automatic` do. `Power` comes with every radar, added by
+    /// [`SharedControls::new`].
+    pub(super) fn controls_with(manual: &[ControlId], automatic: &[ControlId]) -> SharedControls {
         use crate::radar::settings::{HAS_AUTO_NOT_ADJUSTABLE, new_auto, new_numeric};
 
         let mut controls = HashMap::new();
-        new_numeric(ControlId::Range, 0., 100_000.).build(&mut controls);
-        for id in [ControlId::Gain, ControlId::Sea, ControlId::Rain] {
+        for &id in manual {
+            new_numeric(id, 0., 100_000.).build(&mut controls);
+        }
+        for &id in automatic {
             new_auto(id, 0., 100., HAS_AUTO_NOT_ADJUSTABLE).build(&mut controls);
         }
         SharedControls::new(

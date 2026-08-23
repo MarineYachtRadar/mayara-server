@@ -2996,6 +2996,12 @@ impl Control {
         &self.item
     }
 
+    /// Whether this control has an automatic mode at all, as opposed to
+    /// whether it is currently in one.
+    pub fn has_auto(&self) -> bool {
+        self.item.automatic.is_some()
+    }
+
     /// The `auto` flag as reported to clients. Auto-capable controls (those with
     /// an automatic mode — gain, sea, rain, ...) always report a flag,
     /// defaulting to `false` when the radar has not set one, so a client never
