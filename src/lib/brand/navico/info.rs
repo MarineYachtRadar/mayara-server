@@ -7,7 +7,7 @@ use tokio::time::Instant;
 
 use crate::brand::navico::{HALO_HEADING_INFO_ADDRESS, HALO_SPEED_ADDRESS_A, HALO_SPEED_ADDRESS_B};
 use crate::navdata::{get_cog, get_heading_true, get_sog};
-use crate::network::create_multicast_send;
+use crate::network::create_connected_send;
 use crate::radar::{RadarError, RadarInfo};
 
 /// Heading is reported in the range [0..0xF800), with 0xF800 representing 360°.
@@ -135,7 +135,7 @@ impl Information {
         if self.sock[index].is_some() {
             return Ok(());
         }
-        match create_multicast_send(&SOCKET_ADDRESS[index], &self.nic_addr) {
+        match create_connected_send(&SOCKET_ADDRESS[index], &self.nic_addr) {
             Ok(sock) => {
                 log::debug!(
                     "{} {} via {}: sending info",
@@ -148,7 +148,7 @@ impl Information {
             }
             Err(e) => {
                 log::debug!(
-                    "{} {} via {}: create multicast failed: {}",
+                    "{} {} via {}: send socket failed: {}",
                     self.key,
                     SOCKET_ADDRESS[index],
                     self.nic_addr,

@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use tokio::net::UdpSocket;
 
 use crate::brand::CommandSender;
-use crate::network::create_multicast_send;
+use crate::network::create_connected_send;
 use crate::radar::settings::{ControlId, ControlValue, SharedControls};
 use crate::radar::{Power, RadarError, RadarInfo};
 
@@ -47,7 +47,7 @@ impl Command {
     }
 
     async fn start_socket(&mut self) -> Result<(), RadarError> {
-        match create_multicast_send(&self.info.send_command_addr, &self.info.nic_addr) {
+        match create_connected_send(&self.info.send_command_addr, &self.info.nic_addr) {
             Ok(sock) => {
                 log::debug!(
                     "{} {} via {}: sending commands",
@@ -61,7 +61,7 @@ impl Command {
             }
             Err(e) => {
                 log::debug!(
-                    "{} {} via {}: create multicast failed: {}",
+                    "{} {} via {}: send socket failed: {}",
                     self.key,
                     self.info.send_command_addr,
                     self.info.nic_addr,

@@ -301,11 +301,33 @@ pub(crate) fn create_connected_unicast(
     UdpSocket::from_std(socket.into())
 }
 
-pub(crate) fn create_multicast_send(
+/// A UDP socket connected to `addr`, sourced from `nic_addr`.
+///
+/// Takes a multicast group or a unicast peer alike — half the callers send to
+/// a radar's own address — but only multicast is pinned to an interface.
+///
+/// Note that the local port is bound to the *destination's* port, not an
+/// ephemeral one: the radars expect commands to arrive from the port they are
+/// sent to, and reply there.
+///
+/// Multicast is pinned to `nic_addr`'s interface. Unicast cannot be: binding to
+/// `nic_addr` fixes the source address but not the outgoing interface, and the
+/// kernel still routes by destination. For a unicast peer this host has no
+/// route to, `connect` fails here; for one reachable only by some other
+/// interface it succeeds and the datagrams quietly go the wrong way — see
+/// [`can_reach`].
+pub(crate) fn create_connected_send(
     addr: &SocketAddrV4,
     nic_addr: &Ipv4Addr,
 ) -> io::Result<UdpSocket> {
     let socket: socket2::Socket = new_socket()?;
+
+    // Send multicast out of the radar's own interface. Without this the kernel
+    // chooses one by route, which on a boat with both WiFi and Ethernet — or a
+    // cellular dongle holding the default route — is usually not the radar's
+    // network, and the commands leave the wrong way. Unicast is unaffected by
+    // this option; it is set unconditionally because it costs nothing.
+    socket.set_multicast_if_v4(nic_addr)?;
 
     let socketaddr = SocketAddr::new(IpAddr::V4(*addr.ip()), addr.port());
     let socketaddr_nic = SocketAddr::new(IpAddr::V4(*nic_addr), addr.port());
@@ -436,6 +458,62 @@ mod reachability_tests {
                 &SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 2), 2573)
             ),
             None
+        );
+    }
+}
+
+#[cfg(test)]
+mod send_socket_tests {
+    use super::{UdpSocket, create_connected_send};
+    use std::io;
+    use std::net::{Ipv4Addr, SocketAddrV4};
+
+    /// The all-hosts group. Any multicast destination proves the point; this
+    /// one is guaranteed to exist wherever the tests run.
+    const ALL_HOSTS_GROUP: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 1);
+
+    /// How many ports to try before giving up. Losing the race below once is
+    /// plausible; losing it this many times in a row means something other
+    /// than a collision is wrong.
+    const PORT_ATTEMPTS: usize = 16;
+
+    /// The socket under test, on whichever local port we can get.
+    ///
+    /// [`create_connected_send`] binds locally to the *destination's* port, so
+    /// this needs a port to itself. A port cannot be reserved and handed over —
+    /// asking the OS for a free one releases it again the moment we look at it
+    /// — and a duplicate bind is refused even with `SO_REUSEADDR`. Tests run in
+    /// parallel processes under nextest, so losing the race is reachable rather
+    /// than theoretical: on a collision, simply try another port.
+    fn a_send_socket_on_some_free_port() -> UdpSocket {
+        for _ in 0..PORT_ATTEMPTS {
+            let port = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+                .expect("a loopback port should be available")
+                .local_addr()
+                .expect("a bound socket has an address")
+                .port();
+            let dst = SocketAddrV4::new(ALL_HOSTS_GROUP, port);
+            match create_connected_send(&dst, &Ipv4Addr::LOCALHOST) {
+                Ok(sock) => return sock,
+                // Somebody took the port between our look and our bind.
+                Err(e) if e.kind() == io::ErrorKind::AddrInUse => continue,
+                // Anything else is the failure the test exists to catch, so
+                // say what it was rather than blame the port.
+                Err(e) => panic!("send socket could not be created: {e}"),
+            }
+        }
+        panic!("no local port stayed free after {PORT_ATTEMPTS} attempts");
+    }
+
+    /// Multicast commands must leave by the interface the radar was found on,
+    /// not by whichever one happens to hold the default route.
+    #[tokio::test]
+    async fn a_send_socket_pins_multicast_to_the_given_interface() {
+        let sock = a_send_socket_on_some_free_port();
+
+        assert_eq!(
+            socket2::SockRef::from(&sock).multicast_if_v4().unwrap(),
+            Ipv4Addr::LOCALHOST
         );
     }
 }

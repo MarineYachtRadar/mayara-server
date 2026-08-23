@@ -4,7 +4,7 @@ use tokio::net::UdpSocket;
 
 use super::BaseModel;
 use crate::brand::CommandSender;
-use crate::network::create_multicast_send;
+use crate::network::create_connected_send;
 use crate::radar::range::Ranges;
 use crate::radar::settings::{ControlValue, SharedControls};
 use crate::radar::{RadarError, RadarInfo};
@@ -50,7 +50,7 @@ impl Command {
 
     async fn start_socket(&mut self) -> Result<(), RadarError> {
         assert!(!self.unicast_mode);
-        match create_multicast_send(&self.info.send_command_addr, &self.info.nic_addr) {
+        match create_connected_send(&self.info.send_command_addr, &self.info.nic_addr) {
             Ok(sock) => {
                 // The command address is often an Axiom that relays to a WiFi
                 // radar; like the wake burst, commands must carry TTL > 1 or
@@ -74,7 +74,7 @@ impl Command {
             }
             Err(e) => {
                 log::debug!(
-                    "{} {} via {}: create multicast failed: {}",
+                    "{} {} via {}: send socket failed: {}",
                     self.key,
                     self.info.send_command_addr,
                     self.info.nic_addr,
@@ -153,17 +153,17 @@ impl CommandSender for Command {
 mod tests {
     use std::net::{Ipv4Addr, SocketAddrV4};
 
-    use crate::network::create_multicast_send;
+    use crate::network::create_connected_send;
 
     // The command socket (start_socket) relays through an Axiom to a WiFi
     // radar, so it must carry TTL > 1 or the relay drops it (issue #160).
     // start_socket needs a full RadarInfo to build, so exercise the socket
-    // configuration it performs directly: a create_multicast_send socket must
+    // configuration it performs directly: a create_connected_send socket must
     // accept both the multicast and unicast relay TTL and report them back.
     #[tokio::test]
     async fn command_socket_accepts_relay_ttl() {
         let dst = SocketAddrV4::new(Ipv4Addr::new(224, 0, 0, 1), 5800);
-        let sock = create_multicast_send(&dst, &Ipv4Addr::UNSPECIFIED)
+        let sock = create_connected_send(&dst, &Ipv4Addr::UNSPECIFIED)
             .expect("command send socket should be creatable");
 
         sock.set_multicast_ttl_v4(super::super::RAYMARINE_RELAY_TTL)

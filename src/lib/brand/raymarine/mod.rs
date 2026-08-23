@@ -588,7 +588,7 @@ impl RaymarineLocator {
             let navdata_name = format!("{}-navdata", report_name);
             subsys.start(SubsystemBuilder::new(
                 navdata_name,
-                async move |s: &mut SubsystemHandle| match crate::network::create_multicast_send(
+                async move |s: &mut SubsystemHandle| match crate::network::create_connected_send(
                     &send_addr, &nic_addr,
                 ) {
                     Ok(sock) => navdata::run(s, sock).await.map_err(|e| e.into()),
@@ -747,7 +747,7 @@ async fn send_wake_burst(nic_addr: &Ipv4Addr) {
     let SocketAddr::V4(addr) = RAYMARINE_BEACON_ADDRESS else {
         return;
     };
-    match crate::network::create_multicast_send(&addr, nic_addr) {
+    match crate::network::create_connected_send(&addr, nic_addr) {
         Ok(sock) => {
             if let Err(e) = sock.set_multicast_ttl_v4(RAYMARINE_RELAY_TTL) {
                 log::warn!("via {}: wake burst TTL: {}", nic_addr, e);

@@ -163,7 +163,7 @@ pub(crate) async fn run(syc_group_id: Arc<AtomicU8>) {
 }
 
 async fn send_one(packet: &[u8], dest: &SocketAddrV4, nic: &Ipv4Addr) {
-    match network::create_multicast_send(dest, nic) {
+    match network::create_connected_send(dest, nic) {
         Ok(sock) => {
             // Suppress local loopback: otherwise the kernel delivers
             // our own packet right back to mayara's receive socket on
