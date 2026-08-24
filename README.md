@@ -42,6 +42,10 @@ Implemented but awaiting real-hardware validation:
 
 If your radar is not on the fully supported list, contact us to help with testing!
 
+Mayara can also work the other way around: an optional build feature makes it
+[emulate a Garmin radar](docs/garmin-xhd-output.md), so a Garmin chartplotter
+can display the picture of a radar of any other supported brand.
+
 ## End users
 
 Mayara runs on Windows, macOS, and Linux (including Raspberry Pi). Download a pre-built binary, start it, and open a web browser — no programming required.

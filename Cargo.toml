@@ -24,6 +24,9 @@ koden = []
 raymarine = []
 emulator = []
 pcap-replay = []
+# Emulate a Garmin GMR xHD radar so a Garmin chartplotter can display any
+# radar mayara has found. Built on the `garmin` brand's protocol definitions.
+garmin-xhd-output = ["garmin"]
 # default = ["navico", "furuno", "raymarine"]
 default = ["navico", "furuno", "garmin", "koden", "raymarine", "emulator"]
 

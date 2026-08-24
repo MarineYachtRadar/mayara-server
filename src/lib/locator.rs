@@ -228,13 +228,20 @@ impl Locator {
                                     buf
                                 );
 
-                                let _ = locator_socket.state.process(
-                                    &buf,
-                                    &addr,
-                                    &locator_socket.nic_addr,
-                                    radars,
-                                    subsys,
-                                );
+                                if is_own_emulated_radar(&addr) {
+                                    log::trace!(
+                                        "{}: ignoring the radar we are emulating ourselves",
+                                        addr
+                                    );
+                                } else {
+                                    let _ = locator_socket.state.process(
+                                        &buf,
+                                        &addr,
+                                        &locator_socket.nic_addr,
+                                        radars,
+                                        subsys,
+                                    );
+                                }
                                 if self.args.multiple_radar || !radars.have_discovered() {
                                     // Respawn this task
                                     spawn_receive(&mut set, locator_socket);
@@ -606,6 +613,25 @@ fn spawn_interface_request_handler(
             _ => Err(RadarError::Shutdown),
         }
     });
+}
+
+/// Whether a beacon came from the radar this mayara is emulating itself.
+///
+/// The Garmin xHD output announces a radar that looks exactly like a real one,
+/// on multicast groups this mayara is also listening to, so without this it
+/// would discover its own emulation. Only the address the emulation sends from
+/// is ignored, not every local address: a second mayara on the same host
+/// shares those addresses and is a display that ought to see the radar.
+fn is_own_emulated_radar(addr: &SocketAddrV4) -> bool {
+    #[cfg(feature = "garmin-xhd-output")]
+    {
+        crate::output::garmin_xhd::is_emulated_source(addr.ip())
+    }
+    #[cfg(not(feature = "garmin-xhd-output"))]
+    {
+        let _ = addr;
+        false
+    }
 }
 
 fn spawn_receive(set: &mut JoinSet<Result<ResultType, RadarError>>, mut socket: LocatorSocket) {

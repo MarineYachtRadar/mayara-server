@@ -22,6 +22,8 @@ pub mod navdata;
 pub mod network;
 #[cfg(feature = "pcap-replay")]
 pub(crate) mod nnd;
+#[cfg(feature = "garmin-xhd-output")]
+pub(crate) mod output;
 #[cfg(feature = "pcap-replay")]
 pub mod pcap;
 pub mod process;

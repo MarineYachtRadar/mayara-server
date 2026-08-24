@@ -776,7 +776,12 @@ impl RadarInfo {
         }
     }
 
-    pub fn start_forwarding_radar_messages_to_stdout(&self, subsys: &SubsystemHandle) {
+    /// Start every output that re-publishes this radar's spoke stream to a
+    /// consumer outside the Signal K API: the `--output` stdout forwarder and,
+    /// when compiled in, the Garmin xHD bridge. Called by each brand once the
+    /// radar has been registered with [`SharedRadars`].
+    #[cfg_attr(not(feature = "garmin-xhd-output"), allow(unused_variables))]
+    pub(crate) fn start_outputs(&self, radars: &SharedRadars, subsys: &SubsystemHandle) {
         if self.output {
             let info_clone2 = self.clone();
 
@@ -785,6 +790,9 @@ impl RadarInfo {
                 async move |s: &mut SubsystemHandle| info_clone2.forward_output(s).await,
             ));
         }
+
+        #[cfg(feature = "garmin-xhd-output")]
+        crate::output::garmin_xhd::spawn(self, radars, subsys);
     }
 
     async fn forward_output(self, subsys: &mut SubsystemHandle) -> Result<(), RadarError> {
@@ -1361,7 +1369,7 @@ const OPAQUE: u8 = 255;
 /// - `0` — no Doppler (HD, plain xHD)
 /// - `1` — single flat Doppler color per direction (Navico HALO)
 /// - `4` — 4-level brightness gradient per direction (Garmin Fantom)
-fn default_legend(
+pub(crate) fn default_legend(
     targets: &TargetMode,
     doppler_levels: u8,
     has_rain_class: bool,

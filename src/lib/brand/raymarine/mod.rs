@@ -576,7 +576,7 @@ impl RaymarineLocator {
 
         if let Some(mut info) = radars.add(info) {
             // It's new, start the RadarProcessor thread
-            info.start_forwarding_radar_messages_to_stdout(subsys);
+            info.start_outputs(radars, subsys);
 
             let report_name = info.key();
             radars.update(&mut info);
