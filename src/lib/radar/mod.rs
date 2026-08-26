@@ -2,6 +2,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
 use enum_primitive_derive::Primitive;
+use portable_atomic::AtomicU64;
 use protobuf::Message;
 use serde::Serialize;
 use serde::ser::Serializer;
@@ -14,7 +15,7 @@ use std::{
     net::{Ipv4Addr, SocketAddrV4},
     sync::{
         Arc, LazyLock, RwLock,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, Ordering},
     },
 };
 use thiserror::Error;

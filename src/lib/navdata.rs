@@ -1,7 +1,7 @@
-use atomic_float::AtomicF64;
 use futures_util::{SinkExt, StreamExt, future::select_ok};
 use mdns_sd::{Error, IfKind, ServiceDaemon, ServiceEvent};
 use nmea_parser::*;
+use portable_atomic::AtomicF64;
 use serde_json::Value;
 use std::{
     collections::HashSet,
