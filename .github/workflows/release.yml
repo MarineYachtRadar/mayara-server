@@ -14,14 +14,31 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        target: [x86_64-unknown-linux-musl, aarch64-unknown-linux-musl]
+        include:
+          - target: x86_64-unknown-linux-musl
+            channel: stable
+          - target: aarch64-unknown-linux-musl
+            channel: stable
+          # mipsel (e.g. OpenWrt/mt7621 devices) is a tier-3 target: rustup
+          # ships no prebuilt std for it, so std has to be built from source
+          # with `-Z build-std`, which requires nightly. See Cross.toml for
+          # the custom cross image this needs.
+          - target: mipsel-unknown-linux-musl
+            channel: nightly
 
     steps:
     - name: Checkout
       uses: actions/checkout@v7
 
-    - name: Install Rust
+    - name: Install Rust (stable)
+      if: matrix.channel == 'stable'
       uses: dtolnay/rust-toolchain@stable
+
+    - name: Install Rust (nightly)
+      if: matrix.channel == 'nightly'
+      uses: dtolnay/rust-toolchain@nightly
+      with:
+        components: rust-src
 
     - uses: swatinem/rust-cache@v2
       with:
@@ -31,7 +48,12 @@ jobs:
       run: cargo install cross
 
     - name: Build
-      run: cross build --release --target ${{ matrix.target }}
+      run: |
+        if [ "${{ matrix.channel }}" = "nightly" ]; then
+          cross build -Z build-std=std,panic_abort --release --target ${{ matrix.target }}
+        else
+          cross build --release --target ${{ matrix.target }}
+        fi
 
     - name: Package
       run: |
@@ -154,6 +176,7 @@ jobs:
         files: |
           artifacts/mayara-server-x86_64-unknown-linux-musl/*.tar.gz
           artifacts/mayara-server-aarch64-unknown-linux-musl/*.tar.gz
+          artifacts/mayara-server-mipsel-unknown-linux-musl/*.tar.gz
           artifacts/mayara-server-macos/*.tar.gz
           artifacts/mayara-server-windows/*.zip
 

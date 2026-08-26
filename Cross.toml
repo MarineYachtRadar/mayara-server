@@ -1,0 +1,8 @@
+# mipsel-unknown-linux-musl (e.g. OpenWrt/mt7621 devices such as the
+# datahubpro) is a tier-3 target: rustup ships no prebuilt std for it, and
+# recent `cross` releases dropped their built-in image mapping for it even
+# though the cross-rs project still publishes one. Point at that image
+# explicitly and build std from source with `-Z build-std` on nightly (see
+# the `dhp`/`dhpd`/`dhpt` targets in Makefile.local).
+[target.mipsel-unknown-linux-musl]
+image = "ghcr.io/cross-rs/mipsel-unknown-linux-musl:main"
