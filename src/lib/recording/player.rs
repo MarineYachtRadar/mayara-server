@@ -1,13 +1,14 @@
 //! Radar playback - reads .mrr files and emits frames as a virtual radar.
 
 use log::{debug, error, info, warn};
+use portable_atomic::AtomicU64;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufReader;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::{RwLock, broadcast};
 

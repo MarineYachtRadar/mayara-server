@@ -1,11 +1,12 @@
 //! Radar recorder - subscribes to radar broadcast and writes to .mrr file.
 
 use log::{debug, error, info, warn};
+use portable_atomic::AtomicU64;
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast;
 
