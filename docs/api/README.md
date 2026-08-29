@@ -33,6 +33,8 @@ mayara-server --openapi
 | GET    | `/signalk/v2/api/vessels/self/radars`                        | List all detected radars                           |
 | GET    | `/signalk/v2/api/vessels/self/radars/interfaces`             | List network interfaces and radar discovery status |
 | GET    | `/signalk/v2/api/vessels/self/radars/diagnostics`            | Download a gzipped JSON network diagnostics snapshot |
+| GET    | `/signalk/v2/api/vessels/self/radars/telemetry`              | Whether to ask the user about anonymous usage reports |
+| PUT    | `/signalk/v2/api/vessels/self/radars/telemetry`              | Store the user's answer to that question |
 | GET    | `/signalk/v2/api/vessels/self/radars/{id}/capabilities`      | Get radar capabilities and legend                  |
 | GET    | `/signalk/v2/api/vessels/self/radars/{id}/controls`          | Get all control values                             |
 | PUT    | `/signalk/v2/api/vessels/self/radars/{id}/controls`          | Set several control values in one request          |

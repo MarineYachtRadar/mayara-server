@@ -28,6 +28,7 @@ use crate::web::{signalk::diagnostics, spokes_handler};
 use super::super::{Message, Web, WebSocket, WebSocketUpgrade};
 use mayara::{
     InterfaceApi,
+    config::Consent,
     config::SettingsStorage,
     navdata,
     radar::{
@@ -36,6 +37,7 @@ use mayara::{
         target::{ArpaTargetApi, MarpaRequest, TrackerCommand},
     },
     stream::{ActiveSubscriptions, Desubscription, SignalKDelta, Subscribe, Subscription},
+    telemetry::{self, RadarIdentity},
 };
 
 const PROVIDER: &str = mayara::PACKAGE;
@@ -48,6 +50,7 @@ const RADAR_URI: &str = "/signalk/v2/api/vessels/self/radars/{radar_id}";
 const RADAR_CAPABILITIES_URI: &str = "/signalk/v2/api/vessels/self/radars/{radar_id}/capabilities";
 const INTERFACES_URI: &str = "/signalk/v2/api/vessels/self/radars/interfaces";
 const STATUS_URI: &str = "/signalk/v2/api/vessels/self/radars/status";
+const TELEMETRY_URI: &str = "/signalk/v2/api/vessels/self/radars/telemetry";
 const RADAR_CONTROLS_URI: &str = "/signalk/v2/api/vessels/self/radars/{radar_id}/controls";
 const RADAR_CONTROL_URI: &str =
     "/signalk/v2/api/vessels/self/radars/{radar_id}/controls/{control_id}";
@@ -79,6 +82,8 @@ const CONTROL_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_mil
         get_radar_info,
         get_interfaces,
         get_status,
+        get_telemetry,
+        set_telemetry,
         diagnostics::get_diagnostics,
         get_radar,
         get_control_values,
@@ -95,6 +100,8 @@ const CONTROL_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_mil
         RadarApiV3,
         RadarsResponse,
         ServerStatus,
+        TelemetryState,
+        TelemetryConsentRequest,
         Capabilities,
         BareControlValue,
         // Target types
@@ -114,6 +121,7 @@ pub(crate) fn routes(axum: axum::Router<Web>) -> axum::Router<Web> {
     axum.route(BASE_URI, get(get_radars))
         .route(INTERFACES_URI, get(get_interfaces))
         .route(STATUS_URI, get(get_status))
+        .route(TELEMETRY_URI, get(get_telemetry).put(set_telemetry))
         .route(
             diagnostics::DIAGNOSTICS_URI,
             get(diagnostics::get_diagnostics),
@@ -387,6 +395,34 @@ impl From<SettingsStorage> for ServerStatus {
     }
 }
 
+/// Whether the GUI should ask the user about reporting that this install
+/// works, and what they answered.
+#[derive(Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+struct TelemetryState {
+    /// `unasked` -- put the question to the user, once. `granted` / `denied`
+    /// -- they have answered, or a packager answered for them. `unavailable`
+    /// -- this run may not report at all, so never ask.
+    #[schema(example = "unasked")]
+    consent: &'static str,
+}
+
+/// The user's answer.
+#[derive(Deserialize, ToSchema)]
+struct TelemetryConsentRequest {
+    /// True to report that this install works, false to keep quiet.
+    consent: bool,
+}
+
+fn consent_name(consent: Consent) -> &'static str {
+    match consent {
+        Consent::Unavailable => "unavailable",
+        Consent::Unasked => "unasked",
+        Consent::Granted => "granted",
+        Consent::Denied => "denied",
+    }
+}
+
 #[utoipa::path(
     get,
     path = "/signalk/v2/api/vessels/self/radars/status",
@@ -400,6 +436,45 @@ impl From<SettingsStorage> for ServerStatus {
 )]
 async fn get_status(State(state): State<Web>) -> Response {
     Json(ServerStatus::from(state.radars.settings_storage())).into_response()
+}
+
+#[utoipa::path(
+    get,
+    path = "/signalk/v2/api/vessels/self/radars/telemetry",
+    summary = "Whether to ask about anonymous usage reports",
+    description = "Mayara can report, twice per run at most, that a radar delivered data and \
+                   accepted a control change -- version, OS, radar brand and model, and a \
+                   random install id. It asks first. `unasked` means the GUI should put the \
+                   question; `unavailable` means this run may not report and must not ask.",
+    responses((status = 200, body = TelemetryState, description = "Consent state")),
+    tag = "Radars"
+)]
+async fn get_telemetry() -> Response {
+    Json(TelemetryState {
+        consent: consent_name(telemetry::consent()),
+    })
+    .into_response()
+}
+
+#[utoipa::path(
+    put,
+    path = "/signalk/v2/api/vessels/self/radars/telemetry",
+    summary = "Answer the usage-report question",
+    description = "Stores the user's answer in the settings file, so they are asked once. \
+                   Ignored when this run may not report, or when the operator already \
+                   answered through the MAYARA_TELEMETRY environment variable.",
+    request_body(content = TelemetryConsentRequest, example = json!({"consent": true})),
+    responses((status = 200, body = TelemetryState, description = "Consent state after the answer")),
+    tag = "Radars"
+)]
+async fn set_telemetry(SignalKJson(request): SignalKJson<TelemetryConsentRequest>) -> Response {
+    let consent = telemetry::set_consent(request.consent);
+    log::info!("Usage stats consent set to {}", consent_name(consent));
+
+    Json(TelemetryState {
+        consent: consent_name(consent),
+    })
+    .into_response()
 }
 
 #[utoipa::path(
@@ -662,7 +737,7 @@ async fn set_control_value(
     );
 
     // Get the radar info and control without holding the lock across await
-    let (controls, control_value, radar_key) = {
+    let (controls, control_value, radar_key, radar_identity) = {
         match state.radars.get_by_key(&radar_id) {
             Some(radar) => {
                 // Any control PUT means someone is interacting with this
@@ -684,7 +759,12 @@ async fn set_control_value(
 
                 let control_value = ControlValue::from_request(control.item().control_id, request);
                 log::debug!("Map request to controlValue {:?}", control_value);
-                (radar.controls.clone(), control_value, radar.key())
+                (
+                    radar.controls.clone(),
+                    control_value,
+                    radar.key(),
+                    RadarIdentity::from(&radar),
+                )
             }
             None => {
                 return no_such_radar(&radar_id, &state.radars);
@@ -698,6 +778,7 @@ async fn set_control_value(
 
     // Check if this control should trigger persistence save
     let needs_persistence = control_needs_persistence(control_value.id);
+    let control_name = control_value.id.to_string();
 
     // Send the control request
     if let Err(e) = controls.process_client_request(control_value, reply_tx) {
@@ -724,6 +805,11 @@ async fn set_control_value(
             // No error reply within timeout, assume success
         }
     }
+
+    // The canonical control name, not the spelling the caller happened to
+    // use: the path match is case-insensitive, and every control path has to
+    // report the same name for the same control.
+    telemetry::note_control_ok(&control_name, radar_identity);
 
     SignalKResponse::ok()
 }
@@ -1164,7 +1250,7 @@ async fn set_control_values(
     log::info!("PUT {} controls for radar {}", request.len(), radar_id);
 
     // Resolve everything up front so the radar lock is not held across an await.
-    let (controls, resolved, radar_key) = {
+    let (controls, resolved, radar_key, radar_identity) = {
         match state.radars.get_by_key(&radar_id) {
             Some(radar) => {
                 // Any control PUT means someone is interacting with this radar
@@ -1206,7 +1292,12 @@ async fn set_control_values(
                         format!("Control(s) {:?} named more than once", duplicates),
                     );
                 }
-                (radar.controls.clone(), resolved, radar.key())
+                (
+                    radar.controls.clone(),
+                    resolved,
+                    radar.key(),
+                    RadarIdentity::from(&radar),
+                )
             }
             None => {
                 return no_such_radar(&radar_id, &state.radars);
@@ -1215,6 +1306,11 @@ async fn set_control_values(
     };
 
     let needs_persistence = resolved.iter().any(|cv| control_needs_persistence(cv.id));
+    // One name stands for the batch; the first is the one the caller led with.
+    let accepted = resolved
+        .first()
+        .map(|cv| cv.id.to_string())
+        .unwrap_or_default();
 
     let mut failures: Vec<String> = Vec::new();
     for control_value in resolved {
@@ -1245,6 +1341,7 @@ async fn set_control_values(
     }
 
     if failures.is_empty() {
+        telemetry::note_control_ok(&accepted, radar_identity);
         SignalKResponse::ok()
     } else {
         failures.sort();
@@ -1872,6 +1969,13 @@ async fn handle_control_request(
             let result = radar
                 .controls
                 .process_client_request(control_value.clone(), reply_tx);
+
+            if result.is_ok() {
+                telemetry::note_control_ok(
+                    &control_value.id.to_string(),
+                    RadarIdentity::from(&radar),
+                );
+            }
 
             // Save persistence for controls that need it
             if result.is_ok()

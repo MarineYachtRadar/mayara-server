@@ -137,6 +137,34 @@ the server to accept IP-based SNI or point Mayara at an on-LAN instance.
 | `--output`      | Write RadarMessage protobuf data to stdout |
 | `--openapi`     | Output OpenAPI specification and exit      |
 
+### Anonymous Usage Stats
+
+The GUI asks once whether to report that this install works. On a yes, mayara
+sends at most two small reports per run: one when a radar first delivers data,
+one when a radar first accepts a control change. Each holds the mayara version,
+operating system, radar brand and model, and a random install id -- never a
+position, serial number or network address. Reports go to
+`https://telemetry.keversoft.com/mayara/v1/event`. See
+[ENDUSER.md](ENDUSER.md#anonymous-usage-stats).
+
+The answer lives in the settings file, so a run that cannot store its settings
+never asks and never reports.
+
+`MAYARA_DEPLOYMENT` tells us how mayara reached the boat, which is the
+difference between "nobody runs Garmin radars" and "nobody runs Garmin radars
+*in the container*". Whoever packages mayara sets it: `container` (set by the
+official image), `signalk-server-plugin`, or `mayara_pi`. Any other short label
+is passed through. Unset, mayara reports `embedded` when a parent process
+supervises it and `standalone` otherwise.
+
+| Option / variable            | Description                                        |
+| ---------------------------- | -------------------------------------------------- |
+| `--no-telemetry`             | Never ask, never send                              |
+| `MAYARA_TELEMETRY=false`     | Same, for containers and service units             |
+| `MAYARA_TELEMETRY=true`      | Answer yes for the user; the GUI does not ask      |
+| `MAYARA_TELEMETRY_URL=<url>` | Send to your own collector instead                 |
+| `MAYARA_DEPLOYMENT=<id>`     | How mayara was installed (see below)               |
+
 ## Examples
 
 ### Basic yacht installation

@@ -6,7 +6,12 @@ import {
   isStandaloneMode,
   detectMode,
   apiFetch,
+<<<<<<< HEAD
   fetchServerStatus,
+=======
+  fetchTelemetryConsent,
+  setTelemetryConsent,
+>>>>>>> b9607de (feat(telemetry): ask once, then report that this install works)
 } from "./api.js";
 import { radarCombinations, multiViewUrl } from "./radar-list.js";
 
@@ -941,6 +946,49 @@ async function showSettingsWarning() {
   );
 }
 
+// Put the usage-report question to the user, once. The server answers
+// "unasked" only while it is able to remember what they say, so a yes or no
+// here is the last time they see this.
+async function askAboutTelemetry() {
+  const state = await fetchTelemetryConsent();
+  if (!state || state.consent !== "unasked") return;
+
+  const box = document.getElementById("telemetry_ask");
+  if (!box) return;
+
+  const answer = async (consent) => {
+    box.style.display = "none";
+    await setTelemetryConsent(consent);
+  };
+
+  box.style.display = "block";
+  box.replaceChildren();
+  van.add(box, div({ class: "myr_ask_title" }, "Inform developers of successful deploy?"));
+  van.add(
+    box,
+    div(
+      { class: "myr_ask_content" },
+      p(
+        "Mayara can tell its developers, at most twice, that your radar works: ",
+        "once when it first delivers a picture and once when it first accepts a ",
+        "setting you change. That is how we learn which radars and which computers ",
+        "people actually get working."
+      ),
+      p(
+        "A report holds the mayara version, your operating system, the brand and ",
+        "model of your radar, and a random number for this installation. ",
+        strong("Never"),
+        " your position, your vessel, your radar's serial number or any network address."
+      ),
+      div(
+        { class: "myr_ask_buttons" },
+        button({ class: "myr_ask_yes", onclick: () => answer(true) }, "Yes, report it"),
+        button({ class: "myr_ask_no", onclick: () => answer(false) }, "No thanks")
+      )
+    )
+  );
+}
+
 async function loadRadars() {
   try {
     const radars = await fetchRadars();
@@ -970,7 +1018,11 @@ window.onload = async function () {
 
   // Load data
   loadRadars();
+<<<<<<< HEAD
   showSettingsWarning();
+=======
+  askAboutTelemetry();
+>>>>>>> b9607de (feat(telemetry): ask once, then report that this install works)
 
   // Hide the interfaces section (now shown via popup)
   const interfacesSection = document.getElementById("interfaces");
