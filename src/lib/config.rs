@@ -106,23 +106,47 @@ pub(crate) struct Persistence {
     path: PathBuf,
 }
 
+const SETTINGS_FILE: &str = "settings.json";
+
+/// The settings file to read and write, or `None` when the config directory
+/// cannot be created. A radar works fine without one, so an unwritable
+/// config directory -- a read-only mount, a host directory owned by another
+/// user -- costs the user their remembered settings, never their radar.
+fn settings_path(config_dir: &std::path::Path) -> Option<PathBuf> {
+    if let Err(e) = fs::create_dir_all(config_dir) {
+        warn!(
+            "Cannot create settings directory '{}': {}",
+            config_dir.display(),
+            e
+        );
+        warn!("Radar names, guard zones and other settings will not be remembered");
+        return None;
+    }
+    Some(config_dir.join(SETTINGS_FILE))
+}
+
 impl Persistence {
+    /// A persistence that remembers nothing, for a run that has nowhere to
+    /// write. An empty path is the marker every write path already checks.
+    fn disabled() -> Self {
+        Persistence {
+            config: Config {
+                radars: HashMap::new(),
+            },
+            timestamp: SystemTime::UNIX_EPOCH,
+            path: PathBuf::new(),
+        }
+    }
+
     pub(crate) fn new() -> Self {
         if crate::replay::is_active() {
             debug!("persistence disabled in pcap replay mode");
-            return Persistence {
-                config: Config {
-                    radars: HashMap::new(),
-                },
-                timestamp: SystemTime::UNIX_EPOCH,
-                path: PathBuf::new(),
-            };
+            return Self::disabled();
         }
 
-        let project_dirs = get_project_dirs();
-        let mut settings_path = project_dirs.config_dir().to_owned();
-        fs::create_dir_all(&settings_path).expect("Cannot create settings directory");
-        settings_path.push("settings.json");
+        let Some(settings_path) = settings_path(get_project_dirs().config_dir()) else {
+            return Self::disabled();
+        };
 
         let mut this = Persistence {
             config: Config {
@@ -132,7 +156,10 @@ impl Persistence {
             path: settings_path,
         };
 
-        this.load();
+        if !this.load() {
+            warn!("Radar names, guard zones and other settings will not be remembered");
+            return Self::disabled();
+        }
         debug!("persistence loaded: {:?}", this);
 
         this
@@ -158,7 +185,11 @@ impl Persistence {
         );
     }
 
-    fn load(&mut self) {
+    /// Returns whether the settings file can be used. A first run writes an
+    /// empty one, which doubles as the check that this run can write at all:
+    /// `create_dir_all` succeeds on a directory that already exists but
+    /// belongs to another user, so the write is what finds that out.
+    fn load(&mut self) -> bool {
         let file = match File::open(&self.path) {
             Err(e) => {
                 warn!(
@@ -167,8 +198,7 @@ impl Persistence {
                     e
                 );
 
-                self.save();
-                return;
+                return self.save();
             }
             Ok(f) => f,
         };
@@ -190,6 +220,7 @@ impl Persistence {
         };
 
         self.timestamp = self.get_file_time();
+        true
     }
 
     fn saver(&mut self) -> Result<(), Box<dyn Error>> {
@@ -206,9 +237,13 @@ impl Persistence {
         Ok(())
     }
 
-    fn save(&mut self) {
-        if let Err(e) = self.saver() {
-            warn!("cannot store config '{}': {}", self.path.display(), e);
+    fn save(&mut self) -> bool {
+        match self.saver() {
+            Err(e) => {
+                warn!("cannot store config '{}': {}", self.path.display(), e);
+                false
+            }
+            Ok(()) => true,
         }
     }
 
@@ -346,7 +381,7 @@ impl Persistence {
         }
 
         if modified {
-            self.save();
+            let _ = self.save();
         }
     }
 
@@ -371,7 +406,7 @@ impl Persistence {
         );
         self.config.radars.insert(key.to_string(), entry);
         if !self.path.as_os_str().is_empty() {
-            self.save();
+            let _ = self.save();
         }
         true
     }
@@ -450,8 +485,7 @@ mod tests {
         );
         Persistence {
             config: Config { radars },
-            timestamp: SystemTime::UNIX_EPOCH,
-            path: PathBuf::new(),
+            ..Persistence::disabled()
         }
     }
 
@@ -506,5 +540,60 @@ mod tests {
         let mut p = persistence_with("gar0102", "Radar");
         assert!(!p.take_legacy_entry("gar0102", "gar0102"));
         assert!(p.config.radars.contains_key("gar0102"));
+    }
+
+    /// The usual case: the config directory does not exist yet on first run.
+    #[test]
+    fn a_missing_config_directory_is_created() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join("mayara");
+
+        let path = settings_path(&config_dir).expect("first run must get a settings file");
+
+        assert_eq!(path, config_dir.join(SETTINGS_FILE));
+        assert!(config_dir.is_dir());
+    }
+
+    /// A radar must keep working when its settings cannot be stored: the
+    /// config directory may be a read-only mount, or a host directory owned
+    /// by another user. Blocked by a plain file standing where the directory
+    /// should be, which no user -- root included -- can create through.
+    #[test]
+    fn an_unusable_config_directory_disables_persistence_instead_of_failing() {
+        let dir = tempfile::tempdir().unwrap();
+        let blocker = dir.path().join("blocker");
+        fs::write(&blocker, b"not a directory").unwrap();
+
+        assert!(settings_path(&blocker.join("mayara")).is_none());
+    }
+
+    fn persistence_at(path: PathBuf) -> Persistence {
+        Persistence {
+            path,
+            ..Persistence::disabled()
+        }
+    }
+
+    /// First run: no settings file yet, so one is written and kept.
+    #[test]
+    fn a_first_run_writes_the_settings_file_it_found_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(SETTINGS_FILE);
+
+        assert!(persistence_at(path.clone()).load());
+        assert!(path.is_file());
+    }
+
+    /// An existing directory says nothing about being able to write in it --
+    /// it may belong to another user -- so a settings file that cannot be
+    /// created has to disable persistence too, or every later save retries a
+    /// write that cannot succeed.
+    #[test]
+    fn a_settings_file_that_cannot_be_written_disables_persistence() {
+        let dir = tempfile::tempdir().unwrap();
+        let blocker = dir.path().join("blocker");
+        fs::write(&blocker, b"not a directory").unwrap();
+
+        assert!(!persistence_at(blocker.join(SETTINGS_FILE)).load());
     }
 }
