@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **network:** pin multicast sends to the intended interface (#574) ([PR #574](https://github.com/MarineYachtRadar/mayara-server/pull/574))
 - **atomics:** support platforms without native 64-bit atomics (#580) ([PR #580](https://github.com/MarineYachtRadar/mayara-server/pull/580))
+- **config:** keep running when settings cannot be stored (#585) ([PR #585](https://github.com/MarineYachtRadar/mayara-server/pull/585))
 
 ## [3.10.0] - 2026-08-20
 
