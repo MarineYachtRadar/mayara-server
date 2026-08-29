@@ -13,6 +13,7 @@ use wildmatch::WildMatch;
 
 use crate::{
     PACKAGE,
+    config::SettingsStorage,
     navdata::get_own_ship_context,
     radar::settings::{BareControlValue, Control, ControlDefinition, ControlId, RadarControlValue},
     radar::target::ArpaTargetApi,
@@ -22,6 +23,11 @@ use crate::{
 /// Signal K's self-reference context, used until a concrete own-ship URN
 /// (e.g. `vessels.urn:mrn:signalk:uuid:…`) is detected from the upstream.
 const SELF_CONTEXT: &str = "vessels.self";
+
+/// Notification path for "this run is not saving radar settings". Under
+/// `mayara.` rather than `radar.<id>.`: the condition belongs to the server,
+/// not to any one radar.
+const SETTINGS_NOTIFICATION_PATH: &str = "notifications.mayara.settingsNotStored";
 
 /// The Signal K context for an AIS target, keyed by MMSI the way Signal K
 /// itself keys it (`vessels.urn:mrn:imo:mmsi:431004411`) rather than by bare
@@ -181,6 +187,32 @@ impl SignalKDelta {
             }],
         };
         self.updates.push(delta_update);
+    }
+
+    /// Tell a connecting client that this run is not saving radar settings.
+    ///
+    /// Sent on connect rather than once at startup, because it describes a
+    /// state that holds for the whole run and a client that joins an hour in
+    /// has to learn about it too. Sent whatever the client subscribed to: it
+    /// says something about the server, not about vessel data, and mayara's
+    /// own GUI connects with `subscribe=none`.
+    pub fn add_settings_warning(&mut self, storage: &SettingsStorage) {
+        let SettingsStorage::Unwritable(path) = storage else {
+            return;
+        };
+
+        self.add_notification_update(
+            SETTINGS_NOTIFICATION_PATH,
+            NotificationValue {
+                state: NotificationState::Warn,
+                method: vec![NotificationMethod::Visual],
+                message: format!(
+                    "Radar settings cannot be saved to '{}'. Radar names, guard zones and exclusion zones are forgotten when mayara restarts.",
+                    path.display()
+                ),
+            },
+            "mayara",
+        );
     }
 
     /// Add a Signal K `notifications.*` alarm update.
@@ -1292,6 +1324,43 @@ mod test {
         // The wildcard scope is `notifications.radar.*`, so other
         // notification subtrees stay outside.
         assert!(!subs.is_subscribed_path("notifications.security.accessRequest.x", false));
+    }
+
+    #[test]
+    fn a_run_that_cannot_save_settings_warns_every_client_that_connects() {
+        use std::path::PathBuf;
+
+        let mut delta = SignalKDelta::new();
+        delta.add_settings_warning(&SettingsStorage::Unwritable(PathBuf::from(
+            "/skdata/mayara-config/mayara/settings.json",
+        )));
+
+        let json = serde_json::to_value(delta.build().expect("a warning is a delta")).unwrap();
+        let value = &json["updates"][0]["values"][0];
+
+        assert_eq!(value["path"], "notifications.mayara.settingsNotStored");
+        assert_eq!(value["value"]["state"], "warn");
+        assert_eq!(value["value"]["method"][0], "visual");
+        assert!(
+            value["value"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("/skdata/mayara-config/mayara/settings.json"),
+            "the message has to name the file the user must fix"
+        );
+    }
+
+    /// A run that stores settings, and a replay run that wants none, are both
+    /// working as intended -- neither is worth a notification.
+    #[test]
+    fn a_run_that_saves_settings_warns_nobody() {
+        use std::path::PathBuf;
+
+        let mut delta = SignalKDelta::new();
+        delta.add_settings_warning(&SettingsStorage::Stored(PathBuf::from("/config/s.json")));
+        delta.add_settings_warning(&SettingsStorage::NotWanted);
+
+        assert!(delta.build().is_none());
     }
 
     #[test]

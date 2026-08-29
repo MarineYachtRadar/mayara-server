@@ -212,6 +212,28 @@ export async function fetchRadars() {
 }
 
 /**
+ * Ask the server whether it can store radar settings.
+ *
+ * Returns null when the answer cannot be had — an older mayara has no such
+ * endpoint, and a proxy in front of it may not route one. A landing page that
+ * cannot reach it simply shows no warning, rather than failing to load.
+ *
+ * @returns {Promise<{settingsStored: boolean, settingsPath?: string}|null>}
+ */
+export async function fetchServerStatus() {
+  await detectMode();
+
+  try {
+    const response = await apiFetch(`${getRadarsPath()}/status`);
+    if (!response.ok) return null;
+    return await response.json();
+  } catch (err) {
+    console.log("Server status unavailable:", err);
+    return null;
+  }
+}
+
+/**
  * Unwrap the radar list to a plain `{ id: radar }` map. The Radar API response
  * is the `{ version, radars }` envelope (both mayara and signalk-server return
  * this); older/bare responses that are already a keyed map are passed through.

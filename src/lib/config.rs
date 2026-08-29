@@ -104,9 +104,37 @@ pub(crate) struct Persistence {
     pub config: Config,
     timestamp: SystemTime,
     path: PathBuf,
+    /// The settings file this run wanted but cannot write. `None` when
+    /// settings are stored, and when a replay run wants none.
+    unwritable: Option<PathBuf>,
 }
 
 const SETTINGS_FILE: &str = "settings.json";
+
+/// What this run does with radar settings. Reported by the status endpoint
+/// and, when settings are going nowhere, sent to every connecting client as
+/// a Signal K notification.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SettingsStorage {
+    /// Settings are read from and written to this file.
+    Stored(PathBuf),
+    /// This file cannot be written, so nothing the user sets up is
+    /// remembered. Named, so they know which permissions to fix.
+    Unwritable(PathBuf),
+    /// A replay run keeps nothing on purpose.
+    NotWanted,
+}
+
+/// What a run can do with the settings file it found.
+enum Loaded {
+    /// Settings are read and written normally.
+    Writable,
+    /// Existing settings were read but cannot be changed -- a file that
+    /// belongs to someone else.
+    ReadOnly,
+    /// Nothing could be read and nothing can be written.
+    Unusable,
+}
 
 /// The settings file to read and write, or `None` when the config directory
 /// cannot be created. A radar works fine without one, so an unwritable
@@ -126,26 +154,37 @@ fn settings_path(config_dir: &std::path::Path) -> Option<PathBuf> {
 }
 
 impl Persistence {
-    /// A persistence that remembers nothing, for a run that has nowhere to
-    /// write. An empty path is the marker every write path already checks.
-    fn disabled() -> Self {
+    /// A persistence that remembers nothing. An empty path is the marker
+    /// every write path already checks; `unwritable` names the file this run
+    /// failed to write, and stays `None` when it never wanted one.
+    fn disabled(unwritable: Option<PathBuf>) -> Self {
         Persistence {
             config: Config {
                 radars: HashMap::new(),
             },
             timestamp: SystemTime::UNIX_EPOCH,
             path: PathBuf::new(),
+            unwritable,
+        }
+    }
+
+    pub(crate) fn storage(&self) -> SettingsStorage {
+        match &self.unwritable {
+            Some(path) => SettingsStorage::Unwritable(path.clone()),
+            None if self.path.as_os_str().is_empty() => SettingsStorage::NotWanted,
+            None => SettingsStorage::Stored(self.path.clone()),
         }
     }
 
     pub(crate) fn new() -> Self {
         if crate::replay::is_active() {
             debug!("persistence disabled in pcap replay mode");
-            return Self::disabled();
+            return Self::disabled(None);
         }
 
-        let Some(settings_path) = settings_path(get_project_dirs().config_dir()) else {
-            return Self::disabled();
+        let config_dir = get_project_dirs().config_dir().to_owned();
+        let Some(settings_path) = settings_path(&config_dir) else {
+            return Self::disabled(Some(config_dir.join(SETTINGS_FILE)));
         };
 
         let mut this = Persistence {
@@ -154,15 +193,49 @@ impl Persistence {
             },
             timestamp: SystemTime::UNIX_EPOCH,
             path: settings_path,
+            unwritable: None,
         };
 
-        if !this.load() {
-            warn!("Radar names, guard zones and other settings will not be remembered");
-            return Self::disabled();
+        match this.load() {
+            Loaded::Writable => {
+                debug!("persistence loaded: {:?}", this);
+                this
+            }
+            Loaded::ReadOnly => {
+                warn!("Radar names, guard zones and other settings will not be remembered");
+                this.read_only()
+            }
+            Loaded::Unusable => {
+                warn!("Radar names, guard zones and other settings will not be remembered");
+                Self::disabled(Some(this.path))
+            }
         }
-        debug!("persistence loaded: {:?}", this);
+    }
 
-        this
+    /// Keep the settings that were read, write no more of them. A file owned
+    /// by another user still describes this radar correctly -- the user keeps
+    /// their zones and names for this run -- it just cannot take changes.
+    fn read_only(self) -> Self {
+        Persistence {
+            config: self.config,
+            timestamp: self.timestamp,
+            unwritable: Some(self.path),
+            path: PathBuf::new(),
+        }
+    }
+
+    /// Whether the settings file will take a change. Existing settings can be
+    /// readable and still belong to another user, which is what a container
+    /// mount produces after the uid it runs as changes; opening for writing
+    /// is the only way to find out, and it leaves the contents alone.
+    fn is_writable(&self) -> bool {
+        match fs::OpenOptions::new().write(true).open(&self.path) {
+            Ok(_) => true,
+            Err(e) => {
+                warn!("cannot write config '{}': {}", self.path.display(), e);
+                false
+            }
+        }
     }
 
     fn get_file_time(&self) -> SystemTime {
@@ -185,11 +258,12 @@ impl Persistence {
         );
     }
 
-    /// Returns whether the settings file can be used. A first run writes an
+    /// What this run can do with the settings file. A first run writes an
     /// empty one, which doubles as the check that this run can write at all:
     /// `create_dir_all` succeeds on a directory that already exists but
-    /// belongs to another user, so the write is what finds that out.
-    fn load(&mut self) -> bool {
+    /// belongs to another user, so the write is what finds that out. An
+    /// existing file gets the same question asked of it directly.
+    fn load(&mut self) -> Loaded {
         let file = match File::open(&self.path) {
             Err(e) => {
                 warn!(
@@ -198,7 +272,11 @@ impl Persistence {
                     e
                 );
 
-                return self.save();
+                return if self.save() {
+                    Loaded::Writable
+                } else {
+                    Loaded::Unusable
+                };
             }
             Ok(f) => f,
         };
@@ -220,7 +298,12 @@ impl Persistence {
         };
 
         self.timestamp = self.get_file_time();
-        true
+
+        if self.is_writable() {
+            Loaded::Writable
+        } else {
+            Loaded::ReadOnly
+        }
     }
 
     fn saver(&mut self) -> Result<(), Box<dyn Error>> {
@@ -485,7 +568,7 @@ mod tests {
         );
         Persistence {
             config: Config { radars },
-            ..Persistence::disabled()
+            ..Persistence::disabled(None)
         }
     }
 
@@ -567,10 +650,31 @@ mod tests {
         assert!(settings_path(&blocker.join("mayara")).is_none());
     }
 
+    /// The status endpoint and the connect-time warning both read this, and
+    /// they must tell apart "cannot write" from "a replay run wants none" --
+    /// only the first is worth warning a user about.
+    #[test]
+    fn storage_tells_a_failed_run_from_one_that_wants_nothing() {
+        let path = PathBuf::from("/config/mayara/settings.json");
+
+        assert_eq!(
+            persistence_at(path.clone()).storage(),
+            SettingsStorage::Stored(path.clone())
+        );
+        assert_eq!(
+            Persistence::disabled(Some(path.clone())).storage(),
+            SettingsStorage::Unwritable(path)
+        );
+        assert_eq!(
+            Persistence::disabled(None).storage(),
+            SettingsStorage::NotWanted
+        );
+    }
+
     fn persistence_at(path: PathBuf) -> Persistence {
         Persistence {
             path,
-            ..Persistence::disabled()
+            ..Persistence::disabled(None)
         }
     }
 
@@ -580,8 +684,51 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(SETTINGS_FILE);
 
-        assert!(persistence_at(path.clone()).load());
+        assert!(matches!(
+            persistence_at(path.clone()).load(),
+            Loaded::Writable
+        ));
         assert!(path.is_file());
+    }
+
+    /// A settings file that opens for reading may still belong to another
+    /// user -- exactly what a container mount produces once the uid it runs
+    /// as changes. Opening it for writing is the only way to find out.
+    /// A directory standing in for the file is refused by every user, root
+    /// included, which no chmod can claim.
+    #[test]
+    fn a_settings_file_that_rejects_writes_is_not_storage() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let writable = dir.path().join("settings.json");
+        fs::write(&writable, b"{}").unwrap();
+        assert!(persistence_at(writable).is_writable());
+
+        let refuses_writes = dir.path().join("unwritable.json");
+        fs::create_dir(&refuses_writes).unwrap();
+        assert!(!persistence_at(refuses_writes).is_writable());
+    }
+
+    /// Settings that cannot be updated are still worth having: the user keeps
+    /// their radar names and zones for this run, and is told they will not
+    /// survive it.
+    #[test]
+    fn settings_that_cannot_be_updated_are_still_read() {
+        let path = PathBuf::from("/config/mayara/settings.json");
+        let mut p = persistence_with("nav1034A", "Bow Radar");
+        p.path = path.clone();
+
+        let p = p.read_only();
+
+        assert_eq!(
+            p.config
+                .radars
+                .get("nav1034A")
+                .map(|r| r.user_name.as_str()),
+            Some("Bow Radar"),
+            "what was read stays available for this run"
+        );
+        assert_eq!(p.storage(), SettingsStorage::Unwritable(path));
     }
 
     /// An existing directory says nothing about being able to write in it --
@@ -594,6 +741,9 @@ mod tests {
         let blocker = dir.path().join("blocker");
         fs::write(&blocker, b"not a directory").unwrap();
 
-        assert!(!persistence_at(blocker.join(SETTINGS_FILE)).load());
+        assert!(matches!(
+            persistence_at(blocker.join(SETTINGS_FILE)).load(),
+            Loaded::Unusable
+        ));
     }
 }

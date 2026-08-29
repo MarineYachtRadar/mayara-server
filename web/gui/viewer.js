@@ -1333,11 +1333,17 @@ function createNotificationBanner() {
   container.appendChild(banner);
 }
 
-// Drop every active notification and hide the banner. Called on disconnect
-// and on radar (re)selection so stale alarms from a prior context never
-// leak into a fresh one.
+// Drop the radar's notifications and redraw the banner. Called on disconnect
+// and on radar (re)selection so stale alarms from a prior context never leak
+// into a fresh one. Notifications about the server itself are left standing:
+// they hold for as long as the connection does, and nothing re-sends them
+// when the user switches radar.
 function clearNotifications() {
-  activeNotifications.clear();
+  for (const path of activeNotifications.keys()) {
+    if (path.startsWith("notifications.radar.")) {
+      activeNotifications.delete(path);
+    }
+  }
   updateNotificationBanner();
 }
 
