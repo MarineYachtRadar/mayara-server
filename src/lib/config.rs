@@ -106,23 +106,48 @@ pub(crate) struct Persistence {
     path: PathBuf,
 }
 
+/// Name of the settings file inside the config directory.
+const SETTINGS_FILE: &str = "settings.json";
+
+/// The settings file to read and write, or `None` when the config directory
+/// cannot be created. A radar works fine without one, so an unwritable
+/// config directory -- a read-only mount, a host directory owned by another
+/// user -- costs the user their remembered settings, never their radar.
+fn settings_path(config_dir: &std::path::Path) -> Option<PathBuf> {
+    if let Err(e) = fs::create_dir_all(config_dir) {
+        warn!(
+            "Cannot create settings directory '{}': {}",
+            config_dir.display(),
+            e
+        );
+        warn!("Radar names, guard zones and other settings will not be remembered");
+        return None;
+    }
+    Some(config_dir.join(SETTINGS_FILE))
+}
+
 impl Persistence {
+    /// A persistence that remembers nothing, for a run that has nowhere to
+    /// write. An empty path is the marker every write path already checks.
+    fn disabled() -> Self {
+        Persistence {
+            config: Config {
+                radars: HashMap::new(),
+            },
+            timestamp: SystemTime::UNIX_EPOCH,
+            path: PathBuf::new(),
+        }
+    }
+
     pub(crate) fn new() -> Self {
         if crate::replay::is_active() {
             debug!("persistence disabled in pcap replay mode");
-            return Persistence {
-                config: Config {
-                    radars: HashMap::new(),
-                },
-                timestamp: SystemTime::UNIX_EPOCH,
-                path: PathBuf::new(),
-            };
+            return Self::disabled();
         }
 
-        let project_dirs = get_project_dirs();
-        let mut settings_path = project_dirs.config_dir().to_owned();
-        fs::create_dir_all(&settings_path).expect("Cannot create settings directory");
-        settings_path.push("settings.json");
+        let Some(settings_path) = settings_path(get_project_dirs().config_dir()) else {
+            return Self::disabled();
+        };
 
         let mut this = Persistence {
             config: Config {
@@ -450,8 +475,7 @@ mod tests {
         );
         Persistence {
             config: Config { radars },
-            timestamp: SystemTime::UNIX_EPOCH,
-            path: PathBuf::new(),
+            ..Persistence::disabled()
         }
     }
 
@@ -506,5 +530,30 @@ mod tests {
         let mut p = persistence_with("gar0102", "Radar");
         assert!(!p.take_legacy_entry("gar0102", "gar0102"));
         assert!(p.config.radars.contains_key("gar0102"));
+    }
+
+    /// The usual case: the config directory does not exist yet on first run.
+    #[test]
+    fn a_missing_config_directory_is_created() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join("mayara");
+
+        let path = settings_path(&config_dir).expect("first run must get a settings file");
+
+        assert_eq!(path, config_dir.join(SETTINGS_FILE));
+        assert!(config_dir.is_dir());
+    }
+
+    /// A radar must keep working when its settings cannot be stored: the
+    /// config directory may be a read-only mount, or a host directory owned
+    /// by another user. Blocked by a plain file standing where the directory
+    /// should be, which no user -- root included -- can create through.
+    #[test]
+    fn an_unusable_config_directory_disables_persistence_instead_of_failing() {
+        let dir = tempfile::tempdir().unwrap();
+        let blocker = dir.path().join("blocker");
+        fs::write(&blocker, b"not a directory").unwrap();
+
+        assert!(settings_path(&blocker.join("mayara")).is_none());
     }
 }
