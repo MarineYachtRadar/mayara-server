@@ -27,7 +27,9 @@ use crate::web::{signalk::diagnostics, spokes_handler};
 
 use super::super::{Message, Web, WebSocket, WebSocketUpgrade};
 use mayara::{
-    InterfaceApi, navdata,
+    InterfaceApi,
+    config::SettingsStorage,
+    navdata,
     radar::{
         GeoPosition, Legend, RadarError, RadarInfo, SharedRadars,
         settings::{BareControlValue, Control, ControlId, ControlValue, RadarControlValue},
@@ -45,6 +47,7 @@ const OPENAPI_URI: &str = "/signalk/v2/api/vessels/self/radars/resources/openapi
 const RADAR_URI: &str = "/signalk/v2/api/vessels/self/radars/{radar_id}";
 const RADAR_CAPABILITIES_URI: &str = "/signalk/v2/api/vessels/self/radars/{radar_id}/capabilities";
 const INTERFACES_URI: &str = "/signalk/v2/api/vessels/self/radars/interfaces";
+const STATUS_URI: &str = "/signalk/v2/api/vessels/self/radars/status";
 const RADAR_CONTROLS_URI: &str = "/signalk/v2/api/vessels/self/radars/{radar_id}/controls";
 const RADAR_CONTROL_URI: &str =
     "/signalk/v2/api/vessels/self/radars/{radar_id}/controls/{control_id}";
@@ -75,6 +78,7 @@ const CONTROL_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_mil
         get_radars,
         get_radar_info,
         get_interfaces,
+        get_status,
         diagnostics::get_diagnostics,
         get_radar,
         get_control_values,
@@ -90,6 +94,7 @@ const CONTROL_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_mil
         RadarControlIdParam,
         RadarApiV3,
         RadarsResponse,
+        ServerStatus,
         Capabilities,
         BareControlValue,
         // Target types
@@ -108,6 +113,7 @@ struct ApiDoc;
 pub(crate) fn routes(axum: axum::Router<Web>) -> axum::Router<Web> {
     axum.route(BASE_URI, get(get_radars))
         .route(INTERFACES_URI, get(get_interfaces))
+        .route(STATUS_URI, get(get_status))
         .route(
             diagnostics::DIAGNOSTICS_URI,
             get(diagnostics::get_diagnostics),
@@ -343,6 +349,57 @@ async fn get_radars(State(state): State<Web>) -> Response {
         radars,
     })
     .into_response()
+}
+
+/// Whether this run keeps what the user sets up.
+///
+/// mayara runs fine without a settings file -- an unwritable config directory
+/// costs the user their radar names and zones, never their radar -- so the
+/// GUI needs to be able to say so on a page that has no WebSocket open.
+#[derive(Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+struct ServerStatus {
+    /// False when radar names, guard zones and exclusion zones set now are
+    /// gone after a restart.
+    settings_stored: bool,
+    /// The settings file in use, or the one that cannot be written. Absent
+    /// on a replay run, which wants none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    settings_path: Option<String>,
+}
+
+impl From<SettingsStorage> for ServerStatus {
+    fn from(storage: SettingsStorage) -> Self {
+        match storage {
+            SettingsStorage::Stored(path) => ServerStatus {
+                settings_stored: true,
+                settings_path: Some(path.display().to_string()),
+            },
+            SettingsStorage::Unwritable(path) => ServerStatus {
+                settings_stored: false,
+                settings_path: Some(path.display().to_string()),
+            },
+            SettingsStorage::NotWanted => ServerStatus {
+                settings_stored: false,
+                settings_path: None,
+            },
+        }
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/signalk/v2/api/vessels/self/radars/status",
+    summary = "Get server status",
+    description = "Reports whether this mayara run can store radar settings. When it cannot, \
+                   radar names, guard zones and exclusion zones are lost on restart, and the \
+                   same condition is sent to connecting clients as a \
+                   `notifications.mayara.settingsNotStored` Signal K notification.",
+    responses((status = 200, body = ServerStatus, description = "Server status")),
+    tag = "Radars"
+)]
+async fn get_status(State(state): State<Web>) -> Response {
+    Json(ServerStatus::from(state.radars.settings_storage())).into_response()
 }
 
 #[utoipa::path(
@@ -1473,6 +1530,8 @@ async fn ws_signalk_delta(
         // AIS vessels are NOT sent on initial connection.
         // They are sent when the client subscribes to "vessels.*"
     }
+
+    sk_delta.add_settings_warning(&radars.settings_storage());
 
     if let Some(sk_delta) = sk_delta.build() {
         send_message(socket, sk_delta).await?;

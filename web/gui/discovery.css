@@ -303,7 +303,8 @@
    WebGPU Warning & Error Pages
    ============================================ */
 
-.myr_webgpu_warning {
+.myr_webgpu_warning,
+.myr_settings_warning {
   display: none;
   background: linear-gradient(135deg, rgba(180, 80, 40, 0.9), rgba(140, 60, 30, 0.9));
   border: 1px solid rgba(255, 150, 100, 0.5);

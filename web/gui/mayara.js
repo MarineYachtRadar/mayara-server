@@ -6,6 +6,7 @@ import {
   isStandaloneMode,
   detectMode,
   apiFetch,
+  fetchServerStatus,
 } from "./api.js";
 import { radarCombinations, multiViewUrl } from "./radar-list.js";
 
@@ -907,6 +908,39 @@ function showActionButtons() {
   van.add(container, div({ class: "myr_action_buttons" }, ...buttons));
 }
 
+// Warn that nothing the user sets up on this server survives a restart.
+// Shown on the discovery page because that is where someone lands, and the
+// page holds no WebSocket to carry the matching Signal K notification.
+async function showSettingsWarning() {
+  const status = await fetchServerStatus();
+  if (!status || status.settingsStored || !status.settingsPath) return;
+
+  const warningDiv = document.getElementById("settings_warning");
+  if (!warningDiv) return;
+
+  warningDiv.style.display = "block";
+  warningDiv.replaceChildren();
+
+  van.add(warningDiv, div({ class: "myr_warning_title" }, "Settings are not being saved"));
+  van.add(
+    warningDiv,
+    div(
+      { class: "myr_warning_content" },
+      p(
+        "Mayara cannot write to ",
+        code(status.settingsPath),
+        ", so radar names, guard zones and exclusion zones you set up now are ",
+        strong("forgotten when mayara restarts"),
+        "."
+      ),
+      p(
+        "The radars themselves work normally. To keep your settings, give mayara " +
+          "permission to write that file, or point it at a folder it owns."
+      )
+    )
+  );
+}
+
 async function loadRadars() {
   try {
     const radars = await fetchRadars();
@@ -936,6 +970,7 @@ window.onload = async function () {
 
   // Load data
   loadRadars();
+  showSettingsWarning();
 
   // Hide the interfaces section (now shown via popup)
   const interfacesSection = document.getElementById("interfaces");

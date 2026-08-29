@@ -33,7 +33,7 @@ pub mod trail;
 pub(crate) mod units;
 
 use crate::brand::CommandSender;
-use crate::config::Persistence;
+use crate::config::{Persistence, SettingsStorage};
 use crate::protos::RadarMessage::RadarMessage;
 use crate::radar::settings::{
     ControlDestination, ControlError, ControlId, ControlUpdate, ControlValue, SharedControls,
@@ -919,6 +919,12 @@ impl SharedRadars {
         } else {
             None
         }
+    }
+
+    /// What this run does with radar settings, for the status endpoint and
+    /// the warning a connecting client is sent.
+    pub fn settings_storage(&self) -> SettingsStorage {
+        self.radars.read().unwrap().persistent_data.storage()
     }
 
     ///
