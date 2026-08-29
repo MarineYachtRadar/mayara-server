@@ -6,12 +6,9 @@ import {
   isStandaloneMode,
   detectMode,
   apiFetch,
-<<<<<<< HEAD
   fetchServerStatus,
-=======
   fetchTelemetryConsent,
   setTelemetryConsent,
->>>>>>> b9607de (feat(telemetry): ask once, then report that this install works)
 } from "./api.js";
 import { radarCombinations, multiViewUrl } from "./radar-list.js";
 
@@ -1018,11 +1015,8 @@ window.onload = async function () {
 
   // Load data
   loadRadars();
-<<<<<<< HEAD
   showSettingsWarning();
-=======
   askAboutTelemetry();
->>>>>>> b9607de (feat(telemetry): ask once, then report that this install works)
 
   // Hide the interfaces section (now shown via popup)
   const interfacesSection = document.getElementById("interfaces");
