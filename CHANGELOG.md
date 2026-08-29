@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **radar:** mark a radar read-only when it cannot be commanded (#569) ([PR #569](https://github.com/MarineYachtRadar/mayara-server/pull/569))
 - **config:** warn when settings are not being saved (#588) ([PR #588](https://github.com/MarineYachtRadar/mayara-server/pull/588))
+- **telemetry:** ask once, then report that this install works (#587) ([PR #587](https://github.com/MarineYachtRadar/mayara-server/pull/587))
 
 ### Changed
 
