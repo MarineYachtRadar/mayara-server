@@ -83,6 +83,17 @@ Integration tests replay captured pcap files through the full radar pipeline. Un
 
 To capture new pcap fixtures, see [docs/capturing-traffic.md](docs/capturing-traffic.md).
 
+The hand-written GUI in `web/gui/` is embedded into the binary at compile time,
+so a module a browser cannot load still compiles and ships. Check it the way a
+browser would before pushing; CI runs the same check:
+
+```sh
+node dev/check-gui-modules.mjs
+```
+
+`node --check web/gui/foo.js` is **not** a substitute -- it parses the file as a
+script rather than a module, and accepts things a browser rejects.
+
 ## Target tracking
 
 Mayara includes software-based ARPA (Automatic Radar Plotting Aid) target tracking. When enabled with `--targets arpa`, the server detects and tracks radar returns, computing course, speed, CPA, and TCPA.

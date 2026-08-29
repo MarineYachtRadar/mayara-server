@@ -20,6 +20,24 @@ jobs:
         components: rustfmt
     - run: cargo fmt --check
 
+  gui:
+    name: GUI modules
+    runs-on: ubuntu-latest
+    # This job runs a script from the branch under review, so it gets no more
+    # than it needs and no credentials left behind for that script to find.
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        persist-credentials: false
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+    # The GUI is embedded into the binary at compile time, so a module a
+    # browser cannot load still compiles, ships, and breaks only on the boat.
+    - run: node dev/check-gui-modules.mjs
+
   clippy:
     name: cargo clippy
     runs-on: ubuntu-latest
