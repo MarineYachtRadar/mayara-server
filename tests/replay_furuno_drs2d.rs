@@ -43,6 +43,7 @@ fn test_args() -> Cli {
         merge_targets: false,
         no_websocket_compression: false,
         mdns_hostname: None,
+        no_telemetry: false,
         no_mdns: true,
         pcap_max_time: None,
     }

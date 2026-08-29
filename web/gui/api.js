@@ -212,6 +212,7 @@ export async function fetchRadars() {
 }
 
 /**
+/**
  * Ask the server whether it can store radar settings.
  *
  * Returns null when the answer cannot be had — an older mayara has no such
@@ -230,6 +231,49 @@ export async function fetchServerStatus() {
   } catch (err) {
     console.log("Server status unavailable:", err);
     return null;
+  }
+}
+
+/**
+ * Ask the server whether the usage-report question should be put to the user.
+ *
+ * Returns null when the answer cannot be had — an older mayara has no such
+ * endpoint, and a proxy in front of it may not route one. Either way the
+ * question is simply not asked.
+ *
+ * @returns {Promise<{consent: string}|null>}
+ */
+export async function fetchTelemetryConsent() {
+  await detectMode();
+
+  try {
+    const response = await apiFetch(`${getRadarsPath()}/telemetry`);
+    if (!response.ok) return null;
+    return await response.json();
+  } catch (err) {
+    console.log("Telemetry consent state unavailable:", err);
+    return null;
+  }
+}
+
+/**
+ * Record the user's answer to the usage-report question.
+ * @param {boolean} consent - True to report, false to keep quiet.
+ * @returns {Promise<boolean>} Whether the answer was stored.
+ */
+export async function setTelemetryConsent(consent) {
+  await detectMode();
+
+  try {
+    const response = await apiFetch(`${getRadarsPath()}/telemetry`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ consent }),
+    });
+    return response.ok;
+  } catch (err) {
+    console.error("Failed to store telemetry answer:", err);
+    return false;
   }
 }
 

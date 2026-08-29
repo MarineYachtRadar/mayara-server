@@ -94,9 +94,39 @@ pub(crate) struct Radar {
     pub doppler_auto_track: bool,
 }
 
+/// Where the answer to the telemetry question lives, so the user is asked
+/// once and never again. A run that cannot store settings cannot remember an
+/// answer either, and so never asks and never reports.
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+pub(crate) struct TelemetryConfig {
+    /// Random id for this install, created when consent is first given so
+    /// repeat runs are not counted as separate installs. Never derived from
+    /// anything about the boat, the radar or the network.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install_id: Option<String>,
+    /// `None` until the user has answered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consent: Option<bool>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub(crate) struct Config {
     pub radars: HashMap<String, Radar>,
+    #[serde(default)]
+    pub telemetry: TelemetryConfig,
+}
+
+/// What the server may do about telemetry, and whether the GUI should put the
+/// question to the user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Consent {
+    /// Settings are not being stored, so an answer could not be remembered.
+    /// Never ask, never report.
+    Unavailable,
+    /// The user has not answered yet.
+    Unasked,
+    Granted,
+    Denied,
 }
 
 #[derive(Debug, Clone)]
@@ -107,6 +137,10 @@ pub(crate) struct Persistence {
     /// The settings file this run wanted but cannot write. `None` when
     /// settings are stored, and when a replay run wants none.
     unwritable: Option<PathBuf>,
+    /// Set when an answer to the telemetry question could not be written.
+    /// The stored answer no longer matches what the user asked for, so this
+    /// run neither reports nor asks again.
+    consent_unwritable: bool,
 }
 
 const SETTINGS_FILE: &str = "settings.json";
@@ -161,10 +195,12 @@ impl Persistence {
         Persistence {
             config: Config {
                 radars: HashMap::new(),
+                telemetry: TelemetryConfig::default(),
             },
             timestamp: SystemTime::UNIX_EPOCH,
             path: PathBuf::new(),
             unwritable,
+            consent_unwritable: false,
         }
     }
 
@@ -190,10 +226,12 @@ impl Persistence {
         let mut this = Persistence {
             config: Config {
                 radars: HashMap::new(),
+                telemetry: TelemetryConfig::default(),
             },
             timestamp: SystemTime::UNIX_EPOCH,
             path: settings_path,
             unwritable: None,
+            consent_unwritable: false,
         };
 
         match this.load() {
@@ -221,6 +259,7 @@ impl Persistence {
             timestamp: self.timestamp,
             unwritable: Some(self.path),
             path: PathBuf::new(),
+            consent_unwritable: self.consent_unwritable,
         }
     }
 
@@ -328,6 +367,70 @@ impl Persistence {
             }
             Ok(()) => true,
         }
+    }
+
+    /// Whether this run can remember anything at all.
+    fn is_storing(&self) -> bool {
+        matches!(self.storage(), SettingsStorage::Stored(_))
+    }
+
+    pub(crate) fn consent(&self) -> Consent {
+        if !self.is_storing() || self.consent_unwritable {
+            return Consent::Unavailable;
+        }
+        match self.config.telemetry.consent {
+            None => Consent::Unasked,
+            Some(true) => Consent::Granted,
+            Some(false) => Consent::Denied,
+        }
+    }
+
+    /// Record the user's answer. Withdrawing consent drops the install id, so
+    /// a later yes is a new install rather than the old one resurfacing.
+    ///
+    /// An answer that cannot be written is not an answer: the file still
+    /// holds the previous one, which a restart would restore -- turning a
+    /// withdrawn consent back into a granted one behind the user's back. So a
+    /// failed write puts this run in the same place as having no settings
+    /// file at all: nothing is reported, and nothing more is asked.
+    pub(crate) fn set_consent(&mut self, granted: bool) -> Consent {
+        if !self.is_storing() || self.consent_unwritable {
+            return Consent::Unavailable;
+        }
+
+        let previous = self.config.telemetry.clone();
+        self.config.telemetry.consent = Some(granted);
+        if !granted {
+            self.config.telemetry.install_id = None;
+        }
+
+        if !self.save() {
+            self.config.telemetry = previous;
+            self.consent_unwritable = true;
+            return Consent::Unavailable;
+        }
+
+        self.consent()
+    }
+
+    /// The id this install reports under, created on first use. Only ever
+    /// called once reporting is allowed, so creating one here is not a
+    /// decision about whether to report -- that has already been made.
+    pub(crate) fn ensure_install_id(&mut self) -> Option<String> {
+        if self.consent() == Consent::Unavailable {
+            return None;
+        }
+
+        if self.config.telemetry.install_id.is_none() {
+            self.config.telemetry.install_id = Some(uuid::Uuid::new_v4().to_string());
+            // An id that cannot be stored would be a fresh one on every
+            // start, counting one install many times over.
+            if !self.save() {
+                self.config.telemetry.install_id = None;
+                return None;
+            }
+        }
+        self.config.telemetry.install_id.clone()
     }
 
     pub(crate) fn store(&mut self, radar_info: &RadarInfo) {
@@ -567,7 +670,10 @@ mod tests {
             },
         );
         Persistence {
-            config: Config { radars },
+            config: Config {
+                radars,
+                ..Config::default()
+            },
             ..Persistence::disabled(None)
         }
     }
@@ -614,6 +720,78 @@ mod tests {
             p.config.radars.get("kod3456").map(|r| r.user_name.as_str()),
             Some("Current Name")
         );
+    }
+
+    /// The question is only ever put to a user whose answer can be kept.
+    #[test]
+    fn a_run_that_stores_nothing_is_never_asked() {
+        let mut p = Persistence::disabled(None);
+
+        assert_eq!(p.consent(), Consent::Unavailable);
+        assert_eq!(p.set_consent(true), Consent::Unavailable);
+        assert_eq!(p.ensure_install_id(), None);
+    }
+
+    /// The answer and the id outlive the run that produced them, which is the
+    /// whole reason the question is asked only once.
+    #[test]
+    fn consent_and_install_id_are_written_to_the_settings_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+
+        let mut p = persistence_at(path.clone());
+        assert_eq!(p.consent(), Consent::Unasked);
+        assert_eq!(p.set_consent(true), Consent::Granted);
+
+        let id = p.ensure_install_id().expect("consent means an id");
+        assert!(uuid::Uuid::parse_str(&id).is_ok());
+        assert_eq!(p.ensure_install_id(), Some(id.clone()), "id is stable");
+
+        let saved: Config = serde_json::from_reader(File::open(&path).unwrap()).unwrap();
+        assert_eq!(saved.telemetry.consent, Some(true));
+        assert_eq!(saved.telemetry.install_id, Some(id));
+    }
+
+    /// An answer that cannot be written is worse than no answer: the file
+    /// still holds the previous one, so a restart would restore it -- turning
+    /// a withdrawn consent back into a granted one. The run must then behave
+    /// as if it could store nothing at all.
+    #[test]
+    fn an_answer_that_cannot_be_written_is_not_acknowledged() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut p = persistence_at(dir.path().join("settings.json"));
+        p.set_consent(true);
+        assert_eq!(p.consent(), Consent::Granted);
+
+        // Take the file away from under it: the parent is now a plain file,
+        // which no user can write through.
+        let blocked = dir.path().join("blocker");
+        fs::write(&blocked, b"not a directory").unwrap();
+        p.path = blocked.join("settings.json");
+
+        assert_eq!(p.set_consent(false), Consent::Unavailable);
+        assert_eq!(
+            p.consent(),
+            Consent::Unavailable,
+            "a run that cannot record the answer must not keep reporting under the old one"
+        );
+        assert_eq!(p.ensure_install_id(), None);
+    }
+
+    /// Saying no drops the id, so a later yes counts as a new install rather
+    /// than resurrecting the old one.
+    #[test]
+    fn declining_forgets_the_install_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut p = persistence_at(dir.path().join("settings.json"));
+
+        p.set_consent(true);
+        let first = p.ensure_install_id().unwrap();
+        assert_eq!(p.set_consent(false), Consent::Denied);
+        assert_eq!(p.config.telemetry.install_id, None);
+
+        p.set_consent(true);
+        assert_ne!(p.ensure_install_id().unwrap(), first);
     }
 
     /// Brands that never had an identity key on their address as before,

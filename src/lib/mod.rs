@@ -31,6 +31,7 @@ pub mod recording;
 pub mod replay;
 pub mod signalk;
 pub mod stream;
+pub mod telemetry;
 pub mod util;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -205,6 +206,15 @@ pub struct Cli {
     /// the loser is renamed.
     #[arg(long, value_name = "NAME", conflicts_with = "no_mdns")]
     pub mdns_hostname: Option<String>,
+
+    /// Never ask about, or send, anonymous usage stats. Mayara otherwise asks
+    /// once in the GUI whether it may report that a radar delivered data and
+    /// accepted a control change -- the mayara version, operating system,
+    /// radar brand and model, and a random id for this install. Never a
+    /// position, serial number or network address. `MAYARA_TELEMETRY=false`
+    /// does the same; `MAYARA_TELEMETRY=true` answers yes without asking.
+    #[arg(long, default_value_t = false)]
+    pub no_telemetry: bool,
 
     /// Do not advertise on mDNS at all: no service and no host name, so
     /// `<name>.local` will not resolve to mayara and clients must be given its

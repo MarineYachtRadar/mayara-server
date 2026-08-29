@@ -33,7 +33,7 @@ pub mod trail;
 pub(crate) mod units;
 
 use crate::brand::CommandSender;
-use crate::config::{Persistence, SettingsStorage};
+use crate::config::{Consent, Persistence, SettingsStorage};
 use crate::protos::RadarMessage::RadarMessage;
 use crate::radar::settings::{
     ControlDestination, ControlError, ControlId, ControlUpdate, ControlValue, SharedControls,
@@ -757,6 +757,8 @@ impl RadarInfo {
     }
 
     pub(super) fn broadcast_radar_message(&self, message: RadarMessage) {
+        crate::telemetry::note_spokes(self);
+
         // write_to_bytes() pre-sizes the Vec via compute_size(), avoiding the
         // ~16 doublings a fresh Vec::new() would do for a ~40 KB serialized
         // batch of spokes (the dominant per-frame allocator churn).
@@ -915,6 +917,7 @@ impl SharedRadars {
                 new_info.ranges.len()
             );
             radars.info.insert(key, new_info.clone());
+            crate::telemetry::note_radar_found();
             Some(new_info)
         } else {
             None
@@ -925,6 +928,31 @@ impl SharedRadars {
     /// the warning a connecting client is sent.
     pub fn settings_storage(&self) -> SettingsStorage {
         self.radars.read().unwrap().persistent_data.storage()
+    }
+
+    /// Whether the user has agreed to report that this install works, and
+    /// whether the question can be put to them at all.
+    pub fn telemetry_consent(&self) -> Consent {
+        self.radars.read().unwrap().persistent_data.consent()
+    }
+
+    /// Record the user's answer to the telemetry question.
+    pub fn set_telemetry_consent(&self, granted: bool) -> Consent {
+        self.radars
+            .write()
+            .unwrap()
+            .persistent_data
+            .set_consent(granted)
+    }
+
+    /// The id this install reports under, created on first use. Called only
+    /// once reporting is already allowed.
+    pub(crate) fn telemetry_install_id(&self) -> Option<String> {
+        self.radars
+            .write()
+            .unwrap()
+            .persistent_data
+            .ensure_install_id()
     }
 
     ///

@@ -129,6 +129,10 @@ impl Web {
         let tls = args.tls_cert.is_some() && args.tls_key.is_some();
         let (radars, tx_interface_request) = start_session(subsys, args.clone()).await;
 
+        // Needs the radars: the answer to the telemetry question lives in the
+        // settings file they own.
+        mayara::telemetry::init(&args, &radars);
+
         Web {
             radars,
             args,

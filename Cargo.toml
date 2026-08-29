@@ -95,6 +95,7 @@ tower = "0.5.3"
 tower-http = { version = "0.7", features = ["set-header", "trace"] }
 utoipa = { version = "5", features = ["macros", "axum_extras", "chrono", "time", "url", "repr" ] }
 serde_string_enum = "0.2.1"
+uuid = { version = "1", features = ["v4"] }
 unicase = "2.9.0"
 wildmatch = "2.6.1"
 utoipa-swagger-ui = { version = "9.0.2", features = ["url", "axum"] }

@@ -97,6 +97,36 @@ This simulates a radar with moving targets so you can explore the interface.
 
 For the full list of options, run `mayara-server --help` or see [USAGE.md](USAGE.md).
 
+### Anonymous usage stats
+
+The first time you open Mayara's own page it asks one question:
+
+> **Inform developers of successful deploy?**
+
+Say yes and Mayara tells its developers, at most twice, that your radar works:
+once when it first delivers a picture, and once when it first accepts a setting
+you change. That is how we learn which radar models people actually get
+working, and on which computers -- there is no other way for us to find out
+that, say, a Garmin xHD on a Raspberry Pi stopped working in the latest
+release.
+
+A report holds the Mayara version, your operating system, how Mayara was
+installed (as a container, a Signal K plugin, an OpenCPN plugin, or on its
+own), the brand and model of your radar, and a random number that identifies
+this installation so repeat runs are not counted as new users. It never holds your position, your vessel,
+your radar's serial number or any network address.
+
+You are asked **once**; the answer is kept in your settings. Say no and nothing
+is ever sent. If Mayara cannot store its settings (see the warning above), it
+does not ask and does not report -- it could not remember your answer, so it
+does not pretend to.
+
+If you use Mayara through Signal K and never open Mayara's own page, you are
+never asked and nothing is sent. Whoever packages Mayara can answer for their
+users by setting `MAYARA_TELEMETRY=true` or `MAYARA_TELEMETRY=false`; with
+either set, the question is not asked. `--no-telemetry` on the command line
+also keeps Mayara quiet.
+
 ### Docker
 
 For more technically oriented users, Mayara is also available as a Docker image:

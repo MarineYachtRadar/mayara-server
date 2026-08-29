@@ -30,6 +30,11 @@ LABEL org.opencontainers.image.license="Apache-2.0"
 RUN apk add --no-cache tini \
     && adduser -D -h /home/mayara mayara
 COPY --from=builder /usr/src/mayara-server/target/release/mayara-server /usr/local/bin/mayara-server
+# Names this deployment in the usage stats a user may agree to send, so a
+# container install is not counted as someone running the binary by hand.
+# A packager that builds on this image overrides it (the Signal K plugin
+# passes signalk-server-plugin).
+ENV MAYARA_DEPLOYMENT=container
 USER mayara
 EXPOSE 6502
 # Probe the always-served, unauthenticated discovery doc so the container
