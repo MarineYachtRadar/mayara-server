@@ -94,6 +94,28 @@ impl Command {
         (a + 7200) % 3600
     }
 
+    /// The frames a HALO needs for one Sea request.
+    ///
+    /// Mode and number are two separate commands: the number command carries
+    /// no mode, so a request that changes both has to send the mode first or
+    /// the radar keeps the mode it was in and silently applies only the
+    /// number. `mode_requested` says the caller actually asked for a mode --
+    /// a request carrying only a number leaves the radar's mode alone rather
+    /// than inferring one from it.
+    ///
+    /// The mode frame goes out whenever it was asked for, without consulting
+    /// the mode we believe the radar is in: that belief arrives by report and
+    /// can lag, and a repeated mode command costs one frame, while a skipped
+    /// one costs the user the change they asked for.
+    fn halo_sea_frames(auto: bool, setting: Option<f64>, mode_requested: bool) -> Vec<[u8; 6]> {
+        let mut frames = Vec::with_capacity(2);
+        if setting.is_some() && mode_requested {
+            frames.push(Self::halo_sea_command(auto, None));
+        }
+        frames.push(Self::halo_sea_command(auto, setting));
+        frames
+    }
+
     /// Build the HALO sea clutter command.
     ///
     /// Both value bytes carry the same number — the one setting being changed:
@@ -269,7 +291,15 @@ impl CommandSender for Command {
                         Some(auto_value)
                     };
 
-                    cmd.extend_from_slice(&Self::halo_sea_command(auto != 0, setting));
+                    let mut frames = Self::halo_sea_frames(auto != 0, setting, cv.auto.is_some());
+                    // Everything but the last frame goes now; the last one
+                    // leaves through the common tail below.
+                    let last = frames.pop().expect("a Sea request is at least one frame");
+                    for frame in frames {
+                        log::debug!("{}: Send command {:02X?}", self.info.key(), frame);
+                        self.send(&frame).await?;
+                    }
+                    cmd.extend_from_slice(&last);
                 } else {
                     let v: u32 = Self::scale_100_to_byte(value) as u32;
                     let auto = auto as u32;
@@ -456,6 +486,56 @@ impl CommandSender for Command {
 #[cfg(test)]
 mod tests {
     use super::Command;
+
+    /// A number and a mode are two commands. Asking for both has to send
+    /// both, mode first, or the radar applies the number and stays in the
+    /// mode it was in -- the user's "manual at 90" silently becoming "auto,
+    /// with 90 stored for later".
+    #[test]
+    fn a_sea_request_changing_mode_and_number_sends_the_mode_first() {
+        let frames = Command::halo_sea_frames(false, Some(90.), true);
+
+        assert_eq!(
+            frames,
+            vec![
+                [0x11, 0xc1, 0x00, 0x00, 0x00, 0x01], // mode manual
+                [0x11, 0xc1, 0x00, 0x5a, 0x5a, 0x02], // level 90
+            ]
+        );
+    }
+
+    /// A number on its own leaves the radar's mode alone: nothing about a
+    /// level says the user wanted out of auto.
+    #[test]
+    fn a_sea_request_carrying_only_a_number_sends_one_frame() {
+        let frames = Command::halo_sea_frames(false, Some(90.), false);
+
+        assert_eq!(frames, vec![[0x11, 0xc1, 0x00, 0x5a, 0x5a, 0x02]]);
+    }
+
+    /// A mode on its own is already one frame, and must not be sent twice.
+    #[test]
+    fn a_sea_request_carrying_only_a_mode_sends_one_frame() {
+        assert_eq!(
+            Command::halo_sea_frames(true, None, true),
+            vec![[0x11, 0xc1, 0x01, 0x00, 0x00, 0x01]]
+        );
+    }
+
+    /// Switching into auto with an offset needs the mode too, or the offset
+    /// lands while the radar is still manual.
+    #[test]
+    fn a_sea_request_entering_auto_with_an_offset_sends_the_mode_first() {
+        let frames = Command::halo_sea_frames(true, Some(-50.), true);
+
+        assert_eq!(
+            frames,
+            vec![
+                [0x11, 0xc1, 0x01, 0x00, 0x00, 0x01], // mode auto
+                [0x11, 0xc1, 0x01, 0x00, 0xce, 0x04], // auto offset -50
+            ]
+        );
+    }
 
     /// Every frame an MFD was captured sending for sea clutter, so a HALO is
     /// told about a change the same way whoever sends it.
