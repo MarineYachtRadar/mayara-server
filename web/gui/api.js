@@ -235,6 +235,29 @@ export async function fetchServerStatus() {
 }
 
 /**
+ * Ask whether this host's network can carry the kind of radar the user says
+ * they are waiting for.
+ *
+ * @param {string} expectation - `navico`, `furuno`, `garmin`, `koden`,
+ *   `raymarine-rd`, `raymarine-quantum-mfd`, `raymarine-quantum-standalone`.
+ * @returns {Promise<{met: boolean, requirement: string, finding: string, remedy?: string}|null>}
+ */
+export async function fetchNetworkCheck(expectation) {
+  await detectMode();
+
+  try {
+    const response = await apiFetch(
+      `${getRadarsPath()}/network-check/${encodeURIComponent(expectation)}`
+    );
+    if (!response.ok) return null;
+    return await response.json();
+  } catch (err) {
+    console.log("Network check unavailable:", err);
+    return null;
+  }
+}
+
+/**
  * Ask the server whether the usage-report question should be put to the user.
  *
  * Returns null when the answer cannot be had — an older mayara has no such

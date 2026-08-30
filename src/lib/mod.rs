@@ -344,6 +344,53 @@ impl Brand {
             Self::Playback => "play",
         }
     }
+
+    /// Whether this build can look for this brand at all. Brands are cargo
+    /// features, so a build can be missing one entirely -- and then no amount
+    /// of correct network configuration will ever produce a radar.
+    pub fn is_compiled_in(&self) -> bool {
+        match self {
+            Self::Navico => cfg!(feature = "navico"),
+            Self::Furuno => cfg!(feature = "furuno"),
+            Self::Garmin => cfg!(feature = "garmin"),
+            Self::Koden => cfg!(feature = "koden"),
+            Self::Raymarine => cfg!(feature = "raymarine"),
+            Self::Emulator => cfg!(feature = "emulator"),
+            Self::Playback => true,
+        }
+    }
+
+    /// Every brand this build can look for, for a client that should not
+    /// offer the user a radar this server could never find.
+    pub fn compiled_in() -> Vec<Brand> {
+        [
+            Self::Navico,
+            Self::Furuno,
+            Self::Garmin,
+            Self::Koden,
+            Self::Raymarine,
+        ]
+        .into_iter()
+        .filter(Self::is_compiled_in)
+        .collect()
+    }
+
+    /// The brand a radar key belongs to. Keys are built as prefix + identity
+    /// by `radar_key`, so a stored key still says which brand wrote it long
+    /// after that radar was last seen.
+    pub fn from_key(key: &str) -> Option<Brand> {
+        [
+            Self::Furuno,
+            Self::Garmin,
+            Self::Koden,
+            Self::Navico,
+            Self::Raymarine,
+            Self::Emulator,
+            Self::Playback,
+        ]
+        .into_iter()
+        .find(|brand| key.starts_with(brand.to_prefix()))
+    }
 }
 
 impl From<&str> for Brand {
@@ -464,6 +511,233 @@ pub struct InterfaceApi {
     /// Map of network interface name to its radar listener information
     #[schema(value_type = HashMap<String, RadarInterfaceApi>)]
     interfaces: HashMap<InterfaceId, RadarInterfaceApi>,
+}
+
+/// What the user says they are waiting to see.
+///
+/// Finer than `Brand`, because Raymarine's three product families need three
+/// different networks: an RD picks its own `10/8` address from its MAC, a
+/// Quantum on an Axiom network is a DHCP client on `198.18/21`, and a Quantum
+/// on its own can be anywhere at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::EnumString, ToSchema)]
+#[strum(serialize_all = "kebab-case", ascii_case_insensitive)]
+pub enum Expectation {
+    Navico,
+    Furuno,
+    Garmin,
+    Koden,
+    RaymarineRd,
+    RaymarineQuantumMfd,
+    RaymarineQuantumStandalone,
+}
+
+/// Whether this host's network can carry the radar the user is waiting for.
+#[derive(Serialize, Debug, PartialEq, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkCheck {
+    /// False only when we can say something is definitely wrong. Searching
+    /// continues either way; a radar mayara cannot name a requirement for is
+    /// not a radar mayara has given up on.
+    pub met: bool,
+    /// What this radar needs of the network, in the user's terms.
+    pub requirement: String,
+    /// What this host has, or what it is missing.
+    pub finding: String,
+    /// What to do about it. Absent when there is nothing to do.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remedy: Option<String>,
+}
+
+impl Expectation {
+    /// What this radar asks of the network, in the user's terms.
+    fn requirement_text(&self) -> String {
+        match self.required_network() {
+            Some((_, _, human)) => {
+                format!("This radar can only be reached from a host in {}.", human)
+            }
+            None => "This radar announces itself by multicast or broadcast and needs no particular address on this host.".to_string(),
+        }
+    }
+
+    /// The network this radar has to be reachable on, as a prefix and the
+    /// wording a user would recognise. `None` for radars that impose nothing
+    /// mayara can check.
+    fn required_network(&self) -> Option<(Ipv4Addr, u8, &'static str)> {
+        match self {
+            // A DRS only answers a host inside its own fixed subnet.
+            Self::Furuno => Some((Ipv4Addr::new(172, 31, 0, 0), 16, "172.31.x.x")),
+            // 172.16.0.0/12, the whole marine range Garmin uses.
+            Self::Garmin => Some((Ipv4Addr::new(172, 16, 0, 0), 12, "172.16.x.x - 172.31.x.x")),
+            // An RD self-assigns 10.<three bytes of its MAC> and will never
+            // answer a host outside that /8.
+            Self::RaymarineRd => Some((Ipv4Addr::new(10, 0, 0, 0), 8, "10.x.x.x")),
+            // The network an Axiom insists on, and hands out DHCP leases from.
+            Self::RaymarineQuantumMfd => {
+                Some((Ipv4Addr::new(198, 18, 0, 0), 21, "198.18.0.x - 198.18.7.x"))
+            }
+            // Navico and Koden find each other by multicast and broadcast;
+            // a standalone Quantum can be on any address its DHCP server hands
+            // out, which is why mayara cannot check it (and does not yet
+            // support it).
+            Self::Navico | Self::Koden | Self::RaymarineQuantumStandalone => None,
+        }
+    }
+
+    /// The brand this expectation belongs to. Raymarine's three families are
+    /// one brand as far as discovery is concerned.
+    pub fn brand(&self) -> Brand {
+        match self {
+            Self::Navico => Brand::Navico,
+            Self::Furuno => Brand::Furuno,
+            Self::Garmin => Brand::Garmin,
+            Self::Koden => Brand::Koden,
+            Self::RaymarineRd | Self::RaymarineQuantumMfd | Self::RaymarineQuantumStandalone => {
+                Brand::Raymarine
+            }
+        }
+    }
+
+    /// Judge this host's addresses against what the radar needs.
+    pub fn check(&self, interfaces: &InterfaceApi) -> NetworkCheck {
+        self.check_supported(interfaces, self.brand().is_compiled_in())
+    }
+
+    fn check_supported(&self, interfaces: &InterfaceApi, supported: bool) -> NetworkCheck {
+        let addresses = interfaces.ipv4_addresses();
+
+        // A network the radar could be reached on means nothing if this build
+        // has no code to look for it. Saying the network is fine would send
+        // the user checking cables for a radar that can never appear.
+        if !supported {
+            return NetworkCheck {
+                met: false,
+                requirement: self.requirement_text(),
+                finding: format!(
+                    "This build of mayara has no {} support compiled in, so it will never find one however the network is set up.",
+                    self.brand()
+                ),
+                remedy: Some(format!(
+                    "Use a mayara build with {} support -- the official builds include every brand.",
+                    self.brand()
+                )),
+            };
+        }
+
+        if *self == Self::RaymarineQuantumStandalone {
+            return NetworkCheck {
+                met: false,
+                requirement: "A Quantum with no MFD accepts an address from whatever DHCP server it finds, so there is no fixed network to check.".to_string(),
+                finding: "Mayara does not support a standalone Quantum yet: it can only find one that is part of a Raymarine network with an MFD.".to_string(),
+                remedy: Some("Connect the Quantum to a Raymarine MFD network, or follow the issue for standalone support.".to_string()),
+            };
+        }
+
+        // Being confidently wrong is worse than saying nothing: with no
+        // interface list to read, "your host has no address" would send the
+        // user reconfiguring a network that is fine.
+        if !interfaces.is_known() {
+            return NetworkCheck {
+                met: true,
+                requirement: self.requirement_text(),
+                finding: "Mayara could not read this host's network interfaces just now, so it cannot check them.".to_string(),
+                remedy: None,
+            };
+        }
+
+        let Some((network, prefix, human)) = self.required_network() else {
+            return NetworkCheck {
+                met: true,
+                requirement: self.requirement_text(),
+                finding: if addresses.is_empty() {
+                    "This host has no usable IPv4 address at all, so nothing can be found."
+                        .to_string()
+                } else {
+                    "Nothing about this host's addresses prevents it from being found."
+                        .to_string()
+                },
+                remedy: (addresses.is_empty())
+                    .then(|| "Connect this computer to the radar network by wired Ethernet and give it an IPv4 address.".to_string()),
+            };
+        };
+
+        let matching: Vec<&(String, Ipv4Addr)> = addresses
+            .iter()
+            .filter(|(_, ip)| in_network(*ip, network, prefix))
+            .collect();
+
+        if let Some((interface, ip)) = matching.first() {
+            NetworkCheck {
+                met: true,
+                requirement: self.requirement_text(),
+                // Naming the interface matters: a container bridge or a
+                // virtual interface can sit in the same range while carrying
+                // no radar traffic at all, and on a containerised install
+                // that is more likely than not.
+                finding: format!(
+                    "{} has {}, which is in that range — check that {} is the interface your radar is wired to.",
+                    interface, ip, interface
+                ),
+                remedy: None,
+            }
+        } else {
+            let has = if addresses.is_empty() {
+                "This host has no usable IPv4 address at all.".to_string()
+            } else {
+                format!(
+                    "This host has {}, none of which is in that range.",
+                    addresses
+                        .iter()
+                        .map(|(interface, ip)| format!("{} on {}", ip, interface))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            };
+
+            NetworkCheck {
+                met: false,
+                requirement: self.requirement_text(),
+                finding: has,
+                remedy: Some(format!(
+                    "Give the interface the radar is wired to an address in {}, then reload this page.",
+                    human
+                )),
+            }
+        }
+    }
+}
+
+/// Whether an address falls inside a network, by prefix length.
+fn in_network(ip: Ipv4Addr, network: Ipv4Addr, prefix: u8) -> bool {
+    let mask = if prefix == 0 {
+        0
+    } else {
+        u32::MAX << (32 - prefix)
+    };
+    u32::from(ip) & mask == u32::from(network) & mask
+}
+
+impl InterfaceApi {
+    /// Whether the interface list could be read at all. Empty means the
+    /// locator did not answer (or is not running, as under `--emulator`) --
+    /// not that the host has no addresses.
+    pub fn is_known(&self) -> bool {
+        !self.interfaces.is_empty()
+    }
+
+    /// Every usable IPv4 address this host has, with the interface it is on.
+    /// Loopback is left out: a radar never answers there.
+    pub fn ipv4_addresses(&self) -> Vec<(String, Ipv4Addr)> {
+        let mut found: Vec<(String, Ipv4Addr)> = self
+            .interfaces
+            .iter()
+            .filter_map(|(id, interface)| {
+                let ip = interface.ip?;
+                (!ip.is_loopback()).then(|| (id.name.clone(), ip))
+            })
+            .collect();
+        found.sort();
+        found
+    }
 }
 
 impl RadarInterfaceApi {
@@ -753,6 +1027,217 @@ pub async fn start_session(
     }
 
     (radars, tx_interface_request)
+}
+
+#[cfg(test)]
+mod expectation_tests {
+    use super::*;
+
+    fn interfaces(addresses: &[(&str, &str)]) -> InterfaceApi {
+        let mut api = InterfaceApi::default();
+        for (name, ip) in addresses {
+            let ip: Ipv4Addr = ip.parse().unwrap();
+            api.interfaces.insert(
+                InterfaceId::new(name, Some(ip)),
+                RadarInterfaceApi::new(InterfaceStatus::Ok, Some(ip), None, None),
+            );
+        }
+        api
+    }
+
+    /// A host whose interfaces were read and simply carry no IPv4 address --
+    /// which is a different thing from not having been able to read them.
+    fn interfaces_without_addresses() -> InterfaceApi {
+        let mut api = InterfaceApi::default();
+        api.interfaces.insert(
+            InterfaceId::new("eth0", None),
+            RadarInterfaceApi::new(InterfaceStatus::NoIPv4Address, None, None, None),
+        );
+        api
+    }
+
+    /// A DRS answers nobody outside its own subnet, so a host that is not in
+    /// it will wait forever without being told why.
+    #[test]
+    fn furuno_needs_its_own_subnet() {
+        let wrong = Expectation::Furuno.check(&interfaces(&[("eth0", "192.168.1.10")]));
+        assert!(!wrong.met);
+        assert!(wrong.finding.contains("192.168.1.10"), "name what is there");
+        assert!(wrong.remedy.is_some(), "say what to do about it");
+
+        let right = Expectation::Furuno.check(&interfaces(&[("eth0", "172.31.3.100")]));
+        assert!(right.met);
+        assert_eq!(right.remedy, None);
+        assert!(
+            right.finding.contains("eth0"),
+            "name the interface: a container bridge can sit in the range and carry nothing"
+        );
+    }
+
+    /// Garmin's range is the whole of 172.16/12, not just 172.16.x.
+    #[test]
+    fn garmin_accepts_the_whole_marine_range() {
+        assert!(
+            Expectation::Garmin
+                .check(&interfaces(&[("eth0", "172.16.2.5")]))
+                .met
+        );
+        assert!(
+            Expectation::Garmin
+                .check(&interfaces(&[("eth0", "172.30.9.9")]))
+                .met
+        );
+        assert!(
+            !Expectation::Garmin
+                .check(&interfaces(&[("eth0", "172.32.0.1")]))
+                .met
+        );
+    }
+
+    /// An RD self-assigns 10.<three bytes of its MAC>, so the host has to be
+    /// somewhere in 10/8 to hear it at all.
+    #[test]
+    fn a_raymarine_rd_needs_a_ten_network() {
+        assert!(
+            Expectation::RaymarineRd
+                .check(&interfaces(&[("eth0", "10.56.0.1")]))
+                .met
+        );
+
+        let wrong = Expectation::RaymarineRd.check(&interfaces(&[("eth0", "192.168.1.10")]));
+        assert!(!wrong.met);
+        assert!(wrong.requirement.contains("10.x.x.x"));
+    }
+
+    /// An Axiom network is 198.18.0.0/21 -- 198.18.8.x is already outside it.
+    #[test]
+    fn a_quantum_with_an_mfd_needs_the_axiom_network() {
+        assert!(
+            Expectation::RaymarineQuantumMfd
+                .check(&interfaces(&[("eth0", "198.18.0.5")]))
+                .met
+        );
+        assert!(
+            Expectation::RaymarineQuantumMfd
+                .check(&interfaces(&[("eth0", "198.18.7.254")]))
+                .met
+        );
+        assert!(
+            !Expectation::RaymarineQuantumMfd
+                .check(&interfaces(&[("eth0", "198.18.8.1")]))
+                .met,
+            "/21 stops at 198.18.7.255"
+        );
+    }
+
+    /// Mayara cannot find one yet, and saying so beats letting the user wait.
+    #[test]
+    fn a_standalone_quantum_is_reported_as_unsupported() {
+        let check =
+            Expectation::RaymarineQuantumStandalone.check(&interfaces(&[("eth0", "192.168.1.10")]));
+
+        assert!(!check.met);
+        assert!(check.finding.contains("does not support"));
+    }
+
+    /// Being unable to read the interfaces changes nothing about a radar
+    /// mayara cannot find at all, so that answer has to come first.
+    #[test]
+    fn a_standalone_quantum_is_unsupported_even_with_no_interface_list() {
+        let check = Expectation::RaymarineQuantumStandalone.check(&InterfaceApi::default());
+
+        assert!(!check.met);
+        assert!(
+            check.finding.contains("does not support"),
+            "not 'could not read the interfaces', which invites the user to keep waiting"
+        );
+    }
+
+    /// Navico is found by multicast from any address, so the answer is "your
+    /// network is not the problem" -- unless there is no address at all.
+    #[test]
+    fn navico_asks_nothing_of_the_address() {
+        let check = Expectation::Navico.check(&interfaces(&[("eth0", "192.168.1.10")]));
+        assert!(check.met);
+        assert_eq!(check.remedy, None);
+
+        let nothing = Expectation::Navico.check(&interfaces_without_addresses());
+        assert!(nothing.met, "still worth searching");
+        assert!(nothing.remedy.is_some(), "but say the host has no address");
+    }
+
+    /// Loopback is not a radar network and must not count as a match.
+    #[test]
+    fn loopback_is_not_an_address_a_radar_can_use() {
+        let check = Expectation::RaymarineRd.check(&interfaces(&[("lo", "127.0.0.1")]));
+        assert!(!check.met);
+    }
+
+    /// Under `--emulator`, or if the locator does not answer, there is no
+    /// interface list. Telling the user their host has no address would send
+    /// them reconfiguring a network that is fine.
+    #[test]
+    fn an_unreadable_interface_list_is_not_reported_as_a_missing_address() {
+        let check = Expectation::Furuno.check(&InterfaceApi::default());
+
+        assert!(check.met, "nothing is known to be wrong");
+        assert!(check.finding.contains("could not read"));
+        assert_eq!(check.remedy, None);
+        assert!(
+            check.requirement.contains("172.31.x.x"),
+            "the requirement is still worth stating"
+        );
+    }
+
+    /// Brands are cargo features. A build without one will never produce that
+    /// radar, and telling the user their network is fine would have them
+    /// checking cables for something that cannot arrive. Tested through the
+    /// injected flag, because the test build has every brand compiled in.
+    #[test]
+    fn a_brand_this_build_cannot_look_for_is_said_so_plainly() {
+        let check =
+            Expectation::Garmin.check_supported(&interfaces(&[("eth0", "172.16.2.5")]), false);
+
+        assert!(
+            !check.met,
+            "a correct network cannot save an absent locator"
+        );
+        assert!(check.finding.contains("no Garmin support"));
+        assert!(check.remedy.is_some());
+
+        // The same host, with the brand present, is fine.
+        let supported =
+            Expectation::Garmin.check_supported(&interfaces(&[("eth0", "172.16.2.5")]), true);
+        assert!(supported.met);
+    }
+
+    /// Raymarine's three families are one brand to discovery, so all three
+    /// stand or fall with the same feature.
+    #[test]
+    fn every_raymarine_expectation_belongs_to_the_raymarine_brand() {
+        for expectation in [
+            Expectation::RaymarineRd,
+            Expectation::RaymarineQuantumMfd,
+            Expectation::RaymarineQuantumStandalone,
+        ] {
+            assert_eq!(expectation.brand(), Brand::Raymarine);
+        }
+        assert_eq!(Expectation::Navico.brand(), Brand::Navico);
+    }
+
+    #[test]
+    fn an_expectation_is_named_the_way_the_url_spells_it() {
+        use std::str::FromStr;
+        assert_eq!(
+            Expectation::from_str("raymarine-quantum-mfd").unwrap(),
+            Expectation::RaymarineQuantumMfd
+        );
+        assert_eq!(
+            Expectation::from_str("FURUNO").unwrap(),
+            Expectation::Furuno
+        );
+        assert!(Expectation::from_str("nonsense").is_err());
+    }
 }
 
 #[cfg(test)]

@@ -300,6 +300,73 @@
 }
 
 /* ============================================
+   Help after a radar has stayed missing
+   ============================================ */
+
+.myr_search_help {
+  display: none;
+  background: linear-gradient(135deg, rgba(70, 60, 130, 0.9), rgba(50, 42, 95, 0.9));
+  border: 1px solid rgba(150, 140, 220, 0.5);
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 25px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.myr_search_title {
+  font-size: 20px;
+  font-weight: bold;
+  color: #fff;
+  margin-bottom: 12px;
+}
+
+.myr_search_known {
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  background: rgba(0, 0, 0, 0.22);
+  border-radius: 8px;
+}
+
+.myr_expectation_label {
+  display: block;
+  /* base.css caps every label at 150px for the control panel's form layout,
+     which folds this question into a narrow column. */
+  max-width: none;
+  margin: 16px 0 8px;
+  font-weight: bold;
+}
+
+.myr_expectation_select {
+  width: 100%;
+  max-width: 520px;
+  padding: 10px;
+  font-size: 15px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: rgba(0, 0, 0, 0.3);
+  color: #fff;
+}
+
+.myr_check_result {
+  margin-top: 16px;
+  padding: 14px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.25);
+  border-left: 4px solid rgba(255, 255, 255, 0.4);
+}
+
+/* Green for "your network is fine", amber for "this cannot work" — the
+   distinction the user is reading for. */
+.myr_check_ok {
+  border-left-color: rgba(120, 220, 140, 0.9);
+}
+
+.myr_check_bad {
+  border-left-color: rgba(250, 180, 90, 0.95);
+}
+
+/* ============================================
    One-time question: report that this works?
    ============================================ */
 

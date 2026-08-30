@@ -11,12 +11,19 @@ import {
   setTelemetryConsent,
 } from "./api.js";
 import { radarCombinations, multiViewUrl } from "./radar-list.js";
+import { HELP_AFTER_MS, renderSearchHelp } from "./search-help.js";
 
 const { a, tr, td, div, p, strong, details, summary, code, br, span, button } =
   van.tags;
 
 // Global WebGPU availability flag
 let webGPUAvailable = false;
+
+// When the current run of finding nothing began, and what the server told us
+// about radars seen before. Both feed the help offered after HELP_AFTER_MS.
+let searchingSince = Date.now();
+let knownRadars = [];
+let compiledBrands = [];
 
 // Network requirements for different radar brands
 const NETWORK_REQUIREMENTS = {
@@ -527,11 +534,16 @@ function radarsLoaded(d) {
 
   // Only rebuild if radar count changed (avoids collapsing the help details)
   if (c === previousRadarCount && c === 0) {
-    // No change, just reschedule poll
+    // Still nothing: the list needs no rebuild, but the help may be due.
+    updateSearchHelp(c);
     setTimeout(loadRadars, 2000);
     return;
   }
   previousRadarCount = c;
+  if (c > 0) {
+    searchingSince = Date.now();
+  }
+  updateSearchHelp(c);
 
   // Clear previous content
   r.innerHTML = "";
@@ -915,6 +927,12 @@ function showActionButtons() {
 // page holds no WebSocket to carry the matching Signal K notification.
 async function showSettingsWarning() {
   const status = await fetchServerStatus();
+  if (status && Array.isArray(status.knownRadars)) {
+    knownRadars = status.knownRadars;
+  }
+  if (status && Array.isArray(status.brands)) {
+    compiledBrands = status.brands;
+  }
   if (!status || status.settingsStored || !status.settingsPath) return;
 
   const warningDiv = document.getElementById("settings_warning");
@@ -984,6 +1002,34 @@ async function askAboutTelemetry() {
       )
     )
   );
+}
+
+// True while the help is on screen, so a poll does not re-render a dropdown
+// the user is reading.
+let helpShown = false;
+
+// Offer the "what were you expecting?" help once a radar has stayed missing
+// for long enough, and take it away the moment one turns up.
+function updateSearchHelp(radarCount) {
+  const box = document.getElementById("search_help");
+  if (!box) return;
+
+  const waited = Date.now() - searchingSince;
+  const due = radarCount === 0 && waited >= HELP_AFTER_MS;
+
+  if (!due) {
+    box.style.display = "none";
+    box.replaceChildren();
+    helpShown = false;
+    return;
+  }
+
+  // Rendering again would throw away a dropdown the user is reading.
+  if (helpShown) return;
+
+  helpShown = true;
+  box.style.display = "block";
+  renderSearchHelp(box, knownRadars, compiledBrands);
 }
 
 async function loadRadars() {

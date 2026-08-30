@@ -33,6 +33,8 @@ mayara-server --openapi
 | GET    | `/signalk/v2/api/vessels/self/radars`                        | List all detected radars                           |
 | GET    | `/signalk/v2/api/vessels/self/radars/interfaces`             | List network interfaces and radar discovery status |
 | GET    | `/signalk/v2/api/vessels/self/radars/diagnostics`            | Download a gzipped JSON network diagnostics snapshot |
+| GET    | `/signalk/v2/api/vessels/self/radars/status`                 | Whether settings can be stored, radars seen before, and the brands this build supports |
+| GET    | `/signalk/v2/api/vessels/self/radars/network-check/{kind}`   | Whether this host's network can reach a given kind of radar |
 | GET    | `/signalk/v2/api/vessels/self/radars/telemetry`              | Whether to ask the user about anonymous usage reports |
 | PUT    | `/signalk/v2/api/vessels/self/radars/telemetry`              | Store the user's answer to that question |
 | GET    | `/signalk/v2/api/vessels/self/radars/{id}/capabilities`      | Get radar capabilities and legend                  |

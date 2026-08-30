@@ -140,7 +140,7 @@ fn config_summary(args: &mayara::Cli) -> Value {
 /// than hang the HTTP request indefinitely.
 const INTERFACE_API_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
-async fn fetch_interface_api(state: &Web) -> InterfaceApi {
+pub(crate) async fn fetch_interface_api(state: &Web) -> InterfaceApi {
     let (tx, mut rx) = mpsc::channel(1);
     if state.tx_interface_request.send(Some(tx)).is_err() {
         return InterfaceApi::default();

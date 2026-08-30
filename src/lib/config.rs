@@ -9,6 +9,7 @@ use std::io::{BufReader, BufWriter, Write};
 use std::path::PathBuf;
 use std::time::SystemTime;
 
+use crate::Brand;
 use crate::radar::RadarInfo;
 use crate::radar::range::Ranges;
 use crate::radar::settings::ControlId;
@@ -145,6 +146,20 @@ pub(crate) struct Persistence {
 
 const SETTINGS_FILE: &str = "settings.json";
 
+/// A radar this install has seen before, remembered across restarts.
+///
+/// Discovery is the same for everyone, but the advice is not: someone whose
+/// radar worked last week has a different problem from someone setting one up
+/// for the first time, and the page can only say so if it knows.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KnownRadar {
+    pub brand: Option<Brand>,
+    /// The name the user gave it, or the one the radar reported.
+    pub name: String,
+    /// Model as last detected, e.g. `HALO24`.
+    pub model: Option<String>,
+}
+
 /// What this run does with radar settings. Reported by the status endpoint
 /// and, when settings are going nowhere, sent to every connecting client as
 /// a Signal K notification.
@@ -202,6 +217,28 @@ impl Persistence {
             unwritable,
             consent_unwritable: false,
         }
+    }
+
+    /// Every radar in the settings file, whether or not it is on the air now.
+    pub(crate) fn known_radars(&self) -> Vec<KnownRadar> {
+        let mut known: Vec<KnownRadar> = self
+            .config
+            .radars
+            .iter()
+            .map(|(key, radar)| KnownRadar {
+                brand: Brand::from_key(key),
+                name: if radar.user_name.is_empty() {
+                    key.clone()
+                } else {
+                    radar.user_name.clone()
+                },
+                model: radar.model_name.clone(),
+            })
+            .collect();
+        // A map's order is nobody's idea of an order; the page shows these to
+        // a person.
+        known.sort_by(|a, b| a.name.cmp(&b.name));
+        known
     }
 
     pub(crate) fn storage(&self) -> SettingsStorage {
@@ -720,6 +757,40 @@ mod tests {
             p.config.radars.get("kod3456").map(|r| r.user_name.as_str()),
             Some("Current Name")
         );
+    }
+
+    /// The discovery page names the radars this install has had working, so
+    /// someone whose radar worked last week is told something different from
+    /// someone setting one up for the first time. A radar the user renamed is
+    /// named the way they named it.
+    #[test]
+    fn known_radars_are_listed_by_the_name_the_user_would_recognise() {
+        let mut p = persistence_with("nav1034A", "Bow Radar");
+        p.config.radars.insert(
+            "fur6424A".to_string(),
+            Radar {
+                user_name: String::new(),
+                model_name: Some("DRS4D-NXT".to_string()),
+                ..Default::default()
+            },
+        );
+
+        let known = p.known_radars();
+
+        assert_eq!(known.len(), 2);
+        // Sorted, so the page does not reshuffle them between visits.
+        assert_eq!(known[0].name, "Bow Radar");
+        assert_eq!(known[0].brand, Some(Brand::Navico));
+        // No name of its own falls back to the key, which at least identifies it.
+        assert_eq!(known[1].name, "fur6424A");
+        assert_eq!(known[1].brand, Some(Brand::Furuno));
+        assert_eq!(known[1].model.as_deref(), Some("DRS4D-NXT"));
+    }
+
+    /// A first run has nothing to say about radars seen before.
+    #[test]
+    fn a_run_with_no_stored_radars_knows_of_none() {
+        assert!(Persistence::disabled(None).known_radars().is_empty());
     }
 
     /// The question is only ever put to a user whose answer can be kept.
