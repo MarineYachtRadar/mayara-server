@@ -33,7 +33,7 @@ pub mod trail;
 pub(crate) mod units;
 
 use crate::brand::CommandSender;
-use crate::config::{Consent, Persistence, SettingsStorage};
+use crate::config::{Consent, KnownRadar, Persistence, SettingsStorage};
 use crate::protos::RadarMessage::RadarMessage;
 use crate::radar::settings::{
     ControlDestination, ControlError, ControlId, ControlUpdate, ControlValue, SharedControls,
@@ -922,6 +922,12 @@ impl SharedRadars {
         } else {
             None
         }
+    }
+
+    /// Radars this install has seen before, for the discovery page to name
+    /// while it waits for them to turn up again.
+    pub fn known_radars(&self) -> Vec<KnownRadar> {
+        self.radars.read().unwrap().persistent_data.known_radars()
     }
 
     /// What this run does with radar settings, for the status endpoint and

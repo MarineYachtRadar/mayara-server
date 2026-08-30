@@ -10,6 +10,7 @@ use http::StatusCode;
 use hyper;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::str::FromStr;
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     net::Ipv4Addr,
@@ -27,9 +28,8 @@ use crate::web::{signalk::diagnostics, spokes_handler};
 
 use super::super::{Message, Web, WebSocket, WebSocketUpgrade};
 use mayara::{
-    InterfaceApi,
-    config::Consent,
-    config::SettingsStorage,
+    Brand, Expectation, InterfaceApi, NetworkCheck,
+    config::{Consent, KnownRadar, SettingsStorage},
     navdata,
     radar::{
         GeoPosition, Legend, RadarError, RadarInfo, SharedRadars,
@@ -50,6 +50,7 @@ const RADAR_URI: &str = "/signalk/v2/api/vessels/self/radars/{radar_id}";
 const RADAR_CAPABILITIES_URI: &str = "/signalk/v2/api/vessels/self/radars/{radar_id}/capabilities";
 const INTERFACES_URI: &str = "/signalk/v2/api/vessels/self/radars/interfaces";
 const STATUS_URI: &str = "/signalk/v2/api/vessels/self/radars/status";
+const NETWORK_CHECK_URI: &str = "/signalk/v2/api/vessels/self/radars/network-check/{expectation}";
 const TELEMETRY_URI: &str = "/signalk/v2/api/vessels/self/radars/telemetry";
 const RADAR_CONTROLS_URI: &str = "/signalk/v2/api/vessels/self/radars/{radar_id}/controls";
 const RADAR_CONTROL_URI: &str =
@@ -82,6 +83,7 @@ const CONTROL_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_mil
         get_radar_info,
         get_interfaces,
         get_status,
+        get_network_check,
         get_telemetry,
         set_telemetry,
         diagnostics::get_diagnostics,
@@ -100,6 +102,8 @@ const CONTROL_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_mil
         RadarApiV3,
         RadarsResponse,
         ServerStatus,
+        KnownRadarApi,
+        NetworkCheck,
         TelemetryState,
         TelemetryConsentRequest,
         Capabilities,
@@ -121,6 +125,7 @@ pub(crate) fn routes(axum: axum::Router<Web>) -> axum::Router<Web> {
     axum.route(BASE_URI, get(get_radars))
         .route(INTERFACES_URI, get(get_interfaces))
         .route(STATUS_URI, get(get_status))
+        .route(NETWORK_CHECK_URI, get(get_network_check))
         .route(TELEMETRY_URI, get(get_telemetry).put(set_telemetry))
         .route(
             diagnostics::DIAGNOSTICS_URI,
@@ -374,23 +379,53 @@ struct ServerStatus {
     /// on a replay run, which wants none.
     #[serde(skip_serializing_if = "Option::is_none")]
     settings_path: Option<String>,
+    /// Radars this install has seen before. Empty on a first run, and on any
+    /// run that cannot store settings.
+    known_radars: Vec<KnownRadarApi>,
+    /// Brands this build can look for. A client must not offer the user a
+    /// radar this server could never find.
+    #[schema(example = json!(["Navico", "Furuno"]))]
+    brands: Vec<Brand>,
 }
 
-impl From<SettingsStorage> for ServerStatus {
-    fn from(storage: SettingsStorage) -> Self {
-        match storage {
-            SettingsStorage::Stored(path) => ServerStatus {
-                settings_stored: true,
-                settings_path: Some(path.display().to_string()),
-            },
-            SettingsStorage::Unwritable(path) => ServerStatus {
-                settings_stored: false,
-                settings_path: Some(path.display().to_string()),
-            },
-            SettingsStorage::NotWanted => ServerStatus {
-                settings_stored: false,
-                settings_path: None,
-            },
+/// A radar the user has had working before.
+#[derive(Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+struct KnownRadarApi {
+    /// `Navico`, `Furuno`, … Absent for a key written by a version that used
+    /// a prefix this one does not know.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    brand: Option<Brand>,
+    #[schema(example = "Halo A")]
+    name: String,
+    #[schema(example = "HALO24")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+}
+
+impl From<KnownRadar> for KnownRadarApi {
+    fn from(known: KnownRadar) -> Self {
+        KnownRadarApi {
+            brand: known.brand,
+            name: known.name,
+            model: known.model,
+        }
+    }
+}
+
+impl ServerStatus {
+    fn new(storage: SettingsStorage, known_radars: Vec<KnownRadar>) -> Self {
+        let (settings_stored, settings_path) = match storage {
+            SettingsStorage::Stored(path) => (true, Some(path.display().to_string())),
+            SettingsStorage::Unwritable(path) => (false, Some(path.display().to_string())),
+            SettingsStorage::NotWanted => (false, None),
+        };
+
+        ServerStatus {
+            settings_stored,
+            settings_path,
+            known_radars: known_radars.into_iter().map(KnownRadarApi::from).collect(),
+            brands: Brand::compiled_in(),
         }
     }
 }
@@ -435,7 +470,50 @@ fn consent_name(consent: Consent) -> &'static str {
     tag = "Radars"
 )]
 async fn get_status(State(state): State<Web>) -> Response {
-    Json(ServerStatus::from(state.radars.settings_storage())).into_response()
+    Json(ServerStatus::new(
+        state.radars.settings_storage(),
+        state.radars.known_radars(),
+    ))
+    .into_response()
+}
+
+#[derive(Deserialize, ToSchema)]
+struct ExpectationParam {
+    /// `navico`, `furuno`, `garmin`, `koden`, `raymarine-rd`,
+    /// `raymarine-quantum-mfd` or `raymarine-quantum-standalone`.
+    #[schema(example = "raymarine-rd")]
+    expectation: String,
+}
+
+#[utoipa::path(
+    get,
+    path = "/signalk/v2/api/vessels/self/radars/network-check/{expectation}",
+    summary = "Can this host reach the radar the user is waiting for?",
+    description = "Answers whether this host's addresses can carry a given kind of radar, for \
+                   a discovery page that has found nothing and has to say something more useful \
+                   than 'still searching'. Raymarine is split into three: an RD self-assigns a \
+                   10/8 address, a Quantum on an MFD network is a DHCP client on 198.18/21, and \
+                   a standalone Quantum can be anywhere (and is not supported yet).",
+    params(("expectation" = String, Path, description = "What the user expects", example = "raymarine-rd")),
+    responses(
+        (status = 200, body = NetworkCheck, description = "Whether the network can carry it"),
+        (status = 404, description = "Unknown kind of radar")
+    ),
+    tag = "Radars"
+)]
+async fn get_network_check(
+    Path(params): Path<ExpectationParam>,
+    State(state): State<Web>,
+) -> Response {
+    let Ok(expectation) = Expectation::from_str(&params.expectation) else {
+        return SignalKResponse::failed(
+            StatusCode::NOT_FOUND,
+            format!("Unknown radar kind '{}'", params.expectation),
+        );
+    };
+
+    let interfaces = diagnostics::fetch_interface_api(&state).await;
+    Json(expectation.check(&interfaces)).into_response()
 }
 
 #[utoipa::path(
