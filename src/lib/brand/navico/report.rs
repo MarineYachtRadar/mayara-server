@@ -651,6 +651,14 @@ impl NavicoReportReceiver {
     }
 
     fn process_frame(&mut self) {
+        // The data socket opens before 0xC403 reports the model, so spokes can
+        // arrive while the header layout is still unknown. A BR24 header is
+        // indistinguishable from a Gen3+ one by length and status, so guessing
+        // would emit bogus ranges rather than fail.
+        if self.model == Model::Unknown {
+            return;
+        }
+
         if self.data_buf.len() < FRAME_HEADER_LENGTH + RADAR_LINE_LENGTH {
             log::warn!(
                 "UDP data frame with even less than one spoke, len {} dropped",
@@ -671,7 +679,9 @@ impl NavicoReportReceiver {
             let spoke_slice = &self.data_buf[offset + RADAR_LINE_HEADER_LENGTH
                 ..offset + RADAR_LINE_HEADER_LENGTH + SPOKE_DATA_LENGTH];
 
-            if let Some((range, angle, heading)) = self.validate_header(header_slice, scanline) {
+            if let Some((range, angle, heading)) =
+                Self::validate_header(self.model, header_slice, scanline)
+            {
                 log::trace!("range {} angle {} heading {:?}", range, angle, heading);
                 log::trace!(
                     "Received  {:04} spoke {}",
@@ -1355,12 +1365,13 @@ impl NavicoReportReceiver {
     }
 
     fn validate_header(
-        &self,
+        model: Model,
         header_slice: &[u8],
         scanline: usize,
     ) -> Option<(u32, SpokeBearing, Option<u16>)> {
-        match self.model {
-            Model::BR24 | Model::Gen3 => match decode_bin::<GenBr24Header>(header_slice) {
+        match model {
+            Model::Unknown => None,
+            Model::BR24 => match decode_bin::<GenBr24Header>(header_slice) {
                 Ok(header) => {
                     log::trace!("Received {:04} header {:?}", scanline, header);
 
@@ -1523,8 +1534,72 @@ fn error_name(code: u32) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{LookupDoppler, error_name, parse_radar_errors, wire_to_legend};
+    use super::{
+        LookupDoppler, Model, NavicoReportReceiver, error_name, parse_radar_errors, wire_to_legend,
+    };
     use crate::radar::Legend;
+
+    /// Real spoke headers captured from a Broadband 3G dome, one per range the
+    /// operator selected. A 3G uses the Gen3+ (4G-style) header, so
+    /// `large_range` is 0x80 and the range lives in `small_range` at offset 12.
+    const GEN3_SPOKE_HEADERS: [([u8; 24], u32); 3] = [
+        (
+            [
+                0x18, 0x02, 0x98, 0x06, 0x00, 0x44, 0x80, 0x00, 0x2c, 0x0d, 0x00, 0x80, 0x84, 0x03,
+                0xb6, 0x83, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0xa0,
+            ],
+            225,
+        ),
+        (
+            [
+                0x18, 0x02, 0xe7, 0x08, 0x00, 0x44, 0x80, 0x00, 0x71, 0x0c, 0x00, 0x80, 0x0c, 0x07,
+                0x08, 0xa2, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0xa0,
+            ],
+            451,
+        ),
+        (
+            [
+                0x18, 0x02, 0xff, 0x0e, 0x00, 0x44, 0x80, 0x00, 0xa1, 0x08, 0x00, 0x80, 0xa0, 0x0c,
+                0x05, 0xa7, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0xa0,
+            ],
+            808,
+        ),
+    ];
+
+    #[test]
+    fn gen3_spoke_header_decodes_real_range() {
+        for (header, expected_range) in GEN3_SPOKE_HEADERS {
+            let (range, _angle, _heading) =
+                NavicoReportReceiver::validate_header(Model::Gen3, &header, 0)
+                    .expect("3G spoke header must be accepted");
+            assert_eq!(range, expected_range, "header {header:02x?}");
+        }
+    }
+
+    /// Until 0xC403 reports the model there is no way to tell a BR24 header
+    /// from a Gen3+ one, so no layout may be assumed.
+    #[test]
+    fn unknown_model_decodes_no_spoke() {
+        for (header, _) in GEN3_SPOKE_HEADERS {
+            assert!(
+                NavicoReportReceiver::validate_header(Model::Unknown, &header, 0).is_none(),
+                "header {header:02x?}"
+            );
+        }
+    }
+
+    /// A 3G must not be decoded with the BR24 layout: that reads `small_range`
+    /// and `rotation` as one 24-bit range, yielding ranges thousands of
+    /// kilometres out that also change every spoke.
+    #[test]
+    fn gen3_is_not_decoded_as_br24() {
+        for (header, expected_range) in GEN3_SPOKE_HEADERS {
+            let (br24_range, _, _) =
+                NavicoReportReceiver::validate_header(Model::BR24, &header, 0).unwrap();
+            assert_ne!(br24_range, expected_range);
+            assert!(br24_range > 1_000_000, "header {header:02x?}");
+        }
+    }
 
     fn doppler_legend() -> Legend {
         Legend {

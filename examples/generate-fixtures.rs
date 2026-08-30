@@ -99,6 +99,16 @@ fn main() {
         500,
     );
 
+    // Navico Broadband 3G (scanner type 12). Only the radar_pi capture carries
+    // the Gen3+ discovery beacon; 3g-with-mayara.pcap.gz in the same directory
+    // starts after discovery has already happened.
+    generate_fixture(
+        &base.join("navico/3g/3g-with-radar_pi.pcap.gz"),
+        &fixture_dir.join("navico-3g.pcap.gz"),
+        &navico_filter,
+        500,
+    );
+
     // Navico HALO20+ (halo20+.pcap.gz has C403+C409, halo20plus_willem does not)
     // Needs >1072 packets — the first Gen3+ beacon response arrives late
     generate_fixture(
