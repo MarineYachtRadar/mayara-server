@@ -130,8 +130,9 @@ jobs:
     needs: [build-linux, build-macos, build-windows]
     runs-on: ubuntu-latest
     permissions:
+      # Creating the release needs write; the changelog is no longer written
+      # from here, so no pull-request permission is required.
       contents: write
-      pull-requests: write
 
     steps:
     - name: Checkout
@@ -156,19 +157,6 @@ jobs:
         OUTPUT: CHANGES.md
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Generate full changelog
-      uses: orhun/git-cliff-action@v4
-      with:
-        config: cliff.toml
-        args: --output CHANGELOG.md --tag ${{ github.ref_name }}
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Append historical changelog
-      run: |
-        printf '\n' >> CHANGELOG.md
-        cat CHANGELOG.manual.md >> CHANGELOG.md
-
     - name: Create Release
       uses: softprops/action-gh-release@v3
       with:
@@ -179,32 +167,6 @@ jobs:
           artifacts/mayara-server-mipsel-unknown-linux-musl/*.tar.gz
           artifacts/mayara-server-macos/*.tar.gz
           artifacts/mayara-server-windows/*.zip
-
-    - name: Commit changelog
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        # git-cliff has already rewritten CHANGELOG.md in the working
-        # tree during the previous step. Snapshot it, then force the
-        # switch to main so the uncommitted modification doesn't block
-        # the checkout (the snapshot is restored right after). Without
-        # -f, `git switch -C` aborts with "Your local changes ... would
-        # be overwritten by checkout" and the changelog PR never opens.
-        cp CHANGELOG.md /tmp/CHANGELOG.md
-        git fetch origin main
-        git switch -fC main origin/main
-        git config user.name "github-actions[bot]"
-        git config user.email "github-actions[bot]@users.noreply.github.com"
-        cp /tmp/CHANGELOG.md CHANGELOG.md
-        git add CHANGELOG.md
-        if ! git diff --staged --quiet; then
-          BRANCH="docs-changelog-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}"
-          git switch -C "$BRANCH"
-          git commit -m "docs(changelog): update CHANGELOG.md for ${{ github.ref_name }}"
-          git push --set-upstream origin "$BRANCH"
-          PR_URL="$(gh pr create --title "docs(changelog): update CHANGELOG.md for ${{ github.ref_name }}" --body "Auto-generated changelog update." --base main --head "$BRANCH")"
-          gh pr merge "$PR_URL" --squash --delete-branch --auto || gh pr merge "$PR_URL" --squash --delete-branch
-        fi
 
   docker:
     name: Publish Docker Image

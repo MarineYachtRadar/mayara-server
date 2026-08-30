@@ -55,7 +55,7 @@ Use conventional format: `<type>(<scope>): <subject>` where type = feat|fix|docs
 
 Keep commits small and atomic - one logical change per commit. Split unrelated changes into separate commits. The commit history tells a story; each commit should be a meaningful, self-contained step.
 
-**DO NOT** edit CHANGELOG.md — it is auto-generated from conventional commits at release time by git-cliff.
+**DO NOT** edit CHANGELOG.md — `release.sh` regenerates it from conventional commits with git-cliff when a release is cut, and any hand edit is overwritten there. It changes only at release time, so `main` carries no entry for merges made since the last one.
 **MANDATORY:** Never amend commits that have already been pushed to GitHub. Only amend local, unpushed commits.
 **MANDATORY:** Always rebase and clean up commit history before creating a PR or pushing changes. Amend fixes and corrections to the relevant existing commit instead of creating chains of "fix typo" or "oops" commits. The final history should contain only intentional, complete commits - no work-in-progress artifacts.
 **MANDATORY:** Run `cargo fmt` and `cargo clippy --no-deps --all-targets -- -D warnings` before every commit that touches Rust code. Every commit pushed to `main` must be `cargo fmt --check` clean and `cargo clippy` warning-free — CI enforces both and will fail the build otherwise.
