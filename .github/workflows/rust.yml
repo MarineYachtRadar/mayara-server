@@ -55,6 +55,8 @@ jobs:
       run: cargo clippy --no-deps --all-targets -- -D warnings
     - name: cargo clippy (--features pcap-replay)
       run: cargo clippy --no-deps --all-targets --features pcap-replay -- -D warnings
+    - name: cargo clippy (--features garmin-xhd-output)
+      run: cargo clippy --no-deps --all-targets --features garmin-xhd-output -- -D warnings
 
   build:
     name: Build ${{ matrix.target }}
@@ -92,7 +94,7 @@ jobs:
     - uses: actions/checkout@v7
     - uses: swatinem/rust-cache@v2
     - name: Run tests
-      run: cargo test --features pcap-replay --release
+      run: cargo test --features pcap-replay,garmin-xhd-output --release
     - name: Build
       run: cargo build --release
     - name: Upload artifacts
@@ -111,7 +113,7 @@ jobs:
       with:
         tool: nextest
     - name: Run tests
-      run: cargo nextest run --features pcap-replay
+      run: cargo nextest run --features pcap-replay,garmin-xhd-output
     - name: Build
       run: cargo build --release
     - name: Upload artifacts

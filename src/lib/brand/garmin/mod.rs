@@ -12,12 +12,16 @@ use crate::radar::range::Ranges;
 use crate::radar::{RadarInfo, SharedRadars};
 use crate::{Brand, Cli};
 
-mod capabilities;
+// `capabilities::cap` is shared with the Garmin xHD output bridge, which
+// builds the bitmap it reports from the same bit numbers.
+pub(crate) mod capabilities;
 mod cdm_heartbeat;
 mod command;
-mod discovery;
-mod protocol;
-mod range_table;
+// Shared with the Garmin xHD output bridge, which speaks the same wire
+// protocol from the other side.
+pub(crate) mod discovery;
+pub(crate) mod protocol;
+pub(crate) mod range_table;
 mod report;
 mod settings;
 
@@ -189,7 +193,7 @@ impl GarminLocator {
         subsys: &SubsystemHandle,
     ) {
         if let Some(mut info) = radars.add(info) {
-            info.start_forwarding_radar_messages_to_stdout(subsys);
+            info.start_outputs(radars, subsys);
 
             let report_name = info.key();
             radars.update(&mut info);
@@ -201,7 +205,7 @@ impl GarminLocator {
             if let Some(ib) = info_b
                 && let Some(mut ib) = radars.add(ib)
             {
-                ib.start_forwarding_radar_messages_to_stdout(subsys);
+                ib.start_outputs(radars, subsys);
                 radars.update(&mut ib);
                 report_receiver.set_range_b(&self.args, ib, radars.clone());
             }

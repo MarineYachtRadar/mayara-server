@@ -178,6 +178,8 @@ pub(crate) fn create_emulator_radar(args: &Cli, radars: &SharedRadars, subsys: &
 
         radars.update(&mut info);
 
+        info.start_outputs(radars, subsys);
+
         // Start the report receiver (spoke generator)
         let report_name = info.key() + " reports";
         let report_receiver = report::EmulatorReportReceiver::new(args, info, radars.clone());
