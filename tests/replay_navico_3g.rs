@@ -77,7 +77,6 @@ async fn replay_navico_3g() {
                         let key = &keys[0];
                         let info = radars.get_by_key(key).expect("radar info");
 
-                        // Wait until the model has been identified
                         if info.controls.model_name().is_some() && !info.ranges.all.is_empty() {
                             assert!(key.starts_with("nav"), "expected Navico key, got: {}", key);
                             assert_eq!(info.brand, mayara::Brand::Navico);
