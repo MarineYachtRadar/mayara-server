@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.12.1] - 2026-08-30
+
+### Fixed
+
+- **navico:** decode 3G spokes with the Gen3+ header (#612) ([PR #612](https://github.com/MarineYachtRadar/mayara-server/pull/612))
+
 ## [3.12.0] - 2026-08-30
 
 ### Added
@@ -418,6 +424,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **ci:** use PR for changelog commit to respect branch protection (#73) ([PR #73](https://github.com/MarineYachtRadar/mayara-server/pull/73))
 - **ci:** fall back to immediate merge when auto-merge not needed (#77) ([PR #77](https://github.com/MarineYachtRadar/mayara-server/pull/77))
 
+[3.12.1]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.12.0...v3.12.1
 [3.12.0]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.11.0...v3.12.0
 [3.11.0]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.10.0...v3.11.0
 [3.10.0]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.9.0...v3.10.0
