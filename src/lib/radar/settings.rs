@@ -1534,13 +1534,36 @@ impl SharedControls {
         }
     }
 
+    /// Record an auto state the radar just reported, and tell clients.
+    ///
+    /// The broadcast has to happen here. `set_auto` only raises
+    /// `needs_refresh`, which is flushed by the next `Control::set` -- and for
+    /// a control whose auto flag arrives in a status report without a value
+    /// beside it (HALO's Sea), no such call is guaranteed to follow. The
+    /// pending refresh could then sit unsent indefinitely, leaving every
+    /// client that renders from the delta stream showing the old auto state
+    /// while REST and the radar itself have moved on.
     pub fn set_auto_state(&self, control_id: &ControlId, auto: bool) -> Result<(), ControlError> {
-        let mut locked = self.controls.write().unwrap();
-        if let Some(control) = locked.controls.get_mut(control_id) {
+        let changed = {
+            let mut locked = self.controls.write().unwrap();
+            let Some(control) = locked.controls.get_mut(control_id) else {
+                return Err(ControlError::NotSupported(*control_id));
+            };
             control.set_auto(auto);
-        } else {
-            return Err(ControlError::NotSupported(*control_id));
+
+            if control.needs_refresh {
+                // Flushed here, so a later value-bearing set does not
+                // re-broadcast the same news.
+                control.needs_refresh = false;
+                Some(control.clone())
+            } else {
+                None
+            }
         };
+
+        if let Some(control) = changed {
+            self.send_to_all_clients(&control);
+        }
         Ok(())
     }
 
@@ -4409,6 +4432,94 @@ mod test {
         let json = r#"{"id":"-1","value":"49"}"#;
 
         assert!(serde_json::from_str::<ControlValue>(json).is_err());
+    }
+
+    /// A radar reporting only that a control switched to (or out of) auto is
+    /// news the clients rendering from the delta stream have no other way to
+    /// learn: no value came with it, and nothing guarantees a later
+    /// value-bearing report for that control. Regression for #600, where
+    /// HALO's Sea auto flag changed on the radar and every subscriber kept
+    /// showing the old state indefinitely.
+    #[test]
+    fn an_auto_only_change_reaches_the_clients() {
+        let args = Cli::parse_from(["my_program"]);
+        let tx = tokio::sync::broadcast::Sender::new(1);
+        let mut controls = SharedControls::new("nav1234".to_string(), tx, &args, HashMap::new());
+        controls.add(new_auto(
+            ControlId::Sea,
+            0.,
+            100.,
+            AutomaticValue {
+                has_auto: true,
+                has_auto_adjustable: false,
+                auto_adjust_min_value: None,
+                auto_adjust_max_value: None,
+            },
+        ));
+        let mut client = controls.new_client_subscription();
+
+        controls.set_auto_state(&ControlId::Sea, true).unwrap();
+
+        let sent = client
+            .try_recv()
+            .expect("an auto change has to be broadcast");
+        assert_eq!(sent.id, ControlId::Sea);
+        assert_eq!(sent.auto, Some(true));
+    }
+
+    /// The radar repeats its state in every report; only a change is news.
+    #[test]
+    fn an_unchanged_auto_state_is_not_rebroadcast() {
+        let args = Cli::parse_from(["my_program"]);
+        let tx = tokio::sync::broadcast::Sender::new(1);
+        let mut controls = SharedControls::new("nav1234".to_string(), tx, &args, HashMap::new());
+        controls.add(new_auto(
+            ControlId::Sea,
+            0.,
+            100.,
+            AutomaticValue {
+                has_auto: true,
+                has_auto_adjustable: false,
+                auto_adjust_min_value: None,
+                auto_adjust_max_value: None,
+            },
+        ));
+        let mut client = controls.new_client_subscription();
+
+        controls.set_auto_state(&ControlId::Sea, true).unwrap();
+        client.try_recv().expect("the change itself is broadcast");
+
+        controls.set_auto_state(&ControlId::Sea, true).unwrap();
+        assert!(
+            client.try_recv().is_err(),
+            "the same auto state repeated must not be sent again"
+        );
+    }
+
+    /// Having broadcast the auto change, the pending refresh is spent: a later
+    /// value-bearing set must not send the same news a second time.
+    #[test]
+    fn a_broadcast_auto_change_does_not_also_flush_later() {
+        let args = Cli::parse_from(["my_program"]);
+        let tx = tokio::sync::broadcast::Sender::new(1);
+        let mut controls = SharedControls::new("nav1234".to_string(), tx, &args, HashMap::new());
+        controls.add(new_auto(
+            ControlId::Sea,
+            0.,
+            100.,
+            AutomaticValue {
+                has_auto: true,
+                has_auto_adjustable: false,
+                auto_adjust_min_value: None,
+                auto_adjust_max_value: None,
+            },
+        ));
+
+        controls.set_auto_state(&ControlId::Sea, true).unwrap();
+        assert!(
+            !controls.get(&ControlId::Sea).unwrap().needs_refresh,
+            "the refresh was flushed by the broadcast"
+        );
     }
 
     #[test]
