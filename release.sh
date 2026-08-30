@@ -59,6 +59,12 @@ confirm() {
     fi
 }
 
+# Version-bump PRs carry no reviewable content, so let them merge themselves
+# once CI is green.
+enable_auto_merge() {
+    gh pr merge "$1" --auto --squash || true
+}
+
 ensure_clean() {
     if [ -n "$(git status --porcelain)" ]; then
         echo "Error: working tree is not clean. Commit or stash changes first."
@@ -113,8 +119,7 @@ create_release_pr() {
 
     echo "PR created: $pr_url"
 
-    # Enable auto-merge so the PR merges as soon as checks pass
-    gh pr merge "$branch" --auto --squash || true
+    enable_auto_merge "$branch"
 
     echo ""
     echo "Waiting for PR to be merged..."
@@ -180,10 +185,11 @@ bump_to_dev() {
         --title "chore(release): begin ${dev_version}" \
         --body "Bump version to ${dev_version} for next development cycle."
 
+    enable_auto_merge "$branch"
+
     git checkout main
     echo ""
-    echo "Development version PR created for $dev_version."
-    echo "Merge it to continue development."
+    echo "Development version PR created for $dev_version; it will merge once checks pass."
 }
 
 # ---------------------------------------------------------------------------
@@ -257,10 +263,11 @@ do_beta() {
         --title "chore(release): resume ${dev_version}" \
         --body "Return version to ${dev_version} after beta ${beta_version}."
 
+    enable_auto_merge "$dev_branch"
+
     git checkout main
     echo ""
-    echo "Development version PR created for $dev_version."
-    echo "Merge it to continue development."
+    echo "Development version PR created for $dev_version; it will merge once checks pass."
 }
 
 do_bump() {
@@ -310,9 +317,11 @@ do_bump() {
         --title "chore(release): bump to ${new_version}" \
         --body "Bump version to ${new_version}."
 
+    enable_auto_merge "$branch"
+
     git checkout main
     echo ""
-    echo "PR created for version bump to $new_version. Merge it to apply."
+    echo "PR created for version bump to $new_version; it will merge once checks pass."
 }
 
 do_help() {
