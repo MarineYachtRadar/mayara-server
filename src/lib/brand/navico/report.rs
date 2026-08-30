@@ -651,6 +651,14 @@ impl NavicoReportReceiver {
     }
 
     fn process_frame(&mut self) {
+        // The data socket opens before 0xC403 reports the model, so spokes can
+        // arrive while the header layout is still unknown. A BR24 header is
+        // indistinguishable from a Gen3+ one by length and status, so guessing
+        // would emit bogus ranges rather than fail.
+        if self.model == Model::Unknown {
+            return;
+        }
+
         if self.data_buf.len() < FRAME_HEADER_LENGTH + RADAR_LINE_LENGTH {
             log::warn!(
                 "UDP data frame with even less than one spoke, len {} dropped",
@@ -1362,6 +1370,7 @@ impl NavicoReportReceiver {
         scanline: usize,
     ) -> Option<(u32, SpokeBearing, Option<u16>)> {
         match model {
+            Model::Unknown => None,
             Model::BR24 => match decode_bin::<GenBr24Header>(header_slice) {
                 Ok(header) => {
                     log::trace!("Received {:04} header {:?}", scanline, header);
@@ -1564,6 +1573,18 @@ mod tests {
                 NavicoReportReceiver::validate_header(Model::Gen3, &header, 0)
                     .expect("3G spoke header must be accepted");
             assert_eq!(range, expected_range, "header {header:02x?}");
+        }
+    }
+
+    /// Until 0xC403 reports the model there is no way to tell a BR24 header
+    /// from a Gen3+ one, so no layout may be assumed.
+    #[test]
+    fn unknown_model_decodes_no_spoke() {
+        for (header, _) in GEN3_SPOKE_HEADERS {
+            assert!(
+                NavicoReportReceiver::validate_header(Model::Unknown, &header, 0).is_none(),
+                "header {header:02x?}"
+            );
         }
     }
 
