@@ -11,6 +11,7 @@ use system_configuration::sys::dynamic_store::SCDynamicStoreCreateRunLoopSource;
 use tokio::sync::broadcast::Sender;
 use tokio_util::sync::CancellationToken;
 
+use crate::network::LinkKind;
 use crate::radar::RadarError;
 
 pub async fn spawn_wait_for_ip_addr_change(
@@ -90,7 +91,19 @@ fn wait_for_ip_addr_change(
     Ok(())
 }
 
-pub fn is_wireless_interface(interface_name: &str) -> bool {
+/// Classify an interface by the link technology behind it.
+///
+/// Only WiFi is distinguished here; macOS has no equally cheap probe for the
+/// link types Windows reports as [`LinkKind::Unusable`].
+pub fn link_kind(interface_name: &str) -> LinkKind {
+    if is_wireless_interface(interface_name) {
+        LinkKind::Wireless
+    } else {
+        LinkKind::Wired
+    }
+}
+
+fn is_wireless_interface(interface_name: &str) -> bool {
     use system_configuration::dynamic_store::*;
 
     let Some(store) = SCDynamicStoreBuilder::new("networkInterfaceInfo").build() else {

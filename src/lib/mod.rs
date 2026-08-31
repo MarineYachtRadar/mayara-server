@@ -444,6 +444,9 @@ enum InterfaceStatus {
     Ok,
     NoIPv4Address,
     WirelessIgnored,
+    /// The link cannot carry radar traffic (Bluetooth, tunnel, PPP, ...) and is
+    /// skipped even with `--allow-wifi`.
+    LinkTypeIgnored,
 }
 
 /// Information about a network interface and its radar listeners
@@ -459,7 +462,8 @@ enum InterfaceStatus {
     }
 }))]
 struct RadarInterfaceApi {
-    // Interface status: null (ok), "No IPv4 address" or "Wireless ignored"
+    // Interface status: null (ok), "No IPv4 address", "Wireless ignored" or
+    // "Link type ignored"
     status: InterfaceStatus,
     /// IPv4 address assigned to this interface
     #[serde(skip_serializing_if = "Option::is_none")]
