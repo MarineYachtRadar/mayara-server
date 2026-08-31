@@ -48,6 +48,7 @@ jobs:
     - uses: dtolnay/rust-toolchain@stable
       with:
         components: clippy
+        targets: x86_64-pc-windows-gnu
     - uses: swatinem/rust-cache@v2
       with:
         key: clippy
@@ -55,6 +56,11 @@ jobs:
       run: cargo clippy --no-deps --all-targets -- -D warnings
     - name: cargo clippy (--features pcap-replay)
       run: cargo clippy --no-deps --all-targets --features pcap-replay -- -D warnings
+    # The Windows modules are behind cfg(target_os), so a host-target clippy
+    # never sees them. Clippy only checks, so this needs the target's std but
+    # no Windows linker.
+    - name: cargo clippy (Windows target)
+      run: cargo clippy --no-deps --all-targets --target x86_64-pc-windows-gnu -- -D warnings
 
   build:
     name: Build ${{ matrix.target }}
