@@ -5,12 +5,17 @@ use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use w32_error::W32Error;
 use windows::Win32::Foundation::{
-    CloseHandle, ERROR_IO_PENDING, ERROR_SERVICE_NOT_ACTIVE, ERROR_SUCCESS, HANDLE, WAIT_EVENT,
+    CloseHandle, ERROR_IO_PENDING, ERROR_SUCCESS, HANDLE, WAIT_EVENT,
 };
 use windows::Win32::NetworkManagement::IpHelper::NotifyAddrChange;
+use windows::Win32::NetworkManagement::Ndis::{
+    NDIS_PHYSICAL_MEDIUM, NdisPhysicalMediumBluetooth, NdisPhysicalMediumNative802_11,
+    NdisPhysicalMediumWirelessLan, NdisPhysicalMediumWirelessWan,
+};
 use windows::Win32::System::IO::OVERLAPPED;
 use windows::Win32::System::Threading::{CreateEventW, INFINITE, SetEvent, WaitForMultipleObjects};
 
+use crate::network::LinkKind;
 use crate::radar::RadarError;
 
 /// Create a manual‑reset, initially non‑signaled event.
@@ -124,51 +129,139 @@ fn create_ip_addr_change_event() -> Result<HANDLE, RadarError> {
     }
 }
 
-pub fn is_wireless_interface(interface_name: &str) -> bool {
-    use std::ptr::null_mut;
-    use windows::Win32::NetworkManagement::WiFi::{
-        WLAN_INTERFACE_INFO_LIST, WlanCloseHandle, WlanEnumInterfaces, WlanFreeMemory,
-        WlanOpenHandle,
-    };
+/// Classify an interface by the link technology behind it.
+///
+/// `interface_name` is an adapter *friendly* name, the same string that
+/// `NetworkInterface::show()` reports. `MIB_IF_ROW2` is the only interface table
+/// carrying the friendly name (`Alias`), the adapter type and the physical
+/// medium together, and all three are needed: Windows reports a Bluetooth
+/// personal area network as `IF_TYPE_ETHERNET_CSMACD`, exactly like real
+/// Ethernet, and only `PhysicalMediumType` tells them apart.
+///
+/// An interface missing from the table is reported as [`LinkKind::Wired`] so a
+/// lookup failure never silently hides a radar.
+pub fn link_kind(interface_name: &str) -> LinkKind {
+    lookup_link_kind(interface_name).unwrap_or(LinkKind::Wired)
+}
+
+fn lookup_link_kind(interface_name: &str) -> Option<LinkKind> {
+    use windows::Win32::NetworkManagement::IpHelper::{FreeMibTable, GetIfTable2, MIB_IF_TABLE2};
 
     unsafe {
-        // Open WLAN handle
-        let mut client_handle: HANDLE = Default::default();
-        let mut negotiated_version = 0;
-        let wlan_result = WlanOpenHandle(2, None, &mut negotiated_version, &mut client_handle);
-
-        if wlan_result == ERROR_SERVICE_NOT_ACTIVE.0 {
-            return false;
-        }
-        if wlan_result != 0 {
-            panic!("WlanOpenHandle failed with error: {}", wlan_result);
-        }
-
-        let mut interface_list: *mut WLAN_INTERFACE_INFO_LIST = null_mut();
-        let wlan_enum_result = WlanEnumInterfaces(client_handle, None, &mut interface_list);
-
-        if wlan_enum_result != 0 {
-            WlanCloseHandle(client_handle, None);
-            panic!("WlanEnumInterfaces failed with error: {}", wlan_enum_result);
+        let mut table: *mut MIB_IF_TABLE2 = null_mut();
+        let result = GetIfTable2(&mut table);
+        if result != ERROR_SUCCESS {
+            log::warn!(
+                "GetIfTable2 failed with error: {}, treating '{}' as wired",
+                W32Error::new(result.0),
+                interface_name
+            );
+            return None;
         }
 
-        let interfaces = &*interface_list;
+        // `Table` is a C flexible array: its one-element head is followed by
+        // `NumEntries` rows in the same allocation.
+        let rows =
+            std::slice::from_raw_parts((*table).Table.as_ptr(), (*table).NumEntries as usize);
+        let kind = rows
+            .iter()
+            .find(|row| nul_terminated(&row.Alias) == interface_name)
+            .map(|row| classify(row.Type, row.PhysicalMediumType));
 
-        // Check each WLAN interface
-        for i in 0..interfaces.dwNumberOfItems {
-            let wlan_interface = &interfaces.InterfaceInfo[i as usize];
-            let wlan_interface_name =
-                String::from_utf16_lossy(&wlan_interface.strInterfaceDescription);
-            if wlan_interface_name.trim() == interface_name.trim() {
-                WlanFreeMemory(interface_list as _);
-                WlanCloseHandle(client_handle, None);
-                return true;
-            }
-        }
+        FreeMibTable(table as _);
+        kind
+    }
+}
 
-        WlanFreeMemory(interface_list as _);
-        WlanCloseHandle(client_handle, None);
+fn classify(if_type: u32, medium: NDIS_PHYSICAL_MEDIUM) -> LinkKind {
+    use windows::Win32::NetworkManagement::IpHelper::{IF_TYPE_ETHERNET_CSMACD, IF_TYPE_IEEE80211};
+
+    // Checked before the adapter type, because a Bluetooth PAN claims to be
+    // Ethernet and would otherwise pass as a usable wired link.
+    if medium == NdisPhysicalMediumBluetooth {
+        return LinkKind::Unusable;
     }
 
-    false
+    let wireless_medium = medium == NdisPhysicalMediumNative802_11
+        || medium == NdisPhysicalMediumWirelessLan
+        || medium == NdisPhysicalMediumWirelessWan;
+
+    match if_type {
+        IF_TYPE_IEEE80211 => LinkKind::Wireless,
+        IF_TYPE_ETHERNET_CSMACD if wireless_medium => LinkKind::Wireless,
+        IF_TYPE_ETHERNET_CSMACD => LinkKind::Wired,
+        // Loopback, tunnels (Teredo, 6to4, IP-HTTPS), PPP/VPN dial-up, cellular
+        // modems and the rest cannot carry a radar's multicast spoke stream.
+        _ => LinkKind::Unusable,
+    }
+}
+
+/// Decode a fixed-size, NUL-padded Windows UTF-16 string.
+fn nul_terminated(buffer: &[u16]) -> String {
+    let end = buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len());
+    String::from_utf16_lossy(&buffer[..end])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows::Win32::NetworkManagement::IpHelper::{
+        IF_TYPE_ETHERNET_CSMACD, IF_TYPE_IEEE80211, IF_TYPE_PPP, IF_TYPE_SOFTWARE_LOOPBACK,
+        IF_TYPE_TUNNEL,
+    };
+    use windows::Win32::NetworkManagement::Ndis::{
+        NdisPhysicalMedium802_3, NdisPhysicalMediumUnspecified,
+    };
+
+    #[test]
+    fn ethernet_is_wired() {
+        assert_eq!(
+            classify(IF_TYPE_ETHERNET_CSMACD, NdisPhysicalMedium802_3),
+            LinkKind::Wired
+        );
+    }
+
+    #[test]
+    fn native_80211_is_wireless() {
+        assert_eq!(
+            classify(IF_TYPE_IEEE80211, NdisPhysicalMediumNative802_11),
+            LinkKind::Wireless
+        );
+    }
+
+    #[test]
+    fn bluetooth_pan_is_unusable() {
+        // Values observed on a real adapter: Windows types a Bluetooth PAN as
+        // Ethernet, so only the medium keeps it out of radar discovery.
+        assert_eq!(
+            classify(IF_TYPE_ETHERNET_CSMACD, NdisPhysicalMediumBluetooth),
+            LinkKind::Unusable
+        );
+    }
+
+    #[test]
+    fn tunnels_loopback_and_ppp_are_unusable() {
+        for if_type in [IF_TYPE_TUNNEL, IF_TYPE_PPP, IF_TYPE_SOFTWARE_LOOPBACK] {
+            assert_eq!(
+                classify(if_type, NdisPhysicalMediumUnspecified),
+                LinkKind::Unusable,
+                "if_type {} must be unusable",
+                if_type
+            );
+        }
+    }
+
+    #[test]
+    fn alias_decoding_stops_at_the_nul_padding() {
+        let mut alias = [0u16; 257];
+        for (slot, c) in alias.iter_mut().zip("WiFi".encode_utf16()) {
+            *slot = c;
+        }
+        assert_eq!(nul_terminated(&alias), "WiFi");
+    }
+
+    #[test]
+    fn an_unknown_interface_is_assumed_wired() {
+        assert_eq!(link_kind("no such interface"), LinkKind::Wired);
+    }
 }

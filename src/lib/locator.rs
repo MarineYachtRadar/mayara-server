@@ -19,6 +19,7 @@ use tokio::{task::JoinSet, time::sleep};
 use tokio_graceful_shutdown::SubsystemHandle;
 
 use crate::brand::{LocatorId, RadarLocator, create_brand_listeners};
+use crate::network::LinkKind;
 use crate::radar::{RadarError, SharedRadars};
 use crate::{Brand, Cli, InterfaceApi, InterfaceId, InterfaceStatus, RadarInterfaceApi, network};
 
@@ -371,16 +372,27 @@ impl Locator {
                     let mut active: bool = false;
 
                     if only_interface.is_none() || only_interface.as_ref() == Some(&itf.name) {
+                        let link_kind = network::link_kind(&itf.name);
                         for nic_addr in itf.addr {
                             if let (IpAddr::V4(nic_ip), Some(IpAddr::V4(nic_netmask))) =
                                 (nic_addr.ip(), nic_addr.netmask())
                             {
-                                if avoid_wifi && network::is_wireless_interface(&itf.name) {
-                                    log::trace!("Ignoring wireless interface '{}'", itf.name);
+                                let ignored = match link_kind {
+                                    LinkKind::Unusable => Some((
+                                        InterfaceStatus::LinkTypeIgnored,
+                                        "link type cannot carry radar traffic",
+                                    )),
+                                    LinkKind::Wireless if avoid_wifi => {
+                                        Some((InterfaceStatus::WirelessIgnored, "wireless"))
+                                    }
+                                    _ => None,
+                                };
+                                if let Some((status, reason)) = ignored {
+                                    log::trace!("Ignoring interface '{}': {}", itf.name, reason);
                                     if_api.insert(
                                         InterfaceId::new(&itf.name, Some(nic_ip)),
                                         RadarInterfaceApi::new(
-                                            InterfaceStatus::WirelessIgnored,
+                                            status,
                                             Some(nic_ip),
                                             Some(nic_netmask),
                                             None,

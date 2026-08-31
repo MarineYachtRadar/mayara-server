@@ -401,18 +401,30 @@ pub(crate) fn interface_for(nic_addr: &Ipv4Addr) -> Option<(String, Ipv4Addr)> {
     None
 }
 
+/// What an interface's link type means for radar discovery.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LinkKind {
+    /// A wired link. Radars are searched for here.
+    Wired,
+    /// A wireless link. Searched only when `--allow-wifi` is given.
+    Wireless,
+    /// A link that cannot carry radar traffic at all, such as a Bluetooth
+    /// personal area network or a VPN tunnel. Never searched.
+    Unusable,
+}
+
 #[cfg(target_os = "macos")]
-pub(crate) use macos::is_wireless_interface;
+pub(crate) use macos::link_kind;
 #[cfg(target_os = "macos")]
 pub(crate) use macos::spawn_wait_for_ip_addr_change;
 
 #[cfg(target_os = "linux")]
-pub(crate) use linux::is_wireless_interface;
+pub(crate) use linux::link_kind;
 #[cfg(target_os = "linux")]
 pub(crate) use linux::spawn_wait_for_ip_addr_change;
 
 #[cfg(target_os = "windows")]
-pub(crate) use windows::is_wireless_interface;
+pub(crate) use windows::link_kind;
 #[cfg(target_os = "windows")]
 pub(crate) use windows::spawn_wait_for_ip_addr_change;
 

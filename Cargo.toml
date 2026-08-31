@@ -114,7 +114,7 @@ rtnetlink = "0.23.0"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 w32-error = "1.0.0"
-windows = { version = "0.62.2", features = ["Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_WiFi", "Win32_Networking_WinSock", "Win32_System", "Win32_System_Threading", "Win32_Security", "Win32_System_Diagnostics", "Win32_System_Diagnostics_Debug", "Win32_System_IO", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock", "Win32_System_SystemServices" ] }
+windows = { version = "0.62.2", features = ["Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_System", "Win32_System_Threading", "Win32_Security", "Win32_System_Diagnostics", "Win32_System_Diagnostics_Debug", "Win32_System_IO", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock", "Win32_System_SystemServices" ] }
 
 [build-dependencies]
 protobuf-codegen = "3.7.2"

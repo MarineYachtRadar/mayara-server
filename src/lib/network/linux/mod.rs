@@ -1,3 +1,4 @@
+use crate::network::LinkKind;
 use crate::radar::RadarError;
 
 use futures::stream::StreamExt;
@@ -76,7 +77,19 @@ async fn wait_for_ip_addr_change(
     }
 }
 
-pub fn is_wireless_interface(interface_name: &str) -> bool {
+/// Classify an interface by the link technology behind it.
+///
+/// Only WiFi is distinguished here; Linux has no equally cheap probe for the
+/// link types Windows reports as [`LinkKind::Unusable`].
+pub fn link_kind(interface_name: &str) -> LinkKind {
+    if is_wireless_interface(interface_name) {
+        LinkKind::Wireless
+    } else {
+        LinkKind::Wired
+    }
+}
+
+fn is_wireless_interface(interface_name: &str) -> bool {
     use libc::{AF_INET, Ioctl, c_void, ifreq, ioctl, strncpy};
     use std::ffi::CString;
 
