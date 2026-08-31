@@ -5,15 +5,17 @@ use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use w32_error::W32Error;
 use windows::Win32::Foundation::{
-    CloseHandle, ERROR_IO_PENDING, ERROR_SUCCESS, HANDLE, WAIT_EVENT,
+    CloseHandle, ERROR_IO_PENDING, ERROR_SUCCESS, HANDLE, WAIT_OBJECT_0,
 };
-use windows::Win32::NetworkManagement::IpHelper::NotifyAddrChange;
+use windows::Win32::NetworkManagement::IpHelper::{CancelIPChangeNotify, NotifyAddrChange};
 use windows::Win32::NetworkManagement::Ndis::{
     NDIS_PHYSICAL_MEDIUM, NdisPhysicalMediumBluetooth, NdisPhysicalMediumNative802_11,
     NdisPhysicalMediumWirelessLan, NdisPhysicalMediumWirelessWan,
 };
 use windows::Win32::System::IO::OVERLAPPED;
-use windows::Win32::System::Threading::{CreateEventW, INFINITE, SetEvent, WaitForMultipleObjects};
+use windows::Win32::System::Threading::{
+    CreateEventW, INFINITE, ResetEvent, SetEvent, WaitForMultipleObjects,
+};
 
 use crate::network::LinkKind;
 use crate::radar::RadarError;
@@ -50,6 +52,8 @@ async fn bridge_channel_to_event(
     }
 }
 
+/// Report every change to the local IP address mapping on `tx_ip_change` until
+/// `cancel_token` is cancelled.
 pub async fn spawn_wait_for_ip_addr_change(
     cancel_token: CancellationToken,
     tx_ip_change: broadcast::Sender<()>,
@@ -57,76 +61,99 @@ pub async fn spawn_wait_for_ip_addr_change(
     tokio::task::spawn(bridge_channel_to_event(cancel_token, tx_ip_change));
 }
 
+/// Block on address changes, forwarding each to `tx_ip_change`, until the event
+/// behind `cancel_handle` is signaled.
+///
+/// `HANDLE` is not `Send`, so the cancellation event is passed as a bare address
+/// and rebuilt here; the caller owns it and closes it.
 fn wait_for_ip_addr_change(
     cancel_handle: usize,
     tx_ip_change: broadcast::Sender<()>,
 ) -> Result<(), RadarError> {
     let cancel_handle = HANDLE(cancel_handle as *mut core::ffi::c_void);
 
-    match create_ip_addr_change_event() {
-        Ok(event) => {
-            log::debug!("IP address change event created");
-            loop {
-                let result =
-                    unsafe { WaitForMultipleObjects(&[event, cancel_handle], false, INFINITE) };
-                match result {
-                    WAIT_EVENT(0) => {
-                        log::debug!("IP address change event handled");
-                        let _ = tx_ip_change.send(());
-                    }
-                    WAIT_EVENT(1) => {
-                        break;
-                    }
-                    _ => {
-                        let windows_error = W32Error::last_thread_error();
-                        log::error!(
-                            "IP address change event failed with error: {}",
-                            windows_error
-                        );
-                    }
-                }
-            }
-            let _ = unsafe { CloseHandle(event) };
-        }
+    let event = match new_manual_event() {
+        Ok(event) => event,
         Err(e) => {
             log::error!("Failed to create IP address change event: {}", e);
+            return Ok(());
         }
     };
+
+    // The I/O manager writes the completion status into this structure when an
+    // address changes, so it has to outlive every notification armed against it
+    // and the pending request has to be cancelled before it goes out of scope.
+    let mut overlapped = OVERLAPPED {
+        hEvent: event,
+        ..Default::default()
+    };
+
+    log::debug!("IP address change event created");
+    loop {
+        if let Err(e) = arm_ip_addr_change_notification(&mut overlapped) {
+            log::error!("Failed to register for IP address changes: {}", e);
+            break;
+        }
+
+        // The wait reports the handle that woke it as `WAIT_OBJECT_0` plus its
+        // index in the array below.
+        const ADDRESS_CHANGED: u32 = WAIT_OBJECT_0.0;
+        const CANCELLED: u32 = WAIT_OBJECT_0.0 + 1;
+
+        let result = unsafe { WaitForMultipleObjects(&[event, cancel_handle], false, INFINITE) };
+        match result.0 {
+            ADDRESS_CHANGED => {
+                log::debug!("IP address change event handled");
+                let _ = tx_ip_change.send(());
+            }
+            CANCELLED => {
+                break;
+            }
+            _ => {
+                let windows_error = W32Error::last_thread_error();
+                log::error!(
+                    "IP address change event failed with error: {}",
+                    windows_error
+                );
+                break;
+            }
+        }
+    }
+
+    unsafe {
+        // The last notification armed above is still pending.
+        let _ = CancelIPChangeNotify(&overlapped);
+        let _ = CloseHandle(event);
+    }
     Ok(())
 }
 
-fn create_ip_addr_change_event() -> Result<HANDLE, RadarError> {
-    unsafe {
-        // Create a manual-reset event
-        let event = CreateEventW(None, true, false, None)
-            .map_err(|_| RadarError::Io(std::io::Error::last_os_error()))?;
-        if event.is_invalid() {
-            let windows_error = W32Error::last_thread_error();
-            log::error!("CreateEventW failed with error: {}", windows_error);
-            return Err(RadarError::OSError(windows_error.to_string()));
-        }
-
-        // Prepare an OVERLAPPED structure with the event handle
-        let overlapped = OVERLAPPED {
-            hEvent: event,
-            ..Default::default()
-        };
-
-        // Register for address change notifications
-        let notify_result = NotifyAddrChange(null_mut(), &overlapped);
-        if notify_result != ERROR_SUCCESS.0 && notify_result != ERROR_IO_PENDING.0 {
-            let windows_error = W32Error::new(notify_result);
-            log::error!(
-                "NotifyAddrChange failed with error: {}: {}",
-                notify_result,
-                windows_error
-            );
-            let _ = CloseHandle(event);
-            return Err(RadarError::OSError(windows_error.to_string()));
-        }
-
-        Ok(event)
+/// Arm a single address change notification against `overlapped`.
+///
+/// `NotifyAddrChange` fires once per registration, so a caller wanting more than
+/// the first change re-arms after every notification.
+fn arm_ip_addr_change_notification(overlapped: &mut OVERLAPPED) -> Result<(), RadarError> {
+    // The event is manual-reset and stays signaled once a notification arrives.
+    // The I/O manager also resets it when the request starts, but resetting here
+    // keeps a stale signal from turning the wait into a spin.
+    if let Err(e) = unsafe { ResetEvent(overlapped.hEvent) } {
+        log::error!("Failed to reset IP address change event: {}", e);
+        return Err(RadarError::OSError(e.to_string()));
     }
+
+    // Kept at the provenance of the mutable borrow: the kernel writes here while
+    // the request is pending, even though the binding takes a const pointer.
+    let notify_result = unsafe { NotifyAddrChange(null_mut(), &raw const *overlapped) };
+    if notify_result != ERROR_SUCCESS.0 && notify_result != ERROR_IO_PENDING.0 {
+        let windows_error = W32Error::new(notify_result);
+        log::error!(
+            "NotifyAddrChange failed with error: {}: {}",
+            notify_result,
+            windows_error
+        );
+        return Err(RadarError::OSError(windows_error.to_string()));
+    }
+    Ok(())
 }
 
 /// Classify an interface by the link technology behind it.
@@ -263,5 +290,32 @@ mod tests {
     #[test]
     fn an_unknown_interface_is_assumed_wired() {
         assert_eq!(link_kind("no such interface"), LinkKind::Wired);
+    }
+
+    #[test]
+    fn the_address_change_watcher_stops_when_cancelled() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let cancel = new_manual_event().expect("cancel event");
+        let (tx_ip_change, _rx) = broadcast::channel(1);
+        let (done, cancelled) = mpsc::channel();
+
+        // `HANDLE` is not `Send`, so the watcher takes it as a bare address.
+        let cancel_handle = cancel.0 as usize;
+        std::thread::spawn(move || {
+            let _ = done.send(wait_for_ip_addr_change(cancel_handle, tx_ip_change).is_ok());
+        });
+
+        signal_event(cancel).expect("signal cancel event");
+
+        assert_eq!(
+            cancelled.recv_timeout(Duration::from_secs(5)),
+            Ok(true),
+            "the watcher must return once its cancel event is signaled"
+        );
+        unsafe {
+            let _ = CloseHandle(cancel);
+        }
     }
 }
