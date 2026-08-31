@@ -102,13 +102,13 @@ fn create_ip_addr_change_event() -> Result<HANDLE, RadarError> {
         }
 
         // Prepare an OVERLAPPED structure with the event handle
-        let mut overlapped = OVERLAPPED {
+        let overlapped = OVERLAPPED {
             hEvent: event,
             ..Default::default()
         };
 
         // Register for address change notifications
-        let notify_result = NotifyAddrChange(null_mut(), &mut overlapped);
+        let notify_result = NotifyAddrChange(null_mut(), &overlapped);
         if notify_result != ERROR_SUCCESS.0 && notify_result != ERROR_IO_PENDING.0 {
             let windows_error = W32Error::new(notify_result);
             log::error!(
