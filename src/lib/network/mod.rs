@@ -410,6 +410,10 @@ pub(crate) enum LinkKind {
     Wireless,
     /// A link that cannot carry radar traffic at all, such as a Bluetooth
     /// personal area network or a VPN tunnel. Never searched.
+    ///
+    /// Only Windows classifies interfaces this way; Linux and macOS never
+    /// construct it.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     Unusable,
 }
 
