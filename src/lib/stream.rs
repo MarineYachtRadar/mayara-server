@@ -24,6 +24,12 @@ use crate::{
 /// (e.g. `vessels.urn:mrn:signalk:uuid:…`) is detected from the upstream.
 const SELF_CONTEXT: &str = "vessels.self";
 
+/// No fixed-policy subscription means nothing to deliver on a schedule.
+const NEVER: Duration = Duration::from_secs(99999999);
+
+/// Signal K's default for a `fixed` subscription that names no period.
+const DEFAULT_FIXED_PERIOD_MS: u64 = 1000;
+
 /// Notification path for "this run is not saving radar settings". Under
 /// `mayara.` rather than `radar.<id>.`: the condition belongs to the server,
 /// not to any one radar.
@@ -608,19 +614,28 @@ impl ActiveSubscriptions {
     pub fn new(mode: Subscribe) -> ActiveSubscriptions {
         ActiveSubscriptions {
             mode,
-            timeout: Duration::from_secs(99999999),
+            timeout: NEVER,
             requests: Vec::new(),
             last_sent: HashMap::new(),
         }
     }
 
-    fn set_timeout(&mut self, timeout: u64) {
-        if timeout < u64::MAX {
-            let timeout = Duration::from_millis(timeout);
-            if self.timeout < timeout {
-                self.timeout = timeout;
-            };
-        }
+    /// How often the stream has to wake up to deliver on schedule: the
+    /// shortest period any fixed-policy request asked for. Only `fixed` is
+    /// delivered periodically -- `instant` and `ideal` go out when a value
+    /// changes -- so with no fixed request there is nothing to wake up for.
+    /// Recomputed from the live requests, so dropping the fastest
+    /// subscription slows the loop back down.
+    fn recompute_timeout(&mut self) {
+        self.timeout = self
+            .requests
+            .iter()
+            .filter(|r| r.policy == Some(Policy::Fixed))
+            .map(|r| r.period.unwrap_or(DEFAULT_FIXED_PERIOD_MS))
+            .filter(|p| *p > 0)
+            .min()
+            .map(Duration::from_millis)
+            .unwrap_or(NEVER);
     }
 
     pub fn get_timeout(&mut self) -> Duration {
@@ -636,8 +651,6 @@ impl ActiveSubscriptions {
     }
 
     pub fn subscribe(&mut self, subscription: Subscription) -> Result<bool, RadarError> {
-        let mut period = u64::MAX;
-
         // Answering `true` makes the caller send every vessel it knows of, so
         // it means "newly asked for", not "asked for". A client repeating a
         // subscription it already holds is not asking again.
@@ -646,13 +659,6 @@ impl ActiveSubscriptions {
         for path_subscription in subscription.subscribe {
             let path = &path_subscription.path;
             log::debug!("Subscribing to path: {}", path);
-
-            if let Some(p) = path_subscription.min_period {
-                period = min(p, period);
-            }
-            if let Some(p) = path_subscription.period {
-                period = min(p, period);
-            }
 
             // Asking twice for the same thing is one subscription, but asking
             // for it differently is not — the terms may differ.
@@ -665,7 +671,7 @@ impl ActiveSubscriptions {
                 self.requests.push(path_subscription);
             }
         }
-        self.set_timeout(period);
+        self.recompute_timeout();
 
         Ok(!asked_before && self.asks_for_vessels())
     }
@@ -687,6 +693,7 @@ impl ActiveSubscriptions {
             // to cover the same ground still asked for.
             self.requests.retain(|r| r.path != *path);
         }
+        self.recompute_timeout();
 
         Ok(())
     }
@@ -749,15 +756,22 @@ impl ActiveSubscriptions {
             if !full {
                 return false;
             }
+            // Periodic delivery happens on the stream's tick, so a period is
+            // only ever answered to the nearest tick. Half a tick of slack
+            // rounds to the closest one; without it the tick that lands a
+            // scheduling hair before the boundary is refused and every other
+            // one is lost, delivering at twice the period the client asked
+            // for. Paths asking for longer periods than the tick still wait
+            // the ticks out.
             if let (Some(period), Some(last)) = (terms.period, last)
-                && last + Duration::from_micros(period) > now
+                && last + Duration::from_millis(period) > now + self.timeout / 2
             {
                 return false;
             }
         }
 
         if let (Some(min_period), Some(last)) = (terms.min_period, last)
-            && last + Duration::from_micros(min_period) > now
+            && last + Duration::from_millis(min_period) > now
         {
             return false;
         }
@@ -1583,6 +1597,128 @@ mod build_tests {
         delta.add_meta_for_control("nav1034A", &control);
 
         assert_eq!(delta.build().map(|d| d.updates.len()), Some(1));
+    }
+
+    fn subscribe_to(json: serde_json::Value) -> Subscription {
+        serde_json::from_value(json).expect("a valid subscription")
+    }
+
+    /// The stream has to wake up at least as often as the shortest period a
+    /// client asked for, or a `fixed` subscription is answered once and never
+    /// again.
+    #[test]
+    fn the_wake_up_interval_is_the_shortest_period_asked_for() {
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
+        assert_eq!(
+            subs.get_timeout(),
+            NEVER,
+            "nothing to deliver on a schedule"
+        );
+
+        subs.subscribe(subscribe_to(json!({"subscribe": [
+            {"path": "radars.*.controls.*", "policy": "fixed", "period": 1000}
+        ]})))
+        .unwrap();
+        assert_eq!(subs.get_timeout(), Duration::from_millis(1000));
+
+        subs.subscribe(subscribe_to(json!({"subscribe": [
+            {"path": "radars.nav1034A.controls.gain", "policy": "fixed", "period": 250}
+        ]})))
+        .unwrap();
+        assert_eq!(
+            subs.get_timeout(),
+            Duration::from_millis(250),
+            "the faster subscription sets the pace"
+        );
+    }
+
+    /// Dropping the fastest subscription lets the loop slow back down.
+    #[test]
+    fn dropping_a_subscription_relaxes_the_wake_up_interval() {
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
+        subs.subscribe(subscribe_to(json!({"subscribe": [
+            {"path": "radars.*.controls.*", "policy": "fixed", "period": 1000},
+            {"path": "radars.nav1034A.controls.gain", "policy": "fixed", "period": 250}
+        ]})))
+        .unwrap();
+        assert_eq!(subs.get_timeout(), Duration::from_millis(250));
+
+        subs.desubscribe(
+            serde_json::from_value(json!({"desubscribe": [
+                {"path": "radars.nav1034A.controls.gain"}
+            ]}))
+            .expect("a valid desubscription"),
+        )
+        .unwrap();
+        assert_eq!(subs.get_timeout(), Duration::from_millis(1000));
+    }
+
+    /// Signal K states periods in milliseconds. Read as microseconds a
+    /// 1000 ms period expires a thousand times too early, and `fixed`
+    /// degenerates into "send everything, always".
+    #[test]
+    fn a_period_is_milliseconds() {
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
+        subs.subscribe(subscribe_to(json!({"subscribe": [
+            {"path": "radars.nav1034A.controls.gain", "policy": "fixed", "period": 1000}
+        ]})))
+        .unwrap();
+
+        let path = "radars.nav1034A.controls.gain";
+        assert!(subs.is_subscribed_path(path, true), "first tick delivers");
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(
+            !subs.is_subscribed_path(path, true),
+            "20ms into a 1000ms period the client is not owed another value"
+        );
+    }
+
+    /// Delivery happens on the stream's tick, so a period is answered to the
+    /// nearest tick: a tick landing a hair early still delivers, or every
+    /// other one is dropped and the client is served at half the rate it
+    /// asked for.
+    #[test]
+    fn a_tick_landing_just_early_still_delivers() {
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
+        subs.subscribe(subscribe_to(json!({"subscribe": [
+            {"path": "radars.nav1034A.controls.gain", "policy": "fixed", "period": 100}
+        ]})))
+        .unwrap();
+
+        let path = "radars.nav1034A.controls.gain";
+        assert!(subs.is_subscribed_path(path, true));
+        std::thread::sleep(Duration::from_millis(60));
+        assert!(
+            subs.is_subscribed_path(path, true),
+            "60ms into a 100ms period is the tick this value belongs to"
+        );
+    }
+
+    /// A `fixed` subscription that names no period still has to be delivered:
+    /// Signal K's default period applies.
+    #[test]
+    fn fixed_without_a_period_uses_the_default() {
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
+        subs.subscribe(subscribe_to(json!({"subscribe": [
+            {"path": "radars.*.controls.*", "policy": "fixed"}
+        ]})))
+        .unwrap();
+        assert_eq!(
+            subs.get_timeout(),
+            Duration::from_millis(DEFAULT_FIXED_PERIOD_MS)
+        );
+    }
+
+    /// Change-driven policies are delivered when a value changes, so they must
+    /// not spin the loop up on their own.
+    #[test]
+    fn a_rate_limited_subscription_does_not_schedule_wake_ups() {
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
+        subs.subscribe(subscribe_to(json!({"subscribe": [
+            {"path": "radars.*.controls.*", "policy": "ideal", "minPeriod": 200}
+        ]})))
+        .unwrap();
+        assert_eq!(subs.get_timeout(), NEVER);
     }
 
     /// An emptied update must not take a full one down with it, nor survive
