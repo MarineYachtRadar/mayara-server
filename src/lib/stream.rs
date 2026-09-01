@@ -631,7 +631,7 @@ impl ActiveSubscriptions {
             .requests
             .iter()
             .filter(|r| r.policy == Some(Policy::Fixed))
-            .map(|r| r.period.unwrap_or(DEFAULT_FIXED_PERIOD_MS))
+            .filter_map(effective_period)
             .filter(|p| *p > 0)
             .min()
             .map(Duration::from_millis)
@@ -740,7 +740,7 @@ impl ActiveSubscriptions {
                 if policy.permits_more_than(&found.policy) {
                     found.policy = policy;
                 }
-                found.period = least(found.period, request.period);
+                found.period = least(found.period, effective_period(request));
                 found.min_period = least(found.min_period, request.min_period);
             }
         }
@@ -831,6 +831,18 @@ struct Terms {
     policy: Policy,
     period: Option<u64>,
     min_period: Option<u64>,
+}
+
+/// How often a request is answered. A `fixed` request that names no period
+/// still has Signal K's default, and that has to be the same number the wake-up
+/// interval and the throttle both work from: defaulting in one but not the
+/// other lets a path be woken every second and then refused until the next
+/// period a different subscription happens to name.
+fn effective_period(request: &PathSubscribe) -> Option<u64> {
+    match request.policy {
+        Some(Policy::Fixed) => Some(request.period.unwrap_or(DEFAULT_FIXED_PERIOD_MS)),
+        _ => request.period,
+    }
 }
 
 /// The smaller of two optional periods, treating absence as no limit.
@@ -1706,6 +1718,34 @@ mod build_tests {
         assert_eq!(
             subs.get_timeout(),
             Duration::from_millis(DEFAULT_FIXED_PERIOD_MS)
+        );
+    }
+
+    /// The default period has to reach the throttle as well as the wake-up
+    /// interval. Applied to only one of them, a `fixed` subscription that
+    /// names no period is delivered at whatever pace some other subscription
+    /// happens to set -- here every 100ms instead of the second it is owed.
+    #[test]
+    fn the_default_period_throttles_as_well_as_it_schedules() {
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
+        subs.subscribe(subscribe_to(json!({"subscribe": [
+            {"path": "radars.*.controls.*", "policy": "fixed"},
+            {"path": "radars.nav1034B.controls.gain", "policy": "fixed", "period": 100}
+        ]})))
+        .unwrap();
+        assert_eq!(
+            subs.get_timeout(),
+            Duration::from_millis(100),
+            "the fast subscription still sets the pace"
+        );
+
+        // Covered only by the wildcard, so it is owed the default period.
+        let path = "radars.nav1034A.controls.gain";
+        assert!(subs.is_subscribed_path(path, true));
+        std::thread::sleep(Duration::from_millis(60));
+        assert!(
+            !subs.is_subscribed_path(path, true),
+            "60ms into the default 1000ms period this path is owed nothing"
         );
     }
 
