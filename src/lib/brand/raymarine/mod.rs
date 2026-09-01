@@ -42,13 +42,21 @@ struct RaymarineModel {
 }
 
 impl RaymarineModel {
-    fn new_eseries() -> Self {
+    /// A radar reached through a SeaTalkHS device that never names itself.
+    ///
+    /// The beacons carry no model and no serial: the identity beacon's model
+    /// field holds a bitmap that changes between runs, and the 0x010006 info
+    /// report can be zero-filled entirely. All we can say is that the picture
+    /// arrives over SeaTalkHS. Non-HD 512-sample geometry, since HD radomes
+    /// identify themselves through the 0x018701 report instead and never
+    /// reach this fallback.
+    fn new_seatalk_hs() -> Self {
         RaymarineModel {
             model: BaseModel::RD,
             hd: false,
             max_spoke_len: 512,
             doppler: false,
-            name: "E series Classic",
+            name: "SeaTalkHS",
         }
     }
 

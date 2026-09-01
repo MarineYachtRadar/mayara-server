@@ -636,6 +636,21 @@ fn model_from_serial(model_serial: &str) -> Option<RaymarineModel> {
         .or_else(|| model_serial.get(..6).and_then(RaymarineModel::try_into))
 }
 
+/// Resolve an info report's model field to a model.
+///
+/// A field that names no radome still describes a usable radar, reached over
+/// SeaTalkHS by a device that will not identify itself. Two flavours arrive
+/// here: a purely numeric field, and — from an E-Series Classic MFD
+/// publishing a cabled scanner — a 0x010006 report that is zero-filled apart
+/// from its message id, leaving the field empty. Anything else is a model we
+/// do not know.
+fn model_from_info_field(model_serial: &str) -> Option<RaymarineModel> {
+    model_from_serial(model_serial).or_else(|| {
+        (model_serial.is_empty() || model_serial.parse::<u64>().is_ok())
+            .then(RaymarineModel::new_seatalk_hs)
+    })
+}
+
 pub(super) fn process_info_report(receiver: &mut RaymarineReportReceiver, data: &[u8]) {
     if receiver.model.is_some() {
         return;
@@ -661,23 +676,16 @@ pub(super) fn process_info_report(receiver: &mut RaymarineReportReceiver, data: 
         .unwrap_or(model_field.len())];
     let model_serial = String::from_utf8_lossy(model_field).to_string();
 
-    let model = match model_from_serial(&model_serial) {
-        Some(model) => model,
-        None => {
-            if model_serial.parse::<u64>().is_ok() {
-                RaymarineModel::new_eseries()
-            } else {
-                log::error!(
-                    "{}: Unknown model serial: {}",
-                    receiver.common.key,
-                    model_serial
-                );
-                log::error!("{}: report {:02X?}", receiver.common.key, data);
-                return;
-            }
-        }
+    let Some(model) = model_from_info_field(&model_serial) else {
+        log::error!(
+            "{}: Unknown model serial: {}",
+            receiver.common.key,
+            model_serial
+        );
+        log::error!("{}: report {:02X?}", receiver.common.key, data);
+        return;
     };
-    apply_model(receiver, model, Some(serial_nr));
+    apply_model(receiver, model, Some(serial_nr).filter(|s| !s.is_empty()));
     receiver.state = ReceiverState::InfoRequestReceived;
 }
 
@@ -797,7 +805,7 @@ pub(super) fn process_hd_info_report(receiver: &mut RaymarineReportReceiver, dat
 
 #[cfg(test)]
 mod tests {
-    use super::{hd_info_string, model_from_serial};
+    use super::{hd_info_string, model_from_info_field, model_from_serial};
 
     #[test]
     fn model_from_concatenated_serial() {
@@ -811,6 +819,22 @@ mod tests {
         // Numeric E-series fields are no model; the caller falls back.
         assert!(model_from_serial("1234567").is_none());
         assert!(model_from_serial("E9999").is_none());
+    }
+
+    #[test]
+    fn info_field_without_a_radome_name_is_a_seatalk_hs_radar() {
+        // An E120 Classic sends its 0x010006 report zero-filled, so the
+        // model field arrives empty.
+        assert_eq!(model_from_info_field("").unwrap().name, "SeaTalkHS");
+        // A purely numeric field names no radome either.
+        assert_eq!(model_from_info_field("1234567").unwrap().name, "SeaTalkHS");
+        // A named radome still wins over the fallback.
+        assert_eq!(
+            model_from_info_field("E921300530192").unwrap().name,
+            "RD418D"
+        );
+        // A field that is neither stays unknown.
+        assert!(model_from_info_field("E9999").is_none());
     }
 
     #[test]

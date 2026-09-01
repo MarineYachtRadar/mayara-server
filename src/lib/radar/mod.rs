@@ -337,8 +337,10 @@ pub struct RadarInfo {
 
     pub brand: Brand,
     pub serial_no: Option<String>, // Serial # for this radar
-    /// Hardware identity (a MAC address) for radars that report no usable
-    /// serial number. Not the serial, and never shown as one.
+    /// Stable per-unit identity for radars that report no usable serial
+    /// number: a MAC on Furuno and Koden, the heartbeat's unique id on
+    /// Garmin, the beacon link_id on Raymarine. Not the serial, and never
+    /// shown as one.
     pub hardware_id: Option<String>,
     pub dual: Option<String>,            // "A", "B" or None
     pub pixel_values: u8,                // How many values per pixel, 0..220 or so
@@ -446,12 +448,11 @@ pub(crate) fn mac_identity(mac: &[u8; 6]) -> Option<String> {
 /// discriminator, and the optional dual-range suffix.
 ///
 /// The discriminator is the tail of the serial number; of `hardware_id`
-/// (a MAC address) when the serial is absent *or* empty, as on Furuno
-/// NavNet 3D DRS units which report an all-zero serial; and only failing
-/// both, the low 16 bits of the radar IP. The IP is a last resort because
-/// it moves with the DHCP lease and takes the radar's saved settings with
-/// it — brands that expose neither serial nor MAC (Garmin, Raymarine,
-/// Koden) have nothing better.
+/// when the serial is absent *or* empty, as on Furuno NavNet 3D DRS units
+/// which report an all-zero serial; and only failing both, the low 16 bits
+/// of the radar IP. The IP is a last resort because it moves with the DHCP
+/// lease and takes the radar's saved settings with it, so only a radar that
+/// offers neither of the first two lands there.
 fn radar_key(
     prefix: &str,
     serial_no: Option<&str>,
