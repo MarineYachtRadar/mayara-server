@@ -34,8 +34,6 @@ fn main() {
     // time by rust-embed.
     let gui_dir = PathBuf::from("web").join("gui");
 
-    println!("cargo:rustc-env=MAYARA_GUI_DIR={}", gui_dir.display());
-
     // Read api-version from [package.metadata] in Cargo.toml
     let api_version = env::var("CARGO_PKG_METADATA_API_VERSION").unwrap_or_else(|_| {
         // Fallback: parse Cargo.toml directly
