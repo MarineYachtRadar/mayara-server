@@ -58,6 +58,18 @@ fn main() {
         500,
     );
 
+    // Raymarine E120 Classic publishing a cabled analogue scanner over
+    // SeaTalkHS: beacons (224.0.0.1:5800) + the radar service
+    // (224.28.237.35:2562), which carries reports and spokes on one group.
+    // Capture from MarineYachtRadar/mayara-server#579; this MFD sends a
+    // zero-filled 0x010006 info report, naming neither model nor serial.
+    generate_fixture(
+        &base.join("raymarine/Raymarine_E-120_Analogue/fakehec/e120-radar-transmitting.pcap.gz"),
+        &fixture_dir.join("raymarine-e120-classic.pcap.gz"),
+        &|p| p.dst_addr.port() == 5800 || p.dst_addr.port() == 2562,
+        500,
+    );
+
     // Navico: discovery beacons (236.6.7.5:6878 or 236.6.7.4:6768) +
     // report/spoke data (varies per beacon, but common are 236.6.7.x ports)
     generate_fixture(
