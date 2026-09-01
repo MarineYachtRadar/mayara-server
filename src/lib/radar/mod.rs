@@ -1850,7 +1850,7 @@ impl CommonRadar {
                         }
                         return Ok(());
                     }
-                    ControlId::ArpaDetectMaxSpeed => {
+                    ControlId::ArpaDetectMaxSpeed | ControlId::DopplerAutoTrack => {
                         let value = cv.as_value()?;
                         let result = self
                             .info
@@ -1870,8 +1870,7 @@ impl CommonRadar {
                     | ControlId::ExclusionRect1
                     | ControlId::ExclusionRect2
                     | ControlId::ExclusionRect3
-                    | ControlId::ExclusionRect4
-                    | ControlId::DopplerAutoTrack => {
+                    | ControlId::ExclusionRect4 => {
                         self.update();
                         return Ok(());
                     }
