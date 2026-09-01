@@ -120,9 +120,8 @@ impl TrailBuffer {
             }
             ControlId::TrailsMotion => {
                 let true_motion = cv.as_bool()?;
-                return self
-                    .set_trails_mode(true_motion)
-                    .map_err(RadarError::ControlError);
+                self.set_trails_mode(true_motion)
+                    .map_err(RadarError::ControlError)
             }
             _ => Err(RadarError::CannotSetControlId(cv.id)),
         };
@@ -619,6 +618,7 @@ impl TrailBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Cli;
 
     fn legend() -> Legend {
         Legend {
@@ -633,6 +633,101 @@ mod tests {
             pixels: Vec::new(),
             static_background: None,
         }
+    }
+
+    fn trails_controls() -> SharedControls {
+        let (sk_tx, _sk_rx) = tokio::sync::broadcast::channel(16);
+        SharedControls::new(
+            "test".to_string(),
+            sk_tx,
+            &<Cli as clap::Parser>::parse_from(["mayara-server", "--targets", "trails"]),
+            std::collections::HashMap::new(),
+        )
+    }
+
+    /// A buffer small enough to build cheaply; only the motion mode matters here.
+    fn trail_buffer() -> TrailBuffer {
+        const SPOKES: usize = 32;
+        const SPOKE_LEN: usize = 16;
+        let trail_size = SPOKE_LEN as i16 * 2 + MARGIN_I16 * 2;
+
+        TrailBuffer {
+            target_mode: TargetMode::Trails,
+            legend: legend(),
+            spokes_per_revolution: SPOKES,
+            max_spoke_len: SPOKE_LEN,
+            trail_size,
+            motion_true: false,
+            position: GeoPosition::new(0., 0.),
+            position_difference: GeoPosition { lat: 0., lon: 0. },
+            position_offset: GeoPositionPixels { lat: 0, lon: 0 },
+            cartesian_lookup: PolarToCartesianLookup::new(SPOKES, SPOKE_LEN),
+            true_trails: Box::new(Array2::<u8>::zeros((
+                trail_size as usize,
+                trail_size as usize,
+            ))),
+            true_trails_offset: PointInt { x: 0, y: 0 },
+            relative_trails: vec![0; SPOKES * SPOKE_LEN],
+            trail_length_ms: 0,
+            rotation_speed_ms: 0,
+            minimal_legend_value: 1,
+            previous_range: 0,
+            pixels_per_meter: 0.0,
+            have_heading: false,
+        }
+    }
+
+    /// A client that switches trails back to relative motion must see the
+    /// control report relative motion afterwards, not the value it had
+    /// before: the reported value is all the client has to go on, and one
+    /// that does not follow the write snaps the client's toggle back.
+    #[test]
+    fn a_trails_motion_write_updates_the_reported_value() {
+        let controls = trails_controls();
+        let mut trails = trail_buffer();
+        controls
+            .set_value(&ControlId::TrailsMotion, 1.into())
+            .expect("stored as true motion");
+        trails.motion_true = true;
+
+        trails
+            .set_control_value(
+                &controls,
+                &ControlValue::new(ControlId::TrailsMotion, 0.into()),
+            )
+            .expect("relative motion is always settable");
+
+        assert!(!trails.motion_true);
+        assert_eq!(
+            controls.get(&ControlId::TrailsMotion).unwrap().value,
+            Some(0.)
+        );
+    }
+
+    /// True motion needs a heading, and a refused write must leave both the
+    /// buffer and the reported value as they were.
+    #[test]
+    fn a_refused_trails_motion_write_changes_nothing() {
+        let controls = trails_controls();
+        let mut trails = trail_buffer();
+        controls
+            .set_value(&ControlId::TrailsMotion, 0.into())
+            .expect("stored as relative motion");
+
+        assert!(
+            trails
+                .set_control_value(
+                    &controls,
+                    &ControlValue::new(ControlId::TrailsMotion, 1.into()),
+                )
+                .is_err()
+        );
+
+        assert!(!trails.motion_true);
+        assert_eq!(
+            controls.get(&ControlId::TrailsMotion).unwrap().value,
+            Some(0.)
+        );
     }
 
     #[test]
