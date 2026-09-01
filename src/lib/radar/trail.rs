@@ -139,15 +139,36 @@ impl TrailBuffer {
 
     pub fn set_trails_mode(&mut self, value: bool) -> Result<(), ControlError> {
         if value {
-            if !self.have_heading {
-                return Err(ControlError::NoHeading(ControlId::TrailsMotion, "True"));
-            }
-            if crate::navdata::get_radar_position().is_none() {
-                return Err(ControlError::NoPosition(ControlId::TrailsMotion, "True"));
-            }
+            Self::check_true_motion(
+                self.have_heading,
+                crate::navdata::get_heading_true(),
+                crate::navdata::get_radar_position(),
+            )?;
         }
         self.motion_true = value;
         log::debug!("Trails motion set to {:?}", value);
+        Ok(())
+    }
+
+    /// True motion needs a heading and a position.
+    ///
+    /// The heading may come from the spoke stream -- the radar's own inline
+    /// bearing, or navdata's, which `to_protobuf_spoke` fills in for brands
+    /// that send none -- or straight from navdata. Both are asked, because
+    /// `have_spoke_bearing` only says what the *last spoke* carried: it is
+    /// false until the radar has transmitted, which would otherwise refuse
+    /// true motion on a boat whose heading mayara already knows.
+    fn check_true_motion(
+        have_spoke_bearing: bool,
+        nav_heading: Option<f64>,
+        position: Option<GeoPosition>,
+    ) -> Result<(), ControlError> {
+        if !have_spoke_bearing && nav_heading.is_none() {
+            return Err(ControlError::NoHeading(ControlId::TrailsMotion, "True"));
+        }
+        if position.is_none() {
+            return Err(ControlError::NoPosition(ControlId::TrailsMotion, "True"));
+        }
         Ok(())
     }
 
@@ -704,8 +725,8 @@ mod tests {
         );
     }
 
-    /// True motion needs a heading, and a refused write must leave both the
-    /// buffer and the reported value as they were.
+    /// A refused write must leave both the buffer and the reported value as
+    /// they were.
     #[test]
     fn a_refused_trails_motion_write_changes_nothing() {
         let controls = trails_controls();
@@ -718,7 +739,7 @@ mod tests {
             trails
                 .set_control_value(
                     &controls,
-                    &ControlValue::new(ControlId::TrailsMotion, 1.into()),
+                    &ControlValue::new(ControlId::TrailsMotion, "sideways".into()),
                 )
                 .is_err()
         );
@@ -728,6 +749,41 @@ mod tests {
             controls.get(&ControlId::TrailsMotion).unwrap().value,
             Some(0.)
         );
+    }
+
+    fn somewhere() -> Option<GeoPosition> {
+        Some(GeoPosition::new(52.0, 4.0))
+    }
+
+    /// The heading the radar puts in each spoke is one source, not the only
+    /// one: a boat whose heading reaches mayara over Signal K or NMEA 0183
+    /// can use true motion before the radar has sent its first spoke.
+    #[test]
+    fn true_motion_accepts_a_heading_from_navdata() {
+        assert!(TrailBuffer::check_true_motion(false, Some(2.15), somewhere()).is_ok());
+    }
+
+    /// ...and a radar that embeds its own heading still works when mayara
+    /// has no navigation source of its own.
+    #[test]
+    fn true_motion_accepts_a_heading_from_the_spokes() {
+        assert!(TrailBuffer::check_true_motion(true, None, somewhere()).is_ok());
+    }
+
+    #[test]
+    fn true_motion_needs_a_heading_from_somewhere() {
+        assert!(matches!(
+            TrailBuffer::check_true_motion(false, None, somewhere()),
+            Err(ControlError::NoHeading(ControlId::TrailsMotion, _))
+        ));
+    }
+
+    #[test]
+    fn true_motion_needs_a_position() {
+        assert!(matches!(
+            TrailBuffer::check_true_motion(true, Some(2.15), None),
+            Err(ControlError::NoPosition(ControlId::TrailsMotion, _))
+        ));
     }
 
     #[test]
