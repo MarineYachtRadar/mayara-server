@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.12.3] - 2026-09-01
+
+### Fixed
+
+- **raymarine:** bring up a radar shared over SeaTalkHS (#626) ([PR #626](https://github.com/MarineYachtRadar/mayara-server/pull/626))
+- **controls:** store Doppler Auto Track writes from clients (#628) ([PR #628](https://github.com/MarineYachtRadar/mayara-server/pull/628))
+- **trails:** report the trails motion mode a client just set (#629) ([PR #629](https://github.com/MarineYachtRadar/mayara-server/pull/629))
+- **trails:** accept a heading from navdata for true motion (#630) ([PR #630](https://github.com/MarineYachtRadar/mayara-server/pull/630))
+
+### build
+
+- drop the unused reqwest build-dependency (#624) ([PR #624](https://github.com/MarineYachtRadar/mayara-server/pull/624))
+- remove the npm GUI download (#625) ([PR #625](https://github.com/MarineYachtRadar/mayara-server/pull/625))
+
 ## [3.12.2] - 2026-08-31
 
 ### Fixed
@@ -431,6 +445,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **ci:** use PR for changelog commit to respect branch protection (#73) ([PR #73](https://github.com/MarineYachtRadar/mayara-server/pull/73))
 - **ci:** fall back to immediate merge when auto-merge not needed (#77) ([PR #77](https://github.com/MarineYachtRadar/mayara-server/pull/77))
 
+[3.12.3]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.12.2...v3.12.3
 [3.12.2]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.12.1...v3.12.2
 [3.12.1]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.12.0...v3.12.1
 [3.12.0]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.11.0...v3.12.0
