@@ -25,6 +25,7 @@ use log::{debug, info};
 use serde::Serialize;
 
 use crate::config::Consent;
+use crate::radar::settings::{ControlId, SharedControls};
 use crate::radar::{RadarInfo, SharedRadars};
 use crate::{Brand, Cli, VERSION};
 
@@ -52,6 +53,10 @@ const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 /// variable cannot turn a report into a payload of arbitrary size.
 const MAX_DEPLOYMENT_LEN: usize = 32;
 
+/// Control values are held in SI units, so the radar's lifetime transmit
+/// counter arrives here as seconds however the radar spells it on the wire.
+const SECS_PER_HOUR: f64 = 3600.;
+
 const EVENT_SPOKES: &str = "spokes";
 const EVENT_CONTROL: &str = "control";
 
@@ -62,6 +67,9 @@ pub struct RadarIdentity {
     brand: Brand,
     model: Option<String>,
     dual_range: bool,
+    /// Lifetime transmit hours, for radars that keep such a counter and have
+    /// reported it by the time the snapshot is taken.
+    transmit_hours: Option<u64>,
 }
 
 impl From<&RadarInfo> for RadarIdentity {
@@ -70,6 +78,7 @@ impl From<&RadarInfo> for RadarIdentity {
             brand: info.brand,
             model: info.controls.model_name(),
             dual_range: info.dual_range,
+            transmit_hours: transmit_hours(&info.controls),
         }
     }
 }
@@ -104,6 +113,8 @@ struct Report<'a> {
     model: Option<&'a str>,
     radars: usize,
     dual_range: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    transmit_hours: Option<u64>,
     features: Vec<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     secs_to_first_spoke: Option<u64>,
@@ -278,6 +289,7 @@ impl Telemetry {
             model: identity.model.as_deref(),
             radars: self.radar_count.load(Ordering::Relaxed).max(1),
             dual_range: identity.dual_range,
+            transmit_hours: identity.transmit_hours,
             features: features(),
             secs_to_first_spoke,
             control,
@@ -318,6 +330,14 @@ impl Telemetry {
             }
         });
     }
+}
+
+/// A radar's lifetime transmit counter in whole hours, which is the unit the
+/// radars that keep one count in. `None` when the radar keeps no such counter,
+/// or has not reported it yet.
+fn transmit_hours(controls: &SharedControls) -> Option<u64> {
+    let seconds = controls.get(&ControlId::TransmitTime)?.value?;
+    Some((seconds / SECS_PER_HOUR) as u64)
 }
 
 /// Which radar brands this binary was built with -- a report from a build
@@ -370,11 +390,43 @@ fn sanitized_deployment(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
+    use crate::radar::settings::{Control, new_numeric};
+    use crate::radar::units::Units;
 
     fn cli(args: &[&str]) -> Cli {
         use clap::Parser;
         Cli::parse_from(std::iter::once("mayara").chain(args.iter().copied()))
+    }
+
+    /// The controls of a radar that keeps a transmit counter, spelled the way
+    /// the brands that have one spell it: hours on the wire, seconds once the
+    /// control layer has stored them.
+    fn with_transmit_time() -> SharedControls {
+        let mut controls = HashMap::new();
+        new_numeric(ControlId::TransmitTime, 0., 999999.)
+            .read_only(true)
+            .wire_units(Units::Hours)
+            .build(&mut controls);
+        shared(controls)
+    }
+
+    fn without_transmit_time() -> SharedControls {
+        shared(HashMap::new())
+    }
+
+    fn shared(controls: HashMap<ControlId, Control>) -> SharedControls {
+        let (sk_client_tx, _receiver) = tokio::sync::broadcast::channel(1);
+        SharedControls::new("test".to_string(), sk_client_tx, &cli(&[]), controls)
+    }
+
+    /// As a radar reports it: in hours, over the wire.
+    fn set_transmit_hours(controls: &SharedControls, hours: f64) {
+        controls
+            .set_value_auto_enabled(&ControlId::TransmitTime, hours, None, None)
+            .unwrap();
     }
 
     fn identity() -> RadarIdentity {
@@ -382,6 +434,7 @@ mod tests {
             brand: Brand::Navico,
             model: Some("HALO".to_string()),
             dual_range: true,
+            transmit_hours: Some(1234),
         }
     }
 
@@ -405,6 +458,7 @@ mod tests {
             model: identity.model.as_deref(),
             radars: 2,
             dual_range: identity.dual_range,
+            transmit_hours: identity.transmit_hours,
             features: features(),
             secs_to_first_spoke,
             control,
@@ -424,6 +478,7 @@ mod tests {
         assert_eq!(json["brand"], "Navico");
         assert_eq!(json["model"], "HALO");
         assert_eq!(json["dual_range"], true);
+        assert_eq!(json["transmit_hours"], 1234);
         assert_eq!(json["event"], "spokes");
         assert_eq!(json["secs_to_first_spoke"], 12);
 
@@ -448,6 +503,7 @@ mod tests {
                 "os",
                 "radars",
                 "secs_to_first_spoke",
+                "transmit_hours",
                 "version"
             ]
         );
@@ -476,11 +532,48 @@ mod tests {
             brand: Brand::Furuno,
             model: None,
             dual_range: false,
+            transmit_hours: None,
         };
         let json =
             serde_json::to_value(report(INSTALL, &identity, EVENT_SPOKES, Some(3), None)).unwrap();
 
         assert!(json.get("model").is_none());
+    }
+
+    /// The counter is read from the control the brands populate, and comes
+    /// back in hours -- the unit those radars count in -- however the control
+    /// layer stores it.
+    #[test]
+    fn transmit_time_is_read_from_the_control_and_reported_in_whole_hours() {
+        let controls = with_transmit_time();
+
+        set_transmit_hours(&controls, 1234.);
+        assert_eq!(transmit_hours(&controls), Some(1234));
+
+        set_transmit_hours(&controls, 0.);
+        assert_eq!(transmit_hours(&controls), Some(0));
+    }
+
+    /// A radar that keeps no such counter has no control to read, and one
+    /// that has not reported its counter yet has a control with no value.
+    #[test]
+    fn a_radar_that_has_not_reported_a_transmit_counter_has_no_hours() {
+        assert_eq!(transmit_hours(&with_transmit_time()), None);
+        assert_eq!(transmit_hours(&without_transmit_time()), None);
+    }
+
+    #[test]
+    fn a_radar_without_a_transmit_counter_omits_it_from_the_report() {
+        let identity = RadarIdentity {
+            brand: Brand::Furuno,
+            model: Some("DRS4W".to_string()),
+            dual_range: false,
+            transmit_hours: None,
+        };
+        let json =
+            serde_json::to_value(report(INSTALL, &identity, EVENT_SPOKES, Some(3), None)).unwrap();
+
+        assert!(json.get("transmit_hours").is_none());
     }
 
     /// Regression: a milestone reached before the user answers must not be

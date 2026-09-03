@@ -112,7 +112,8 @@ release.
 
 A report holds the Mayara version, your operating system, how Mayara was
 installed (as a container, a Signal K plugin, an OpenCPN plugin, or on its
-own), the brand and model of your radar, and a random number that identifies
+own), the brand and model of your radar, the hours it has transmitted over its
+life if it counts those, and a random number that identifies
 this installation so repeat runs are not counted as new users. It never holds your position, your vessel,
 your radar's serial number or any network address.
 
