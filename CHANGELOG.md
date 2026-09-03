@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.12.4] - 2026-09-03
+
+### Added
+
+- **telemetry:** report the radar's lifetime transmit hours (#637) ([PR #637](https://github.com/MarineYachtRadar/mayara-server/pull/637))
+- **telemetry:** report build origin instead of compiled-in brands (#638) ([PR #638](https://github.com/MarineYachtRadar/mayara-server/pull/638))
+
 ## [3.12.3] - 2026-09-01
 
 ### Fixed
@@ -445,6 +452,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **ci:** use PR for changelog commit to respect branch protection (#73) ([PR #73](https://github.com/MarineYachtRadar/mayara-server/pull/73))
 - **ci:** fall back to immediate merge when auto-merge not needed (#77) ([PR #77](https://github.com/MarineYachtRadar/mayara-server/pull/77))
 
+[3.12.4]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.12.3...v3.12.4
 [3.12.3]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.12.2...v3.12.3
 [3.12.2]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.12.1...v3.12.2
 [3.12.1]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.12.0...v3.12.1
