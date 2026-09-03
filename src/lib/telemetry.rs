@@ -25,7 +25,7 @@ use log::{debug, info};
 use serde::Serialize;
 
 use crate::config::Consent;
-use crate::radar::settings::ControlId;
+use crate::radar::settings::{ControlId, SharedControls};
 use crate::radar::{RadarInfo, SharedRadars};
 use crate::{Brand, Cli, VERSION};
 
@@ -78,11 +78,7 @@ impl From<&RadarInfo> for RadarIdentity {
             brand: info.brand,
             model: info.controls.model_name(),
             dual_range: info.dual_range,
-            transmit_hours: transmit_hours(
-                info.controls
-                    .get(&ControlId::TransmitTime)
-                    .and_then(|c| c.value),
-            ),
+            transmit_hours: transmit_hours(&info.controls),
         }
     }
 }
@@ -337,13 +333,11 @@ impl Telemetry {
 }
 
 /// A radar's lifetime transmit counter in whole hours, which is the unit the
-/// radars that keep one count in. A negative reading is a decode that went
-/// wrong, not a radar that transmitted backwards, so it is reported as no
-/// reading at all.
-fn transmit_hours(seconds: Option<f64>) -> Option<u64> {
-    seconds
-        .filter(|s| s.is_finite() && *s >= 0.)
-        .map(|s| (s / SECS_PER_HOUR) as u64)
+/// radars that keep one count in. `None` when the radar keeps no such counter,
+/// or has not reported it yet.
+fn transmit_hours(controls: &SharedControls) -> Option<u64> {
+    let seconds = controls.get(&ControlId::TransmitTime)?.value?;
+    Some((seconds / SECS_PER_HOUR) as u64)
 }
 
 /// Which radar brands this binary was built with -- a report from a build
@@ -396,11 +390,43 @@ fn sanitized_deployment(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
+    use crate::radar::settings::{Control, new_numeric};
+    use crate::radar::units::Units;
 
     fn cli(args: &[&str]) -> Cli {
         use clap::Parser;
         Cli::parse_from(std::iter::once("mayara").chain(args.iter().copied()))
+    }
+
+    /// The controls of a radar that keeps a transmit counter, spelled the way
+    /// the brands that have one spell it: hours on the wire, seconds once the
+    /// control layer has stored them.
+    fn with_transmit_time() -> SharedControls {
+        let mut controls = HashMap::new();
+        new_numeric(ControlId::TransmitTime, 0., 999999.)
+            .read_only(true)
+            .wire_units(Units::Hours)
+            .build(&mut controls);
+        shared(controls)
+    }
+
+    fn without_transmit_time() -> SharedControls {
+        shared(HashMap::new())
+    }
+
+    fn shared(controls: HashMap<ControlId, Control>) -> SharedControls {
+        let (sk_client_tx, _receiver) = tokio::sync::broadcast::channel(1);
+        SharedControls::new("test".to_string(), sk_client_tx, &cli(&[]), controls)
+    }
+
+    /// As a radar reports it: in hours, over the wire.
+    fn set_transmit_hours(controls: &SharedControls, hours: f64) {
+        controls
+            .set_value_auto_enabled(&ControlId::TransmitTime, hours, None, None)
+            .unwrap();
     }
 
     fn identity() -> RadarIdentity {
@@ -514,18 +540,26 @@ mod tests {
         assert!(json.get("model").is_none());
     }
 
-    /// Radars count transmit time in hours or in seconds; a report says hours
-    /// either way, and says nothing at all when the radar keeps no such
-    /// counter or has not reported it yet.
+    /// The counter is read from the control the brands populate, and comes
+    /// back in hours -- the unit those radars count in -- however the control
+    /// layer stores it.
     #[test]
-    fn transmit_time_is_reported_in_whole_hours_or_not_at_all() {
-        assert_eq!(transmit_hours(Some(0.)), Some(0));
-        assert_eq!(transmit_hours(Some(3599.)), Some(0));
-        assert_eq!(transmit_hours(Some(3600.)), Some(1));
-        assert_eq!(transmit_hours(Some(4_444_200.)), Some(1234));
-        assert_eq!(transmit_hours(None), None);
-        assert_eq!(transmit_hours(Some(-3600.)), None);
-        assert_eq!(transmit_hours(Some(f64::NAN)), None);
+    fn transmit_time_is_read_from_the_control_and_reported_in_whole_hours() {
+        let controls = with_transmit_time();
+
+        set_transmit_hours(&controls, 1234.);
+        assert_eq!(transmit_hours(&controls), Some(1234));
+
+        set_transmit_hours(&controls, 0.);
+        assert_eq!(transmit_hours(&controls), Some(0));
+    }
+
+    /// A radar that keeps no such counter has no control to read, and one
+    /// that has not reported its counter yet has a control with no value.
+    #[test]
+    fn a_radar_that_has_not_reported_a_transmit_counter_has_no_hours() {
+        assert_eq!(transmit_hours(&with_transmit_time()), None);
+        assert_eq!(transmit_hours(&without_transmit_time()), None);
     }
 
     #[test]
