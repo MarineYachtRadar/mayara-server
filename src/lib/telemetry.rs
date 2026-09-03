@@ -25,6 +25,7 @@ use log::{debug, info};
 use serde::Serialize;
 
 use crate::config::Consent;
+use crate::radar::settings::ControlId;
 use crate::radar::{RadarInfo, SharedRadars};
 use crate::{Brand, Cli, VERSION};
 
@@ -52,6 +53,10 @@ const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 /// variable cannot turn a report into a payload of arbitrary size.
 const MAX_DEPLOYMENT_LEN: usize = 32;
 
+/// Control values are held in SI units, so the radar's lifetime transmit
+/// counter arrives here as seconds however the radar spells it on the wire.
+const SECS_PER_HOUR: f64 = 3600.;
+
 const EVENT_SPOKES: &str = "spokes";
 const EVENT_CONTROL: &str = "control";
 
@@ -62,6 +67,9 @@ pub struct RadarIdentity {
     brand: Brand,
     model: Option<String>,
     dual_range: bool,
+    /// Lifetime transmit hours, for radars that keep such a counter and have
+    /// reported it by the time the snapshot is taken.
+    transmit_hours: Option<u64>,
 }
 
 impl From<&RadarInfo> for RadarIdentity {
@@ -70,6 +78,11 @@ impl From<&RadarInfo> for RadarIdentity {
             brand: info.brand,
             model: info.controls.model_name(),
             dual_range: info.dual_range,
+            transmit_hours: transmit_hours(
+                info.controls
+                    .get(&ControlId::TransmitTime)
+                    .and_then(|c| c.value),
+            ),
         }
     }
 }
@@ -104,6 +117,8 @@ struct Report<'a> {
     model: Option<&'a str>,
     radars: usize,
     dual_range: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    transmit_hours: Option<u64>,
     features: Vec<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     secs_to_first_spoke: Option<u64>,
@@ -278,6 +293,7 @@ impl Telemetry {
             model: identity.model.as_deref(),
             radars: self.radar_count.load(Ordering::Relaxed).max(1),
             dual_range: identity.dual_range,
+            transmit_hours: identity.transmit_hours,
             features: features(),
             secs_to_first_spoke,
             control,
@@ -318,6 +334,16 @@ impl Telemetry {
             }
         });
     }
+}
+
+/// A radar's lifetime transmit counter in whole hours, which is the unit the
+/// radars that keep one count in. A negative reading is a decode that went
+/// wrong, not a radar that transmitted backwards, so it is reported as no
+/// reading at all.
+fn transmit_hours(seconds: Option<f64>) -> Option<u64> {
+    seconds
+        .filter(|s| s.is_finite() && *s >= 0.)
+        .map(|s| (s / SECS_PER_HOUR) as u64)
 }
 
 /// Which radar brands this binary was built with -- a report from a build
@@ -382,6 +408,7 @@ mod tests {
             brand: Brand::Navico,
             model: Some("HALO".to_string()),
             dual_range: true,
+            transmit_hours: Some(1234),
         }
     }
 
@@ -405,6 +432,7 @@ mod tests {
             model: identity.model.as_deref(),
             radars: 2,
             dual_range: identity.dual_range,
+            transmit_hours: identity.transmit_hours,
             features: features(),
             secs_to_first_spoke,
             control,
@@ -424,6 +452,7 @@ mod tests {
         assert_eq!(json["brand"], "Navico");
         assert_eq!(json["model"], "HALO");
         assert_eq!(json["dual_range"], true);
+        assert_eq!(json["transmit_hours"], 1234);
         assert_eq!(json["event"], "spokes");
         assert_eq!(json["secs_to_first_spoke"], 12);
 
@@ -448,6 +477,7 @@ mod tests {
                 "os",
                 "radars",
                 "secs_to_first_spoke",
+                "transmit_hours",
                 "version"
             ]
         );
@@ -476,11 +506,40 @@ mod tests {
             brand: Brand::Furuno,
             model: None,
             dual_range: false,
+            transmit_hours: None,
         };
         let json =
             serde_json::to_value(report(INSTALL, &identity, EVENT_SPOKES, Some(3), None)).unwrap();
 
         assert!(json.get("model").is_none());
+    }
+
+    /// Radars count transmit time in hours or in seconds; a report says hours
+    /// either way, and says nothing at all when the radar keeps no such
+    /// counter or has not reported it yet.
+    #[test]
+    fn transmit_time_is_reported_in_whole_hours_or_not_at_all() {
+        assert_eq!(transmit_hours(Some(0.)), Some(0));
+        assert_eq!(transmit_hours(Some(3599.)), Some(0));
+        assert_eq!(transmit_hours(Some(3600.)), Some(1));
+        assert_eq!(transmit_hours(Some(4_444_200.)), Some(1234));
+        assert_eq!(transmit_hours(None), None);
+        assert_eq!(transmit_hours(Some(-3600.)), None);
+        assert_eq!(transmit_hours(Some(f64::NAN)), None);
+    }
+
+    #[test]
+    fn a_radar_without_a_transmit_counter_omits_it_from_the_report() {
+        let identity = RadarIdentity {
+            brand: Brand::Furuno,
+            model: Some("DRS4W".to_string()),
+            dual_range: false,
+            transmit_hours: None,
+        };
+        let json =
+            serde_json::to_value(report(INSTALL, &identity, EVENT_SPOKES, Some(3), None)).unwrap();
+
+        assert!(json.get("transmit_hours").is_none());
     }
 
     /// Regression: a milestone reached before the user answers must not be
