@@ -50,9 +50,9 @@ jobs:
     - name: Build
       run: |
         if [ "${{ matrix.channel }}" = "nightly" ]; then
-          cross build -Z build-std=std,panic_abort --release --target ${{ matrix.target }}
+          cross build -Z build-std=std,panic_abort --release --features official-build --target ${{ matrix.target }}
         else
-          cross build --release --target ${{ matrix.target }}
+          cross build --release --features official-build --target ${{ matrix.target }}
         fi
 
     - name: Package
@@ -82,10 +82,10 @@ jobs:
     - uses: swatinem/rust-cache@v2
 
     - name: Build ARM64
-      run: cargo build --release --target aarch64-apple-darwin
+      run: cargo build --release --features official-build --target aarch64-apple-darwin
 
     - name: Build x86_64
-      run: cargo build --release --target x86_64-apple-darwin
+      run: cargo build --release --features official-build --target x86_64-apple-darwin
 
     - name: Create universal binary
       run: |
@@ -114,7 +114,7 @@ jobs:
     - uses: swatinem/rust-cache@v2
 
     - name: Build
-      run: cargo build --release
+      run: cargo build --release --features official-build
 
     - name: Package
       run: Compress-Archive -Path target/release/mayara-server.exe -DestinationPath mayara-server-${{ github.ref_name }}-x86_64-pc-windows.zip

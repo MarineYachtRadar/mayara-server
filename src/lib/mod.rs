@@ -40,6 +40,14 @@ pub const PACKAGE: &str = env!("CARGO_PKG_NAME");
 /// `info.version` and the `version` of the `v2` endpoint on `/signalk`. Sourced
 /// from `[package.metadata] api-version` in Cargo.toml.
 pub const SIGNALK_RADAR_API_VERSION: &str = env!("SIGNALK_RADAR_API_VERSION");
+/// Where this binary was built: `official` for one this project's CI
+/// published, `local` for every other build. The publishing workflows build
+/// with `--features official-build`; nothing else does.
+pub const BUILD: &str = if cfg!(feature = "official-build") {
+    "official"
+} else {
+    "local"
+};
 
 /// How often the static-position task re-broadcasts the current heading
 /// so late-joining GUI clients can receive it.

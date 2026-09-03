@@ -44,7 +44,7 @@ jobs:
       run: cargo install cross
 
     - name: Build binary
-      run: cross build --release --target ${{ matrix.target }}
+      run: cross build --release --features official-build --target ${{ matrix.target }}
 
     - name: Upload binary
       uses: actions/upload-artifact@v7
