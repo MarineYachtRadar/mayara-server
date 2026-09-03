@@ -492,14 +492,20 @@ mod tests {
         );
     }
 
-    /// The report distinguishes an artifact this project published from a
-    /// build made anywhere else, and says nothing else about the build.
+    /// Claiming to be an artifact this project published takes a build
+    /// feature that only the publishing workflows pass. An ordinary build --
+    /// a contributor's laptop, a fork, a distribution rebuild, this test run
+    /// -- cannot arrive at it by accident.
+    #[cfg(not(feature = "official-build"))]
     #[test]
-    fn a_build_is_either_this_project_s_or_somebody_else_s() {
-        assert!(
-            BUILD == "official" || BUILD == "local",
-            "unexpected build origin '{BUILD}'"
-        );
+    fn a_build_that_does_not_claim_to_be_official_is_local() {
+        assert_eq!(BUILD, "local");
+    }
+
+    #[cfg(feature = "official-build")]
+    #[test]
+    fn a_build_made_by_a_publishing_workflow_is_official() {
+        assert_eq!(BUILD, "official");
     }
 
     #[test]

@@ -24,6 +24,10 @@ koden = []
 raymarine = []
 emulator = []
 pcap-replay = []
+# Set by the workflows that publish an artifact, so a usage report can say
+# whether a binary is one this project released. Off by default: any build
+# that does not deliberately claim it is a local build.
+official-build = []
 # default = ["navico", "furuno", "raymarine"]
 default = ["navico", "furuno", "garmin", "koden", "raymarine", "emulator"]
 
