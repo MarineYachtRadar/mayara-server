@@ -142,6 +142,7 @@ the server to accept IP-based SNI or point Mayara at an on-LAN instance.
 The GUI asks once whether to report that this install works. On a yes, mayara
 sends at most two small reports per run: one when a radar first delivers data,
 one when a radar first accepts a control change. Each holds the mayara version,
+whether the build came from this project's CI or was compiled elsewhere,
 operating system, radar brand and model, its lifetime transmit hours where the
 radar reports them, and a random install id -- never a position, serial number
 or network address. Reports go to

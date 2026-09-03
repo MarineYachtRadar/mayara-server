@@ -6,3 +6,10 @@
 # the `dhp`/`dhpd`/`dhpt` targets in Makefile.local).
 [target.mipsel-unknown-linux-musl]
 image = "ghcr.io/cross-rs/mipsel-unknown-linux-musl:main"
+
+# `cross` runs the build inside a container that starts with a clean
+# environment, so build.rs cannot otherwise tell one of this project's own CI
+# builds from a build made anywhere else — every cross-compiled release
+# artifact would call itself a local build in its usage report.
+[build.env]
+passthrough = ["GITHUB_ACTIONS", "GITHUB_REPOSITORY"]

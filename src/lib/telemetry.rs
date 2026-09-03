@@ -27,7 +27,7 @@ use serde::Serialize;
 use crate::config::Consent;
 use crate::radar::settings::{ControlId, SharedControls};
 use crate::radar::{RadarInfo, SharedRadars};
-use crate::{Brand, Cli, VERSION};
+use crate::{BUILD, Brand, Cli, VERSION};
 
 /// Collector that receives the reports. Set `MAYARA_TELEMETRY_URL` to send a
 /// run's reports somewhere else; setting it empty stops them entirely.
@@ -115,7 +115,7 @@ struct Report<'a> {
     dual_range: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     transmit_hours: Option<u64>,
-    features: Vec<&'static str>,
+    build: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     secs_to_first_spoke: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -290,7 +290,7 @@ impl Telemetry {
             radars: self.radar_count.load(Ordering::Relaxed).max(1),
             dual_range: identity.dual_range,
             transmit_hours: identity.transmit_hours,
-            features: features(),
+            build: BUILD,
             secs_to_first_spoke,
             control,
         }
@@ -338,24 +338,6 @@ impl Telemetry {
 fn transmit_hours(controls: &SharedControls) -> Option<u64> {
     let seconds = controls.get(&ControlId::TransmitTime)?.value?;
     Some((seconds / SECS_PER_HOUR) as u64)
-}
-
-/// Which radar brands this binary was built with -- a report from a build
-/// without a brand compiled in says nothing about that brand.
-fn features() -> Vec<&'static str> {
-    let mut features = Vec::new();
-    for (name, enabled) in [
-        ("navico", cfg!(feature = "navico")),
-        ("furuno", cfg!(feature = "furuno")),
-        ("garmin", cfg!(feature = "garmin")),
-        ("koden", cfg!(feature = "koden")),
-        ("raymarine", cfg!(feature = "raymarine")),
-    ] {
-        if enabled {
-            features.push(name);
-        }
-    }
-    features
 }
 
 /// How mayara was installed, for telling a container apart from a Signal K
@@ -459,7 +441,7 @@ mod tests {
             radars: 2,
             dual_range: identity.dual_range,
             transmit_hours: identity.transmit_hours,
-            features: features(),
+            build: BUILD,
             secs_to_first_spoke,
             control,
         }
@@ -480,6 +462,7 @@ mod tests {
         assert_eq!(json["dual_range"], true);
         assert_eq!(json["transmit_hours"], 1234);
         assert_eq!(json["event"], "spokes");
+        assert_eq!(json["build"], BUILD);
         assert_eq!(json["secs_to_first_spoke"], 12);
 
         // Nothing beyond the fields the question promises.
@@ -494,10 +477,10 @@ mod tests {
             vec![
                 "arch",
                 "brand",
+                "build",
                 "deployment",
                 "dual_range",
                 "event",
-                "features",
                 "install",
                 "model",
                 "os",
@@ -506,6 +489,16 @@ mod tests {
                 "transmit_hours",
                 "version"
             ]
+        );
+    }
+
+    /// The report distinguishes an artifact this project published from a
+    /// build made anywhere else, and says nothing else about the build.
+    #[test]
+    fn a_build_is_either_this_project_s_or_somebody_else_s() {
+        assert!(
+            BUILD == "official" || BUILD == "local",
+            "unexpected build origin '{BUILD}'"
         );
     }
 

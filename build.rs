@@ -66,9 +66,34 @@ fn main() {
     )
     .unwrap();
 
+    println!("cargo:rustc-env=MAYARA_BUILD={}", build_origin());
+    println!("cargo::rerun-if-env-changed=GITHUB_ACTIONS");
+    println!("cargo::rerun-if-env-changed=GITHUB_REPOSITORY");
+
     println!("cargo::rerun-if-changed=build.rs");
     println!("cargo::rerun-if-changed=Cargo.toml");
     println!("cargo::rerun-if-changed=src/protos/RadarMessage.proto");
+}
+
+/// The repository whose CI publishes the artifacts we ship. A fork's CI sets
+/// its own name here and so is not this project's CI.
+const OFFICIAL_REPOSITORY: &str = "MarineYachtRadar/mayara-server";
+
+/// Where this binary was built, for the usage report to say. `official` is a
+/// binary this project's CI produced and published; everything else --- a
+/// contributor's laptop, a fork, a distribution rebuild --- is `local`, so a
+/// bug seen in the field can be told apart from one seen in a build we did
+/// not make.
+///
+/// `cross` builds inside a container that starts with a clean environment,
+/// which is why `Cross.toml` passes these two variables through; without that
+/// every cross-compiled release artifact would call itself local.
+fn build_origin() -> &'static str {
+    let official = matches!(env::var("GITHUB_ACTIONS").as_deref(), Ok("true"))
+        && env::var("GITHUB_REPOSITORY")
+            .is_ok_and(|repository| repository.eq_ignore_ascii_case(OFFICIAL_REPOSITORY));
+
+    if official { "official" } else { "local" }
 }
 
 /// Point this clone's `core.hooksPath` at `.githooks/` on first `cargo build`,
