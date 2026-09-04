@@ -90,6 +90,14 @@ async fn replay_garmin_xhd() {
                                 "identity must come from the CDM heartbeat"
                             );
                             assert_eq!(key, "gar0aa0A", "dual-range radar keeps its range suffix");
+                            // Both ranges of a dual-range radar are offered.
+                            // Replay used to drop the second one, so nothing
+                            // could exercise Range B without hardware.
+                            assert_eq!(
+                                keys,
+                                vec!["gar0aa0A".to_string(), "gar0aa0B".to_string()],
+                                "both ranges register, A before B"
+                            );
                             let model = info.controls.model_name().unwrap();
                             assert!(model.contains("xHD"), "expected xHD model, got: {}", model);
                             assert!(!info.doppler, "xHD should not support Doppler");
