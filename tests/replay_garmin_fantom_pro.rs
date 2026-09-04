@@ -62,7 +62,11 @@ async fn replay_garmin_fantom_pro_dual_range() {
 
     let _ = env_logger::builder().is_test(true).try_init();
     replay::init(&fixture).expect("init replay");
-    replay::set_instant_timing();
+    // Deliberately not instant: the fixture's own 6.5s of timing is what keeps
+    // spokes arriving after the radars have registered and this test has
+    // subscribed. Dispatched instantly they could all be gone before there is
+    // a radar to subscribe to, and a broadcast receiver never sees what was
+    // sent before it.
     let args = test_args();
 
     Toplevel::new(async move |s: &mut SubsystemHandle| {
@@ -91,8 +95,7 @@ async fn replay_garmin_fantom_pro_dual_range() {
                     "the two ranges are one radar"
                 );
 
-                // And spokes reach both of them. Subscribe before waiting, or
-                // the ones already broadcast are missed.
+                // And spokes reach both of them.
                 let mut spokes: Vec<_> = keys
                     .iter()
                     .map(|k| {

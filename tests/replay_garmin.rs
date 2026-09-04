@@ -72,7 +72,10 @@ async fn replay_garmin_xhd() {
                 let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
                 loop {
                     let keys = radars.get_keys();
-                    if !keys.is_empty() {
+                    // Both ranges of a dual-range radar register, and A is
+                    // added before B: waiting for the pair keeps this from
+                    // reading a ready Range A before Range B exists.
+                    if keys == vec!["gar0aa0A".to_string(), "gar0aa0B".to_string()] {
                         let key = &keys[0];
                         let info = radars.get_by_key(key).expect("radar info");
 
@@ -90,14 +93,6 @@ async fn replay_garmin_xhd() {
                                 "identity must come from the CDM heartbeat"
                             );
                             assert_eq!(key, "gar0aa0A", "dual-range radar keeps its range suffix");
-                            // Both ranges of a dual-range radar are offered.
-                            // Replay used to drop the second one, so nothing
-                            // could exercise Range B without hardware.
-                            assert_eq!(
-                                keys,
-                                vec!["gar0aa0A".to_string(), "gar0aa0B".to_string()],
-                                "both ranges register, A before B"
-                            );
                             let model = info.controls.model_name().unwrap();
                             assert!(model.contains("xHD"), "expected xHD model, got: {}", model);
                             assert!(!info.doppler, "xHD should not support Doppler");

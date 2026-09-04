@@ -73,20 +73,16 @@ async fn replay_navico_halo24() {
                 let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
                 loop {
                     let keys = radars.get_keys();
-                    if !keys.is_empty() {
+                    // Both ranges of a dual-range radar register, and A is
+                    // added before B: waiting for the pair keeps this from
+                    // reading a ready Range A before Range B exists.
+                    if keys == vec!["nav1034A".to_string(), "nav1034B".to_string()] {
                         let key = &keys[0];
                         let info = radars.get_by_key(key).expect("radar info");
 
                         // Wait until the model has been identified
                         if info.controls.model_name().is_some() && !info.ranges.all.is_empty() {
                             assert!(key.starts_with("nav"), "expected Navico key, got: {}", key);
-                            // A HALO advertises two scanners, so both ranges
-                            // register. Replay used to drop the second one.
-                            assert_eq!(
-                                keys,
-                                vec!["nav1034A".to_string(), "nav1034B".to_string()],
-                                "both ranges register, A before B"
-                            );
                             assert_eq!(info.brand, mayara::Brand::Navico);
                             assert_eq!(info.controls.model_name().unwrap(), "HALO24");
                             assert!(info.doppler, "HALO24 should support Doppler");
