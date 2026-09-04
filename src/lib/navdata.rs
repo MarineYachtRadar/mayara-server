@@ -1838,6 +1838,123 @@ mod tests {
         }
     }
 
+    /// Own-ship nav lives in process-global atomics that the whole suite
+    /// shares, so the tests that write them take this lock and restore what
+    /// they touched on the way out.
+    static NAV_GLOBALS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct NavGlobals(#[allow(dead_code)] std::sync::MutexGuard<'static, ()>);
+
+    impl Drop for NavGlobals {
+        fn drop(&mut self) {
+            STATIC_NAV.store(false, Ordering::Release);
+            TRUE_HEADING_AUTHORITATIVE.store(false, Ordering::Release);
+            set_heading_true(None, "test-reset");
+            set_position(None, None, "test-reset");
+            set_cog(None);
+            set_sog(None);
+        }
+    }
+
+    fn nav_globals() -> NavGlobals {
+        // A test that panicked while holding the lock poisoned it; the guard
+        // restores the globals either way, so the state is still usable.
+        NavGlobals(NAV_GLOBALS.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    const STATIC_LAT: f64 = 52.0;
+    const STATIC_LON: f64 = 4.0;
+    const STATIC_HEADING: f64 = 2.1537;
+
+    /// The whole point of `--static-position`: an upstream that disagrees is
+    /// wrong, and a fixed installation stays where it was put.
+    #[test]
+    fn a_static_position_outranks_every_other_source() {
+        let _globals = nav_globals();
+        set_static_nav(STATIC_LAT, STATIC_LON, STATIC_HEADING);
+
+        set_position(Some(32.95), Some(129.10), "signalk");
+        set_heading_true(Some(5.49), "signalk");
+        set_heading_magnetic(Some(1.54), "signalk");
+        set_cog(Some(1.0));
+        set_sog(Some(5.0));
+
+        assert_eq!(
+            get_radar_position(),
+            Some(GeoPosition::new(STATIC_LAT, STATIC_LON))
+        );
+        assert_eq!(get_heading_true(), Some(STATIC_HEADING));
+        assert_eq!(get_heading_magnetic(), None, "no vessel's magnetic heading");
+        assert_eq!(get_cog(), Some(STATIC_HEADING));
+        assert_eq!(get_sog(), Some(0.0));
+    }
+
+    /// An upstream dropping clears own-ship nav so a stale position stops
+    /// being shown. A fixed position did not come from that peer and must
+    /// survive it -- losing it leaves the radar with nothing at all.
+    #[test]
+    fn a_dropped_upstream_leaves_a_static_position_alone() {
+        let _globals = nav_globals();
+        set_static_nav(STATIC_LAT, STATIC_LON, STATIC_HEADING);
+
+        clear_own_ship_nav();
+
+        assert_eq!(
+            get_radar_position(),
+            Some(GeoPosition::new(STATIC_LAT, STATIC_LON))
+        );
+        assert_eq!(get_heading_true(), Some(STATIC_HEADING));
+        assert!(
+            own_ship_nav_age_secs().is_some(),
+            "a fixed installation never has 'no navigation data'"
+        );
+    }
+
+    /// Without the flag nothing is guarded: the upstream writes, and its
+    /// disconnect still clears what it wrote.
+    #[test]
+    fn without_a_static_position_the_upstream_writes_and_clears() {
+        let _globals = nav_globals();
+
+        set_position(Some(32.95), Some(129.10), "signalk");
+        set_heading_true(Some(5.49), "signalk");
+        assert_eq!(get_radar_position(), Some(GeoPosition::new(32.95, 129.10)));
+
+        clear_own_ship_nav();
+
+        assert_eq!(get_radar_position(), None);
+        assert_eq!(get_heading_true(), None);
+    }
+
+    /// A fixed position never changes, so the change-gated broadcasts in the
+    /// setters would announce it once and never again, and a client
+    /// connecting later would never learn where the radar is.
+    #[test]
+    fn refreshing_a_static_position_republishes_it_unchanged() {
+        let _globals = nav_globals();
+        let (tx, _) = tokio::sync::broadcast::channel(16);
+        let mut rx = NAV_BROADCAST_TX.get_or_init(|| tx).subscribe();
+
+        set_static_nav(STATIC_LAT, STATIC_LON, STATIC_HEADING);
+        while rx.try_recv().is_ok() {} // the seeding's own announcements
+
+        refresh_static_nav(STATIC_LAT, STATIC_LON, STATIC_HEADING);
+
+        let published: Vec<String> = std::iter::from_fn(|| rx.try_recv().ok())
+            .map(|d| serde_json::to_string(&d).unwrap())
+            .collect();
+        assert!(
+            published.iter().any(|d| d.contains("navigation.position")),
+            "a late joiner has to be told the position: {published:?}"
+        );
+        assert!(
+            published
+                .iter()
+                .any(|d| d.contains("navigation.headingTrue")),
+            "and the heading: {published:?}"
+        );
+    }
+
     /// A fixed installation knows where it is. Once `--static-position` has
     /// seeded own-ship nav, an upstream that disagrees is wrong and must not
     /// move the vessel.
@@ -1882,8 +1999,9 @@ mod tests {
     #[test]
     fn marking_nav_fresh_makes_it_live() {
         // Receiving own-ship nav stamps the freshness clock: age is small and
-        // nav_live is true. (Safe under parallelism: a set can only make nav
-        // *fresher*, never staler, between the set and the read.)
+        // nav_live is true. Takes the nav lock because a concurrent test
+        // holding a static position would refuse this write.
+        let _globals = nav_globals();
         set_heading_true(Some(1.0), "test");
         let age = own_ship_nav_age_secs();
         assert!(
