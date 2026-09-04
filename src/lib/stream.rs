@@ -592,6 +592,18 @@ fn pattern_covers(pattern: &str, path: &str) -> bool {
     pattern == path || (pattern.contains('*') && WildMatch::new(pattern).matches(path))
 }
 
+/// Whether `path` is own-ship navigation. These are values that stand between
+/// updates, so they can be paced: `fixed` is answered from the value as it
+/// stands on the periodic tick, and `minPeriod` limits how often a change is
+/// passed on. Kept in step with the periodic replay in the server, which is
+/// what re-sends them.
+fn is_navigation_path(path: &str) -> bool {
+    matches!(
+        path,
+        "navigation.position" | "navigation.headingTrue" | "navigation.headingMagnetic"
+    )
+}
+
 /// The shorthand for a published control path, if it is one: `radars.{id}.gain`
 /// alongside `radars.{id}.controls.gain`. `None` for anything that is not a
 /// control, which is how the caller tells them apart.
@@ -797,11 +809,11 @@ impl ActiveSubscriptions {
             Subscribe::None => {}
         }
 
-        // A control is throttled by the terms it was asked on; everything else
-        // goes out whenever it changes. Both the path a control is published
-        // under and the shorthand a client may have named it by are offered,
-        // the same pair `is_subscribed` uses — a client that subscribed the
-        // short way must not be answered on connect and then go quiet.
+        // A control is throttled by the terms it was asked on. Both the path a
+        // control is published under and the shorthand a client may have named
+        // it by are offered, the same pair `is_subscribed` uses — a client that
+        // subscribed the short way must not be answered on connect and then go
+        // quiet.
         if let Some(shorthand) = control_shorthand(path) {
             let Some(terms) = self.terms_for(&[path, &shorthand]) else {
                 return false;
@@ -809,7 +821,44 @@ impl ActiveSubscriptions {
             return self.allow_now(path, &terms, full);
         }
 
+        // Navigation is throttled the same way: it is a value that stands, so
+        // holding one back only delays it until the next change or the next
+        // tick.
+        if is_navigation_path(path) {
+            let Some(terms) = self.terms_for(&[path]) else {
+                return false;
+            };
+            return self.allow_now(path, &terms, full);
+        }
+
+        // Everything else — guard-zone notifications, ARPA target reports — is
+        // an event, and each one carries a transition the client cannot infer
+        // from the next: drop the update that clears an alarm and it stays
+        // raised forever, drop the one that loses a target and it is tracked
+        // forever. So events are delivered whenever they happen, whatever
+        // pacing was asked for.
         self.covering(path).next().is_some()
+    }
+
+    /// Whether `path` is owed a value on the periodic tick. Only a path asked
+    /// for on a `fixed` policy is delivered on schedule; `instant` and `ideal`
+    /// go out when the value changes, and a copy on the tick as well is one the
+    /// client never asked for.
+    pub fn is_due_periodic(&mut self, path: &str) -> bool {
+        // Terms govern delivery only under `subscribe=none`, the same as
+        // everywhere else here: a `self` or `all` client is served on change
+        // off the back of its baseline, never from the schedule.
+        if self.mode != Subscribe::None {
+            return false;
+        }
+
+        let Some(terms) = self.terms_for(&[path]) else {
+            return false;
+        };
+        if terms.policy != Policy::Fixed {
+            return false;
+        }
+        self.allow_now(path, &terms, true)
     }
 
     /// Whether the client wants AIS data for `context` (e.g.
@@ -1784,6 +1833,130 @@ mod build_tests {
         assert!(
             !subs.is_subscribed_path(path, true),
             "60ms into the default 1000ms period this path is owed nothing"
+        );
+    }
+
+    /// A `fixed` navigation subscription is answered from the schedule, not
+    /// from the boat: the client asked for a value a second, and a boat
+    /// reporting ten times a second must not be relayed ten times a second.
+    #[test]
+    fn a_fixed_navigation_path_is_not_delivered_on_change() {
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
+        subs.subscribe(subscribe_to(json!({"subscribe": [
+            {"path": "navigation.*", "policy": "fixed", "period": 1000}
+        ]})))
+        .unwrap();
+
+        assert!(
+            !subs.is_subscribed_path("navigation.headingTrue", false),
+            "an upstream change does not deliver a fixed subscription"
+        );
+        assert!(
+            subs.is_due_periodic("navigation.headingTrue"),
+            "the tick does"
+        );
+    }
+
+    /// The other half: with nothing owed on the tick a `fixed` navigation
+    /// subscription would be silence rather than a slower stream.
+    #[test]
+    fn a_fixed_navigation_path_is_owed_on_the_tick() {
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
+        subs.subscribe(subscribe_to(json!({"subscribe": [
+            {"path": "navigation.position", "policy": "fixed", "period": 100}
+        ]})))
+        .unwrap();
+
+        assert!(subs.is_due_periodic("navigation.position"));
+        assert!(
+            !subs.is_due_periodic("navigation.position"),
+            "a second tick inside the period is owed nothing"
+        );
+        std::thread::sleep(Duration::from_millis(110));
+        assert!(
+            subs.is_due_periodic("navigation.position"),
+            "the tick after the period comes round is owed a value"
+        );
+    }
+
+    /// `minPeriod` lets a client on a slow link ask a busy boat to slow down.
+    #[test]
+    fn a_navigation_path_honours_min_period() {
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
+        subs.subscribe(subscribe_to(json!({"subscribe": [
+            {"path": "navigation.*", "policy": "ideal", "minPeriod": 1000}
+        ]})))
+        .unwrap();
+
+        let path = "navigation.headingTrue";
+        assert!(
+            subs.is_subscribed_path(path, false),
+            "the first change goes"
+        );
+        assert!(
+            !subs.is_subscribed_path(path, false),
+            "a change inside minPeriod does not"
+        );
+    }
+
+    /// Change-driven navigation is untouched: no policy means instant, and
+    /// instant means every change.
+    #[test]
+    fn navigation_without_terms_still_flows_on_change() {
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
+        subs.subscribe(subscribe_to(json!({"subscribe": [
+            {"path": "navigation.*"}
+        ]})))
+        .unwrap();
+
+        let path = "navigation.position";
+        assert!(subs.is_subscribed_path(path, false));
+        assert!(subs.is_subscribed_path(path, false));
+        assert!(
+            !subs.is_due_periodic(path),
+            "an instant subscription is not owed a copy on the tick as well"
+        );
+    }
+
+    /// A `self` client is served from its baseline, on change. Terms it names
+    /// on top must not add a second, periodic, copy of the same value.
+    #[test]
+    fn a_self_client_is_never_served_from_the_schedule() {
+        let mut subs = ActiveSubscriptions::new(Subscribe::SelfOnly);
+        subs.subscribe(subscribe_to(json!({"subscribe": [
+            {"path": "navigation.*", "policy": "fixed", "period": 100}
+        ]})))
+        .unwrap();
+
+        assert!(subs.is_subscribed_path("navigation.position", false));
+        assert!(!subs.is_due_periodic("navigation.position"));
+    }
+
+    /// An event carries a transition the client cannot infer from the next
+    /// one, and there is no current value to re-send on the tick. Pacing a
+    /// notification would leave an alarm raised after it cleared, so events
+    /// keep change-driven delivery whatever policy was asked for.
+    #[test]
+    fn events_are_not_paced() {
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
+        subs.subscribe(subscribe_to(json!({"subscribe": [
+            {"path": "notifications.*", "policy": "fixed", "period": 10000},
+            {"path": "radars.*.targets.*", "policy": "ideal", "minPeriod": 10000}
+        ]})))
+        .unwrap();
+
+        let alarm = "notifications.radar.nav1.guardZone.1";
+        assert!(subs.is_subscribed_path(alarm, false));
+        assert!(
+            subs.is_subscribed_path(alarm, false),
+            "the notification that clears the alarm is not held back"
+        );
+
+        let target = "radars.nav1.targets.5";
+        assert!(subs.is_subscribed_path(target, false));
+        assert!(
+            subs.is_subscribed_path(target, false),
+            "the report that loses the target is not held back"
         );
     }
 
