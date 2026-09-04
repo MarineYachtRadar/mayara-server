@@ -901,11 +901,6 @@ impl SharedRadars {
         let key = new_info.key.to_owned();
         let mut radars = self.radars.write().unwrap();
 
-        // For now, drop second radar in replay Mode...
-        if new_info.replay && key.ends_with("B") {
-            return None;
-        }
-
         let is_new = !radars.info.contains_key(&key);
         if is_new {
             // Set any previously detected model and ranges
@@ -1159,9 +1154,15 @@ impl SharedRadars {
         radars.info.get(key).cloned()
     }
 
+    /// Every radar key, in a stable order: the map behind them is a HashMap,
+    /// whose order changes between runs. Sorted also puts a dual-range
+    /// radar's `A` ahead of its `B`, which is the order anyone naming one of
+    /// them expects.
     pub fn get_keys(&self) -> Vec<String> {
         let radars = self.radars.read().unwrap();
-        radars.info.keys().cloned().collect()
+        let mut keys: Vec<String> = radars.info.keys().cloned().collect();
+        keys.sort();
+        keys
     }
 
     /// Save persistence for a radar by key

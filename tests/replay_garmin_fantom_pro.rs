@@ -1,9 +1,10 @@
 #![cfg(feature = "pcap-replay")]
 
-//! Integration test: replay Navico HALO24 pcap fixture.
+//! Integration test: replay a Garmin Fantom Pro running in dual-range mode.
 //!
-//! Verifies that replaying the fixture through the full pipeline
-//! detects the radar with the correct brand, model, and capabilities.
+//! The one fixture whose radar transmits on both ranges, so it is the only
+//! automated cover for Range B: that it registers alongside Range A, and that
+//! spokes actually reach it.
 
 use mayara::{Cli, replay};
 use std::path::Path;
@@ -18,7 +19,7 @@ fn test_args() -> Cli {
         tls_key: None,
         parent: None,
         interface: None,
-        brand: Some(mayara::Brand::Navico),
+        brand: Some(mayara::Brand::Garmin),
         targets: mayara::TargetMode::None,
         navigation_address: None,
         nmea0183: false,
@@ -47,11 +48,11 @@ fn test_args() -> Cli {
 }
 
 #[tokio::test]
-async fn replay_navico_halo24() {
+async fn replay_garmin_fantom_pro_dual_range() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("testdata")
         .join("pcap")
-        .join("navico-halo24.pcap.gz");
+        .join("garmin-fantom-pro.pcap.gz");
     if !fixture.exists() {
         panic!(
             "Fixture not found: {}. Run: cargo run --features pcap-replay --example generate-fixtures",
@@ -61,7 +62,11 @@ async fn replay_navico_halo24() {
 
     let _ = env_logger::builder().is_test(true).try_init();
     replay::init(&fixture).expect("init replay");
-    replay::set_instant_timing();
+    // Deliberately not instant: the fixture's own 6.5s of timing is what keeps
+    // spokes arriving after the radars have registered and this test has
+    // subscribed. Dispatched instantly they could all be gone before there is
+    // a radar to subscribe to, and a broadcast receiver never sees what was
+    // sent before it.
     let args = test_args();
 
     Toplevel::new(async move |s: &mut SubsystemHandle| {
@@ -70,30 +75,44 @@ async fn replay_navico_halo24() {
         s.start(SubsystemBuilder::new(
             "test",
             async move |subsys: &mut SubsystemHandle| {
-                let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-                loop {
-                    let keys = radars.get_keys();
-                    // Both ranges of a dual-range radar register, and A is
-                    // added before B: waiting for the pair keeps this from
-                    // reading a ready Range A before Range B exists.
-                    if keys == vec!["nav1034A".to_string(), "nav1034B".to_string()] {
-                        let key = &keys[0];
-                        let info = radars.get_by_key(key).expect("radar info");
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
 
-                        // Wait until the model has been identified
-                        if info.controls.model_name().is_some() && !info.ranges.all.is_empty() {
-                            assert!(key.starts_with("nav"), "expected Navico key, got: {}", key);
-                            assert_eq!(info.brand, mayara::Brand::Navico);
-                            assert_eq!(info.controls.model_name().unwrap(), "HALO24");
-                            assert!(info.doppler, "HALO24 should support Doppler");
-                            assert_eq!(info.spokes_per_revolution, 2048);
-                            break;
-                        }
+                // Both ranges of a dual-range radar register.
+                let keys = loop {
+                    let keys = radars.get_keys();
+                    if keys.len() == 2 {
+                        break keys;
                     }
                     if tokio::time::Instant::now() > deadline {
-                        panic!("Timeout: no radar detected within 5 seconds");
+                        panic!("Timeout: expected two ranges, got {:?}", radars.get_keys());
                     }
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                };
+                assert!(keys[0].ends_with('A') && keys[1].ends_with('B'), "{keys:?}");
+                assert_eq!(
+                    keys[0][..keys[0].len() - 1],
+                    keys[1][..keys[1].len() - 1],
+                    "the two ranges are one radar"
+                );
+
+                // And spokes reach both of them.
+                let mut spokes: Vec<_> = keys
+                    .iter()
+                    .map(|k| {
+                        radars
+                            .get_by_key(k)
+                            .expect("radar info")
+                            .message_tx
+                            .subscribe()
+                    })
+                    .collect();
+
+                for (key, rx) in keys.iter().zip(spokes.iter_mut()) {
+                    let waited = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await;
+                    assert!(
+                        waited.is_ok_and(|r| r.is_ok()),
+                        "no spokes arrived for {key}"
+                    );
                 }
 
                 subsys.request_shutdown();

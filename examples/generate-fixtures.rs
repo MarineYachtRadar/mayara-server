@@ -91,6 +91,19 @@ fn main() {
         500,
     );
 
+    // Garmin Fantom Pro: the same three ports, from a radar running in
+    // dual-range mode. The xHD capture above has Range A only, so this is the
+    // one fixture where spokes arrive on both ranges.
+    generate_fixture(
+        &base.join("garmin/fantom_pro/A1_warm_mayara-off.pcap.gz"),
+        &fixture_dir.join("garmin-fantom-pro.pcap.gz"),
+        &|p| {
+            let port = p.dst_addr.port();
+            port == 50050 || port == 50100 || port == 50102
+        },
+        1500,
+    );
+
     // Furuno: beacons (172.31.255.255:10010) + multicast data (239.255.0.2:10024) +
     // status reports (172.31.255.255:10034)
     generate_fixture(

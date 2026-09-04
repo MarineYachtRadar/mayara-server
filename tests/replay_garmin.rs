@@ -72,7 +72,10 @@ async fn replay_garmin_xhd() {
                 let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
                 loop {
                     let keys = radars.get_keys();
-                    if !keys.is_empty() {
+                    // Both ranges of a dual-range radar register, and A is
+                    // added before B: waiting for the pair keeps this from
+                    // reading a ready Range A before Range B exists.
+                    if keys == vec!["gar0aa0A".to_string(), "gar0aa0B".to_string()] {
                         let key = &keys[0];
                         let info = radars.get_by_key(key).expect("radar info");
 
