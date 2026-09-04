@@ -12,7 +12,7 @@
 
 use std::path::Path;
 
-use mayara::pcap::{PcapPacket, parse_file, write_file};
+use mayara::pcap::{PcapPacket, parse_file, write_file_if_changed};
 
 fn main() {
     let recordings = std::env::var("RADAR_RECORDINGS").unwrap_or_else(|_| {
@@ -185,11 +185,12 @@ fn generate_fixture(
         .filter(|p| filter(p))
         .take(max_packets)
         .collect();
+    let wrote = write_file_if_changed(dst, &filtered).expect("write fixture");
     println!(
-        "{}: {} -> {} packets",
+        "{}: {} -> {} packets{}",
         dst.file_name().unwrap().to_string_lossy(),
         src.display(),
-        filtered.len()
+        filtered.len(),
+        if wrote { "" } else { " (unchanged)" }
     );
-    write_file(dst, &filtered).expect("write fixture");
 }

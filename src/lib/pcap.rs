@@ -42,21 +42,26 @@ const ETHERTYPE_IPV4: u16 = 0x0800;
 /// UDP IP protocol number.
 const IP_PROTO_UDP: u8 = 17;
 
+/// Read a file, decompressing it when it is gzipped.
+fn read_maybe_gzip(path: &Path) -> io::Result<Vec<u8>> {
+    if path.extension().is_some_and(|e| e == "gz") {
+        let file = fs::File::open(path)?;
+        let mut decoder = flate2::read::GzDecoder::new(file);
+        let mut buf = Vec::new();
+        decoder.read_to_end(&mut buf)?;
+        Ok(buf)
+    } else {
+        fs::read(path)
+    }
+}
+
 /// Parse a pcap or NND file (optionally gzipped) and return all UDP packets.
 ///
 /// Auto-detects the file format: NND files start with `Time:`, pcap files
 /// start with a 4-byte magic number. Both `.gz` and uncompressed files are
 /// supported.
 pub fn parse_file(path: &Path) -> io::Result<Vec<PcapPacket>> {
-    let data = if path.extension().is_some_and(|e| e == "gz") {
-        let file = fs::File::open(path)?;
-        let mut decoder = flate2::read::GzDecoder::new(file);
-        let mut buf = Vec::new();
-        decoder.read_to_end(&mut buf)?;
-        buf
-    } else {
-        fs::read(path)?
-    };
+    let data = read_maybe_gzip(path)?;
 
     if crate::nnd::is_nnd(&data) {
         return crate::nnd::parse_bytes(&data, path);
@@ -199,6 +204,48 @@ fn parse_udp_packet(data: &[u8], timestamp: Duration) -> Option<PcapPacket> {
 /// Ethernet + IPv4 + UDP headers wrapping each payload.
 #[cfg(any(test, feature = "pcap-replay"))]
 pub fn write_file(path: &Path, packets: &[PcapPacket]) -> io::Result<()> {
+    write_bytes(path, &encode_packets(packets))
+}
+
+/// Write `packets` to `path` unless it already holds exactly these packets,
+/// reporting whether it wrote.
+///
+/// The comparison is against what the file decompresses to, not against its
+/// bytes. The same packets compress to different bytes under different gzip
+/// implementations, and the fixtures in `testdata/` were written by several of
+/// them over the years, so writing unconditionally rewrites files whose content
+/// has not moved — leaving a diff of unreadable binary churn for a reviewer to
+/// wade through.
+#[cfg(any(test, feature = "pcap-replay"))]
+pub fn write_file_if_changed(path: &Path, packets: &[PcapPacket]) -> io::Result<bool> {
+    let data = encode_packets(packets);
+    if read_maybe_gzip(path).is_ok_and(|existing| existing == data) {
+        return Ok(false);
+    }
+    write_bytes(path, &data)?;
+    Ok(true)
+}
+
+/// Write `data` to `path`, gzipping it when the path says so.
+#[cfg(any(test, feature = "pcap-replay"))]
+fn write_bytes(path: &Path, data: &[u8]) -> io::Result<()> {
+    if path.extension().is_some_and(|e| e == "gz") {
+        use flate2::Compression;
+        use flate2::write::GzEncoder;
+        use std::io::Write;
+        let file = fs::File::create(path)?;
+        let mut encoder = GzEncoder::new(file, Compression::default());
+        encoder.write_all(data)?;
+        encoder.finish()?;
+        Ok(())
+    } else {
+        fs::write(path, data)
+    }
+}
+
+/// Encode packets as pcap bytes, before any compression.
+#[cfg(any(test, feature = "pcap-replay"))]
+fn encode_packets(packets: &[PcapPacket]) -> Vec<u8> {
     let mut data = Vec::new();
 
     // Global header (24 bytes): magic, version 2.4, timezone 0, sigfigs 0, snaplen 65535, linktype 1 (Ethernet)
@@ -257,23 +304,89 @@ pub fn write_file(path: &Path, packets: &[PcapPacket]) -> io::Result<()> {
         data.extend_from_slice(&pkt.payload);
     }
 
-    if path.extension().is_some_and(|e| e == "gz") {
-        use flate2::Compression;
-        use flate2::write::GzEncoder;
-        use std::io::Write;
-        let file = fs::File::create(path)?;
-        let mut encoder = GzEncoder::new(file, Compression::default());
-        encoder.write_all(&data)?;
-        encoder.finish()?;
-        Ok(())
-    } else {
-        fs::write(path, data)
-    }
+    data
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sample_packets() -> Vec<PcapPacket> {
+        vec![
+            PcapPacket {
+                timestamp: Duration::from_millis(0),
+                src_addr: SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 1), 1234),
+                dst_addr: SocketAddrV4::new(Ipv4Addr::new(239, 0, 0, 1), 5678),
+                payload: vec![0x01, 0x02, 0x03],
+            },
+            PcapPacket {
+                timestamp: Duration::from_millis(100),
+                src_addr: SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 2), 4321),
+                dst_addr: SocketAddrV4::new(Ipv4Addr::new(239, 0, 0, 2), 8765),
+                payload: vec![0xAA, 0xBB],
+            },
+        ]
+    }
+
+    /// The bug this guards: a fixture holding exactly these packets, but
+    /// compressed by a different gzip than the one we write with, must be left
+    /// alone. Comparing file bytes would rewrite it and fill the diff with
+    /// binary churn that says nothing.
+    #[test]
+    fn a_fixture_compressed_differently_is_left_alone() {
+        let packets = sample_packets();
+        let tmp = std::env::temp_dir().join("test_if_changed_recompressed.pcap.gz");
+
+        // Same content, deliberately compressed at a level `write_file` never
+        // uses, standing in for whichever gzip wrote the committed fixtures.
+        {
+            use flate2::Compression;
+            use flate2::write::GzEncoder;
+            use std::io::Write;
+            let file = fs::File::create(&tmp).expect("create");
+            let mut encoder = GzEncoder::new(file, Compression::best());
+            encoder.write_all(&encode_packets(&packets)).expect("write");
+            encoder.finish().expect("finish");
+        }
+        let before = fs::read(&tmp).expect("read");
+        assert_ne!(
+            before,
+            {
+                write_file(&tmp.with_extension("other"), &packets).expect("write");
+                fs::read(tmp.with_extension("other")).expect("read")
+            },
+            "the two gzips must differ, or this test proves nothing"
+        );
+
+        assert!(
+            !write_file_if_changed(&tmp, &packets).expect("compare"),
+            "identical packets must not be rewritten"
+        );
+        assert_eq!(fs::read(&tmp).expect("read"), before, "file was touched");
+    }
+
+    /// The other half: content that really did move is written.
+    #[test]
+    fn a_fixture_whose_packets_changed_is_rewritten() {
+        let mut packets = sample_packets();
+        let tmp = std::env::temp_dir().join("test_if_changed_moved.pcap.gz");
+        assert!(
+            write_file_if_changed(&tmp, &packets).expect("write"),
+            "a fixture that does not exist yet is written"
+        );
+        assert!(
+            !write_file_if_changed(&tmp, &packets).expect("compare"),
+            "writing it again changes nothing"
+        );
+
+        packets[1].payload = vec![0xAA, 0xBB, 0xCC];
+        assert!(
+            write_file_if_changed(&tmp, &packets).expect("write"),
+            "a changed payload is written"
+        );
+        let parsed = parse_file(&tmp).expect("parse");
+        assert_eq!(parsed[1].payload, vec![0xAA, 0xBB, 0xCC]);
+    }
 
     #[test]
     fn roundtrip_write_parse() {
