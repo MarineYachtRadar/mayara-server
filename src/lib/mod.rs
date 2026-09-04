@@ -62,6 +62,15 @@ pub enum TargetMode {
     None,
 }
 
+/// Reject a malformed `--navigation-address` while the user is still looking
+/// at their terminal, rather than letting it take the navigation subsystem
+/// down once the server is running. Only the shape is checked here: whether a
+/// host name resolves is a question for the network at connect time.
+fn validate_navigation_address(value: &str) -> Result<String, String> {
+    navdata::ConnectionType::parse(&Some(value.to_string()))?;
+    Ok(value.to_string())
+}
+
 #[derive(Parser, Clone, Debug)]
 pub struct Cli {
     #[clap(flatten)]
@@ -98,7 +107,10 @@ pub struct Cli {
     pub targets: TargetMode,
 
     /// Set navigation service address. Accepts either an interface name
-    /// (restricts mDNS to that interface) or `<scheme>:<address>:<port>`.
+    /// (restricts mDNS to that interface) or `<scheme>:<address>:<port>`,
+    /// where the address may be an IP or a host name. A name is resolved
+    /// afresh on each connection attempt, so one whose address changes is
+    /// followed without a restart.
     ///
     /// Schemes:
     /// - `tcp:` — plain TCP Signal K stream (anonymous only)
@@ -110,7 +122,7 @@ pub struct Cli {
     ///
     /// Authenticated Signal K servers can only be reached via `ws:` or `wss:`.
     /// The plain `tcp:` transport is strictly for anonymous setups.
-    #[arg(short, long)]
+    #[arg(short, long, value_parser = validate_navigation_address)]
     pub navigation_address: Option<String>,
 
     /// Use NMEA 0183 for navigation service instead of Signal K
