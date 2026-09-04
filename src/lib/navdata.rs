@@ -206,13 +206,17 @@ pub fn nav_status(args: &Cli) -> NavStatus {
     } else {
         match &args.navigation_address {
             None => "mdns",
-            Some(addr) => match addr.split_once(':') {
-                // Same scheme set ConnectionType::parse accepts; an interface
-                // name (no scheme) restricts mDNS, so it's still discovery.
-                Some(("tcp", _)) => "tcp",
-                Some(("udp", _)) => "udp",
-                Some(("ws", _)) => "ws",
-                Some(("wss", _)) => "wss",
+            // Same scheme set ConnectionType::parse accepts, matched the same
+            // way it matches them; an interface name (no scheme) restricts
+            // mDNS, so it's still discovery.
+            Some(addr) => match addr
+                .split_once(':')
+                .map(|(scheme, rest)| (scheme.to_ascii_lowercase(), rest))
+            {
+                Some((scheme, _)) if scheme == "tcp" => "tcp",
+                Some((scheme, _)) if scheme == "udp" => "udp",
+                Some((scheme, _)) if scheme == "ws" => "ws",
+                Some((scheme, _)) if scheme == "wss" => "wss",
                 _ => "mdns",
             },
         }
@@ -735,6 +739,34 @@ pub(crate) enum ConnectionType {
     Ws(String, bool),
 }
 
+/// Check that `<address>:<port>` could name something before the server
+/// commits to it. Only the shape: whether the host exists is the network's
+/// answer to give, at connect time.
+fn validate_target(interface: &str, target: &str) -> Result<(), String> {
+    let Some((host, port)) = target.rsplit_once(':') else {
+        return Err(format!(
+            "navigation address '{interface}' names no port: expected <connection>:<address>:<port>"
+        ));
+    };
+    if host.is_empty() {
+        return Err(format!("navigation address '{interface}' names no address"));
+    }
+    // A bare IPv6 address is all colons, so the port cannot be told from the
+    // address unless it is bracketed, as it is everywhere else a host and port
+    // appear together.
+    if host.contains(':') && !(host.starts_with('[') && host.ends_with(']')) {
+        return Err(format!(
+            "navigation address '{interface}' needs its IPv6 address in brackets, as in `[::1]:3000`"
+        ));
+    }
+    if port.parse::<u16>().is_err() {
+        return Err(format!(
+            "navigation address '{interface}' has '{port}' where a port number belongs"
+        ));
+    }
+    Ok(())
+}
+
 /// Turn `<address>:<port>` into an address to connect to, accepting a host
 /// name as readily as a literal IP. Resolution happens per connect attempt,
 /// so a name whose address changed is picked up on the next reconnect rather
@@ -772,11 +804,7 @@ impl ConnectionType {
             // No scheme: an interface name, which restricts mDNS discovery.
             return Ok(ConnectionType::Mdns);
         };
-        if !target.contains(':') {
-            return Err(format!(
-                "navigation address '{interface}' names no port: expected <connection>:<address>:<port>"
-            ));
-        }
+        validate_target(interface, target)?;
         match scheme.to_ascii_lowercase().as_str() {
             "udp" => Ok(ConnectionType::Udp(target.to_string())),
             "tcp" => Ok(ConnectionType::Tcp(target.to_string())),
@@ -1863,12 +1891,20 @@ mod tests {
         // so adding a scheme to one without the other fails here.
         // ConnectionType variant -> expected nav_status string.
         let addr = "127.0.0.1:80";
-        for (scheme, expected) in [("tcp", "tcp"), ("udp", "udp"), ("ws", "ws"), ("wss", "wss")] {
+        // Upper case included: parse lowercases the scheme, so the status has
+        // to read it the same way or the two disagree about one address.
+        for (scheme, expected) in [
+            ("tcp", "tcp"),
+            ("udp", "udp"),
+            ("ws", "ws"),
+            ("wss", "wss"),
+            ("WSS", "wss"),
+            ("Tcp", "tcp"),
+        ] {
             let arg = format!("{scheme}:{addr}");
-            // parse() must accept the scheme...
             let parsed = ConnectionType::parse(&Some(arg.clone())).expect("a known scheme");
             let parsed_ok = matches!(
-                (scheme, &parsed),
+                (expected, &parsed),
                 ("tcp", ConnectionType::Tcp(_))
                     | ("udp", ConnectionType::Udp(_))
                     | ("ws", ConnectionType::Ws(_, false))
@@ -1910,6 +1946,39 @@ mod tests {
             ConnectionType::parse(&None),
             Ok(ConnectionType::Mdns)
         ));
+    }
+
+    /// The address is checked where the user can still see it: through the
+    /// argument parser, the way it is reached in earnest.
+    #[test]
+    fn a_malformed_navigation_address_is_refused_at_startup() {
+        for bad in [
+            "ws:signalk.local",  // no port
+            "ws:signalk.local:", // empty port
+            "ws:signalk.local:not-a-port",
+            "ws:signalk.local:99999", // not a u16
+            "ws::3000",               // no address
+            "ws:::1:3000",            // unbracketed IPv6
+            "http:10.0.0.1:80",       // unknown scheme
+        ] {
+            assert!(
+                Cli::try_parse_from(["mayara-server", "-n", bad]).is_err(),
+                "'{bad}' must be refused before the server starts"
+            );
+        }
+
+        for good in [
+            "ws:signalk.local:3000",
+            "tcp:10.0.0.1:8375",
+            "wss:[::1]:3443",
+            "udp:0.0.0.0:2000",
+            "en0", // an interface name restricts discovery
+        ] {
+            assert!(
+                Cli::try_parse_from(["mayara-server", "-n", good]).is_ok(),
+                "'{good}' is a usable navigation address"
+            );
+        }
     }
 
     /// A malformed address is reported, not panicked on: it used to take the
