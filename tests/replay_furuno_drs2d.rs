@@ -99,6 +99,10 @@ async fn replay_furuno_drs2d() {
                             // spoke frames in the fixture so the alignment bug
                             // (issue #195) would have a chance to panic.
                             tokio::time::sleep(Duration::from_millis(500)).await;
+                            // furuno-drs2d.pcap.gz holds a single packet on the spoke port,
+                            // so there is no revolution to look at. Furuno spoke decoding is
+                            // covered by replay_furuno and replay_furuno_nnd.
+
                             break;
                         }
                     }

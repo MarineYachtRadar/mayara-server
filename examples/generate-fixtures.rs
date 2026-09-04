@@ -162,6 +162,18 @@ fn main() {
     println!("Fixtures generated in {}", fixture_dir.display());
 }
 
+/// A datagram too big for one Ethernet frame reached us as IP fragments. On
+/// Navico that is the spoke stream (~17 kB per datagram); reports and beacons
+/// all fit in a single frame. This is what makes a fixture large.
+const FRAGMENTED_MIN: usize = 1473;
+
+/// How many bulk datagrams to keep. A Navico datagram carries 32 spokes and a
+/// revolution is 2048 of them, so 128 datagrams is two full revolutions —
+/// enough for a test to see every angle twice, without committing megabytes of
+/// echo to the repository. Discovery is unaffected: it is carried by the small
+/// packets, which are kept as before.
+const BULK_DATAGRAMS: usize = 128;
+
 fn navico_filter(p: &PcapPacket) -> bool {
     let ip = p.dst_addr.ip().octets();
     // Navico multicast 236.6.x.x (discovery + reports + spokes)
@@ -180,11 +192,28 @@ fn generate_fixture(
         return;
     }
     let packets = parse_file(src).expect("parse source");
-    let filtered: Vec<_> = packets
-        .into_iter()
-        .filter(|p| filter(p))
-        .take(max_packets)
-        .collect();
+    // `max_packets` counts only the small packets — the beacons and reports
+    // discovery is made of. That is what it has always counted, because the
+    // parser used to drop the fragmented ones entirely, and some captures only
+    // answer a Gen3+ beacon a thousand packets in. Counting spokes against the
+    // same cap would end the window early and lose that answer.
+    let mut filtered = Vec::new();
+    let mut small = 0;
+    let mut bulk = 0;
+    for packet in packets.into_iter().filter(|p| filter(p)) {
+        if packet.payload.len() >= FRAGMENTED_MIN {
+            if bulk < BULK_DATAGRAMS {
+                bulk += 1;
+                filtered.push(packet);
+            }
+            continue;
+        }
+        if small >= max_packets {
+            break;
+        }
+        small += 1;
+        filtered.push(packet);
+    }
     let wrote = write_file_if_changed(dst, &filtered).expect("write fixture");
     println!(
         "{}: {} -> {} packets{}",

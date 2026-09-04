@@ -10,6 +10,8 @@
 //! the status report — the whole receiver state machine is gated behind the
 //! info report, so a rejected one leaves the radar found but invisible.
 
+mod common;
+
 use mayara::{Cli, replay};
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::Path;
@@ -31,7 +33,10 @@ fn test_args() -> Cli {
         output: false,
         replay: false,
         pcap: Some("fixture".to_string()),
-        repeat: false,
+        // Loop the fixture: the radar only exists once discovery has run, so a
+        // test that subscribes then would otherwise find the dispatcher
+        // already finished and never see a spoke.
+        repeat: true,
         fake_errors: false,
         allow_wifi: false,
         stationary: false,
@@ -108,6 +113,15 @@ async fn replay_raymarine_e120_classic() {
                                 info.send_command_addr,
                                 SocketAddrV4::new(Ipv4Addr::new(10, 0, 231, 105), 2052)
                             );
+                            let spokes = common::collect_spokes(
+                                &info,
+                                info.spokes_per_revolution as usize,
+                                Duration::from_secs(10),
+                            )
+                            .await;
+                            // this capture holds most of a revolution.
+                            common::assert_spokes(&info, &spokes, 0.70);
+
                             break;
                         }
                     }

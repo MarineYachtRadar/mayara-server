@@ -5,6 +5,8 @@
 //! Verifies that replaying the fixture through the full pipeline
 //! detects the radar with the correct brand, model, and capabilities.
 
+mod common;
+
 use mayara::{Cli, replay};
 use std::path::Path;
 use std::time::Duration;
@@ -25,7 +27,10 @@ fn test_args() -> Cli {
         output: false,
         replay: false,
         pcap: Some("fixture".to_string()),
-        repeat: false,
+        // Loop the fixture: the radar only exists once discovery has run, so a
+        // test that subscribes then would otherwise find the dispatcher
+        // already finished and never see a spoke.
+        repeat: true,
         fake_errors: false,
         allow_wifi: false,
         stationary: false,
@@ -96,6 +101,15 @@ async fn replay_garmin_xhd() {
                             let model = info.controls.model_name().unwrap();
                             assert!(model.contains("xHD"), "expected xHD model, got: {}", model);
                             assert!(!info.doppler, "xHD should not support Doppler");
+                            let spokes = common::collect_spokes(
+                                &info,
+                                info.spokes_per_revolution as usize,
+                                Duration::from_secs(10),
+                            )
+                            .await;
+                            // this capture holds about a third of a revolution.
+                            common::assert_spokes(&info, &spokes, 0.25);
+
                             break;
                         }
                     }
