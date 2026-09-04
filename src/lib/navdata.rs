@@ -206,13 +206,17 @@ pub fn nav_status(args: &Cli) -> NavStatus {
     } else {
         match &args.navigation_address {
             None => "mdns",
-            Some(addr) => match addr.split_once(':') {
-                // Same scheme set ConnectionType::parse accepts; an interface
-                // name (no scheme) restricts mDNS, so it's still discovery.
-                Some(("tcp", _)) => "tcp",
-                Some(("udp", _)) => "udp",
-                Some(("ws", _)) => "ws",
-                Some(("wss", _)) => "wss",
+            // Same scheme set ConnectionType::parse accepts, matched the same
+            // way it matches them; an interface name (no scheme) restricts
+            // mDNS, so it's still discovery.
+            Some(addr) => match addr
+                .split_once(':')
+                .map(|(scheme, rest)| (scheme.to_ascii_lowercase(), rest))
+            {
+                Some((scheme, _)) if scheme == "tcp" => "tcp",
+                Some((scheme, _)) if scheme == "udp" => "udp",
+                Some((scheme, _)) if scheme == "ws" => "ws",
+                Some((scheme, _)) if scheme == "wss" => "wss",
                 _ => "mdns",
             },
         }
@@ -727,40 +731,89 @@ impl SignalKSubscription {
     }
 }
 
-enum ConnectionType {
+pub(crate) enum ConnectionType {
     Mdns,
-    Udp(SocketAddr),
-    Tcp(SocketAddr),
+    Udp(String),
+    Tcp(String),
     /// WebSocket connection; bool indicates TLS (wss) vs plain (ws)
-    Ws(SocketAddr, bool),
+    Ws(String, bool),
+}
+
+/// Check that `<address>:<port>` could name something before the server
+/// commits to it. Only the shape: whether the host exists is the network's
+/// answer to give, at connect time.
+fn validate_target(interface: &str, target: &str) -> Result<(), String> {
+    let Some((host, port)) = target.rsplit_once(':') else {
+        return Err(format!(
+            "navigation address '{interface}' names no port: expected <connection>:<address>:<port>"
+        ));
+    };
+    if host.is_empty() {
+        return Err(format!("navigation address '{interface}' names no address"));
+    }
+    // A bare IPv6 address is all colons, so the port cannot be told from the
+    // address unless it is bracketed, as it is everywhere else a host and port
+    // appear together.
+    if host.contains(':') && !(host.starts_with('[') && host.ends_with(']')) {
+        return Err(format!(
+            "navigation address '{interface}' needs its IPv6 address in brackets, as in `[::1]:3000`"
+        ));
+    }
+    if port.parse::<u16>().is_err() {
+        return Err(format!(
+            "navigation address '{interface}' has '{port}' where a port number belongs"
+        ));
+    }
+    Ok(())
+}
+
+/// Turn `<address>:<port>` into an address to connect to, accepting a host
+/// name as readily as a literal IP. Resolution happens per connect attempt,
+/// so a name whose address changed is picked up on the next reconnect rather
+/// than needing a restart.
+async fn resolve_target(target: &str) -> Result<SocketAddr, RadarError> {
+    let addrs: Vec<SocketAddr> = tokio::net::lookup_host(target)
+        .await
+        .map_err(|e| {
+            RadarError::Config(format!("cannot resolve navigation address '{target}': {e}"))
+        })?
+        .collect();
+
+    // Prefer IPv4: the rest of mayara speaks it, and a marine network that
+    // hands out both is far likelier to route it.
+    addrs
+        .iter()
+        .find(|a| a.is_ipv4())
+        .or_else(|| addrs.first())
+        .copied()
+        .ok_or_else(|| {
+            RadarError::Config(format!("navigation address '{target}' resolves to nothing"))
+        })
 }
 
 impl ConnectionType {
-    fn parse(interface: &Option<String>) -> ConnectionType {
-        match interface {
-            None => {
-                return ConnectionType::Mdns;
-            }
-            Some(interface) => {
-                let parts: Vec<&str> = interface.splitn(2, ':').collect();
-                if parts.len() == 1 {
-                    return ConnectionType::Mdns;
-                } else if parts.len() == 2
-                    && let Ok(addr) = parts[1].parse()
-                {
-                    match parts[0].to_ascii_lowercase().as_str() {
-                        "udp" => return ConnectionType::Udp(addr),
-                        "tcp" => return ConnectionType::Tcp(addr),
-                        "ws" => return ConnectionType::Ws(addr, false),
-                        "wss" => return ConnectionType::Ws(addr, true),
-                        _ => {} // fallthrough to panic below
-                    }
-                }
-            }
+    /// Read `--navigation-address`. The target is kept as written and
+    /// resolved at connect time, so a name that moves -- a `.local` host, a
+    /// DHCP lease -- is followed across reconnects instead of being pinned to
+    /// whatever it meant at startup.
+    pub(crate) fn parse(interface: &Option<String>) -> Result<ConnectionType, String> {
+        let Some(interface) = interface else {
+            return Ok(ConnectionType::Mdns);
+        };
+        let Some((scheme, target)) = interface.split_once(':') else {
+            // No scheme: an interface name, which restricts mDNS discovery.
+            return Ok(ConnectionType::Mdns);
+        };
+        validate_target(interface, target)?;
+        match scheme.to_ascii_lowercase().as_str() {
+            "udp" => Ok(ConnectionType::Udp(target.to_string())),
+            "tcp" => Ok(ConnectionType::Tcp(target.to_string())),
+            "ws" => Ok(ConnectionType::Ws(target.to_string(), false)),
+            "wss" => Ok(ConnectionType::Ws(target.to_string(), true)),
+            other => Err(format!(
+                "navigation address '{interface}' has unknown connection '{other}': expected an interface name, or one of `udp`, `tcp`, `ws`, `wss`"
+            )),
         }
-        panic!(
-            "Interface must be either interface name (no :) or <connection>:<address>:<port> with <connection> one of `udp`, `tcp`, `ws` or `wss`."
-        );
     }
 }
 
@@ -1122,6 +1175,13 @@ impl NavigationData {
                         return Ok(());
                     }
                     e => {
+                        // A misconfigured or unresolvable address is the
+                        // user's to fix and would otherwise be invisible:
+                        // nav data simply never arrives. The backoff below
+                        // keeps this from becoming a stream of warnings.
+                        if matches!(e, RadarError::Config(_)) {
+                            log::warn!("{}: {}", self.what, e);
+                        }
                         log::debug!("{} find_service restart on result {:?}", self.what, e);
                         // find_service failed before any peer could even be
                         // probed. That's a transient discovery error
@@ -1141,15 +1201,26 @@ impl NavigationData {
         rx_ip_change: &mut Receiver<()>,
         interface: &Option<String>,
     ) -> Result<Stream, RadarError> {
-        let connection_type = ConnectionType::parse(interface);
+        // Checked at startup by the argument parser, so anything wrong here
+        // is a bug rather than a user's typo.
+        let connection_type = ConnectionType::parse(interface).map_err(RadarError::Config)?;
         match connection_type {
             ConnectionType::Mdns => {
                 self.find_mdns_service(subsys, rx_ip_change, interface)
                     .await
             }
-            ConnectionType::Tcp(addr) => self.find_tcp_service(subsys, addr).await,
-            ConnectionType::Udp(addr) => self.find_udp_service(subsys, addr).await,
-            ConnectionType::Ws(addr, tls) => self.find_signalk_ws_service(subsys, addr, tls).await,
+            ConnectionType::Tcp(target) => {
+                let addr = resolve_target(&target).await?;
+                self.find_tcp_service(subsys, addr).await
+            }
+            ConnectionType::Udp(target) => {
+                let addr = resolve_target(&target).await?;
+                self.find_udp_service(subsys, addr).await
+            }
+            ConnectionType::Ws(target, tls) => {
+                let addr = resolve_target(&target).await?;
+                self.find_signalk_ws_service(subsys, addr, tls).await
+            }
         }
     }
 
@@ -1816,17 +1887,24 @@ mod tests {
     #[test]
     fn nav_transport_stays_in_sync_with_connection_type() {
         // nav_status derives its transport string independently of
-        // ConnectionType::parse (deliberately — parse() panics on an unknown
-        // scheme, which a status endpoint must not do). This guard pins the
-        // two scheme sets together so adding a scheme to one without the other
-        // fails here. ConnectionType variant -> expected nav_status string.
+        // ConnectionType::parse. This guard pins the two scheme sets together
+        // so adding a scheme to one without the other fails here.
+        // ConnectionType variant -> expected nav_status string.
         let addr = "127.0.0.1:80";
-        for (scheme, expected) in [("tcp", "tcp"), ("udp", "udp"), ("ws", "ws"), ("wss", "wss")] {
+        // Upper case included: parse lowercases the scheme, so the status has
+        // to read it the same way or the two disagree about one address.
+        for (scheme, expected) in [
+            ("tcp", "tcp"),
+            ("udp", "udp"),
+            ("ws", "ws"),
+            ("wss", "wss"),
+            ("WSS", "wss"),
+            ("Tcp", "tcp"),
+        ] {
             let arg = format!("{scheme}:{addr}");
-            // parse() must accept the scheme (it would panic otherwise)...
-            let parsed = ConnectionType::parse(&Some(arg.clone()));
+            let parsed = ConnectionType::parse(&Some(arg.clone())).expect("a known scheme");
             let parsed_ok = matches!(
-                (scheme, &parsed),
+                (expected, &parsed),
                 ("tcp", ConnectionType::Tcp(_))
                     | ("udp", ConnectionType::Udp(_))
                     | ("ws", ConnectionType::Ws(_, false))
@@ -1836,6 +1914,108 @@ mod tests {
             // ...and nav_status must map it to the matching string.
             assert_eq!(nav_status(&cli(&["-n", &arg])).transport, expected);
         }
+    }
+
+    /// A navigation address may name a host, not only an IP. The address is
+    /// kept as written and resolved when the connection is made, so a name
+    /// that moves is followed across reconnects.
+    #[test]
+    fn a_navigation_address_may_name_a_host() {
+        assert!(matches!(
+            ConnectionType::parse(&Some("ws:signalk.local:3000".to_string())),
+            Ok(ConnectionType::Ws(target, false)) if target == "signalk.local:3000"
+        ));
+        assert!(matches!(
+            ConnectionType::parse(&Some("tcp:10.0.0.1:8375".to_string())),
+            Ok(ConnectionType::Tcp(target)) if target == "10.0.0.1:8375"
+        ));
+        assert!(matches!(
+            ConnectionType::parse(&Some("wss:[::1]:3443".to_string())),
+            Ok(ConnectionType::Ws(target, true)) if target == "[::1]:3443"
+        ));
+    }
+
+    /// A name with no scheme is an interface, which restricts discovery.
+    #[test]
+    fn a_bare_name_still_means_discovery() {
+        assert!(matches!(
+            ConnectionType::parse(&Some("en0".to_string())),
+            Ok(ConnectionType::Mdns)
+        ));
+        assert!(matches!(
+            ConnectionType::parse(&None),
+            Ok(ConnectionType::Mdns)
+        ));
+    }
+
+    /// The address is checked where the user can still see it: through the
+    /// argument parser, the way it is reached in earnest.
+    #[test]
+    fn a_malformed_navigation_address_is_refused_at_startup() {
+        for bad in [
+            "ws:signalk.local",  // no port
+            "ws:signalk.local:", // empty port
+            "ws:signalk.local:not-a-port",
+            "ws:signalk.local:99999", // not a u16
+            "ws::3000",               // no address
+            "ws:::1:3000",            // unbracketed IPv6
+            "http:10.0.0.1:80",       // unknown scheme
+        ] {
+            assert!(
+                Cli::try_parse_from(["mayara-server", "-n", bad]).is_err(),
+                "'{bad}' must be refused before the server starts"
+            );
+        }
+
+        for good in [
+            "ws:signalk.local:3000",
+            "tcp:10.0.0.1:8375",
+            "wss:[::1]:3443",
+            "udp:0.0.0.0:2000",
+            "en0", // an interface name restricts discovery
+        ] {
+            assert!(
+                Cli::try_parse_from(["mayara-server", "-n", good]).is_ok(),
+                "'{good}' is a usable navigation address"
+            );
+        }
+    }
+
+    /// A malformed address is reported, not panicked on: it used to take the
+    /// navigation subsystem down with it once the server was already running.
+    #[test]
+    fn a_malformed_navigation_address_is_an_error() {
+        let no_port = ConnectionType::parse(&Some("ws:signalk.local".to_string()));
+        assert!(
+            no_port.is_err_and(|e| e.contains("port")),
+            "must name the problem"
+        );
+
+        let bad_scheme = ConnectionType::parse(&Some("http:10.0.0.1:80".to_string()));
+        assert!(
+            bad_scheme.is_err_and(|e| e.contains("http") && e.contains("wss")),
+            "must name what was given and what is accepted"
+        );
+    }
+
+    /// Resolution prefers IPv4: the rest of mayara speaks it, and a marine
+    /// network handing out both is likelier to route it.
+    #[tokio::test]
+    async fn resolving_a_host_prefers_ipv4() {
+        let addr = resolve_target("localhost:3000")
+            .await
+            .expect("localhost resolves");
+        assert_eq!(addr.port(), 3000);
+        assert!(addr.is_ipv4(), "got {addr}");
+    }
+
+    #[tokio::test]
+    async fn an_unresolvable_host_is_an_error_not_a_panic() {
+        assert!(
+            resolve_target("no-such-host-xyz.invalid:3000")
+                .await
+                .is_err()
+        );
     }
 
     /// Own-ship nav lives in process-global atomics that the whole suite

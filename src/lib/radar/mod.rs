@@ -82,6 +82,8 @@ pub enum RadarError {
     InterfaceNoV4(String),
     #[error("Cannot detect Ethernet devices")]
     EnumerationFailed,
+    #[error("{0}")]
+    Config(String),
     #[error("Timeout")]
     Timeout,
     #[error("Shutdown")]
