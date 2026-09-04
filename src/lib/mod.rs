@@ -826,9 +826,9 @@ pub async fn start_session(
     navdata::init_nav_broadcast(radars.get_sk_client_tx());
 
     // Seed navigation data from --static-position (for shore-based installations
-    // without a connected Signal K/NMEA navigation source). Mirrors the emulator
-    // pattern: set atomics once, then periodically re-broadcast so late-joining
-    // GUI clients receive the current heading/position.
+    // whose position is known and fixed). The seeding makes these values
+    // authoritative -- see navdata::set_static_nav -- and the task below
+    // re-asserts them so they stay fresh and reach late-joining GUI clients.
     if let Some(static_pos) = args.get_static_position() {
         if static_pos.lat.is_finite()
             && static_pos.lon.is_finite()
@@ -837,10 +837,7 @@ pub async fn start_session(
             && (-180.0..=180.0).contains(&static_pos.lon)
         {
             let heading_rad = static_pos.heading.to_radians();
-            navdata::set_position(Some(static_pos.lat), Some(static_pos.lon), "static");
-            navdata::set_heading_true(Some(heading_rad), "static");
-            navdata::set_sog(Some(0.0));
-            navdata::set_cog(Some(heading_rad));
+            navdata::set_static_nav(static_pos.lat, static_pos.lon, heading_rad);
 
             subsystem.start(SubsystemBuilder::new(
                 "Static Navigation",
@@ -852,7 +849,16 @@ pub async fn start_session(
                         tokio::select! { biased;
                             _ = subsys.on_shutdown_requested() => break,
                             _ = interval.tick() => {
-                                navdata::broadcast_heading("static");
+                                // Re-assert as well as re-broadcast: this keeps
+                                // own-ship nav fresh, so a fixed installation
+                                // with no upstream never ages into "no
+                                // navigation data", while late-joining clients
+                                // still learn a position that never changes.
+                                navdata::refresh_static_nav(
+                                    static_pos.lat,
+                                    static_pos.lon,
+                                    heading_rad,
+                                );
                             }
                         }
                     }

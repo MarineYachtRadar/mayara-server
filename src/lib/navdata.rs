@@ -39,6 +39,9 @@ static POSITION_LAT: AtomicF64 = AtomicF64::new(f64::NAN);
 static POSITION_LON: AtomicF64 = AtomicF64::new(f64::NAN);
 static COG: AtomicF64 = AtomicF64::new(f64::NAN);
 static SOG: AtomicF64 = AtomicF64::new(f64::NAN);
+/// Set once `--static-position` has seeded own-ship nav, after which nothing
+/// else may move the vessel. See [`set_static_nav`].
+static STATIC_NAV: AtomicBool = AtomicBool::new(false);
 
 /// Broadcast sender for navigation updates to GUI clients
 static NAV_BROADCAST_TX: OnceLock<tokio::sync::broadcast::Sender<SignalKDelta>> = OnceLock::new();
@@ -385,6 +388,47 @@ fn build_seed_updates(vessel: &Value) -> Option<Value> {
 /// a real (authoritative) true source or the derivation path.
 const DERIVED_SOURCE: &str = "magnetic+variation";
 
+/// The source name the `--static-position` seeding writes under.
+const STATIC_SOURCE: &str = "static";
+
+/// Whether a write from `source` has to be refused because the installation
+/// was given a fixed position. A shore station or a radar on a pier knows
+/// where it is and which way it points; an upstream that disagrees is wrong,
+/// and an upstream that disconnects must not be able to take the position
+/// away with it.
+fn static_nav_refuses(static_nav: bool, source: &str) -> bool {
+    static_nav && source != STATIC_SOURCE
+}
+
+fn static_nav_holds() -> bool {
+    STATIC_NAV.load(Ordering::Acquire)
+}
+
+/// Re-assert a fixed position and publish it, whether or not it changed.
+///
+/// A fixed installation's values never change, so the change-gated broadcasts
+/// in the setters would only ever fire once, and a GUI client connecting later
+/// would never be told where the radar is or which way it points. Called on a
+/// timer, this both keeps own-ship nav fresh and answers late joiners.
+pub fn refresh_static_nav(lat: f64, lon: f64, heading_rad: f64) {
+    set_static_nav(lat, lon, heading_rad);
+    broadcast_position_update(lat, lon, STATIC_SOURCE);
+    broadcast_heading(STATIC_SOURCE);
+}
+
+/// Seed own-ship nav from `--static-position` and make it authoritative.
+/// Idempotent: the periodic refresh calls it to keep the values fresh, so a
+/// fixed installation never ages into "no navigation data".
+pub fn set_static_nav(lat: f64, lon: f64, heading_rad: f64) {
+    STATIC_NAV.store(true, Ordering::Release);
+    // Position and heading carry the source the guard recognises; COG and SOG
+    // have no source, so they are stored past the guard rather than through it.
+    set_position(Some(lat), Some(lon), STATIC_SOURCE);
+    set_heading_true(Some(heading_rad), STATIC_SOURCE);
+    store_cog(Some(heading_rad));
+    store_sog(Some(0.0));
+}
+
 ///
 /// Get the heading in radians [0..2*PI>
 ///
@@ -411,6 +455,10 @@ pub fn get_heading_magnetic() -> Option<f64> {
 ///
 pub(crate) fn set_heading_true(heading: Option<f64>, source: &str) {
     use std::f64::consts::TAU;
+
+    if static_nav_refuses(static_nav_holds(), source) {
+        return;
+    }
 
     if let Some(h) = heading {
         assert!(
@@ -456,6 +504,13 @@ fn should_derive(true_authoritative: bool) -> bool {
 /// Set the magnetic heading in radians. Broadcast to the GUI (for the readout
 /// toggle) and feed the magnetic→true derivation.
 pub(crate) fn set_heading_magnetic(heading: Option<f64>, source: &str) {
+    // A fixed installation that reports someone else's magnetic heading
+    // contradicts the true heading it is reporting, so this is refused with
+    // the rest of own-ship nav.
+    if static_nav_refuses(static_nav_holds(), source) {
+        return;
+    }
+
     use std::f64::consts::TAU;
 
     if let Some(h) = heading {
@@ -478,6 +533,12 @@ pub(crate) fn set_heading_magnetic(heading: Option<f64>, source: &str) {
 /// Set the magnetic variation in radians and feed the magnetic→true derivation.
 /// Not displayed, so no GUI broadcast.
 pub(crate) fn set_magnetic_variation(variation: Option<f64>) {
+    // Variation is a property of where you are, and a fixed installation is
+    // not where the upstream vessel is.
+    if static_nav_holds() {
+        return;
+    }
+
     match variation {
         Some(v) => MAGNETIC_VARIATION.store(v, Ordering::Release),
         None => MAGNETIC_VARIATION.store(f64::NAN, Ordering::Release),
@@ -535,6 +596,9 @@ pub fn get_position() -> (Option<f64>, Option<f64>) {
 }
 
 pub(crate) fn set_position(lat: Option<f64>, lon: Option<f64>, source: &str) {
+    if static_nav_refuses(static_nav_holds(), source) {
+        return;
+    }
     if let (Some(lat), Some(lon)) = (lat, lon) {
         log::trace!("navdata::set_position(lat={}, lon={})", lat, lon);
         mark_own_ship_nav_fresh();
@@ -561,6 +625,12 @@ pub(crate) fn set_position(lat: Option<f64>, lon: Option<f64>, source: &str) {
 /// own-ship nav was ever received, so a transport that never carried nav
 /// (e.g. anonymous tcp on a hidden-vessels server) doesn't churn broadcasts.
 pub(crate) fn clear_own_ship_nav() {
+    // A fixed installation keeps knowing where it is when an upstream goes
+    // away: the position came from the command line, not from the peer that
+    // just dropped, and clearing it would leave the radar with nothing.
+    if static_nav_holds() {
+        return;
+    }
     if own_ship_nav_age_secs().is_none() {
         return;
     }
@@ -584,6 +654,13 @@ pub(crate) fn get_cog() -> Option<f64> {
 }
 
 pub(crate) fn set_cog(cog: Option<f64>) {
+    if static_nav_holds() {
+        return;
+    }
+    store_cog(cog);
+}
+
+fn store_cog(cog: Option<f64>) {
     use std::f64::consts::TAU;
 
     if let Some(c) = cog {
@@ -607,6 +684,13 @@ pub(crate) fn get_sog() -> Option<f64> {
 }
 
 pub(crate) fn set_sog(sog: Option<f64>) {
+    if static_nav_holds() {
+        return;
+    }
+    store_sog(sog);
+}
+
+fn store_sog(sog: Option<f64>) {
     if let Some(s) = sog {
         SOG.store(s, Ordering::Release);
     } else {
@@ -1752,6 +1836,40 @@ mod tests {
             // ...and nav_status must map it to the matching string.
             assert_eq!(nav_status(&cli(&["-n", &arg])).transport, expected);
         }
+    }
+
+    /// A fixed installation knows where it is. Once `--static-position` has
+    /// seeded own-ship nav, an upstream that disagrees is wrong and must not
+    /// move the vessel.
+    #[test]
+    fn a_static_position_refuses_upstream_navigation() {
+        assert!(static_nav_refuses(true, "signalk"));
+        assert!(static_nav_refuses(true, "nmea0183"));
+        assert!(static_nav_refuses(true, DERIVED_SOURCE));
+    }
+
+    /// The seeding, and the periodic re-assert that keeps it fresh, write
+    /// under the static source and have to be let through.
+    #[test]
+    fn a_static_position_accepts_its_own_writes() {
+        assert!(!static_nav_refuses(true, STATIC_SOURCE));
+    }
+
+    /// An upstream dropping clears own-ship nav so the GUI stops showing a
+    /// frozen value. A fixed position is not that: it came from the command
+    /// line, not from the peer that went away, so the clear must not take it.
+    #[test]
+    fn a_dropped_upstream_cannot_clear_a_static_position() {
+        assert!(static_nav_refuses(true, "disconnect"));
+    }
+
+    /// Without `--static-position` nothing is refused; every source writes as
+    /// it always did.
+    #[test]
+    fn without_a_static_position_every_source_writes() {
+        assert!(!static_nav_refuses(false, "signalk"));
+        assert!(!static_nav_refuses(false, "disconnect"));
+        assert!(!static_nav_refuses(false, STATIC_SOURCE));
     }
 
     // ----- nav freshness / staleness (revoked-token / dropped upstream) -----
