@@ -2189,11 +2189,10 @@ async fn send_all_subscribed(
     for radar in radars.get_active() {
         rcvs.append(&mut radar.controls.get_radar_control_values());
     }
-    // Under `none`, keep only explicitly-subscribed controls; `self`/`all` get
-    // them all (radar controls are own-ship data, always in those baselines).
-    if subscriptions.mode == Subscribe::None {
-        rcvs.retain(|x| subscriptions.is_subscribed(x, true));
-    }
+    // Keep what the client is owed: the controls it named, on the terms it
+    // named them on, plus everything its baseline carries (radar controls are
+    // own-ship data, so `self` and `all` carry them all).
+    rcvs.retain(|x| subscriptions.is_subscribed(x, true));
     log::debug!("Sending {} subscribed controls", rcvs.len());
     if !rcvs.is_empty() {
         let mut delta: SignalKDelta = SignalKDelta::new();

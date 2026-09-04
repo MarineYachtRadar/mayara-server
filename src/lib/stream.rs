@@ -604,6 +604,17 @@ fn is_navigation_path(path: &str) -> bool {
     )
 }
 
+/// Whether `path` carries a value that stands between updates, and so can be
+/// paced: a radar control, or own-ship navigation. Everything else — guard-zone
+/// notifications, ARPA target reports — is an event, and each one carries a
+/// transition the client cannot infer from the next: drop the update that
+/// clears an alarm and it stays raised forever, drop the one that loses a
+/// target and it is tracked forever. So events are delivered whenever they
+/// happen, whatever pacing was asked for.
+fn is_paced_path(path: &str) -> bool {
+    control_shorthand(path).is_some() || is_navigation_path(path)
+}
+
 /// The shorthand for a published control path, if it is one: `radars.{id}.gain`
 /// alongside `radars.{id}.controls.gain`. `None` for anything that is not a
 /// control, which is how the caller tells them apart.
@@ -712,23 +723,15 @@ impl ActiveSubscriptions {
     /// Whether this control goes out now, which is both whether the client
     /// asked for it and whether the terms it asked on allow it yet.
     pub fn is_subscribed(&mut self, rcv: &RadarControlValue, full: bool) -> bool {
-        match self.mode {
-            Subscribe::All => {
-                return true;
-            }
-            Subscribe::SelfOnly => {
-                return true;
-            }
-            Subscribe::None => {}
-        }
-
         let (Some(radar_id), Some(control_id)) = (rcv.radar_id.as_deref(), &rcv.control_id) else {
             panic!("Invalid use of is_subscribed(), can only be done on internal RCV");
         };
         let [canonical, shorthand] = control_paths(radar_id, control_id);
 
         let Some(terms) = self.terms_for(&[&canonical, &shorthand]) else {
-            return false;
+            // Nothing names it, so the baseline decides. Radar controls are
+            // own-ship data, carried by `self` as well as `all`.
+            return self.mode != Subscribe::None;
         };
 
         self.allow_now(&canonical, &terms, full)
@@ -792,66 +795,51 @@ impl ActiveSubscriptions {
     }
 
     pub fn is_subscribed_path(&mut self, path: &str, full: bool) -> bool {
+        // Both the path a control is published under and the shorthand a client
+        // may have named it by are offered, the same pair `is_subscribed` uses
+        // — a client that subscribed the short way must not be answered on
+        // connect and then go quiet.
+        let terms = match control_shorthand(path) {
+            Some(shorthand) => self.terms_for(&[path, &shorthand]),
+            None => self.terms_for(&[path]),
+        };
+
+        let Some(terms) = terms else {
+            return self.baseline_carries(path);
+        };
+
+        // A value that stands is paced on the terms it was asked on; holding
+        // one back only delays it until the next change or the next tick. An
+        // event cannot be held back at all, so being asked for is the whole
+        // answer.
+        if !is_paced_path(path) {
+            return true;
+        }
+
+        self.allow_now(path, &terms, full)
+    }
+
+    /// Whether the stream's `?subscribe=` baseline carries `path` on its own,
+    /// which is what decides a path no request names.
+    fn baseline_carries(&self, path: &str) -> bool {
         match self.mode {
-            Subscribe::All => {
-                return true;
-            }
-            Subscribe::SelfOnly => {
-                // Own-ship data is in the `self` baseline; only AIS (`vessels.*`,
-                // another vessel's context) needs an explicit subscription. The
-                // path prefix is the context discriminator, so this stays correct
-                // even when navigation comes from NMEA 0183 (no upstream own-ship
-                // URN) — `navigation.*` is own-ship by path regardless.
-                if !path.starts_with("vessels.") {
-                    return true;
-                }
-            }
-            Subscribe::None => {}
+            Subscribe::All => true,
+            // Own-ship data is in the `self` baseline; only AIS (`vessels.*`,
+            // another vessel's context) needs an explicit subscription. The
+            // path prefix is the context discriminator, so this stays correct
+            // even when navigation comes from NMEA 0183 (no upstream own-ship
+            // URN) — `navigation.*` is own-ship by path regardless.
+            Subscribe::SelfOnly => !path.starts_with("vessels."),
+            Subscribe::None => false,
         }
-
-        // A control is throttled by the terms it was asked on. Both the path a
-        // control is published under and the shorthand a client may have named
-        // it by are offered, the same pair `is_subscribed` uses — a client that
-        // subscribed the short way must not be answered on connect and then go
-        // quiet.
-        if let Some(shorthand) = control_shorthand(path) {
-            let Some(terms) = self.terms_for(&[path, &shorthand]) else {
-                return false;
-            };
-            return self.allow_now(path, &terms, full);
-        }
-
-        // Navigation is throttled the same way: it is a value that stands, so
-        // holding one back only delays it until the next change or the next
-        // tick.
-        if is_navigation_path(path) {
-            let Some(terms) = self.terms_for(&[path]) else {
-                return false;
-            };
-            return self.allow_now(path, &terms, full);
-        }
-
-        // Everything else — guard-zone notifications, ARPA target reports — is
-        // an event, and each one carries a transition the client cannot infer
-        // from the next: drop the update that clears an alarm and it stays
-        // raised forever, drop the one that loses a target and it is tracked
-        // forever. So events are delivered whenever they happen, whatever
-        // pacing was asked for.
-        self.covering(path).next().is_some()
     }
 
     /// Whether `path` is owed a value on the periodic tick. Only a path asked
     /// for on a `fixed` policy is delivered on schedule; `instant` and `ideal`
     /// go out when the value changes, and a copy on the tick as well is one the
-    /// client never asked for.
+    /// client never asked for. The baseline never delivers from the schedule:
+    /// a path no request names is carried on change.
     pub fn is_due_periodic(&mut self, path: &str) -> bool {
-        // Terms govern delivery only under `subscribe=none`, the same as
-        // everywhere else here: a `self` or `all` client is served on change
-        // off the back of its baseline, never from the schedule.
-        if self.mode != Subscribe::None {
-            return false;
-        }
-
         let Some(terms) = self.terms_for(&[path]) else {
             return false;
         };
@@ -1918,18 +1906,88 @@ mod build_tests {
         );
     }
 
-    /// A `self` client is served from its baseline, on change. Terms it names
-    /// on top must not add a second, periodic, copy of the same value.
+    /// A `self` client asking for a path on terms is answered on those terms:
+    /// the baseline is what carries a path nobody named, not an answer that
+    /// overrides one that was.
     #[test]
-    fn a_self_client_is_never_served_from_the_schedule() {
+    fn a_self_client_is_paced_by_the_terms_it_names() {
         let mut subs = ActiveSubscriptions::new(Subscribe::SelfOnly);
         subs.subscribe(subscribe_to(json!({"subscribe": [
             {"path": "navigation.*", "policy": "fixed", "period": 100}
         ]})))
         .unwrap();
 
+        assert!(
+            !subs.is_subscribed_path("navigation.position", false),
+            "a fixed subscription is not delivered on change"
+        );
+        assert!(
+            subs.is_due_periodic("navigation.position"),
+            "it is delivered on the schedule it asked for"
+        );
+    }
+
+    /// What the baseline is for: a `self` client that names nothing is served
+    /// everything own-ship, on change, as it always was.
+    #[test]
+    fn a_self_client_naming_nothing_is_served_from_the_baseline() {
+        let mut subs = ActiveSubscriptions::new(Subscribe::SelfOnly);
+
         assert!(subs.is_subscribed_path("navigation.position", false));
-        assert!(!subs.is_due_periodic("navigation.position"));
+        assert!(subs.is_subscribed_path("navigation.position", false));
+        assert!(subs.is_subscribed_path("radars.nav1.controls.gain", false));
+        assert!(subs.is_subscribed_path("radars.nav1.targets.5", false));
+        assert!(
+            !subs.is_subscribed_path("vessels.urn:mrn:imo:mmsi:431004411", false),
+            "another vessel is not own-ship data"
+        );
+        assert!(
+            !subs.is_due_periodic("navigation.position"),
+            "the baseline delivers on change, never from the schedule"
+        );
+    }
+
+    /// Terms name paths, not everything: a path the client did not ask about
+    /// keeps whatever the baseline gives it.
+    #[test]
+    fn terms_pace_only_the_paths_they_cover() {
+        let mut subs = ActiveSubscriptions::new(Subscribe::SelfOnly);
+        subs.subscribe(subscribe_to(json!({"subscribe": [
+            {"path": "navigation.*", "policy": "ideal", "minPeriod": 1000}
+        ]})))
+        .unwrap();
+
+        assert!(subs.is_subscribed_path("navigation.headingTrue", false));
+        assert!(
+            !subs.is_subscribed_path("navigation.headingTrue", false),
+            "the named path is rate-limited"
+        );
+
+        let gain = "radars.nav1.controls.gain";
+        assert!(subs.is_subscribed_path(gain, false));
+        assert!(
+            subs.is_subscribed_path(gain, false),
+            "a path no request names is still carried on change"
+        );
+    }
+
+    /// An `all` client can pace what it asked for too, and its AIS baseline is
+    /// untouched by terms on an own-ship path.
+    #[test]
+    fn an_all_client_is_paced_by_the_terms_it_names() {
+        let mut subs = ActiveSubscriptions::new(Subscribe::All);
+        subs.subscribe(subscribe_to(json!({"subscribe": [
+            {"path": "radars.*.controls.*", "policy": "ideal", "minPeriod": 1000}
+        ]})))
+        .unwrap();
+
+        let gain = "radars.nav1.controls.gain";
+        assert!(subs.is_subscribed_path(gain, false));
+        assert!(!subs.is_subscribed_path(gain, false));
+        assert!(
+            subs.is_subscribed_ais("vessels.urn:mrn:imo:mmsi:431004411"),
+            "AIS still rides the all baseline"
+        );
     }
 
     /// An event carries a transition the client cannot infer from the next
