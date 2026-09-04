@@ -1798,7 +1798,7 @@ async fn ws_signalk_delta(
             }
 
             _ = ticker.tick() => {
-                if let Err(e) = send_all_subscribed(socket, &radars, &mut subscriptions, &mut meta_radar_data_sent).await
+                if let Err(e) = send_periodic(socket, &radars, &mut subscriptions, &mut meta_radar_data_sent).await
                 {
                     log::warn!("Cannot send subscribed data to websocket");
                     break Err(e);
@@ -2116,33 +2116,45 @@ async fn handle_subscription(
         send_all_ais_vessels(socket).await?;
     }
 
-    send_current_navigation(socket, subscriptions).await?;
+    send_navigation(socket, subscriptions, |subs, path| {
+        subs.is_subscribed_path(path, true)
+    })
+    .await?;
 
     Ok(())
 }
 
-/// Send the current value of any navigation paths the client is subscribed
-/// to, so the client doesn't have to wait for the next upstream change to
-/// receive a starting value. Position rarely changes when stationary, so
-/// without this a freshly-connected client may see no position for minutes.
-async fn send_current_navigation(
+/// Send navigation values as they stand, for the paths `due` picks out.
+///
+/// On subscribe that is every navigation path the client asked for, so it
+/// doesn't have to wait for the next upstream change to receive a starting
+/// value — position rarely changes when stationary, and without this a
+/// freshly-connected client may see no position for minutes. On the periodic
+/// tick it is the paths asked for on a `fixed` policy, which are answered from
+/// the current value rather than from a change.
+///
+/// The paths handled here are the navigation paths `stream::is_navigation_path`
+/// knows can be paced; the two lists say the same thing and have to keep
+/// saying it.
+async fn send_navigation(
     socket: &mut WebSocket,
     subscriptions: &mut ActiveSubscriptions,
+    due: fn(&mut ActiveSubscriptions, &str) -> bool,
 ) -> Result<(), RadarError> {
     let mut delta = SignalKDelta::new();
 
-    if subscriptions.is_subscribed_path("navigation.position", false) {
+    if due(subscriptions, "navigation.position") {
         let (lat, lon) = navdata::get_position();
         if let (Some(lat), Some(lon)) = (lat, lon) {
             delta.add_position_update(lat, lon, "mayara");
         }
     }
-    if subscriptions.is_subscribed_path("navigation.headingTrue", false)
+    if due(subscriptions, "navigation.headingTrue")
         && let Some(h) = navdata::get_heading_true()
     {
         delta.add_navigation_update("navigation.headingTrue", h, "mayara");
     }
-    if subscriptions.is_subscribed_path("navigation.headingMagnetic", false)
+    if due(subscriptions, "navigation.headingMagnetic")
         && let Some(h) = navdata::get_heading_magnetic()
     {
         delta.add_navigation_update("navigation.headingMagnetic", h, "mayara");
@@ -2152,6 +2164,18 @@ async fn send_current_navigation(
         send_message(socket, d).await?;
     }
     Ok(())
+}
+
+/// Everything a client is owed on this tick: the controls it subscribed to,
+/// and the navigation values behind any `fixed` navigation subscription.
+async fn send_periodic(
+    socket: &mut WebSocket,
+    radars: &SharedRadars,
+    subscriptions: &mut ActiveSubscriptions,
+    meta_sent: &mut HashSet<String>,
+) -> Result<(), RadarError> {
+    send_all_subscribed(socket, radars, subscriptions, meta_sent).await?;
+    send_navigation(socket, subscriptions, ActiveSubscriptions::is_due_periodic).await
 }
 
 async fn send_all_subscribed(

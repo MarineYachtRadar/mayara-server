@@ -248,6 +248,15 @@ Subscription options:
 | `period`    | Update interval in ms (for `fixed` policy)                        |
 | `minPeriod` | Minimum interval between updates in ms (for `ideal`)              |
 
+Pacing applies to controls and navigation — values that stand between updates,
+so holding one back only delays it. Guard-zone notifications and target reports
+are events: each carries a transition that cannot be inferred from the next (an
+alarm clearing, a target lost), so they are always delivered as they happen,
+whatever policy is asked for.
+
+These options govern a stream opened with `subscribe=none`. A `self` or `all`
+stream is served from its baseline as values change.
+
 ### Client → Server: Unsubscribe
 
 ```json
