@@ -254,8 +254,9 @@ are events: each carries a transition that cannot be inferred from the next (an
 alarm clearing, a target lost), so they are always delivered as they happen,
 whatever policy is asked for.
 
-These options govern a stream opened with `subscribe=none`. A `self` or `all`
-stream is served from its baseline as values change.
+These options apply on any stream. A path a subscription names is delivered on
+the terms it names; a path no subscription mentions is left to the
+`?subscribe=` baseline, which delivers as values change.
 
 ### Client → Server: Unsubscribe
 
