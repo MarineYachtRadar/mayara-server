@@ -1712,8 +1712,21 @@ async fn ws_signalk_delta(
         send_message(socket, sk_delta).await?;
     }
 
+    // A fresh `sleep` per iteration would be cancelled and restarted by every
+    // other branch, so on a busy radar the periodic delivery would starve and
+    // a `fixed` subscription would answer once. An interval keeps its own
+    // schedule across iterations; it is rebuilt only when a subscription
+    // changes how often we have to wake.
+    let mut period = subscriptions.get_timeout();
+    let mut ticker = periodic_ticker(period);
+
     loop {
         let mut shutdown_rx = shutdown_tx.subscribe();
+
+        if subscriptions.get_timeout() != period {
+            period = subscriptions.get_timeout();
+            ticker = periodic_ticker(period);
+        }
 
         tokio::select! {
             _ = shutdown_rx.recv() => {
@@ -1784,7 +1797,7 @@ async fn ws_signalk_delta(
                 }
             }
 
-            _ = tokio::time::sleep(subscriptions.get_timeout()) => {
+            _ = ticker.tick() => {
                 if let Err(e) = send_all_subscribed(socket, &radars, &mut subscriptions, &mut meta_radar_data_sent).await
                 {
                     log::warn!("Cannot send subscribed data to websocket");
@@ -1793,6 +1806,14 @@ async fn ws_signalk_delta(
             }
         }
     }
+}
+
+/// A ticker whose first tick is a full period away: the values as they stand
+/// have just been sent, so the client is owed the next one, not another copy.
+fn periodic_ticker(period: std::time::Duration) -> tokio::time::Interval {
+    let mut ticker = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    ticker
 }
 
 fn map_axum_error(e: axum::Error) -> Result<(), RadarError> {
