@@ -27,7 +27,7 @@ const SELF_CONTEXT: &str = "vessels.self";
 /// No fixed-policy subscription means nothing to deliver on a schedule.
 const NEVER: Duration = Duration::from_secs(99999999);
 
-/// Signal K's default for a `fixed` subscription that names no period.
+/// Signal K's default for a `fixed` subscription that names no usable period.
 const DEFAULT_FIXED_PERIOD_MS: u64 = 1000;
 
 /// Notification path for "this run is not saving radar settings". Under
@@ -632,7 +632,6 @@ impl ActiveSubscriptions {
             .iter()
             .filter(|r| r.policy == Some(Policy::Fixed))
             .filter_map(effective_period)
-            .filter(|p| *p > 0)
             .min()
             .map(Duration::from_millis)
             .unwrap_or(NEVER);
@@ -840,7 +839,13 @@ struct Terms {
 /// period a different subscription happens to name.
 fn effective_period(request: &PathSubscribe) -> Option<u64> {
     match request.policy {
-        Some(Policy::Fixed) => Some(request.period.unwrap_or(DEFAULT_FIXED_PERIOD_MS)),
+        // A period of zero is not a rate anyone can be served at, and Signal K
+        // gives it no meaning; it is read as "no period named", which is the
+        // one reading that cannot produce either silence or a firehose.
+        Some(Policy::Fixed) => Some(match request.period {
+            Some(period) if period > 0 => period,
+            _ => DEFAULT_FIXED_PERIOD_MS,
+        }),
         _ => request.period,
     }
 }
@@ -1740,6 +1745,39 @@ mod build_tests {
         );
 
         // Covered only by the wildcard, so it is owed the default period.
+        let path = "radars.nav1034A.controls.gain";
+        assert!(subs.is_subscribed_path(path, true));
+        std::thread::sleep(Duration::from_millis(60));
+        assert!(
+            !subs.is_subscribed_path(path, true),
+            "60ms into the default 1000ms period this path is owed nothing"
+        );
+    }
+
+    /// A period of zero is read as "none named" in both halves. Handled in one
+    /// and not the other it is either silence -- nothing schedules the wake-up
+    /// -- or a firehose, delivered on every tick some other subscription set.
+    #[test]
+    fn a_zero_period_is_read_as_no_period() {
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
+        subs.subscribe(subscribe_to(json!({"subscribe": [
+            {"path": "radars.*.controls.*", "policy": "fixed", "period": 0}
+        ]})))
+        .unwrap();
+        assert_eq!(
+            subs.get_timeout(),
+            Duration::from_millis(DEFAULT_FIXED_PERIOD_MS),
+            "a zero period still has to schedule a wake-up"
+        );
+
+        subs.subscribe(subscribe_to(json!({"subscribe": [
+            {"path": "radars.nav1034B.controls.gain", "policy": "fixed", "period": 100}
+        ]})))
+        .unwrap();
+        assert_eq!(subs.get_timeout(), Duration::from_millis(100));
+
+        // Covered by the zero-period wildcard, so it is owed the default
+        // period rather than every tick the faster subscription brings round.
         let path = "radars.nav1034A.controls.gain";
         assert!(subs.is_subscribed_path(path, true));
         std::thread::sleep(Duration::from_millis(60));
