@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.12.5] - 2026-09-04
+
+### Fixed
+
+- **navdata:** let a fixed position outrank the navigation source (#642)
+- **stream:** deliver fixed-policy subscriptions on schedule (#632)
+- **navdata:** accept a host name as a navigation address (#643)
+- **replay:** register both ranges of a dual-range radar (#644)
+- **stream:** honour policy, period and minPeriod on navigation (#646)
+- **stream:** honour subscription terms on a self or all stream (#648)
+
 ## [3.12.4] - 2026-09-03
 
 ### Added
@@ -452,6 +463,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **ci:** use PR for changelog commit to respect branch protection (#73) ([PR #73](https://github.com/MarineYachtRadar/mayara-server/pull/73))
 - **ci:** fall back to immediate merge when auto-merge not needed (#77) ([PR #77](https://github.com/MarineYachtRadar/mayara-server/pull/77))
 
+[3.12.5]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.12.4...v3.12.5
 [3.12.4]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.12.3...v3.12.4
 [3.12.3]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.12.2...v3.12.3
 [3.12.2]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.12.1...v3.12.2
