@@ -311,6 +311,16 @@ fn encode_packets(packets: &[PcapPacket]) -> Vec<u8> {
 mod tests {
     use super::*;
 
+    /// A directory of this test's own. Cleared on entry, so a run that panics
+    /// half way cannot leave a file behind that decides the next run's result,
+    /// and two runs at once cannot collide.
+    fn scratch_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("mayara-pcap-{}-{}", name, std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create scratch dir");
+        dir
+    }
+
     fn sample_packets() -> Vec<PcapPacket> {
         vec![
             PcapPacket {
@@ -335,57 +345,71 @@ mod tests {
     #[test]
     fn a_fixture_compressed_differently_is_left_alone() {
         let packets = sample_packets();
-        let tmp = std::env::temp_dir().join("test_if_changed_recompressed.pcap.gz");
+        let dir = scratch_dir("recompressed");
+        let fixture = dir.join("fixture.pcap.gz");
 
-        // Same content, deliberately compressed at a level `write_file` never
-        // uses, standing in for whichever gzip wrote the committed fixtures.
+        // The same content, written by a gzip that stamps its header
+        // differently from ours — standing in for whichever gzip wrote the
+        // committed fixtures.
         {
             use flate2::Compression;
-            use flate2::write::GzEncoder;
+            use flate2::GzBuilder;
             use std::io::Write;
-            let file = fs::File::create(&tmp).expect("create");
-            let mut encoder = GzEncoder::new(file, Compression::best());
+            let file = fs::File::create(&fixture).expect("create");
+            let mut encoder = GzBuilder::new()
+                .mtime(0x5EA5_0000)
+                .write(file, Compression::best());
             encoder.write_all(&encode_packets(&packets)).expect("write");
             encoder.finish().expect("finish");
         }
-        let before = fs::read(&tmp).expect("read");
+        let before = fs::read(&fixture).expect("read");
+
+        // Both files are gzip, so this compares one gzip encoding against the
+        // other. Without it the test would pass even if the two agreed byte for
+        // byte, which is the one case in which it proves nothing.
+        let ours = dir.join("ours.pcap.gz");
+        write_file(&ours, &packets).expect("write");
         assert_ne!(
             before,
-            {
-                write_file(&tmp.with_extension("other"), &packets).expect("write");
-                fs::read(tmp.with_extension("other")).expect("read")
-            },
+            fs::read(&ours).expect("read"),
             "the two gzips must differ, or this test proves nothing"
         );
 
         assert!(
-            !write_file_if_changed(&tmp, &packets).expect("compare"),
+            !write_file_if_changed(&fixture, &packets).expect("compare"),
             "identical packets must not be rewritten"
         );
-        assert_eq!(fs::read(&tmp).expect("read"), before, "file was touched");
+        assert_eq!(
+            fs::read(&fixture).expect("read"),
+            before,
+            "file was touched"
+        );
+        fs::remove_dir_all(&dir).expect("clean up");
     }
 
     /// The other half: content that really did move is written.
     #[test]
     fn a_fixture_whose_packets_changed_is_rewritten() {
         let mut packets = sample_packets();
-        let tmp = std::env::temp_dir().join("test_if_changed_moved.pcap.gz");
+        let dir = scratch_dir("moved");
+        let fixture = dir.join("fixture.pcap.gz");
         assert!(
-            write_file_if_changed(&tmp, &packets).expect("write"),
+            write_file_if_changed(&fixture, &packets).expect("write"),
             "a fixture that does not exist yet is written"
         );
         assert!(
-            !write_file_if_changed(&tmp, &packets).expect("compare"),
+            !write_file_if_changed(&fixture, &packets).expect("compare"),
             "writing it again changes nothing"
         );
 
         packets[1].payload = vec![0xAA, 0xBB, 0xCC];
         assert!(
-            write_file_if_changed(&tmp, &packets).expect("write"),
+            write_file_if_changed(&fixture, &packets).expect("write"),
             "a changed payload is written"
         );
-        let parsed = parse_file(&tmp).expect("parse");
+        let parsed = parse_file(&fixture).expect("parse");
         assert_eq!(parsed[1].payload, vec![0xAA, 0xBB, 0xCC]);
+        fs::remove_dir_all(&dir).expect("clean up");
     }
 
     #[test]
