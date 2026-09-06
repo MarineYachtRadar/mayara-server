@@ -11,6 +11,8 @@
 
 use mayara::radar::Power;
 use mayara::radar::settings::ControlId;
+mod common;
+
 use mayara::{Cli, replay};
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::Path;
@@ -32,7 +34,10 @@ fn test_args() -> Cli {
         output: false,
         replay: false,
         pcap: Some("fixture".to_string()),
-        repeat: false,
+        // Loop the fixture: the radar only exists once discovery has run, so a
+        // test that subscribes then would otherwise find the dispatcher
+        // already finished and never see a spoke.
+        repeat: true,
         fake_errors: false,
         allow_wifi: false,
         stationary: false,
@@ -120,6 +125,14 @@ async fn replay_raymarine_rd418hd() {
                                 info.send_command_addr,
                                 SocketAddrV4::new(Ipv4Addr::new(10, 3, 82, 210), 2573)
                             );
+                            let spokes = common::collect_spokes(
+                                &info,
+                                info.spokes_per_revolution as usize,
+                                Duration::from_secs(10),
+                            )
+                            .await;
+                            common::assert_spokes(&info, &spokes);
+
                             break;
                         }
                     }

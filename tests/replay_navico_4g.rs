@@ -5,6 +5,8 @@
 //! Verifies that replaying the fixture through the full pipeline
 //! detects the radar with the correct brand, model, and capabilities.
 
+mod common;
+
 use mayara::{Cli, replay};
 use std::path::Path;
 use std::time::Duration;
@@ -25,7 +27,10 @@ fn test_args() -> Cli {
         output: false,
         replay: false,
         pcap: Some("fixture".to_string()),
-        repeat: false,
+        // Loop the fixture: the radar only exists once discovery has run, so a
+        // test that subscribes then would otherwise find the dispatcher
+        // already finished and never see a spoke.
+        repeat: true,
         fake_errors: false,
         allow_wifi: false,
         stationary: false,
@@ -84,6 +89,14 @@ async fn replay_navico_4g() {
                             assert_eq!(info.controls.model_name().unwrap(), "4G");
                             assert!(!info.doppler, "4G should not support Doppler");
                             assert_eq!(info.spokes_per_revolution, 2048);
+                            let spokes = common::collect_spokes(
+                                &info,
+                                info.spokes_per_revolution as usize,
+                                Duration::from_secs(10),
+                            )
+                            .await;
+                            common::assert_spokes(&info, &spokes);
+
                             break;
                         }
                     }
