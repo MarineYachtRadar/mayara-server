@@ -46,8 +46,10 @@ fn heading_of(bearing: u32, angle: u32, per_revolution: u32) -> u32 {
 /// which is to scatter through as many distinct values as there are spokes.
 const HEADING_DRIFT_DIVISOR: usize = 4;
 
-/// How much of a revolution a sample must cover. See [`assert_spokes`].
-const MIN_REVOLUTION_COVERAGE: f64 = 0.15;
+/// How many distinct angles a sample must hold. See [`assert_spokes`]: four
+/// times the 8 a collapsed decoder produces, and four times under the 135 the
+/// slowest fixture managed on the slowest machine seen.
+const MIN_DISTINCT_ANGLES: usize = 32;
 
 /// Collect decoded spokes from a radar's broadcast until `wanted` have arrived
 /// or `timeout` passes.
@@ -87,14 +89,14 @@ pub async fn collect_spokes(info: &RadarInfo, wanted: usize, timeout: Duration) 
 /// covered, every range one the radar advertises, and echo that is not all
 /// zero.
 ///
-/// The coverage bar is deliberately low. How much of a revolution a sample
-/// holds depends on how many spokes arrive before the collection deadline, and
-/// that moves from run to run — one capture was measured at 64% and 89% minutes
-/// apart. The point is to catch a decoder that collapses every spoke onto a
-/// handful of angles, which is what reading the angle from the wrong offset
-/// does: the Furuno DRS2D fixture manages 8 distinct angles out of 8192, or
-/// 0.1%. A bar set just under whatever a fixture measured today would fail on
-/// Tuesday and prove nothing extra.
+/// The angle bar is a count of distinct angles rather than a share of the
+/// circle, because a share is a property of the machine as much as of the
+/// decoder: collection is time-bounded, so a slower or busier one gathers fewer
+/// spokes. The Garmin dual-range capture covers 31% of a revolution on a
+/// development machine and 9% on Windows CI. A count holds still. What it has
+/// to catch is a decoder that collapses spokes onto a handful of angles, which
+/// is what reading the angle from the wrong offset does — the Furuno DRS2D
+/// fixture manages 8 distinct angles out of 8192.
 pub fn assert_spokes(info: &RadarInfo, spokes: &[Spoke]) {
     assert!(
         !spokes.is_empty(),
@@ -116,15 +118,13 @@ pub fn assert_spokes(info: &RadarInfo, spokes: &[Spoke]) {
         );
     }
 
-    let covered = angles.len() as f64 / per_revolution as f64;
     assert!(
-        covered >= MIN_REVOLUTION_COVERAGE,
-        "{}: spokes cover {:.0}% of a revolution ({} of {} angles); a decoder \
-         reading the angle from the wrong offset lands on a handful of angles",
+        angles.len() >= MIN_DISTINCT_ANGLES,
+        "{}: only {} distinct angles across {} spokes; a decoder reading the \
+         angle from the wrong offset lands on a handful of them",
         info.key(),
-        covered * 100.0,
         angles.len(),
-        per_revolution
+        spokes.len()
     );
 
     // Heading, where the capture carries it. Only some radars report it in the
