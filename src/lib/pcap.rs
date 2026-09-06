@@ -30,6 +30,20 @@ const PCAP_MAGIC_BE: u32 = 0xd4c3b2a1;
 const PCAP_MAGIC_NS_LE: u32 = 0xa1b23c4d; // nanosecond resolution
 const PCAP_MAGIC_NS_BE: u32 = 0x4d3cb2a1;
 
+/// The low 13 bits of the IPv4 flags/fragment-offset field hold the offset.
+const IP_FRAG_OFFSET_MASK: u16 = 0x1FFF;
+/// The "more fragments" flag in that same field.
+const IP_FLAG_MORE_FRAGMENTS: u16 = 0x2000;
+/// A fragment offset counts 8-byte units, not bytes.
+const IP_FRAG_OFFSET_UNIT: usize = 8;
+/// How long an incomplete datagram is kept before its pieces are abandoned.
+/// The IPv4 identification field is only 16 bits, so a capture busy enough --
+/// or lossy enough -- reuses one: without an expiry, a datagram that lost its
+/// last fragment sits in the table until a later datagram with the same
+/// identification fills the gap, and the two are spliced into one packet that
+/// never existed. RFC 1122 puts the reassembly timeout at 15 seconds or more.
+const FRAGMENT_TIMEOUT_SECS: u64 = 30;
+
 /// Pcap link type for Ethernet.
 const LINKTYPE_ETHERNET: u32 = 1;
 /// Ethernet header length (no VLAN tags).
@@ -108,6 +122,13 @@ pub(crate) fn parse_bytes(data: &[u8]) -> io::Result<Vec<PcapPacket>> {
         ));
     }
 
+    let divisor: u64 = if nanoseconds {
+        1_000_000_000
+    } else {
+        1_000_000
+    };
+    let fragment_timeout = FRAGMENT_TIMEOUT_SECS * divisor;
+
     let mut packets = Vec::new();
     let mut fragments: HashMap<FragmentKey, FragmentSet> = HashMap::new();
     let mut offset = 24;
@@ -140,7 +161,16 @@ pub(crate) fn parse_bytes(data: &[u8]) -> io::Result<Vec<PcapPacket>> {
             part.payload
         } else {
             let key = (part.src, part.dst, part.id);
-            let set = fragments.entry(key).or_default();
+            let now = ts_sec as u64 * divisor + ts_frac as u64;
+            let set = fragments
+                .entry(key)
+                .or_insert_with(|| FragmentSet::new(now));
+            // The identification field wraps, so a set this old belongs to a
+            // datagram that never completed rather than to this one. Start over
+            // instead of filling its gap with these bytes.
+            if now.saturating_sub(set.started) > fragment_timeout {
+                *set = FragmentSet::new(now);
+            }
             set.add(part.offset, part.payload, !part.more);
             match set.take_complete() {
                 Some(datagram) => {
@@ -157,11 +187,6 @@ pub(crate) fn parse_bytes(data: &[u8]) -> io::Result<Vec<PcapPacket>> {
         if let Some(mut pkt) = parse_udp_datagram(part.src, part.dst, datagram, Duration::ZERO) {
             // Anchor timing to the first datagram, not the first pcap record
             let first = first_ts.get_or_insert((ts_sec, ts_frac));
-            let divisor: u64 = if nanoseconds {
-                1_000_000_000
-            } else {
-                1_000_000
-            };
             let abs_first = first.0 as u64 * divisor + first.1 as u64;
             let abs_now = ts_sec as u64 * divisor + ts_frac as u64;
             pkt.timestamp =
@@ -193,15 +218,25 @@ struct IpPart<'a> {
 type FragmentKey = (Ipv4Addr, Ipv4Addr, u16);
 
 /// The pieces of one datagram, held until every byte of it has arrived.
-#[derive(Default)]
 struct FragmentSet {
     /// Fragments kept sorted by offset, so completeness is one walk.
     pieces: Vec<(usize, Vec<u8>)>,
     /// The datagram's length, known once the last fragment arrives.
     total: Option<usize>,
+    /// Capture time of the first fragment, in the file's own timestamp units,
+    /// against which the set is expired.
+    started: u64,
 }
 
 impl FragmentSet {
+    fn new(started: u64) -> Self {
+        FragmentSet {
+            pieces: Vec::new(),
+            total: None,
+            started,
+        }
+    }
+
     fn add(&mut self, offset: usize, payload: &[u8], last: bool) {
         if last {
             self.total = Some(offset + payload.len());
@@ -272,9 +307,8 @@ fn parse_ip_part(data: &[u8]) -> Option<IpPart<'_>> {
         src: Ipv4Addr::new(ip[12], ip[13], ip[14], ip[15]),
         dst: Ipv4Addr::new(ip[16], ip[17], ip[18], ip[19]),
         id,
-        // The fragment offset counts 8-byte units.
-        offset: (frag & 0x1FFF) as usize * 8,
-        more: frag & 0x2000 != 0,
+        offset: (frag & IP_FRAG_OFFSET_MASK) as usize * IP_FRAG_OFFSET_UNIT,
+        more: frag & IP_FLAG_MORE_FRAGMENTS != 0,
         payload: &ip[ihl..total_len],
     })
 }
@@ -538,7 +572,8 @@ mod tests {
         f.push(0x00);
         f.extend_from_slice(&((IP_HEADER_MIN_LEN + part.len()) as u16).to_be_bytes());
         f.extend_from_slice(&id.to_be_bytes());
-        let flags = (if more { 0x2000u16 } else { 0 }) | (offset / 8) as u16;
+        let flags =
+            (if more { IP_FLAG_MORE_FRAGMENTS } else { 0 }) | (offset / IP_FRAG_OFFSET_UNIT) as u16;
         f.extend_from_slice(&flags.to_be_bytes());
         f.push(64);
         f.push(IP_PROTO_UDP);
@@ -560,7 +595,7 @@ mod tests {
         d.extend_from_slice(&65535u32.to_le_bytes());
         d.extend_from_slice(&1u32.to_le_bytes());
         for (i, f) in frames.iter().enumerate() {
-            d.extend_from_slice(&(i as u32).to_le_bytes()); // ts_sec
+            d.extend_from_slice(&(i as u32).to_le_bytes()); // ts_sec, one per second
             d.extend_from_slice(&0u32.to_le_bytes()); // ts_usec
             d.extend_from_slice(&(f.len() as u32).to_le_bytes());
             d.extend_from_slice(&(f.len() as u32).to_le_bytes());
@@ -649,6 +684,86 @@ mod tests {
         ]))
         .expect("parse");
         assert!(with_hole.is_empty(), "a hole means no datagram");
+    }
+
+    /// A capture can hold the same fragment twice; the second copy must not be
+    /// appended a second time.
+    #[test]
+    fn a_duplicated_fragment_is_not_appended_twice() {
+        let payload: Vec<u8> = (0..3000u32).map(|i| (i % 251) as u8).collect();
+        let datagram = udp_datagram(6680, 6678, &payload);
+        let (first, rest) = datagram.split_at(1480);
+
+        let packets = parse_bytes(&pcap_of(&[
+            frame(0x1234, 0, true, first),
+            frame(0x1234, 0, true, first),
+            frame(0x1234, 1480, false, rest),
+        ]))
+        .expect("parse");
+
+        assert_eq!(packets.len(), 1);
+        assert_eq!(packets[0].payload, payload);
+    }
+
+    /// Fragments can overlap: a retransmitted one may start before the last
+    /// byte already covered. Only the part that extends the datagram counts.
+    #[test]
+    fn an_overlapping_fragment_contributes_only_its_new_bytes() {
+        let payload: Vec<u8> = (0..3000u32).map(|i| (i % 251) as u8).collect();
+        let datagram = udp_datagram(6680, 6678, &payload);
+
+        // The second fragment starts 480 bytes before the first one ended.
+        let packets = parse_bytes(&pcap_of(&[
+            frame(0x1234, 0, true, &datagram[..1480]),
+            frame(0x1234, 1000, false, &datagram[1000..]),
+        ]))
+        .expect("parse");
+
+        assert_eq!(packets.len(), 1);
+        assert_eq!(packets[0].payload, payload);
+    }
+
+    /// The identification field is 16 bits, so a busy capture reuses one. A
+    /// datagram whose middle fragment was lost knows its total length and sits
+    /// waiting with a hole in it. A later datagram that reuses the same
+    /// identification must not have its bytes dropped into that hole: the two
+    /// would be spliced into a packet that never crossed the wire.
+    #[test]
+    fn a_stale_fragment_set_is_not_completed_by_a_later_datagram() {
+        let orphan = udp_datagram(6680, 6678, &vec![0xAA; 3000]);
+        let later = udp_datagram(6680, 6678, &vec![0xBB; 3000]);
+        assert_eq!(orphan.len(), 3008);
+
+        // The orphan loses only its middle fragment, so its total length is
+        // known and the set waits with a hole at 1480..2960.
+        let mut frames = vec![
+            frame(0x1234, 0, true, &orphan[..1480]),
+            frame(0x1234, 2960, false, &orphan[2960..]),
+        ];
+        // pcap_of stamps one second per record, so what follows lands well
+        // beyond FRAGMENT_TIMEOUT_SECS.
+        for _ in 0..FRAGMENT_TIMEOUT_SECS + 1 {
+            frames.push(frame(0x9999, 0, false, &udp_datagram(1, 2, &[0x00])));
+        }
+        // A later datagram reusing identification 0x1234, its middle fragment
+        // exactly filling the orphan's hole.
+        frames.push(frame(0x1234, 1480, true, &later[1480..2960]));
+
+        let packets = parse_bytes(&pcap_of(&frames)).expect("parse");
+        let on_radar_port: Vec<_> = packets
+            .iter()
+            .filter(|p| p.dst_addr.port() == 6678)
+            .collect();
+
+        assert!(
+            on_radar_port.is_empty(),
+            "neither datagram is complete, yet {} packet(s) were emitted: {:?}",
+            on_radar_port.len(),
+            on_radar_port
+                .iter()
+                .map(|p| (p.payload[0], p.payload[p.payload.len() - 1]))
+                .collect::<Vec<_>>()
+        );
     }
 
     /// A frame padded to Ethernet's 60-byte minimum must not have its padding
