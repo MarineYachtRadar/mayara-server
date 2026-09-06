@@ -94,8 +94,7 @@ async fn replay_furuno_nnd() {
                                 Duration::from_secs(10),
                             )
                             .await;
-                            // this capture holds about half a revolution.
-                            common::assert_spokes(&info, &spokes, 0.40);
+                            common::assert_spokes(&info, &spokes);
 
                             break;
                         }

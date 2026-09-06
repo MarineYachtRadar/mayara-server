@@ -91,7 +91,7 @@ async fn replay_navico_3g() {
 
                             let spokes =
                                 common::collect_spokes(&info, 2048, Duration::from_secs(10)).await;
-                            common::assert_spokes(&info, &spokes, 0.9);
+                            common::assert_spokes(&info, &spokes);
                             break;
                         }
                     }

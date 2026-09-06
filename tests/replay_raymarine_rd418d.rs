@@ -115,8 +115,7 @@ async fn replay_raymarine_rd418d() {
                                 Duration::from_secs(10),
                             )
                             .await;
-                            // this capture holds most of a revolution.
-                            common::assert_spokes(&info, &spokes, 0.65);
+                            common::assert_spokes(&info, &spokes);
 
                             break;
                         }

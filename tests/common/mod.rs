@@ -1,5 +1,12 @@
 //! Shared assertions for the replay integration tests.
 //!
+//! Cargo compiles this module into every test binary that declares `mod
+//! common;`, and each of them uses a different part of it — a helper only the
+//! HALO tests need is dead code in the other eight, which `-D warnings` would
+//! otherwise refuse to build.
+#![allow(dead_code)]
+
+//!
 //! A replay test that stops at discovery proves only that a radar was found.
 //! A radar can be discovered correctly, report the right model and the right
 //! range list, and still draw nothing: the 3G decoded its spokes with the BR24
@@ -24,6 +31,23 @@ const MAX_DISTINCT_RANGES: usize = 4;
 /// few spokes of a capture can arrive before the report that says what the
 /// range is.
 const MIN_RANGED_PERCENT: usize = 95;
+
+/// The heading a spoke implies: its bearing is the angle referred to true
+/// north, so the difference between the two is where the bow was pointing.
+fn heading_of(bearing: u32, angle: u32, per_revolution: u32) -> u32 {
+    (bearing + per_revolution - angle) % per_revolution
+}
+
+/// How far the heading may wander across one sample, as a fraction of a
+/// revolution. A quarter of the circle is far more swing than any capture of a
+/// few seconds shows -- a HALO holds to one or two distinct headings, and a
+/// Furuno capture with the boat turning reached 224 of 8192, about ten degrees.
+/// It is still nowhere near what a heading read from the wrong offset does,
+/// which is to scatter through as many distinct values as there are spokes.
+const HEADING_DRIFT_DIVISOR: usize = 4;
+
+/// How much of a revolution a sample must cover. See [`assert_spokes`].
+const MIN_REVOLUTION_COVERAGE: f64 = 0.15;
 
 /// Collect decoded spokes from a radar's broadcast until `wanted` have arrived
 /// or `timeout` passes.
@@ -63,12 +87,15 @@ pub async fn collect_spokes(info: &RadarInfo, wanted: usize, timeout: Duration) 
 /// covered, every range one the radar advertises, and echo that is not all
 /// zero.
 ///
-/// `full_revolution` is how much of the circle the sample must cover, as a
-/// fraction. A capture rarely starts on a spoke boundary and the fixture holds
-/// a bounded number of revolutions, so demanding every last angle would be
-/// flaky; the point is to catch a decoder that collapses every spoke onto one
-/// angle, not to audit the antenna.
-pub fn assert_spokes(info: &RadarInfo, spokes: &[Spoke], full_revolution: f64) {
+/// The coverage bar is deliberately low. How much of a revolution a sample
+/// holds depends on how many spokes arrive before the collection deadline, and
+/// that moves from run to run — one capture was measured at 64% and 89% minutes
+/// apart. The point is to catch a decoder that collapses every spoke onto a
+/// handful of angles, which is what reading the angle from the wrong offset
+/// does: the Furuno DRS2D fixture manages 8 distinct angles out of 8192, or
+/// 0.1%. A bar set just under whatever a fixture measured today would fail on
+/// Tuesday and prove nothing extra.
+pub fn assert_spokes(info: &RadarInfo, spokes: &[Spoke]) {
     assert!(
         !spokes.is_empty(),
         "{}: no spokes were decoded — the fixture carries no echo, or the \
@@ -91,7 +118,7 @@ pub fn assert_spokes(info: &RadarInfo, spokes: &[Spoke], full_revolution: f64) {
 
     let covered = angles.len() as f64 / per_revolution as f64;
     assert!(
-        covered >= full_revolution,
+        covered >= MIN_REVOLUTION_COVERAGE,
         "{}: spokes cover {:.0}% of a revolution ({} of {} angles); a decoder \
          reading the angle from the wrong offset lands on a handful of angles",
         info.key(),
@@ -99,6 +126,38 @@ pub fn assert_spokes(info: &RadarInfo, spokes: &[Spoke], full_revolution: f64) {
         angles.len(),
         per_revolution
     );
+
+    // Heading, where the capture carries it. Only some radars report it in the
+    // spoke stream (a HALO does, on its own multicast group), so a fixture
+    // without it is not a fault — but one that has it must decode it sanely.
+    // `bearing` is the angle referred to true north, so `bearing - angle` is the
+    // heading itself: steady over the couple of revolutions a fixture holds,
+    // give or take the boat swinging. A heading read from the wrong offset
+    // scatters that difference across the circle instead.
+    let headings: HashSet<u32> = spokes
+        .iter()
+        .filter_map(|s| s.bearing.map(|b| heading_of(b, s.angle, per_revolution)))
+        .collect();
+    if !headings.is_empty() {
+        for heading in &headings {
+            assert!(
+                *heading < per_revolution,
+                "{}: heading {} is outside a revolution of {}",
+                info.key(),
+                heading,
+                per_revolution
+            );
+        }
+        let drift = per_revolution as usize / HEADING_DRIFT_DIVISOR;
+        assert!(
+            headings.len() <= drift,
+            "{}: {} distinct headings across one sample, more than the {} a \
+             swinging boat explains; heading is being read from the wrong place",
+            info.key(),
+            headings.len(),
+            drift
+        );
+    }
 
     // A spoke's range is the distance to its last pixel, which is what the
     // radar is actually sweeping — not the menu entry it was set from. On a 3G
@@ -161,5 +220,16 @@ pub fn assert_spokes(info: &RadarInfo, spokes: &[Spoke], full_revolution: f64) {
         "{}: every one of {} spokes is empty; nothing would be drawn",
         info.key(),
         spokes.len()
+    );
+}
+
+/// Assert the radar reported a heading at all. Called by the tests whose
+/// capture carries one, so that losing it is a failure rather than a silently
+/// skipped check in [`assert_spokes`].
+pub fn assert_heading_present(info: &RadarInfo, spokes: &[Spoke]) {
+    assert!(
+        spokes.iter().any(|s| s.bearing.is_some()),
+        "{}: this capture carries heading, so some spoke should have a bearing",
+        info.key()
     );
 }

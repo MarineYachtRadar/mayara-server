@@ -111,8 +111,7 @@ async fn replay_garmin_fantom_pro_dual_range() {
                         Duration::from_secs(10),
                     )
                     .await;
-                    // This capture holds about a third of a revolution.
-                    common::assert_spokes(&info, &spokes, 0.25);
+                    common::assert_spokes(&info, &spokes);
                 }
 
                 subsys.request_shutdown();

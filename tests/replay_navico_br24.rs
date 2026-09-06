@@ -95,7 +95,7 @@ async fn replay_navico_br24() {
                                 Duration::from_secs(10),
                             )
                             .await;
-                            common::assert_spokes(&info, &spokes, 0.9);
+                            common::assert_spokes(&info, &spokes);
 
                             break;
                         }

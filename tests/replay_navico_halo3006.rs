@@ -94,7 +94,9 @@ async fn replay_navico_halo3006() {
                                 Duration::from_secs(10),
                             )
                             .await;
-                            common::assert_spokes(&info, &spokes, 0.9);
+                            common::assert_spokes(&info, &spokes);
+                            // This capture carries HALO heading info.
+                            common::assert_heading_present(&info, &spokes);
 
                             break;
                         }

@@ -107,8 +107,7 @@ async fn replay_garmin_xhd() {
                                 Duration::from_secs(10),
                             )
                             .await;
-                            // this capture holds about a third of a revolution.
-                            common::assert_spokes(&info, &spokes, 0.25);
+                            common::assert_spokes(&info, &spokes);
 
                             break;
                         }

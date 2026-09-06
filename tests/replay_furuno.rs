@@ -94,8 +94,7 @@ async fn replay_furuno_drs4dnxt() {
                                 Duration::from_secs(10),
                             )
                             .await;
-                            // this capture holds about a third of a revolution.
-                            common::assert_spokes(&info, &spokes, 0.30);
+                            common::assert_spokes(&info, &spokes);
 
                             break;
                         }
