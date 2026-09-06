@@ -49,12 +49,15 @@ Command Line Options
 | `-i, --interface <INTERFACE>` | Limit radar discovery to a specific network interface                                                   |
 | `--allow-wifi`                | Allow radar discovery on WiFi interfaces (not recommended for most brands due to multicast limitations) |
 | `--parent <PID>`              | Run as a helper process of a chart plotter; see [Running under a chart plotter](#running-under-a-chart-plotter) |
+| `--mdns-hostname <NAME>`      | Host name to claim on mDNS, so the GUI is reachable at `http://<name>.local:<port>/` (default: `mayara`). Give each server on a network its own name; two claiming the same one contend for it, and the loser is renamed |
+| `--no-mdns`                   | Do not advertise on mDNS at all, so `<name>.local` will not resolve and clients must be given the address. Use it when the machine already runs its own mDNS responder (Avahi, Bonjour) |
+| `--no-websocket-compression`  | Disable permessage-deflate on the outbound spoke and Signal K streams. Trades bandwidth for CPU, which is worth it on a LAN where compressing costs more than it saves |
 
 ### Radar Selection
 
 | Option                | Description                                                                            |
 | --------------------- | -------------------------------------------------------------------------------------- |
-| `-b, --brand <BRAND>` | Limit to a specific radar brand: `furuno`, `garmin`, `navico`, `raymarine`, `emulator` |
+| `-b, --brand <BRAND>` | Limit to a specific radar brand: `furuno`, `garmin`, `koden`, `navico`, `raymarine`, `emulator`, `playback` |
 | `--multiple-radar`    | Keep searching for additional radars after finding one                                 |
 | `--emulator`          | Use built-in radar emulator instead of real radar discovery                            |
 
@@ -75,10 +78,13 @@ Command Line Options
 | `-n, --navigation-address <ADDR>` | Navigation service address for GPS/heading data                             |
 |                                   | No value: auto-discover via mDNS                                            |
 |                                   | Interface name: search mDNS on that interface                               |
-|                                   | `tcp:ip:port`: anonymous Signal K TCP stream                                |
-|                                   | `udp:ip:port`: listen for NMEA 0183 UDP broadcasts                          |
-|                                   | `ws:ip:port`: Signal K WebSocket (via discovery)                            |
-|                                   | `wss:ip:port`: Signal K secure WebSocket (requires `--accept-invalid-certs`)|
+|                                   | `tcp:host:port`: anonymous Signal K TCP stream                              |
+|                                   | `udp:host:port`: listen for NMEA 0183 UDP broadcasts                        |
+|                                   | `ws:host:port`: Signal K WebSocket (via discovery)                          |
+|                                   | `wss:host:port`: Signal K secure WebSocket (requires `--accept-invalid-certs`)|
+|                                   | The address may be an IP or a host name. A name is resolved afresh on each  |
+|                                   | connection attempt, so one whose address changes is followed without a      |
+|                                   | restart.                                                                    |
 | `--nmea0183`                      | Use NMEA 0183 instead of Signal K for navigation                            |
 | `--accept-invalid-certs`          | Accept self-signed TLS certificates when connecting to Signal K via         |
 |                                   | HTTPS/WSS. Required for boat-LAN setups that use self-signed certs.         |
@@ -125,8 +131,20 @@ the server to accept IP-based SNI or point Mayara at an on-LAN instance.
 | Option          | Description                                          |
 | --------------- | ---------------------------------------------------- |
 | `--transmit`    | Automatically put detected radars into transmit mode |
-| `-r, --replay`  | Replay mode for pcap file playback                   |
+| `-r, --replay`  | Legacy replay mode: controls are read-only and no beacons are sent, for feeding a radar stream in from outside mayara (`tcpreplay`). To replay a capture file, use `--pcap` |
 | `--fake-errors` | Testing mode that simulates control errors           |
+
+### Capture Replay
+
+These need a build made with the `pcap-replay` feature — it is not among the
+default features, so neither the released binaries nor a plain `cargo build`
+carry it. Build with `cargo build --features pcap-replay`.
+
+| Option                    | Description                                                            |
+| ------------------------- | ---------------------------------------------------------------------- |
+| `--pcap <FILE>`           | Replay a pcap or nnd capture through the full radar pipeline           |
+| `--repeat`                | Loop the capture instead of stopping at the end (only with `--pcap`)   |
+| `--pcap-max-time <SECS>`  | Replay at most this many seconds of the capture, then exit (only with `--pcap`, conflicts with `--repeat`). Useful for a reproducible, time-bounded profiling run |
 
 ### Output & Debugging
 
@@ -204,10 +222,16 @@ mayara-server --emulator -vv
 mayara-server --multiple-radar --merge-targets
 ```
 
-### Replay mode
+### Replaying a capture
 
 ```bash
-# Replay captured radar data (requires tcpreplay of pcap file)
+# Replay a capture file through the full pipeline
+mayara-server --pcap navico-halo24.pcap.gz
+
+# Loop it, for working on the GUI without a radar to hand
+mayara-server --pcap navico-halo24.pcap.gz --repeat
+
+# Feed the stream in from outside mayara instead, e.g. with tcpreplay
 mayara-server --replay
 ```
 
