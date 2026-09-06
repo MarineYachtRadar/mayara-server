@@ -101,7 +101,9 @@ async fn replay_furuno_drs2d() {
                             tokio::time::sleep(Duration::from_millis(500)).await;
                             // furuno-drs2d.pcap.gz holds a single packet on the spoke port,
                             // so there is no revolution to look at. Furuno spoke decoding is
-                            // covered by replay_furuno and replay_furuno_nnd.
+                            // covered by replay_furuno. (replay_furuno_nnd covers it too, but only
+                            // where its capture is present: that fixture is not
+                            // committed, so the test skips itself in CI.)
 
                             break;
                         }
