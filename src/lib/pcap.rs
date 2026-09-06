@@ -36,12 +36,23 @@ const IP_FRAG_OFFSET_MASK: u16 = 0x1FFF;
 const IP_FLAG_MORE_FRAGMENTS: u16 = 0x2000;
 /// A fragment offset counts 8-byte units, not bytes.
 const IP_FRAG_OFFSET_UNIT: usize = 8;
-/// How long an incomplete datagram is kept before its pieces are abandoned.
+/// How long an incomplete datagram is kept, in capture time, before its pieces
+/// are abandoned.
+///
 /// The IPv4 identification field is only 16 bits, so a capture busy enough --
-/// or lossy enough -- reuses one: without an expiry, a datagram that lost its
-/// last fragment sits in the table until a later datagram with the same
-/// identification fills the gap, and the two are spliced into one packet that
-/// never existed. RFC 1122 puts the reassembly timeout at 15 seconds or more.
+/// or lossy enough -- reuses one: without an expiry, a datagram that lost a
+/// fragment sits in the table until a later datagram with the same
+/// identification fills the hole, and the two are spliced into one packet that
+/// never existed.
+///
+/// RFC 1122 asks a *host* to hold fragments for 60 to 120 seconds, because a
+/// host must not discard a datagram whose sender may still be retransmitting.
+/// Reading a capture is the other way round: the fragments of one datagram were
+/// sent back to back and sit microseconds apart in the file, so no real datagram
+/// is lost by giving up sooner, while every second held widens the window in
+/// which an identification can come round again and splice two datagrams
+/// together. Half the host timeout keeps that window as narrow as it can be
+/// without inventing a threshold no standard mentions.
 const FRAGMENT_TIMEOUT_SECS: u64 = 30;
 
 /// Pcap link type for Ethernet.
