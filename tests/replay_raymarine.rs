@@ -108,6 +108,9 @@ async fn replay_raymarine_quantum() {
                                 "the serial should reach the user-visible name, got: {}",
                                 info.controls.user_name()
                             );
+                            // raymarine-quantum.pcap.gz carries no spoke datagrams. Raymarine
+                            // spoke decoding is covered by e120, rd418d and rd418hd.
+
                             break;
                         }
                     }

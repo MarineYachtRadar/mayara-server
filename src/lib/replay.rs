@@ -243,6 +243,12 @@ pub async fn run(realistic_timing: bool, repeat: bool, max_time: Option<u32>) {
             if realistic_timing && pkt.timestamp > prev_ts {
                 let delay = pkt.timestamp - prev_ts;
                 sleep(delay).await;
+            } else {
+                // Instant timing never awaits anything, so on a current-thread
+                // runtime — which is what `#[tokio::test]` builds — the
+                // dispatcher would hold the thread from the moment it starts
+                // and starve every task waiting on what it sends.
+                tokio::task::yield_now().await;
             }
             prev_ts = pkt.timestamp;
 

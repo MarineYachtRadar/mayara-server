@@ -87,6 +87,10 @@ async fn replay_navico_halo24() {
                             assert_eq!(info.controls.model_name().unwrap(), "HALO24");
                             assert!(info.doppler, "HALO24 should support Doppler");
                             assert_eq!(info.spokes_per_revolution, 2048);
+                            // halo24-with-mayara.pcap.gz carries no spoke datagrams — the
+                            // capture holds reports only, so there is nothing to decode here.
+                            // Spoke decoding for HALO is covered by halo20plus and halo3006.
+
                             break;
                         }
                     }

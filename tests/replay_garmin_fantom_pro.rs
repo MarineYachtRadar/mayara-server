@@ -6,6 +6,8 @@
 //! automated cover for Range B: that it registers alongside Range A, and that
 //! spokes actually reach it.
 
+mod common;
+
 use mayara::{Cli, replay};
 use std::path::Path;
 use std::time::Duration;
@@ -26,7 +28,10 @@ fn test_args() -> Cli {
         output: false,
         replay: false,
         pcap: Some("fixture".to_string()),
-        repeat: false,
+        // Loop the fixture: the radar only exists once discovery has run, so a
+        // test that subscribes then would otherwise find the dispatcher
+        // already finished and never see a spoke.
+        repeat: true,
         fake_errors: false,
         allow_wifi: false,
         stationary: false,
@@ -95,24 +100,18 @@ async fn replay_garmin_fantom_pro_dual_range() {
                     "the two ranges are one radar"
                 );
 
-                // And spokes reach both of them.
-                let mut spokes: Vec<_> = keys
-                    .iter()
-                    .map(|k| {
-                        radars
-                            .get_by_key(k)
-                            .expect("radar info")
-                            .message_tx
-                            .subscribe()
-                    })
-                    .collect();
-
-                for (key, rx) in keys.iter().zip(spokes.iter_mut()) {
-                    let waited = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await;
-                    assert!(
-                        waited.is_ok_and(|r| r.is_ok()),
-                        "no spokes arrived for {key}"
-                    );
+                // And each of them decodes a picture of its own. Range A and
+                // Range B run at different ranges, which is what makes this the
+                // fixture that would catch a decoder mixing the two up.
+                for key in &keys {
+                    let info = radars.get_by_key(key).expect("radar info");
+                    let spokes = common::collect_spokes(
+                        &info,
+                        info.spokes_per_revolution as usize,
+                        Duration::from_secs(10),
+                    )
+                    .await;
+                    common::assert_spokes(&info, &spokes);
                 }
 
                 subsys.request_shutdown();
