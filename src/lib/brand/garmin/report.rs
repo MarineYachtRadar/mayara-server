@@ -514,12 +514,16 @@ impl GarminReportReceiver {
             MSG_TRANSMIT_CHANNEL_MODE => {
                 let v = self.extract_xhd_value(data)?;
                 log::debug!("{}: transmit channel mode: {}", self.common.key, v);
-                // 0=manual, 1=auto
-                self.common.set_value_auto(
-                    &ControlId::TransmitChannel,
-                    0.0,
-                    if v == 1 { 1 } else { 0 },
-                );
+                // 0=manual, 1=auto. The mode arrives without a channel beside
+                // it, and the channel numbers start at 1, so setting the auto
+                // flag through a value-bearing call would offer 0 and have the
+                // whole update refused for being below the minimum. The channel
+                // itself comes from MSG_TRANSMIT_CHANNEL_SELECT below.
+                let _ = self
+                    .common
+                    .info
+                    .controls
+                    .set_auto_state(&ControlId::TransmitChannel, v == 1);
             }
             MSG_TRANSMIT_CHANNEL_SELECT => {
                 let v = self.extract_xhd_value(data)?;
