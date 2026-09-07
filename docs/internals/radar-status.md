@@ -71,12 +71,50 @@ unknown.
 Widening idle to cover the transmit-but-unwatched case is possible, but only once the
 subscriber count counts ARPA (below).
 
-## ARPA counts as a subscriber
+### 3. Stand-down — letting an *unwatched* radar go (issue #633)
+
+A headless mayara must not hold a radar transmitting for an audience of nobody: that ages
+the magnetron and burns power. So when nobody has watched a radar for the period set by its
+**Auto standby** control (Off / 1 / 5 / 15 / 30 min, default 1 min; category Installation)
+the brand receiver stops holding it up and lets the radar decide for itself. Stand-down is
+independent of idle and of the radar's power state; it is a *policy* for the receiver, not
+a state of the radar.
+
+"Watched" is deliberately narrow: a subscriber on the spoke broadcast (`message_tx`) — the
+GUI or any spoke WebSocket client, the `--output` stdout forwarder, or a running recording.
+Control PUTs, REST reads and the control WebSocket do **not** count. Neither does ARPA
+tracking or an armed guard zone: a radar nobody is looking at stands down even while it is
+tracking. That is an accepted consequence, not an oversight — the radar is meant to come
+back only when a client asks for it.
+
+The ranges of a dual-range radar share one antenna, so the decision is made **per
+antenna** and written to every range: the antenna stands down only when *every* range has
+auto standby enabled and has been unwatched for its own period. A range set to Off holds
+the whole antenna up. The 5 s radar watchdog computes this (`SharedRadars::refresh_stand_down`
+in `src/lib/radar/mod.rs`; the pure predicate `antenna_should_stand_down` and its tests pin
+the rule) and each brand receiver reads `RadarInfo::stand_down()` on its own tick.
+
+The control is offered only by brands whose receiver honours it (`new_auto_standby()` in
+the brand's `settings.rs`); on other brands `SharedControls::auto_standby()` is `None` and
+the radar never stands down. Per brand:
+
+- **Navico**: the radar is held up by the `a0 c1` "stay on scanner A" ping mayara sends
+  every 5 s with its state queries. While standing down the ping is left out; the two
+  queries (`04 c2`, `01 c2`) continue so the radar's state keeps arriving. No standby
+  command is sent — the ping is a per-client watchdog, so an MFD that is also using the
+  radar keeps it up with its own, and mayara needs no "am I the only controller" check.
+  Once a client reconnects the ping resumes, but the radar stays in Standby until that
+  client asks for Transmit. Measured on a HALO24: the radar leaves Transmit about 25 s
+  after the last ping, so with the 1 min default the antenna goes quiet roughly 85 s after
+  the last viewer disconnects.
+- **Raymarine, Koden, Furuno, Garmin**: not yet; see the issue for the per-brand notes.
+
+## ARPA counts as a subscriber — for idle
 
 A radar with an active ARPA / MARPA tracker is **not idle**, even if no GUI is open. ARPA is
 a legitimate consumer of the spoke stream — if it's tracking targets, something (autopilot,
-guard zone, plotter) cares about that radar. Do not treat "no WebSocket viewers" as "nobody
-is watching."
+guard zone, plotter) cares about that radar. For the *idle* predicate, do not treat "no
+WebSocket viewers" as "nobody is watching." (Stand-down, above, deliberately does.)
 
 ### ⚠️ ARPA / idle gotcha — be careful here
 

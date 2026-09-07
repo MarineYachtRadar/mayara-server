@@ -7,8 +7,8 @@ use crate::{
     Cli,
     radar::RadarInfo,
     radar::settings::{
-        AutomaticValue, ControlId, HAS_AUTO_NOT_ADJUSTABLE, SharedControls, new_auto, new_list,
-        new_numeric, new_sector, new_string,
+        AutomaticValue, ControlId, HAS_AUTO_NOT_ADJUSTABLE, SharedControls, new_auto,
+        new_auto_standby, new_list, new_numeric, new_sector, new_string,
     },
     radar::units::Units,
     stream::SignalKDelta,
@@ -83,6 +83,9 @@ pub(crate) fn new(
     // Navico supports all three range unit modes
     // 0 = Nautical (default), 1 = Metric, 2 = Mixed
     new_list(ControlId::RangeUnits, &["Nautical", "Metric", "Mixed"]).build(&mut controls);
+
+    // The report receiver drops the stay-alive while the radar should stand down
+    new_auto_standby().build(&mut controls);
 
     SharedControls::new(radar_id, sk_client_tx, args, controls)
 }

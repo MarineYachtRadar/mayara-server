@@ -988,6 +988,9 @@ pub async fn start_session(
     // depends on this host's addressing, so it is driven by address changes as
     // well as by the tick — the tick alone would still catch it, but only after
     // a delay, and a radar discovered between ticks needs evaluating too.
+    //
+    // The tick also decides, per antenna, whether nobody has watched the radar
+    // long enough for its brand receiver to let it stand down (issue #633).
     let watchdog_radars = radars.clone();
     let mut watchdog_rx_ip_change = tx_ip_change.subscribe();
     subsystem.start(SubsystemBuilder::new(
@@ -1006,6 +1009,7 @@ pub async fn start_session(
                     },
                     _ = interval.tick() => {
                         watchdog_radars.mark_silent_radars_off();
+                        watchdog_radars.refresh_stand_down();
                         watchdog_radars.refresh_command_reachability();
                     }
                 }

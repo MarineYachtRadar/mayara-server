@@ -1442,6 +1442,7 @@ fn control_needs_persistence(id: ControlId) -> bool {
             | ControlId::ExclusionRect3
             | ControlId::ExclusionRect4
             | ControlId::UserName
+            | ControlId::AutoStandby
     )
 }
 
@@ -2080,7 +2081,10 @@ async fn handle_control_request(
             if result.is_ok()
                 && matches!(
                     control_value.id,
-                    ControlId::GuardZone1 | ControlId::GuardZone2 | ControlId::UserName
+                    ControlId::GuardZone1
+                        | ControlId::GuardZone2
+                        | ControlId::UserName
+                        | ControlId::AutoStandby
                 )
             {
                 radars.save_persistence(&radar.key());

@@ -211,6 +211,9 @@ pub(crate) struct NavicoReportReceiver {
     /// fault override (active errors -> [`Power::Fault`]) can be lifted once the
     /// errors clear without waiting for the next state-mode report.
     reported_power: Power,
+    /// Whether the last report-request tick left out the stay-alive, so the
+    /// transition is logged once rather than every 5 s.
+    stood_down: bool,
 
     // For data (spokes)
     data_buf: Vec<u8>,
@@ -444,6 +447,7 @@ impl NavicoReportReceiver {
             has_use_mode_from_ext: false,
             active_errors: BTreeSet::new(),
             reported_power: Power::Standby,
+            stood_down: false,
             data_buf: Vec::with_capacity(size_of::<RadarFramePkt>()),
             data_socket: None,
             doppler: DopplerMode::None,
@@ -741,7 +745,19 @@ impl NavicoReportReceiver {
 
     async fn send_report_requests(&mut self) -> Result<(), RadarError> {
         if let Some(command_sender) = &mut self.command_sender {
-            command_sender.send_report_requests().await?;
+            let stand_down = self.common.info.stand_down();
+            if stand_down != self.stood_down {
+                self.stood_down = stand_down;
+                if stand_down {
+                    log::info!(
+                        "{}: nobody watching, dropping stay-alive so the radar can stand down",
+                        self.common.key
+                    );
+                } else {
+                    log::info!("{}: client connected, resuming stay-alive", self.common.key);
+                }
+            }
+            command_sender.send_report_requests(!stand_down).await?;
         }
         self.report_request_timeout += REPORT_REQUEST_INTERVAL;
         Ok(())
