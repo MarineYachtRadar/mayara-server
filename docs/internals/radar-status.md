@@ -98,11 +98,11 @@ The control is offered only by brands whose receiver honours it (`new_auto_stand
 the brand's `settings.rs`); on other brands `SharedControls::auto_standby()` is `None` and
 the radar never stands down. Per brand:
 
-- **Navico**: the radar is held up by the `a0 c1` "stay on scanner A" ping mayara sends
-  every 5 s with its state queries. While standing down the ping is left out; the two
-  queries (`04 c2`, `01 c2`) continue so the radar's state keeps arriving. No standby
-  command is sent — the ping is a per-client watchdog, so an MFD that is also using the
-  radar keeps it up with its own, and mayara needs no "am I the only controller" check.
+- **Navico**: the radar is held up by the stay-alive ping mayara sends with its periodic
+  state queries. While standing down the ping is left out; the queries continue so the
+  radar's state keeps arriving. No standby command is sent — the ping is a per-client
+  watchdog, so an MFD that is also using the radar keeps it up with its own, and mayara
+  needs no "am I the only controller" check.
   Once a client reconnects the ping resumes, but the radar stays in Standby until that
   client asks for Transmit. Measured on a HALO24: the radar leaves Transmit about 25 s
   after the last ping, so with the 1 min default the antenna goes quiet roughly 85 s after

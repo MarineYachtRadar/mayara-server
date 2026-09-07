@@ -242,3 +242,20 @@ pub(crate) fn update_from_capabilities(
 
     log::debug!("update_from_capabilities: refined controls from TLV");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+    use std::time::Duration;
+
+    /// Navico is a brand whose receiver honours stand-down, so it must offer
+    /// the control, enabled at its default.
+    #[test]
+    fn navico_offers_auto_standby_at_one_minute() {
+        let args = Cli::parse_from(["mayara-server"]);
+        let tx = tokio::sync::broadcast::Sender::new(1);
+        let controls = new("nav1234".to_string(), tx, &args, None);
+        assert_eq!(controls.auto_standby(), Some(Duration::from_secs(60)));
+    }
+}
