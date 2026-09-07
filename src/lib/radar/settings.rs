@@ -3324,16 +3324,29 @@ impl Control {
         }
 
         if auto.is_some() && self.item.automatic.is_none() {
-            Err(ControlError::NoAuto(self.item.control_id))
-        } else if self.value != Some(value)
-            || self.auto_value != auto_value
-            || self.auto != auto
-            || self.enabled != enabled
-        {
+            return Err(ControlError::NoAuto(self.item.control_id));
+        }
+
+        // A report that says nothing about a field leaves it as it was. `None`
+        // here means "this message did not carry it", not "it is unknown": a
+        // radar that reports a control's auto state in one message and its
+        // value in the next would otherwise have the second wipe the first.
+        // Clearing a flag is what `Some(false)` is for.
+        let auto_changed = auto.is_some() && self.auto != auto;
+        let auto_value_changed = auto_value.is_some() && self.auto_value != auto_value;
+        let enabled_changed = enabled.is_some() && self.enabled != enabled;
+
+        if self.value != Some(value) || auto_changed || auto_value_changed || enabled_changed {
             self.value = Some(value);
-            self.auto_value = auto_value;
-            self.auto = auto;
-            self.enabled = enabled;
+            if auto.is_some() {
+                self.auto = auto;
+            }
+            if auto_value.is_some() {
+                self.auto_value = auto_value;
+            }
+            if enabled.is_some() {
+                self.enabled = enabled;
+            }
             self.needs_refresh = false;
             self.timestamp = Some(Utc::now());
 
@@ -4441,20 +4454,7 @@ mod test {
     /// and the auto flag is discarded with it. Regression for #658.
     #[test]
     fn auto_state_is_recorded_for_a_control_whose_values_start_above_zero() {
-        let args = Cli::parse_from(["my_program"]);
-        let tx = tokio::sync::broadcast::Sender::new(1);
-        let mut controls = SharedControls::new("gar1234".to_string(), tx, &args, HashMap::new());
-        controls.add(new_auto(
-            ControlId::TransmitChannel,
-            1.,
-            4.,
-            AutomaticValue {
-                has_auto: true,
-                has_auto_adjustable: false,
-                auto_adjust_min_value: None,
-                auto_adjust_max_value: None,
-            },
-        ));
+        let controls = controls_with_auto_control();
 
         // How the mode used to be recorded: a placeholder value alongside the
         // flag. The value is refused, and the flag never lands.
@@ -4479,6 +4479,111 @@ mod test {
             controls.get(&ControlId::TransmitChannel).unwrap().auto,
             Some(true)
         );
+    }
+
+    fn controls_with_auto_control() -> SharedControls {
+        let args = Cli::parse_from(["my_program"]);
+        let tx = tokio::sync::broadcast::Sender::new(10);
+        let mut controls = SharedControls::new("gar1234".to_string(), tx, &args, HashMap::new());
+        controls.add(new_auto(
+            ControlId::TransmitChannel,
+            1.,
+            4.,
+            AutomaticValue {
+                has_auto: true,
+                has_auto_adjustable: false,
+                auto_adjust_min_value: None,
+                auto_adjust_max_value: None,
+            },
+        ));
+        controls
+    }
+
+    /// A radar that reports a control's auto state in one message and its value
+    /// in the next must not have the second wipe the first. `None` on the auto
+    /// parameter means "this message did not carry it", and a Fantom Pro sends
+    /// exactly that pair: the transmit channel mode, then the channel.
+    /// Regression for #661.
+    #[test]
+    fn a_value_only_report_keeps_the_auto_flag() {
+        let controls = controls_with_auto_control();
+        controls
+            .set_auto_state(&ControlId::TransmitChannel, true)
+            .unwrap();
+
+        controls.set(&ControlId::TransmitChannel, 2., None).unwrap();
+
+        let control = controls.get(&ControlId::TransmitChannel).unwrap();
+        assert_eq!(control.auto, Some(true), "the flag survived the value");
+        assert_eq!(control.value, Some(2.), "and the value landed");
+    }
+
+    /// Clearing the flag is what `Some(false)` is for, and it still works.
+    #[test]
+    fn a_manual_report_clears_the_auto_flag() {
+        let controls = controls_with_auto_control();
+        controls
+            .set_auto_state(&ControlId::TransmitChannel, true)
+            .unwrap();
+
+        controls
+            .set(&ControlId::TransmitChannel, 2., Some(false))
+            .unwrap();
+
+        assert_eq!(
+            controls.get(&ControlId::TransmitChannel).unwrap().auto,
+            Some(false)
+        );
+    }
+
+    /// Leaving a field alone must not make every value-only report look like a
+    /// change: a repeat of what the radar already said is still not news.
+    #[test]
+    fn a_repeated_value_only_report_is_not_broadcast() {
+        let controls = controls_with_auto_control();
+        controls
+            .set_auto_state(&ControlId::TransmitChannel, true)
+            .unwrap();
+        controls.set(&ControlId::TransmitChannel, 2., None).unwrap();
+
+        let mut client = controls.new_client_subscription();
+        assert!(
+            controls
+                .set(&ControlId::TransmitChannel, 2., None)
+                .unwrap()
+                .is_none(),
+            "nothing changed, so there is nothing to say"
+        );
+        assert!(
+            client.try_recv().is_err(),
+            "a repeat of what the radar already reported reached the clients"
+        );
+    }
+
+    /// `enabled` is carried the same way and follows the same rule: a report
+    /// that says nothing about it leaves it standing.
+    #[test]
+    fn a_value_only_report_keeps_the_enabled_flag() {
+        let args = Cli::parse_from(["my_program"]);
+        let tx = tokio::sync::broadcast::Sender::new(10);
+        let mut controls = SharedControls::new("nav1234".to_string(), tx, &args, HashMap::new());
+        controls.add(new_numeric(ControlId::NoTransmitSector1, -180., 180.).has_enabled());
+
+        controls
+            .set_value_auto_enabled(&ControlId::NoTransmitSector1, 10., None, Some(true))
+            .unwrap();
+        assert_eq!(
+            controls.get(&ControlId::NoTransmitSector1).unwrap().enabled,
+            Some(true)
+        );
+
+        controls
+            .set(&ControlId::NoTransmitSector1, 20., None)
+            .unwrap();
+
+        let control = controls.get(&ControlId::NoTransmitSector1).unwrap();
+        assert_eq!(control.enabled, Some(true), "the sector is still enabled");
+        assert_eq!(control.value, Some(20.));
     }
 
     /// A radar reporting only that a control switched to (or out of) auto is
