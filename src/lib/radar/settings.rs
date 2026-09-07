@@ -4434,6 +4434,53 @@ mod test {
         assert!(serde_json::from_str::<ControlValue>(json).is_err());
     }
 
+    /// A control whose values start above zero can still have its auto state
+    /// recorded. Garmin reports the transmit-channel mode on its own, with no
+    /// channel beside it, and the channels are numbered from 1: offering a
+    /// placeholder 0 has the whole update refused for being below the minimum,
+    /// and the auto flag is discarded with it. Regression for #658.
+    #[test]
+    fn auto_state_is_recorded_for_a_control_whose_values_start_above_zero() {
+        let args = Cli::parse_from(["my_program"]);
+        let tx = tokio::sync::broadcast::Sender::new(1);
+        let mut controls = SharedControls::new("gar1234".to_string(), tx, &args, HashMap::new());
+        controls.add(new_auto(
+            ControlId::TransmitChannel,
+            1.,
+            4.,
+            AutomaticValue {
+                has_auto: true,
+                has_auto_adjustable: false,
+                auto_adjust_min_value: None,
+                auto_adjust_max_value: None,
+            },
+        ));
+
+        // How the mode used to be recorded: a placeholder value alongside the
+        // flag. The value is refused, and the flag never lands.
+        assert!(
+            matches!(
+                controls.set_value_auto(&ControlId::TransmitChannel, true, 0.),
+                Err(ControlError::TooLow(..))
+            ),
+            "a channel of 0 is below the minimum of 1"
+        );
+        assert_eq!(
+            controls.get(&ControlId::TransmitChannel).unwrap().auto,
+            None,
+            "the refused value took the auto flag with it"
+        );
+
+        // The mode on its own, which is all the radar reported.
+        controls
+            .set_auto_state(&ControlId::TransmitChannel, true)
+            .unwrap();
+        assert_eq!(
+            controls.get(&ControlId::TransmitChannel).unwrap().auto,
+            Some(true)
+        );
+    }
+
     /// A radar reporting only that a control switched to (or out of) auto is
     /// news the clients rendering from the delta stream have no other way to
     /// learn: no value came with it, and nothing guarantees a later
