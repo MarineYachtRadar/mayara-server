@@ -81,13 +81,17 @@ Command Line Options
 |                                   | `tcp:host:port`: anonymous Signal K TCP stream                              |
 |                                   | `udp:host:port`: listen for NMEA 0183 UDP broadcasts                        |
 |                                   | `ws:host:port`: Signal K WebSocket (via discovery)                          |
-|                                   | `wss:host:port`: Signal K secure WebSocket (requires `--accept-invalid-certs`)|
+|                                   | `wss:host:port`: Signal K secure WebSocket. A self-signed certificate       |
+|                                   | additionally needs `--accept-invalid-certs`; one signed by a CA the machine |
+|                                   | trusts needs nothing.                                                       |
 |                                   | The address may be an IP or a host name. A name is resolved afresh on each  |
 |                                   | connection attempt, so one whose address changes is followed without a      |
 |                                   | restart.                                                                    |
 | `--nmea0183`                      | Use NMEA 0183 instead of Signal K for navigation                            |
-| `--accept-invalid-certs`          | Accept self-signed TLS certificates when connecting to Signal K via         |
-|                                   | HTTPS/WSS. Required for boat-LAN setups that use self-signed certs.         |
+| `--accept-invalid-certs`          | Accept any TLS certificate when connecting to Signal K over HTTPS or WSS,   |
+|                                   | which a boat LAN using a self-signed one needs. It turns the check off      |
+|                                   | rather than widening it, so leave it off against a server whose certificate |
+|                                   | is signed by a CA the machine already trusts.                               |
 | `--signalk-token <TOKEN>`         | Signal K bearer token for authenticating to a `ws:` or `wss:` upstream.     |
 |                                   | Sent as `?token=...` on the WebSocket and as `Authorization: Bearer ...`    |
 |                                   | on the REST discovery and AIS-store seeding probes. Has no effect on        |
