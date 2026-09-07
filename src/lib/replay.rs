@@ -112,6 +112,23 @@ struct ReplayState {
     channels: Mutex<HashMap<SocketAddrV4, Vec<mpsc::Sender<ReplayPacket>>>>,
 }
 
+#[cfg(feature = "pcap-replay")]
+impl ReplayState {
+    /// How many listeners are registered, across every address.
+    ///
+    /// Counting addresses instead — `channels.len()` — misses a listener that
+    /// joins a group another one already holds, and that is the ordinary case:
+    /// discovery hands a radar the groups the locator is already listening on.
+    fn listener_count(&self) -> usize {
+        self.channels
+            .lock()
+            .unwrap()
+            .values()
+            .map(|v| v.len())
+            .sum()
+    }
+}
+
 /// Initialize the replay system with a pcap/nnd file. Called once at startup.
 #[cfg(feature = "pcap-replay")]
 pub fn init(path: &Path) -> io::Result<()> {
@@ -215,13 +232,7 @@ pub async fn run(realistic_timing: bool, repeat: bool, max_time: Option<u32>) {
 
     let mut first_pass = true;
     loop {
-        let listeners_before: usize = state
-            .channels
-            .lock()
-            .unwrap()
-            .values()
-            .map(|v| v.len())
-            .sum();
+        let listeners_before = state.listener_count();
         let mut prev_ts = Duration::ZERO;
         let mut sent = 0u64;
         let mut unrouted = 0u64;
@@ -280,23 +291,11 @@ pub async fn run(realistic_timing: bool, repeat: bool, max_time: Option<u32>) {
             first_pass = false;
             let wait_deadline = tokio::time::Instant::now() + Duration::from_secs(2);
             loop {
-                let listeners_now: usize = state
-                    .channels
-                    .lock()
-                    .unwrap()
-                    .values()
-                    .map(|v| v.len())
-                    .sum();
+                let listeners_now = state.listener_count();
                 if listeners_now > listeners_before {
                     // Give a short grace period for remaining listeners
                     sleep(Duration::from_millis(50)).await;
-                    let listeners_final: usize = state
-                        .channels
-                        .lock()
-                        .unwrap()
-                        .values()
-                        .map(|v| v.len())
-                        .sum();
+                    let listeners_final = state.listener_count();
                     log::info!(
                         "Replay: {} new listeners registered (total {}), re-sending",
                         listeners_final - listeners_before,
@@ -314,8 +313,7 @@ pub async fn run(realistic_timing: bool, repeat: bool, max_time: Option<u32>) {
                 }
                 sleep(Duration::from_millis(10)).await;
             }
-            let listeners_now = state.channels.lock().unwrap().len();
-            if listeners_now > listeners_before {
+            if state.listener_count() > listeners_before {
                 continue;
             }
         }
@@ -336,5 +334,100 @@ pub async fn run(realistic_timing: bool, repeat: bool, max_time: Option<u32>) {
     // Keep running so the program doesn't exit immediately
     loop {
         sleep(Duration::from_secs(3600)).await;
+    }
+}
+
+#[cfg(all(test, feature = "pcap-replay"))]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn state_with(listeners: &[(&str, usize)]) -> ReplayState {
+        let mut channels: HashMap<SocketAddrV4, Vec<mpsc::Sender<ReplayPacket>>> = HashMap::new();
+        for (addr, count) in listeners {
+            let senders = (0..*count).map(|_| mpsc::channel(1).0).collect();
+            channels.insert(addr.parse().expect("an address"), senders);
+        }
+        ReplayState {
+            packets: Vec::new(),
+            channels: Mutex::new(channels),
+        }
+    }
+
+    /// Listeners are counted, not the addresses they listen on. Counting
+    /// addresses is what the dispatcher used to compare against, and it misses
+    /// the listener a radar registers on a group the locator already holds —
+    /// so the re-send pass that exists to give that radar the reports and
+    /// spokes replayed before it existed never happens.
+    #[test]
+    fn listeners_sharing_an_address_are_counted_separately() {
+        let state = state_with(&[("236.6.7.5:6878", 3)]);
+        assert_eq!(
+            state.listener_count(),
+            3,
+            "three listeners on one group are three listeners"
+        );
+    }
+
+    #[test]
+    fn listeners_are_counted_across_addresses() {
+        let state = state_with(&[("236.6.7.5:6878", 2), ("236.6.7.8:6679", 1)]);
+        assert_eq!(state.listener_count(), 3);
+    }
+
+    #[test]
+    fn no_listeners_is_none() {
+        assert_eq!(state_with(&[]).listener_count(), 0);
+    }
+
+    /// End to end: a listener that joins a group another listener already
+    /// holds must still get the capture replayed to it.
+    ///
+    /// This is the shape of a real replay session. The locator is listening on
+    /// a group when the dispatcher starts; discovery then hands the radar the
+    /// same group, and the radar's listener appears part way through. The
+    /// second pass exists to give that listener what it missed, and counting
+    /// addresses rather than listeners skipped it, because the group was
+    /// already in the map.
+    ///
+    /// The only test in this binary that touches the replay global, which is
+    /// set once per process.
+    #[tokio::test]
+    async fn a_listener_joining_a_known_group_still_receives_the_capture() {
+        let group: SocketAddrV4 = "239.9.9.9:5555".parse().expect("an address");
+        let dir = std::env::temp_dir().join(format!("mayara-replay-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create scratch dir");
+        let capture = dir.join("capture.pcap");
+        crate::pcap::write_file(
+            &capture,
+            &[PcapPacket {
+                timestamp: Duration::ZERO,
+                src_addr: "10.0.0.1:1234".parse().expect("an address"),
+                dst_addr: group,
+                payload: vec![0x01, 0x02, 0x03],
+            }],
+        )
+        .expect("write capture");
+
+        init(&capture).expect("init replay");
+        set_instant_timing();
+
+        // The locator, listening before the dispatcher starts.
+        let _locator = create_listen(&group).expect("replay is active");
+        tokio::spawn(run(false, false, None));
+
+        // The radar's listener, arriving on the group the locator already
+        // holds — after the first pass has been and gone.
+        sleep(Duration::from_millis(100)).await;
+        let mut radar = create_listen(&group).expect("replay is active");
+
+        let got = tokio::time::timeout(Duration::from_secs(5), radar.rx.recv()).await;
+        assert!(
+            matches!(got, Ok(Some(_))),
+            "the second pass never came: a listener joining a known group \
+             received nothing"
+        );
+        fs::remove_dir_all(&dir).expect("clean up");
     }
 }
