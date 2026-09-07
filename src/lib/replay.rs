@@ -112,6 +112,23 @@ struct ReplayState {
     channels: Mutex<HashMap<SocketAddrV4, Vec<mpsc::Sender<ReplayPacket>>>>,
 }
 
+#[cfg(feature = "pcap-replay")]
+impl ReplayState {
+    /// How many listeners are registered, across every address.
+    ///
+    /// Counting addresses instead — `channels.len()` — misses a listener that
+    /// joins a group another one already holds, and that is the ordinary case:
+    /// discovery hands a radar the groups the locator is already listening on.
+    fn listener_count(&self) -> usize {
+        self.channels
+            .lock()
+            .unwrap()
+            .values()
+            .map(|v| v.len())
+            .sum()
+    }
+}
+
 /// Initialize the replay system with a pcap/nnd file. Called once at startup.
 #[cfg(feature = "pcap-replay")]
 pub fn init(path: &Path) -> io::Result<()> {
@@ -215,13 +232,7 @@ pub async fn run(realistic_timing: bool, repeat: bool, max_time: Option<u32>) {
 
     let mut first_pass = true;
     loop {
-        let listeners_before: usize = state
-            .channels
-            .lock()
-            .unwrap()
-            .values()
-            .map(|v| v.len())
-            .sum();
+        let listeners_before = state.listener_count();
         let mut prev_ts = Duration::ZERO;
         let mut sent = 0u64;
         let mut unrouted = 0u64;
@@ -280,23 +291,11 @@ pub async fn run(realistic_timing: bool, repeat: bool, max_time: Option<u32>) {
             first_pass = false;
             let wait_deadline = tokio::time::Instant::now() + Duration::from_secs(2);
             loop {
-                let listeners_now: usize = state
-                    .channels
-                    .lock()
-                    .unwrap()
-                    .values()
-                    .map(|v| v.len())
-                    .sum();
+                let listeners_now = state.listener_count();
                 if listeners_now > listeners_before {
                     // Give a short grace period for remaining listeners
                     sleep(Duration::from_millis(50)).await;
-                    let listeners_final: usize = state
-                        .channels
-                        .lock()
-                        .unwrap()
-                        .values()
-                        .map(|v| v.len())
-                        .sum();
+                    let listeners_final = state.listener_count();
                     log::info!(
                         "Replay: {} new listeners registered (total {}), re-sending",
                         listeners_final - listeners_before,
@@ -314,8 +313,7 @@ pub async fn run(realistic_timing: bool, repeat: bool, max_time: Option<u32>) {
                 }
                 sleep(Duration::from_millis(10)).await;
             }
-            let listeners_now = state.channels.lock().unwrap().len();
-            if listeners_now > listeners_before {
+            if state.listener_count() > listeners_before {
                 continue;
             }
         }
@@ -336,5 +334,48 @@ pub async fn run(realistic_timing: bool, repeat: bool, max_time: Option<u32>) {
     // Keep running so the program doesn't exit immediately
     loop {
         sleep(Duration::from_secs(3600)).await;
+    }
+}
+
+#[cfg(all(test, feature = "pcap-replay"))]
+mod tests {
+    use super::*;
+
+    fn state_with(listeners: &[(&str, usize)]) -> ReplayState {
+        let mut channels: HashMap<SocketAddrV4, Vec<mpsc::Sender<ReplayPacket>>> = HashMap::new();
+        for (addr, count) in listeners {
+            let senders = (0..*count).map(|_| mpsc::channel(1).0).collect();
+            channels.insert(addr.parse().expect("an address"), senders);
+        }
+        ReplayState {
+            packets: Vec::new(),
+            channels: Mutex::new(channels),
+        }
+    }
+
+    /// Listeners are counted, not the addresses they listen on. Counting
+    /// addresses is what the dispatcher used to compare against, and it misses
+    /// the listener a radar registers on a group the locator already holds —
+    /// so the re-send pass that exists to give that radar the reports and
+    /// spokes replayed before it existed never happens.
+    #[test]
+    fn listeners_sharing_an_address_are_counted_separately() {
+        let state = state_with(&[("236.6.7.5:6878", 3)]);
+        assert_eq!(
+            state.listener_count(),
+            3,
+            "three listeners on one group are three listeners"
+        );
+    }
+
+    #[test]
+    fn listeners_are_counted_across_addresses() {
+        let state = state_with(&[("236.6.7.5:6878", 2), ("236.6.7.8:6679", 1)]);
+        assert_eq!(state.listener_count(), 3);
+    }
+
+    #[test]
+    fn no_listeners_is_none() {
+        assert_eq!(state_with(&[]).listener_count(), 0);
     }
 }
