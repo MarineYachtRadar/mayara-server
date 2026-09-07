@@ -4560,6 +4560,48 @@ mod test {
         );
     }
 
+    /// `auto_value` is carried on the same reports and follows the same rule.
+    /// It is read back rather than asserted against a literal, because the
+    /// value goes through the control's scaling on the way in.
+    #[test]
+    fn a_value_only_report_keeps_the_auto_value() {
+        let controls = controls_with_auto_control();
+        controls
+            .set_auto_state(&ControlId::TransmitChannel, true)
+            .unwrap();
+        controls
+            .set_value_with_many_auto(&ControlId::TransmitChannel, 2., 3.)
+            .unwrap();
+
+        let stored = controls
+            .get(&ControlId::TransmitChannel)
+            .unwrap()
+            .auto_value;
+        assert!(stored.is_some(), "the radar reported an auto value");
+
+        let mut client = controls.new_client_subscription();
+        assert!(
+            controls
+                .set(&ControlId::TransmitChannel, 2., None)
+                .unwrap()
+                .is_none(),
+            "a report carrying neither auto nor auto value changes nothing"
+        );
+
+        assert_eq!(
+            controls
+                .get(&ControlId::TransmitChannel)
+                .unwrap()
+                .auto_value,
+            stored,
+            "the auto value survived a report that said nothing about it"
+        );
+        assert!(
+            client.try_recv().is_err(),
+            "and nothing was broadcast, because nothing changed"
+        );
+    }
+
     /// `enabled` is carried the same way and follows the same rule: a report
     /// that says nothing about it leaves it standing.
     #[test]
