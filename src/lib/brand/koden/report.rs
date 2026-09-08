@@ -16,6 +16,9 @@ use crate::util::PrintableSlice;
 pub(crate) struct KodenReportReceiver {
     common: CommonRadar,
     command_sender: Option<Command>,
+    /// Whether the last keep-alive tick left the packet out, so the
+    /// transition is logged once rather than every 10 s.
+    stood_down: bool,
 }
 
 impl KodenReportReceiver {
@@ -48,6 +51,7 @@ impl KodenReportReceiver {
         KodenReportReceiver {
             common,
             command_sender,
+            stood_down: false,
         }
     }
 
@@ -90,10 +94,28 @@ impl KodenReportReceiver {
                 }
 
                 _ = sleep_until(next_keepalive) => {
-                    if let Some(ref cmd) = self.command_sender {
-                        cmd.send_keepalive().await?;
-                    }
                     next_keepalive = Instant::now() + Duration::from_secs(KEEPALIVE_INTERVAL_SECS);
+                    if let Some(ref cmd) = self.command_sender {
+                        // The keep-alive is what holds the radar up for us, so it
+                        // is left out while nobody is watching and the radar
+                        // may stand down. Another controller keeps it up with
+                        // its own.
+                        let stand_down = self.common.info.stand_down();
+                        if stand_down != self.stood_down {
+                            self.stood_down = stand_down;
+                            if stand_down {
+                                log::info!(
+                                    "{}: nobody watching, dropping keep-alive so the radar can stand down",
+                                    self.common.key
+                                );
+                            } else {
+                                log::info!("{}: client connected, resuming keep-alive", self.common.key);
+                            }
+                        }
+                        if !stand_down {
+                            cmd.send_keepalive().await?;
+                        }
+                    }
                 }
 
                 result = recv_socket.recv_from(&mut buf) => {
