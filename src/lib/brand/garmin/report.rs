@@ -2,7 +2,7 @@ use anyhow::{Error, bail};
 use std::collections::HashMap;
 use std::io;
 use std::time::Duration;
-use tokio::time::sleep;
+use tokio::time::{Instant, sleep, sleep_until};
 use tokio_graceful_shutdown::SubsystemHandle;
 
 use super::GarminRadarType;
@@ -11,15 +11,21 @@ use super::command::Command;
 use super::protocol::*;
 use super::range_table;
 use crate::Cli;
+use crate::brand::CommandSender;
 use crate::network;
-use crate::radar::settings::ControlId;
+use crate::radar::settings::{ControlId, ControlValue};
 use crate::radar::spoke::GenericSpoke;
 use crate::radar::{
     BYTE_LOOKUP_LENGTH, CommonRadar, DopplerMode, Legend, Power, RadarError, RadarInfo,
-    SharedRadars,
+    SharedRadars, transmit_claim_after_report, transmit_claim_after_request,
 };
 use crate::replay::RadarSocket;
 use crate::util::c_string;
+use serde_json::Value;
+
+/// How often the receiver checks whether the radar should stand down; the
+/// watchdog that decides it ticks at the same rate.
+const STAND_DOWN_CHECK_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Lookup table for converting raw wire pixel values to legend indices.
 /// For xHD, values are halved to make room for special legend entries.
@@ -97,6 +103,14 @@ pub(crate) struct GarminReportReceiver {
     data_socket: Option<RadarSocket>,
     command_sender: Option<Command>,
     reported_unknown: HashMap<u32, bool>,
+    /// The range (0 = A, 1 = B) a client asked to Transmit through mayara,
+    /// while that transmit is still ours to stand down. A Garmin radar keeps
+    /// transmitting until a client tells it to stop and does nothing on losing
+    /// its CDM peers but stop broadcasting spokes (research/garmin/
+    /// gmr-xhd-firmware.md), so standing down means sending Standby ourselves,
+    /// and only for a transmit that was ours: an MFD's transmit is never
+    /// touched. Both ranges share the scanner, so this is one fact for it.
+    transmit_is_ours: Option<i32>,
 
     range_a: RangeState,
     range_b: Option<RangeState>,
@@ -199,6 +213,7 @@ impl GarminReportReceiver {
             data_socket: None,
             command_sender,
             reported_unknown: HashMap::new(),
+            transmit_is_ours: None,
             range_a: RangeState {
                 range_meters: 0,
                 doppler: DopplerMode::None,
@@ -317,12 +332,19 @@ impl GarminReportReceiver {
         );
         let mut report_buf = Vec::with_capacity(10000);
         let mut data_buf = Vec::with_capacity(10000);
+        let mut stand_down_check = Instant::now() + STAND_DOWN_CHECK_INTERVAL;
 
         loop {
             tokio::select! {
                 _ = subsys.on_shutdown_requested() => {
                     log::debug!("{}: shutdown", self.common.key);
                     return Err(RadarError::Shutdown);
+                },
+                _ = sleep_until(stand_down_check) => {
+                    stand_down_check = Instant::now() + STAND_DOWN_CHECK_INTERVAL;
+                    if self.common.info.stand_down() {
+                        self.stand_down_our_transmit().await;
+                    }
                 },
                 r = async {
                     if let Some(sock) = self.report_socket.as_mut() {
@@ -369,7 +391,10 @@ impl GarminReportReceiver {
                     match r {
                         Err(_) => {},
                         Ok(cv) => {
-                            let _ = self.common.process_control_update(cv, &mut self.command_sender).await;
+                            let claim = transmit_claim_after_request(self.transmit_is_ours, 0, &cv.control_value);
+                            if self.common.process_control_update(cv, &mut self.command_sender).await.is_ok() {
+                                self.transmit_is_ours = claim;
+                            }
                         },
                     }
                 },
@@ -377,8 +402,10 @@ impl GarminReportReceiver {
                     match r {
                         Err(_) => {},
                         Ok(cv) => {
-                            if let Some(ref mut cb) = self.common_b {
-                                let _ = cb.process_control_update(cv, &mut self.command_sender_b).await;
+                            let claim = transmit_claim_after_request(self.transmit_is_ours, 1, &cv.control_value);
+                            if let Some(ref mut cb) = self.common_b
+                                && cb.process_control_update(cv, &mut self.command_sender_b).await.is_ok() {
+                                self.transmit_is_ours = claim;
                             }
                         },
                     }
@@ -815,8 +842,7 @@ impl GarminReportReceiver {
             HD_STATE_SPINNING_UP => Power::Preparing,
             _ => Power::Off,
         };
-        self.common
-            .set_value(&ControlId::Power, power as i32 as f64);
+        self.note_reported_power(power);
 
         self.common.set_value_enabled(
             &ControlId::WarmupTime,
@@ -863,8 +889,7 @@ impl GarminReportReceiver {
         } else {
             Power::Standby
         };
-        self.common
-            .set_value(&ControlId::Power, power as i32 as f64);
+        self.note_reported_power(power);
         Ok(())
     }
 
@@ -1210,9 +1235,42 @@ impl GarminReportReceiver {
             STATE_STOPPING | STATE_SPINNING_DOWN => Power::Preparing,
             _ => Power::Off,
         };
+        self.note_reported_power(power);
+        Ok(())
+    }
+
+    /// Publish the power the radar reported and let a Standby or Off end our
+    /// claim on the transmit, whoever put it there.
+    fn note_reported_power(&mut self, power: Power) {
+        self.transmit_is_ours = transmit_claim_after_report(self.transmit_is_ours, power);
         self.common
             .set_value(&ControlId::Power, power as i32 as f64);
-        Ok(())
+    }
+
+    /// Nobody is watching: if the radar is transmitting on our behalf, put it
+    /// in Standby. The radar itself never stands down on losing a client, so
+    /// this is the only way an unwatched Garmin radar stops. A send failure is
+    /// logged and retried on the next tick; the claim stays until the radar
+    /// reports Standby.
+    async fn stand_down_our_transmit(&mut self) {
+        let Some(range) = self.transmit_is_ours else {
+            return;
+        };
+        let (target, sender) = match (&self.common_b, range) {
+            (Some(cb), 1) => (cb, &mut self.command_sender_b),
+            _ => (&self.common, &mut self.command_sender),
+        };
+        let Some(cs) = sender else {
+            return;
+        };
+        log::info!(
+            "{}: nobody watching and the radar transmits for us, sending standby",
+            target.key
+        );
+        let standby = ControlValue::new(ControlId::Power, Value::from(Power::Standby as i32));
+        if let Err(e) = cs.set_control(&standby, &target.info.controls).await {
+            log::warn!("{}: standby request failed: {}", target.key, e);
+        }
     }
 
     fn process_state_change(&mut self, data: &[u8]) -> Result<(), Error> {

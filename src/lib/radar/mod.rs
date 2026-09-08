@@ -1453,6 +1453,40 @@ fn should_power_off(silence: Duration, current_power: Option<i32>) -> bool {
     silence >= SharedRadars::RADAR_SILENCE_TIMEOUT && current_power != Some(Power::Off as i32)
 }
 
+/// Which range's transmit is mayara's to stand down, for brands whose radar
+/// keeps transmitting until a client tells it to stop (Furuno, Garmin). The
+/// claim is the dual-range id a client asked to Transmit through mayara; a
+/// transmit started by any other controller is never claimed, so standing it
+/// down is never on the table.
+///
+/// After a client's control request for `range` has reached the radar: a
+/// Transmit request claims that range, any other Power request gives the
+/// claim up, anything else leaves it alone.
+pub(crate) fn transmit_claim_after_request(
+    current: Option<i32>,
+    range: i32,
+    cv: &ControlValue,
+) -> Option<i32> {
+    if cv.id != ControlId::Power {
+        return current;
+    }
+    match cv.as_value().ok().and_then(|v| Power::from_value(&v).ok()) {
+        Some(Power::Transmit) => Some(range),
+        Some(_) => None,
+        None => current,
+    }
+}
+
+/// After the radar reported its power: the claim ends once the radar is in
+/// Standby or Off, whoever put it there. Preparing is the radar warming or
+/// spinning up on the way to the Transmit we asked for, and keeps the claim.
+pub(crate) fn transmit_claim_after_report(current: Option<i32>, reported: Power) -> Option<i32> {
+    match reported {
+        Power::Standby | Power::Off => None,
+        _ => current,
+    }
+}
+
 /// Decide whether one antenna should be let go so it can stand down. Each
 /// entry is one range: its `AutoStandby` period (`None` = off) and how long
 /// nobody has watched it. The ranges of a dual-range radar share the antenna,
@@ -2807,6 +2841,50 @@ mod tests {
     // ----- stand-down (issue #633) -----
 
     const PERIOD: Duration = Duration::from_secs(60);
+
+    fn power_request(power: Power) -> ControlValue {
+        ControlValue::new(ControlId::Power, Value::from(power as i32))
+    }
+
+    #[test]
+    fn a_transmit_asked_through_mayara_is_claimed_until_standby_is_asked() {
+        assert_eq!(
+            transmit_claim_after_request(None, 1, &power_request(Power::Transmit)),
+            Some(1)
+        );
+        assert_eq!(
+            transmit_claim_after_request(Some(1), 0, &power_request(Power::Standby)),
+            None
+        );
+        assert_eq!(
+            transmit_claim_after_request(Some(0), 0, &power_request(Power::Off)),
+            None
+        );
+    }
+
+    #[test]
+    fn other_controls_and_unreadable_requests_leave_the_claim_alone() {
+        let gain = ControlValue::new(ControlId::Gain, Value::from(50));
+        assert_eq!(transmit_claim_after_request(Some(0), 0, &gain), Some(0));
+        let junk = ControlValue::new(ControlId::Power, Value::from("nonsense"));
+        assert_eq!(transmit_claim_after_request(Some(1), 1, &junk), Some(1));
+        assert_eq!(transmit_claim_after_request(None, 0, &junk), None);
+    }
+
+    #[test]
+    fn the_claim_survives_warm_up_and_ends_in_standby() {
+        assert_eq!(
+            transmit_claim_after_report(Some(0), Power::Preparing),
+            Some(0)
+        );
+        assert_eq!(
+            transmit_claim_after_report(Some(0), Power::Transmit),
+            Some(0)
+        );
+        assert_eq!(transmit_claim_after_report(Some(0), Power::Standby), None);
+        assert_eq!(transmit_claim_after_report(Some(1), Power::Off), None);
+        assert_eq!(transmit_claim_after_report(None, Power::Transmit), None);
+    }
 
     #[test]
     fn antenna_should_stand_down_single_range() {

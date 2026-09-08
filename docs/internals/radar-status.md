@@ -123,7 +123,13 @@ the radar never stands down. Per brand:
 - **Koden**: the radar answers a keep-alive mayara sends every 10 s; it is left out while
   standing down. Whether the radar then leaves Transmit by itself is still to be confirmed
   on hardware (#665).
-- **Garmin**: not yet; see #667.
+- **Garmin**: nothing mayara sends holds the radar up either: its firmware drops a silent CDM
+  peer after 30 s and then only stops broadcasting spokes, the transmitter keeps running (see
+  `research/garmin/gmr-xhd-firmware.md`). So the receiver keeps the same claim as Furuno,
+  shared by both ranges of a dual-range scanner, and while standing down sends a Standby
+  itself; the claim ends when the radar reports Standby or Off, so a request the radar ignored
+  is repeated on the next tick. mayara keeps sending its CDM heartbeat so the radar keeps
+  reporting and discovery keeps working.
 
 ## ARPA counts as a subscriber — for idle
 

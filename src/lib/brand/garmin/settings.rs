@@ -7,8 +7,8 @@ use crate::{
     Cli,
     radar::{
         settings::{
-            ControlId, HAS_AUTO_NOT_ADJUSTABLE, SharedControls, new_auto, new_list, new_numeric,
-            new_sector, new_string,
+            ControlId, HAS_AUTO_NOT_ADJUSTABLE, SharedControls, new_auto, new_auto_standby,
+            new_list, new_numeric, new_sector, new_string,
         },
         units::Units,
     },
@@ -178,5 +178,31 @@ pub(crate) fn new(
         }
     }
 
+    // The report receiver stands a transmit that was asked through mayara down itself
+    new_auto_standby().build(&mut controls);
+
     SharedControls::new(radar_id, sk_client_tx, args, controls)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+    use std::time::Duration;
+
+    /// The receiver sends a Standby for a transmit that was ours while
+    /// standing down, so the control is offered on every Garmin, enabled at
+    /// its default.
+    #[test]
+    fn garmin_offers_auto_standby_at_one_minute() {
+        let args = Cli::parse_from(["mayara-server"]);
+        for (radar_type, caps) in [
+            (GarminRadarType::HD, GarminCapabilities::for_legacy_hd()),
+            (GarminRadarType::XHD, GarminCapabilities::empty()),
+        ] {
+            let tx = tokio::sync::broadcast::Sender::new(1);
+            let controls = new("gar1234".to_string(), tx, &args, radar_type, &caps, false);
+            assert_eq!(controls.auto_standby(), Some(Duration::from_secs(60)));
+        }
+    }
 }
