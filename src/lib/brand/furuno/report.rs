@@ -22,14 +22,16 @@ use super::protocol::{
 };
 use super::settings;
 use crate::Cli;
+use crate::brand::CommandSender;
 use crate::network;
 use crate::radar::CommonRadar;
 use crate::radar::SharedRadars;
 use crate::radar::SpokeBearing;
-use crate::radar::settings::ControlId;
+use crate::radar::settings::{ControlId, ControlValue};
 use crate::radar::{Power, RadarError, RadarInfo};
 use crate::replay::RadarSocket;
 use crate::util::PrintableSpoke;
+use serde_json::Value;
 
 /// TCP keepalive timing for the Furuno control socket. Tunes how quickly the
 /// kernel detects that the radar has silently dropped the connection after
@@ -51,6 +53,17 @@ const RECONNECT_BACKOFF_MIN: Duration = Duration::from_secs(1);
 const RECONNECT_BACKOFF_MAX: Duration = Duration::from_secs(60);
 /// A session that survived this long counts as stable: reset the backoff.
 const RECONNECT_STABLE_AFTER: Duration = Duration::from_secs(60);
+
+/// Whether a range's transmit counts as ours after a client's Power request
+/// through mayara: a Transmit request makes it ours, any other Power request
+/// ends that, and a request we cannot read leaves it alone.
+fn transmit_is_ours_after(current: bool, request: Option<Power>) -> bool {
+    match request {
+        Some(Power::Transmit) => true,
+        Some(_) => false,
+        None => current,
+    }
+}
 
 /// Split out from the connection loop so the policy can be exercised without a
 /// radar: the loop supplies real elapsed times and sleeps.
@@ -110,6 +123,13 @@ pub(crate) struct FurunoReportReceiver {
     stream: Option<TcpStream>,
     command_sender: Option<Command>,
     report_request_interval: Duration,
+    /// Per range: whether the radar is transmitting because a client asked
+    /// for it through mayara. A Furuno radar keeps transmitting until some
+    /// client tells it to stop, so standing down means sending that request
+    /// ourselves, and only for a transmit that was ours to begin with: an MFD's
+    /// transmit is never touched. Cleared as soon as the radar reports
+    /// anything but Transmit, or a client asks for Standby through mayara.
+    transmit_is_ours: [bool; 2],
     model_known: bool,
     model: RadarModel,
 
@@ -197,6 +217,7 @@ impl FurunoReportReceiver {
             multicast_socket: None,
             broadcast_socket: None,
             prev_spoke: [Vec::new(), Vec::new()],
+            transmit_is_ours: [false; 2],
             prev_angle: [0, 0],
             guard_zone_alarm: [false, false],
             alarm_active: false,
@@ -308,6 +329,10 @@ impl FurunoReportReceiver {
                     }
                     deadline = Instant::now() + self.report_request_interval;
 
+                    if self.common.info.stand_down() {
+                        self.stand_down_our_transmit().await?;
+                    }
+
                     // Recompute idle: standby + zero spoke subscribers. Exit
                     // points (control PUT, power-change report, new WS
                     // subscriber) clear is_idle directly so this only needs
@@ -376,6 +401,7 @@ impl FurunoReportReceiver {
                             if let Some(ref mut cs) = self.command_sender {
                                 cs.dual_range_id = 0;
                             }
+                            self.note_power_request(0, &cv.control_value);
                             self.common.process_control_update( cv, &mut self.command_sender).await?
                         },
                     }
@@ -395,6 +421,7 @@ impl FurunoReportReceiver {
                             if let Some(ref mut cs) = self.command_sender {
                                 cs.dual_range_id = 1;
                             }
+                            self.note_power_request(1, &cv.control_value);
                             if let Some(ref mut cb) = self.common_b
                                 && let Err(e) = cb.process_control_update(cv, &mut self.command_sender).await {
                                     return Err(e);
@@ -538,6 +565,47 @@ impl FurunoReportReceiver {
         }
     }
 
+    /// Remember whether the transmit a client is asking for through mayara is
+    /// ours to stand down later; a Standby request ends that.
+    fn note_power_request(&mut self, range: usize, cv: &ControlValue) {
+        if cv.id != ControlId::Power {
+            return;
+        }
+        let request = cv.as_value().ok().and_then(|v| Power::from_value(&v).ok());
+        self.transmit_is_ours[range] =
+            transmit_is_ours_after(self.transmit_is_ours[range], request);
+    }
+
+    /// Nobody is watching: put every range that is transmitting on our behalf
+    /// back in Standby. The radar itself never stands down on losing a
+    /// client, so this is the only way an unwatched Furuno radar stops.
+    async fn stand_down_our_transmit(&mut self) -> Result<(), RadarError> {
+        for range in 0..2 {
+            if !self.transmit_is_ours[range] {
+                continue;
+            }
+            let Some(cs) = &mut self.command_sender else {
+                return Ok(());
+            };
+            let target = if range == 0 {
+                &self.common
+            } else if let Some(cb) = &self.common_b {
+                cb
+            } else {
+                continue;
+            };
+            log::info!(
+                "{}: nobody watching and the radar transmits for us, sending standby",
+                target.key
+            );
+            cs.dual_range_id = range as i32;
+            let standby = ControlValue::new(ControlId::Power, Value::from(Power::Standby as i32));
+            cs.set_control(&standby, &target.info.controls).await?;
+            self.transmit_is_ours[range] = false;
+        }
+        Ok(())
+    }
+
     fn login_to_radar(&mut self) -> Result<(), RadarError> {
         if self.command_sender.is_none() {
             return Ok(());
@@ -567,6 +635,11 @@ impl FurunoReportReceiver {
     /// Return a mutable reference to the CommonRadar for the given dual range ID.
     /// `drid` 0 = Range A (self.common), `drid` 1 = Range B (self.common_b).
     /// Falls back to Range A if Range B is not configured.
+    /// The `transmit_is_ours` slot for a wire dual-range id.
+    fn range_index(drid: u8) -> usize {
+        usize::from(drid == 1)
+    }
+
     fn common_for_range(&mut self, drid: u8) -> &mut CommonRadar {
         if drid == 1
             && let Some(ref mut cb) = self.common_b
@@ -720,6 +793,9 @@ impl FurunoReportReceiver {
                 let is_standby = matches!(generic_state, Power::Standby);
                 let power_value = generic_state as i32 as f64;
                 let drid = self.extract_drid(&command_id, &numbers);
+                if generic_state != Power::Transmit {
+                    self.transmit_is_ours[Self::range_index(drid)] = false;
+                }
                 let target = self.common_for_range(drid);
                 target.set_value(&ControlId::Power, power_value);
 
@@ -2164,6 +2240,21 @@ async fn conditional_read(
 mod tests {
     use super::*;
     use crate::radar::Legend;
+
+    // ----- stand-down: only a transmit that was ours (issue #666) -----
+
+    #[test]
+    fn a_transmit_asked_through_mayara_is_ours_until_standby_is_asked() {
+        assert!(transmit_is_ours_after(false, Some(Power::Transmit)));
+        assert!(!transmit_is_ours_after(true, Some(Power::Standby)));
+        assert!(!transmit_is_ours_after(true, Some(Power::Off)));
+    }
+
+    #[test]
+    fn an_unreadable_power_request_changes_nothing() {
+        assert!(transmit_is_ours_after(true, None));
+        assert!(!transmit_is_ours_after(false, None));
+    }
 
     /// A radar that keeps dropping the control session must be backed off
     /// exponentially: hammering relogins exhausts the firmware's session slot
