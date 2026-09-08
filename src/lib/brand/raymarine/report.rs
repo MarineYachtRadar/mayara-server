@@ -184,6 +184,9 @@ pub(crate) struct RaymarineReportReceiver {
     command_sender: Option<Command>,
     heartbeat_deadline: Instant,
     heartbeat_counter: u32,
+    /// Whether the last heartbeat tick left the keep-alives out, so the
+    /// transition is logged once rather than every second.
+    stood_down: bool,
     wake_deadline: Instant,
     external_seen: Arc<ExternalControllerWitness>,
     reported_unknown: HashMap<u32, bool>,
@@ -291,6 +294,7 @@ impl RaymarineReportReceiver {
             command_sender,
             heartbeat_deadline: now + HEARTBEAT_INTERVAL,
             heartbeat_counter: 0,
+            stood_down: false,
             wake_deadline: now + OBSERVATION_WINDOW,
             external_seen,
             reported_unknown: HashMap::new(),
@@ -522,6 +526,25 @@ impl RaymarineReportReceiver {
         // busy-loops. The next tick retries the heartbeat a second later.
         self.heartbeat_deadline += HEARTBEAT_INTERVAL;
         if let Some(ref mut cs) = self.command_sender {
+            // The heartbeat is what holds the radar up for us: the radar drops
+            // a controller it has not heard from for ~60 s, so leaving it out
+            // lets an unwatched radar stand down. An MFD using the radar keeps
+            // it up with its own.
+            let stand_down = self.common.info.stand_down();
+            if stand_down != self.stood_down {
+                self.stood_down = stand_down;
+                if stand_down {
+                    log::info!(
+                        "{}: nobody watching, dropping heartbeat so the radar can stand down",
+                        self.common.key
+                    );
+                } else {
+                    log::info!("{}: client connected, resuming heartbeat", self.common.key);
+                }
+            }
+            if stand_down {
+                return Ok(());
+            }
             cs.send_heartbeat().await?;
 
             // Every 5th heartbeat (every 5 seconds), also send the

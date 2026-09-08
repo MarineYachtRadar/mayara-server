@@ -107,7 +107,11 @@ the radar never stands down. Per brand:
   client asks for Transmit. Measured on a HALO24: the radar leaves Transmit about 25 s
   after the last ping, so with the 1 min default the antenna goes quiet roughly 85 s after
   the last viewer disconnects.
-- **Raymarine, Koden, Furuno, Garmin**: not yet; see the issue for the per-brand notes.
+- **Raymarine**: the radar drops a controller it has not heard from for about a minute, so
+  the 1 s heartbeat (and the 5 s extended one) is left out while standing down. An MFD using
+  the radar sends its own heartbeat and keeps it up. Whether every model then leaves
+  Transmit by itself is still to be confirmed on hardware (#664).
+- **Koden, Furuno, Garmin**: not yet; see #665, #666, #667.
 
 ## ARPA counts as a subscriber — for idle
 
