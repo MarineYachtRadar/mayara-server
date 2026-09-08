@@ -111,7 +111,16 @@ the radar never stands down. Per brand:
   the 1 s heartbeat (and the 5 s extended one) is left out while standing down. An MFD using
   the radar sends its own heartbeat and keeps it up. Whether every model then leaves
   Transmit by itself is still to be confirmed on hardware (#664).
-- **Koden, Furuno, Garmin**: not yet; see #665, #666, #667.
+- **Furuno**: the radar is not held up by anything mayara sends: it keeps transmitting until
+  some client tells it to stop, and the firmware has no notion of standing down when a
+  client goes away (see `research/furuno/drs4d-nxt-firmware.md`). So the receiver remembers
+  whether the radar is transmitting because a client asked for it through mayara (both
+  ranges share one transmitter, so this is one fact for the antenna), and while standing
+  down sends a Standby request itself. A transmit an MFD started is never touched: the
+  memory is set only by a Transmit request that reached the radar through mayara and
+  cleared by a Standby request through mayara or by the radar reporting anything but
+  Transmit.
+- **Koden, Garmin**: not yet; see #665, #667.
 
 ## ARPA counts as a subscriber — for idle
 

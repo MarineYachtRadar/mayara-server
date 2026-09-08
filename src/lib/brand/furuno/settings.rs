@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use crate::{
     Cli,
     radar::settings::{
-        ControlId, HAS_AUTO_NOT_ADJUSTABLE, SharedControls, new_auto, new_list, new_numeric,
-        new_sector, new_string,
+        ControlId, HAS_AUTO_NOT_ADJUSTABLE, SharedControls, new_auto, new_auto_standby, new_list,
+        new_numeric, new_sector, new_string,
     },
     radar::{
         FRAC_NM_2, FRAC_NM_4, FRAC_NM_8, FRAC_NM_16, NM, RadarInfo, range::Ranges, units::Units,
@@ -44,6 +44,9 @@ pub(crate) fn new(
 
     new_string(ControlId::SerialNumber).build(&mut controls);
     new_list(ControlId::RangeUnits, &["Nautical", "Metric"]).build(&mut controls);
+
+    // The report receiver stands a transmit that was asked through mayara down itself
+    new_auto_standby().build(&mut controls);
 
     SharedControls::new(radar_id, sk_client_tx, args, controls)
 }
@@ -676,4 +679,21 @@ fn get_ranges_by_model(model: &RadarModel) -> Vec<i32> {
         km_table.len(),
     );
     ranges
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+    use std::time::Duration;
+
+    /// The receiver sends a Standby for a transmit that was ours while
+    /// standing down, so the control is offered, enabled at its default.
+    #[test]
+    fn furuno_offers_auto_standby_at_one_minute() {
+        let args = Cli::parse_from(["mayara-server"]);
+        let tx = tokio::sync::broadcast::Sender::new(1);
+        let controls = new("fur1234".to_string(), tx, &args);
+        assert_eq!(controls.auto_standby(), Some(Duration::from_secs(60)));
+    }
 }
