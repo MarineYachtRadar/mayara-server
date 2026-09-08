@@ -45,7 +45,7 @@ pub(crate) fn new(
     new_string(ControlId::SerialNumber).build(&mut controls);
     new_list(ControlId::RangeUnits, &["Nautical", "Metric"]).build(&mut controls);
 
-    // The report receiver closes the control session while the radar should stand down
+    // The report receiver stands a transmit that was asked through mayara down itself
     new_auto_standby().build(&mut controls);
 
     SharedControls::new(radar_id, sk_client_tx, args, controls)
@@ -687,8 +687,8 @@ mod tests {
     use clap::Parser;
     use std::time::Duration;
 
-    /// The receiver closes the control session while standing down, so the
-    /// control is offered, enabled at its default.
+    /// The receiver sends a Standby for a transmit that was ours while
+    /// standing down, so the control is offered, enabled at its default.
     #[test]
     fn furuno_offers_auto_standby_at_one_minute() {
         let args = Cli::parse_from(["mayara-server"]);
