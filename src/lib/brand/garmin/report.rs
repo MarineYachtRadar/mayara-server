@@ -16,8 +16,8 @@ use crate::network;
 use crate::radar::settings::{ControlId, ControlValue};
 use crate::radar::spoke::GenericSpoke;
 use crate::radar::{
-    BYTE_LOOKUP_LENGTH, CommonRadar, DopplerMode, Legend, Power, RadarError, RadarInfo,
-    SharedRadars, transmit_claim_after_report, transmit_claim_after_request,
+    BYTE_LOOKUP_LENGTH, CommonRadar, DUAL_RANGE_A, DUAL_RANGE_B, DopplerMode, Legend, Power,
+    RadarError, RadarInfo, SharedRadars, transmit_claim_after_report, transmit_claim_after_request,
 };
 use crate::replay::RadarSocket;
 use crate::util::c_string;
@@ -103,7 +103,7 @@ pub(crate) struct GarminReportReceiver {
     data_socket: Option<RadarSocket>,
     command_sender: Option<Command>,
     reported_unknown: HashMap<u32, bool>,
-    /// The range (0 = A, 1 = B) a client asked to Transmit through mayara,
+    /// The dual-range id a client asked to Transmit through mayara,
     /// while that transmit is still ours to stand down. A Garmin radar keeps
     /// transmitting until a client tells it to stop and does nothing on losing
     /// its CDM peers but stop broadcasting spokes (research/garmin/
@@ -391,7 +391,7 @@ impl GarminReportReceiver {
                     match r {
                         Err(_) => {},
                         Ok(cv) => {
-                            let claim = transmit_claim_after_request(self.transmit_is_ours, 0, &cv.control_value);
+                            let claim = transmit_claim_after_request(self.transmit_is_ours, DUAL_RANGE_A, &cv.control_value);
                             if self.common.process_control_update(cv, &mut self.command_sender).await.is_ok() {
                                 self.transmit_is_ours = claim;
                             }
@@ -402,7 +402,7 @@ impl GarminReportReceiver {
                     match r {
                         Err(_) => {},
                         Ok(cv) => {
-                            let claim = transmit_claim_after_request(self.transmit_is_ours, 1, &cv.control_value);
+                            let claim = transmit_claim_after_request(self.transmit_is_ours, DUAL_RANGE_B, &cv.control_value);
                             if let Some(ref mut cb) = self.common_b
                                 && cb.process_control_update(cv, &mut self.command_sender_b).await.is_ok() {
                                 self.transmit_is_ours = claim;
@@ -1257,7 +1257,7 @@ impl GarminReportReceiver {
             return;
         };
         let (target, sender) = match (&self.common_b, range) {
-            (Some(cb), 1) => (cb, &mut self.command_sender_b),
+            (Some(cb), DUAL_RANGE_B) => (cb, &mut self.command_sender_b),
             _ => (&self.common, &mut self.command_sender),
         };
         let Some(cs) = sender else {

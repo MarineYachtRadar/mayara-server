@@ -1453,6 +1453,11 @@ fn should_power_off(silence: Duration, current_power: Option<i32>) -> bool {
     silence >= SharedRadars::RADAR_SILENCE_TIMEOUT && current_power != Some(Power::Off as i32)
 }
 
+/// The dual-range ids a transmit claim is keyed on: the primary range and,
+/// on a dual-range radar, the secondary one.
+pub(crate) const DUAL_RANGE_A: i32 = 0;
+pub(crate) const DUAL_RANGE_B: i32 = 1;
+
 /// Which range's transmit is mayara's to stand down, for brands whose radar
 /// keeps transmitting until a client tells it to stop (Furuno, Garmin). The
 /// claim is the dual-range id a client asked to Transmit through mayara; a
