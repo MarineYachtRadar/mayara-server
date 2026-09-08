@@ -28,7 +28,9 @@ use crate::radar::CommonRadar;
 use crate::radar::SharedRadars;
 use crate::radar::SpokeBearing;
 use crate::radar::settings::{ControlId, ControlValue};
-use crate::radar::{Power, RadarError, RadarInfo};
+use crate::radar::{
+    DUAL_RANGE_A, DUAL_RANGE_B, Power, RadarError, RadarInfo, transmit_claim_after_request,
+};
 use crate::replay::RadarSocket;
 use crate::util::PrintableSpoke;
 use serde_json::Value;
@@ -53,21 +55,6 @@ const RECONNECT_BACKOFF_MIN: Duration = Duration::from_secs(1);
 const RECONNECT_BACKOFF_MAX: Duration = Duration::from_secs(60);
 /// A session that survived this long counts as stable: reset the backoff.
 const RECONNECT_STABLE_AFTER: Duration = Duration::from_secs(60);
-
-/// Our claim on the transmitter after a client's control request for `range`
-/// goes through mayara: a Transmit request makes the transmit ours (on that
-/// range), any other Power request ends the claim, and anything else leaves
-/// it alone. Applied only once the request has reached the radar.
-fn transmit_claim_after(current: Option<i32>, range: i32, cv: &ControlValue) -> Option<i32> {
-    if cv.id != ControlId::Power {
-        return current;
-    }
-    match cv.as_value().ok().and_then(|v| Power::from_value(&v).ok()) {
-        Some(Power::Transmit) => Some(range),
-        Some(_) => None,
-        None => current,
-    }
-}
 
 /// Split out from the connection loop so the policy can be exercised without a
 /// radar: the loop supplies real elapsed times and sleeps.
@@ -404,11 +391,10 @@ impl FurunoReportReceiver {
                     match r {
                         Err(_) => {},
                         Ok(cv) => {
-                            // Range A control update: set dual_range_id=0
                             if let Some(ref mut cs) = self.command_sender {
-                                cs.dual_range_id = 0;
+                                cs.dual_range_id = DUAL_RANGE_A;
                             }
-                            let claim = transmit_claim_after(self.transmit_is_ours, 0, &cv.control_value);
+                            let claim = transmit_claim_after_request(self.transmit_is_ours, DUAL_RANGE_A, &cv.control_value);
                             self.common.process_control_update( cv, &mut self.command_sender).await?;
                             self.transmit_is_ours = claim;
                         },
@@ -425,11 +411,10 @@ impl FurunoReportReceiver {
                     match r {
                         Err(_) => {},
                         Ok(cv) => {
-                            // Range B control update: set dual_range_id=1
                             if let Some(ref mut cs) = self.command_sender {
-                                cs.dual_range_id = 1;
+                                cs.dual_range_id = DUAL_RANGE_B;
                             }
-                            let claim = transmit_claim_after(self.transmit_is_ours, 1, &cv.control_value);
+                            let claim = transmit_claim_after_request(self.transmit_is_ours, DUAL_RANGE_B, &cv.control_value);
                             if let Some(ref mut cb) = self.common_b
                                 && let Err(e) = cb.process_control_update(cv, &mut self.command_sender).await {
                                     return Err(e);
@@ -582,7 +567,7 @@ impl FurunoReportReceiver {
             return Ok(());
         };
         let target = match (&self.common_b, range) {
-            (Some(cb), 1) => cb,
+            (Some(cb), DUAL_RANGE_B) => cb,
             _ => &self.common,
         };
         log::info!(
@@ -2228,37 +2213,6 @@ async fn conditional_read(
 mod tests {
     use super::*;
     use crate::radar::Legend;
-
-    // ----- stand-down: only a transmit that was ours (issue #666) -----
-
-    fn power_request(power: Power) -> ControlValue {
-        ControlValue::new(ControlId::Power, Value::from(power as i32))
-    }
-
-    #[test]
-    fn a_transmit_asked_through_mayara_is_ours_until_standby_is_asked() {
-        assert_eq!(
-            transmit_claim_after(None, 1, &power_request(Power::Transmit)),
-            Some(1)
-        );
-        assert_eq!(
-            transmit_claim_after(Some(1), 0, &power_request(Power::Standby)),
-            None
-        );
-        assert_eq!(
-            transmit_claim_after(Some(0), 0, &power_request(Power::Off)),
-            None
-        );
-    }
-
-    #[test]
-    fn other_controls_and_unreadable_requests_leave_the_claim_alone() {
-        let gain = ControlValue::new(ControlId::Gain, Value::from(50));
-        assert_eq!(transmit_claim_after(Some(0), 0, &gain), Some(0));
-        let junk = ControlValue::new(ControlId::Power, Value::from("nonsense"));
-        assert_eq!(transmit_claim_after(Some(1), 1, &junk), Some(1));
-        assert_eq!(transmit_claim_after(None, 0, &junk), None);
-    }
 
     /// A radar that keeps dropping the control session must be backed off
     /// exponentially: hammering relogins exhausts the firmware's session slot
