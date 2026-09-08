@@ -12,7 +12,7 @@ use std::time::SystemTime;
 use crate::Brand;
 use crate::radar::RadarInfo;
 use crate::radar::range::Ranges;
-use crate::radar::settings::ControlId;
+use crate::radar::settings::{ControlId, DEFAULT_AUTO_STANDBY};
 
 pub(crate) fn get_project_dirs() -> ProjectDirs {
     directories::ProjectDirs::from("net", "verruijt", "mayara")
@@ -21,6 +21,10 @@ pub(crate) fn get_project_dirs() -> ProjectDirs {
 
 pub(crate) fn default_range_units() -> i32 {
     0 // Nautical (default)
+}
+
+fn default_auto_standby() -> i32 {
+    DEFAULT_AUTO_STANDBY as i32
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq)]
@@ -57,6 +61,8 @@ pub(crate) struct Radar {
     pub spoke_processing: i32, // 0 = Clean, 1 = Fill, 2 = Reduce, 3 = Smooth
     #[serde(default = "default_range_units")]
     pub range_units: i32, // 0 = Nautical, 1 = Metric, 2 = Mixed
+    #[serde(default = "default_auto_standby")]
+    pub auto_standby: i32, // Index into the AutoStandby control's choices
 
     // Data that is computed and not immediately known when starting
     pub model_name: Option<String>, // Descriptive model name (4G, HALO)
@@ -493,6 +499,12 @@ impl Persistence {
             radar.range_units = range_units;
             modified = true;
         }
+        if let Some(auto_standby) = radar_info.controls.auto_standby_index()
+            && radar.auto_standby != auto_standby
+        {
+            radar.auto_standby = auto_standby;
+            modified = true;
+        }
         let ranges = Some(radar_info.ranges.all.iter().map(|r| r.distance()).collect());
         if radar.ranges != ranges {
             radar.ranges = ranges;
@@ -644,6 +656,7 @@ impl Persistence {
             info.controls.set_user_name(p.user_name.clone());
             info.controls.set_spoke_processing(p.spoke_processing);
             info.controls.set_range_units(p.range_units);
+            info.controls.set_auto_standby(p.auto_standby);
             if let Some(ranges) = &p.ranges
                 && !ranges.is_empty()
             {
@@ -994,5 +1007,25 @@ mod tests {
             persistence_at(blocker.join(SETTINGS_FILE)).load(),
             Loaded::Unusable
         ));
+    }
+
+    /// A settings file written before auto standby existed enables it at its
+    /// default, so an upgrade stands an unwatched radar down like a fresh
+    /// install does.
+    #[test]
+    fn auto_standby_defaults_to_one_minute_for_old_settings() {
+        let radar: Radar = serde_json::from_str(r#"{"id": 1, "user_name": "Bow"}"#).unwrap();
+        assert_eq!(radar.auto_standby, DEFAULT_AUTO_STANDBY as i32);
+    }
+
+    #[test]
+    fn auto_standby_round_trips() {
+        let radar = Radar {
+            auto_standby: 3,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&radar).unwrap();
+        let back: Radar = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.auto_standby, 3);
     }
 }

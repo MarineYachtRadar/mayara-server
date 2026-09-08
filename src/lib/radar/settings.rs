@@ -11,6 +11,7 @@ use std::{
     fmt::{self, Display},
     str::FromStr,
     sync::{Arc, RwLock},
+    time::Duration,
 };
 use strum::{EnumCount, EnumIter, EnumString, IntoStaticStr};
 use thiserror::Error;
@@ -172,6 +173,7 @@ pub enum ControlId {
     StcRange,
     AntiJamming,
     EchoFormat,
+    AutoStandby,
 }
 
 impl Display for ControlId {
@@ -258,7 +260,7 @@ impl ControlId {
             | ControlId::PulseWidth => Category::Info,
             ControlId::SupplyVoltage | ControlId::DeviceTemperature => Category::Info,
             ControlId::ScanAverageMode | ControlId::ScanAverageSensitivity => Category::Advanced,
-            ControlId::ParkPosition => Category::Installation,
+            ControlId::ParkPosition | ControlId::AutoStandby => Category::Installation,
             ControlId::TransmitChannel => Category::Advanced,
             ControlId::NoiseRejection
             | ControlId::TargetBoost
@@ -386,6 +388,9 @@ impl ControlId {
                 "Anti-jamming filter reduces interference from other radars on the same frequency"
             }
             ControlId::EchoFormat => "Experimental echo format request (NXT only: IMO or Tile)",
+            ControlId::AutoStandby => {
+                "Let the radar stand down when nobody has watched it for this long"
+            }
         }
     }
 
@@ -479,6 +484,7 @@ impl ControlId {
             ControlId::StcRange => "STC range",
             ControlId::AntiJamming => "Anti-jamming",
             ControlId::EchoFormat => "Echo format",
+            ControlId::AutoStandby => "Auto standby",
         }
     }
 
@@ -565,6 +571,7 @@ impl ControlId {
             ControlId::StcRange => ControlDestination::Command,
             ControlId::AntiJamming => ControlDestination::Command,
             ControlId::EchoFormat => ControlDestination::Command,
+            ControlId::AutoStandby => ControlDestination::Internal,
         }
     }
 }
@@ -1811,6 +1818,30 @@ impl SharedControls {
             .unwrap_or(0)
     }
 
+    /// No-op on a brand that does not offer the control.
+    pub(crate) fn set_auto_standby(&self, value: i32) {
+        let mut locked = self.controls.write().unwrap();
+        if let Some(control) = locked.controls.get_mut(&ControlId::AutoStandby) {
+            let _ = control.set(value as f64, None, None, None);
+        }
+    }
+
+    /// The wire value of the `AutoStandby` control, for persistence; `None`
+    /// on a brand that does not offer the control.
+    pub(crate) fn auto_standby_index(&self) -> Option<i32> {
+        self.get(&ControlId::AutoStandby)
+            .and_then(|c| c.value)
+            .map(|v| v as i32)
+    }
+
+    /// How long nobody may watch this radar before it is let go to stand
+    /// down; `None` when auto standby is off or not offered.
+    pub(crate) fn auto_standby(&self) -> Option<Duration> {
+        AUTO_STANDBY_CHOICES
+            .get(usize::try_from(self.auto_standby_index()?).ok()?)
+            .and_then(|(_, period)| *period)
+    }
+
     /// Returns the current ARPA max speed setting: 0 = Normal (25kn), 1 = Medium (40kn), 2 = Fast (50kn)
     pub fn doppler_auto_track(&self) -> bool {
         self.get(&ControlId::DopplerAutoTrack)
@@ -2592,6 +2623,15 @@ impl ControlBuilder {
         self
     }
 
+    pub(crate) fn default_value(mut self, value: f64) -> Self {
+        if self.frozen {
+            panic!("{} already frozen", self.control.item.control_id);
+        }
+        self.control.item.default_value = Some(value);
+        self.control.value = Some(value);
+        self
+    }
+
     pub(crate) fn wire_scale_step(mut self, step: f64) -> Self {
         if self.frozen {
             panic!("{} already frozen", self.control.item.control_id);
@@ -2677,6 +2717,25 @@ impl ControlBuilder {
     pub(crate) fn take(self) -> (ControlId, Control) {
         (self.control.item.control_id, self.control)
     }
+}
+
+/// The `AutoStandby` list control: index is the wire value, the period is how
+/// long nobody may watch the radar before it is let go; `None` is Off.
+const AUTO_STANDBY_CHOICES: [(&str, Option<Duration>); 5] = [
+    ("Off", None),
+    ("1 min", Some(Duration::from_secs(60))),
+    ("5 min", Some(Duration::from_secs(5 * 60))),
+    ("15 min", Some(Duration::from_secs(15 * 60))),
+    ("30 min", Some(Duration::from_secs(30 * 60))),
+];
+pub(crate) const DEFAULT_AUTO_STANDBY: usize = 1;
+
+/// The `AutoStandby` control, for brands whose receiver honours
+/// [`RadarInfo::stand_down`](crate::radar::RadarInfo::stand_down); a brand
+/// that does not must not offer the control.
+pub(crate) fn new_auto_standby() -> ControlBuilder {
+    let names: Vec<&str> = AUTO_STANDBY_CHOICES.iter().map(|(name, _)| *name).collect();
+    new_list(ControlId::AutoStandby, &names).default_value(DEFAULT_AUTO_STANDBY as f64)
 }
 
 pub(crate) fn new_numeric(control_id: ControlId, min_value: f64, max_value: f64) -> ControlBuilder {
@@ -4800,5 +4859,42 @@ mod test {
         // `value` takes any JSON and is converted where it is read, so it is
         // left exactly as sent.
         assert_eq!(zone.value, Some(serde_json::json!("0.5")));
+    }
+
+    // ----- AutoStandby (issue #633) -----
+
+    fn controls_with_auto_standby() -> SharedControls {
+        let args = Cli::parse_from(["my_program"]);
+        let tx = tokio::sync::broadcast::Sender::new(1);
+        let mut controls = HashMap::new();
+        new_auto_standby().build(&mut controls);
+        SharedControls::new("nav1234".to_string(), tx, &args, controls)
+    }
+
+    #[test]
+    fn auto_standby_defaults_to_one_minute() {
+        let controls = controls_with_auto_standby();
+        assert_eq!(controls.auto_standby_index(), Some(1));
+        assert_eq!(controls.auto_standby(), Some(Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn auto_standby_maps_index_to_period() {
+        let controls = controls_with_auto_standby();
+        controls.set_auto_standby(0);
+        assert_eq!(controls.auto_standby(), None, "index 0 is Off");
+        controls.set_auto_standby(4);
+        assert_eq!(controls.auto_standby(), Some(Duration::from_secs(30 * 60)));
+        assert!(controls.set(&ControlId::AutoStandby, 5., None).is_err());
+    }
+
+    #[test]
+    fn auto_standby_is_absent_on_a_brand_that_does_not_offer_it() {
+        let args = Cli::parse_from(["my_program"]);
+        let tx = tokio::sync::broadcast::Sender::new(1);
+        let controls = SharedControls::new("kod1234".to_string(), tx, &args, HashMap::new());
+        controls.set_auto_standby(0);
+        assert_eq!(controls.auto_standby_index(), None);
+        assert_eq!(controls.auto_standby(), None);
     }
 }

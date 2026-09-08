@@ -199,10 +199,24 @@ impl Command {
         Ok(cmd)
     }
 
-    pub(super) async fn send_report_requests(&mut self) -> Result<(), RadarError> {
-        self.send(&REQUEST_STATE_PROPERTIES).await?;
-        self.send(&REQUEST_STATE_BATCH).await?;
-        self.send(&COMMAND_STAY_ON_A).await?;
+    /// The datagrams of one report-request tick. The stay-alive is what holds
+    /// the radar up for us, so it is left out while the radar should stand
+    /// down; the two queries stay so the radar's state keeps arriving.
+    fn report_request_frames(stay_alive: bool) -> Vec<&'static [u8]> {
+        let mut frames: Vec<&'static [u8]> = vec![&REQUEST_STATE_PROPERTIES, &REQUEST_STATE_BATCH];
+        if stay_alive {
+            frames.push(&COMMAND_STAY_ON_A);
+        }
+        frames
+    }
+
+    pub(super) async fn send_report_requests(
+        &mut self,
+        stay_alive: bool,
+    ) -> Result<(), RadarError> {
+        for frame in Self::report_request_frames(stay_alive) {
+            self.send(frame).await?;
+        }
         Ok(())
     }
 }
@@ -593,5 +607,23 @@ mod tests {
             manual_level_is_irrelevant,
             [0x11, 0xc1, 0x01, 0x00, 0xce, 0x04]
         );
+    }
+
+    /// The stay-alive is what holds the radar up, so it rides along with the
+    /// state queries while somebody is watching ...
+    #[test]
+    fn report_requests_include_the_stay_alive_while_watched() {
+        let frames = Command::report_request_frames(true);
+
+        assert_eq!(frames, vec![&[0x04, 0xc2], &[0x01, 0xc2], &[0xa0, 0xc1]]);
+    }
+
+    /// ... and only the stay-alive is left out when the radar should stand
+    /// down: the queries keep the radar's state arriving.
+    #[test]
+    fn report_requests_drop_only_the_stay_alive_when_standing_down() {
+        let frames = Command::report_request_frames(false);
+
+        assert_eq!(frames, vec![&[0x04, 0xc2], &[0x01, 0xc2]]);
     }
 }

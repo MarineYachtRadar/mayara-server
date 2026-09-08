@@ -397,6 +397,18 @@ pub struct RadarInfo {
     /// brand receivers (which hold a clone) and the watchdog (reading the map)
     /// observe the same value. Updated via `mark_input`, read via `input_silence`.
     last_input: Arc<AtomicU64>,
+
+    /// Milliseconds since [`RADAR_EPOCH`] the watchdog last saw a spoke
+    /// subscriber on this radar's antenna (issue #633). A dual-range pair
+    /// shares one antenna, so the stamp is refreshed on every range while any
+    /// of them is watched. Shared via `Arc` like `last_input`.
+    last_watched: Arc<AtomicU64>,
+
+    /// Whether the brand receiver should stop holding the radar up so it can
+    /// stand down: nobody has watched the antenna for the `AutoStandby` period
+    /// of every range. Decided per antenna by the watchdog
+    /// (`SharedRadars::refresh_stand_down`), read via `stand_down()`.
+    stand_down: Arc<AtomicBool>,
 }
 
 /// Number of trailing characters of an identity that make a radar
@@ -566,6 +578,10 @@ impl RadarInfo {
             // Seed with "now" so a freshly discovered radar isn't immediately
             // considered silent before its first report arrives.
             last_input: Arc::new(AtomicU64::new(now_millis())),
+            // Seed with "now" so a radar nobody ever watches stands down one
+            // auto-standby period after discovery, not at once.
+            last_watched: Arc::new(AtomicU64::new(now_millis())),
+            stand_down: Arc::new(AtomicBool::new(false)),
         };
 
         log::trace!("Created RadarInfo {:?}", info);
@@ -620,6 +636,34 @@ impl RadarInfo {
     /// How long it has been since the last packet was received from this radar.
     pub(crate) fn input_silence(&self) -> Duration {
         Duration::from_millis(now_millis().saturating_sub(self.last_input.load(Ordering::Relaxed)))
+    }
+
+    fn mark_watched_at(&self, now: u64) {
+        self.last_watched.store(now, Ordering::Relaxed);
+    }
+
+    fn unwatched_for_at(&self, now: u64) -> Duration {
+        Duration::from_millis(now.saturating_sub(self.last_watched.load(Ordering::Relaxed)))
+    }
+
+    /// Whether the brand receiver should stop holding this radar up so it can
+    /// stand down. See the `stand_down` field.
+    pub(crate) fn stand_down(&self) -> bool {
+        self.stand_down.load(Ordering::Relaxed)
+    }
+
+    fn set_stand_down(&self, stand_down: bool) {
+        self.stand_down.store(stand_down, Ordering::Relaxed);
+    }
+
+    /// The key shared by every range of one antenna: a dual-range radar's
+    /// ranges differ only in their trailing "A"/"B", a single-range radar is
+    /// its own antenna.
+    pub(crate) fn antenna_key(&self) -> &str {
+        self.dual
+            .as_deref()
+            .and_then(|dual| self.key.strip_suffix(dual))
+            .unwrap_or(&self.key)
     }
 
     /// Recompute the idle flag from this radar's live power state and spoke
@@ -1086,6 +1130,33 @@ impl SharedRadars {
         }
     }
 
+    /// Decide for every antenna whether its ranges should let the radar stand
+    /// down, and write the verdict to each of them. Called on a fixed cadence
+    /// by the radar watchdog. Any range with a spoke subscriber keeps the whole
+    /// antenna watched; see [`antenna_should_stand_down`] for the verdict.
+    pub(crate) fn refresh_stand_down(&self) {
+        self.refresh_stand_down_at(now_millis());
+    }
+
+    fn refresh_stand_down_at(&self, now: u64) {
+        let radars = self.radars.read().unwrap();
+        let mut antennas: HashMap<&str, Vec<&RadarInfo>> = HashMap::new();
+        for info in radars.info.values() {
+            antennas.entry(info.antenna_key()).or_default().push(info);
+        }
+        for ranges in antennas.values() {
+            if ranges.iter().any(|r| r.message_tx.receiver_count() > 0) {
+                ranges.iter().for_each(|r| r.mark_watched_at(now));
+            }
+            let periods: Vec<(Option<Duration>, Duration)> = ranges
+                .iter()
+                .map(|r| (r.controls.auto_standby(), r.unwatched_for_at(now)))
+                .collect();
+            let stand_down = antenna_should_stand_down(&periods);
+            ranges.iter().for_each(|r| r.set_stand_down(stand_down));
+        }
+    }
+
     ///
     /// Return every radar that has been discovered, including those that have
     /// not yet reported their ranges. Use this where a radar should surface as
@@ -1380,6 +1451,23 @@ pub(crate) fn should_idle(power: Option<i32>, spoke_receiver_count: usize) -> bo
 /// is powered off from the operator's point of view.
 fn should_power_off(silence: Duration, current_power: Option<i32>) -> bool {
     silence >= SharedRadars::RADAR_SILENCE_TIMEOUT && current_power != Some(Power::Off as i32)
+}
+
+/// Decide whether one antenna should be let go so it can stand down. Each
+/// entry is one range: its `AutoStandby` period (`None` = off) and how long
+/// nobody has watched it. The ranges of a dual-range radar share the antenna,
+/// so every one of them must agree: a range set to Off, or watched more
+/// recently than its period, holds the whole antenna up.
+///
+/// "Watched" is the spoke-broadcast subscriber count only, by design: control
+/// PUTs and REST reads do not keep a radar transmitting, and neither does ARPA
+/// tracking or an armed guard zone — a radar nobody is looking at stands down
+/// even while it is tracking. See docs/internals/radar-status.md.
+fn antenna_should_stand_down(ranges: &[(Option<Duration>, Duration)]) -> bool {
+    !ranges.is_empty()
+        && ranges
+            .iter()
+            .all(|(period, unwatched)| period.is_some_and(|period| *unwatched >= period))
 }
 
 // The actual values are not arbitrary: these are the exact values as reported
@@ -2716,13 +2804,161 @@ mod tests {
         assert!(should_power_off(SharedRadars::RADAR_SILENCE_TIMEOUT, None));
     }
 
+    // ----- stand-down (issue #633) -----
+
+    const PERIOD: Duration = Duration::from_secs(60);
+
+    #[test]
+    fn antenna_should_stand_down_single_range() {
+        assert!(!antenna_should_stand_down(&[]));
+        assert!(!antenna_should_stand_down(&[(None, PERIOD * 10)]));
+        assert!(!antenna_should_stand_down(&[(
+            Some(PERIOD),
+            PERIOD - Duration::from_secs(1)
+        )]));
+        assert!(antenna_should_stand_down(&[(Some(PERIOD), PERIOD)]));
+        assert!(antenna_should_stand_down(&[(Some(PERIOD), PERIOD * 10)]));
+    }
+
+    #[test]
+    fn antenna_should_stand_down_only_when_every_range_agrees() {
+        // A range set to Off holds the antenna up.
+        assert!(!antenna_should_stand_down(&[
+            (Some(PERIOD), PERIOD * 10),
+            (None, PERIOD * 10)
+        ]));
+        // So does a range that has not yet reached its own period.
+        assert!(!antenna_should_stand_down(&[
+            (Some(PERIOD), PERIOD * 10),
+            (Some(PERIOD * 5), PERIOD * 2)
+        ]));
+        assert!(antenna_should_stand_down(&[
+            (Some(PERIOD), PERIOD * 10),
+            (Some(PERIOD * 5), PERIOD * 5)
+        ]));
+    }
+
+    #[test]
+    fn antenna_key_strips_dual_suffix() {
+        let radars = SharedRadars::new();
+        let a = test_helpers::radar_info(&radars, "633A", Some("A"));
+        let b = test_helpers::radar_info(&radars, "633A", Some("B"));
+        let single = test_helpers::radar_info(&radars, "633S", None);
+        assert_eq!(a.antenna_key(), b.antenna_key());
+        assert_ne!(a.key(), b.key());
+        assert_eq!(single.antenna_key(), single.key());
+    }
+
+    #[test]
+    fn refresh_stand_down_keeps_a_watched_antenna_up_on_every_range() {
+        let radars = SharedRadars::new();
+        let a = radars
+            .add(test_helpers::radar_info(&radars, "633B", Some("A")))
+            .unwrap();
+        let b = radars
+            .add(test_helpers::radar_info(&radars, "633B", Some("B")))
+            .unwrap();
+        let _watching_a = a.message_tx.subscribe();
+        a.mark_watched_at(0);
+        b.mark_watched_at(0);
+
+        radars.refresh_stand_down_at(PERIOD.as_millis() as u64 + 1000);
+
+        assert_eq!(
+            b.unwatched_for_at(PERIOD.as_millis() as u64 + 1000),
+            Duration::ZERO
+        );
+        assert!(!a.stand_down());
+        assert!(!b.stand_down());
+    }
+
+    #[test]
+    fn refresh_stand_down_stands_both_ranges_down_together() {
+        let radars = SharedRadars::new();
+        let a = radars
+            .add(test_helpers::radar_info(&radars, "633C", Some("A")))
+            .unwrap();
+        let b = radars
+            .add(test_helpers::radar_info(&radars, "633C", Some("B")))
+            .unwrap();
+        a.mark_watched_at(0);
+        b.mark_watched_at(0);
+        let later = PERIOD.as_millis() as u64 + 1000;
+
+        radars.refresh_stand_down_at(later);
+        assert!(a.stand_down());
+        assert!(b.stand_down());
+
+        // Switching one range off brings the whole antenna back up.
+        b.controls.set_auto_standby(0);
+        radars.refresh_stand_down_at(later);
+        assert!(!a.stand_down());
+        assert!(!b.stand_down());
+    }
+
+    #[test]
+    fn refresh_stand_down_leaves_an_unrelated_radar_alone() {
+        let radars = SharedRadars::new();
+        let pair = radars
+            .add(test_helpers::radar_info(&radars, "633D", Some("A")))
+            .unwrap();
+        let other = radars
+            .add(test_helpers::radar_info(&radars, "633E", None))
+            .unwrap();
+        let _watching_other = other.message_tx.subscribe();
+        pair.mark_watched_at(0);
+        other.mark_watched_at(0);
+
+        radars.refresh_stand_down_at(PERIOD.as_millis() as u64 + 1000);
+
+        assert!(pair.stand_down());
+        assert!(!other.stand_down());
+    }
+
     mod test_helpers {
         use super::*;
+        use crate::radar::settings::new_auto_standby;
+        use clap::Parser;
+
         /// Mint a stand-in for `RadarInfo.is_idle` so the test above
         /// doesn't have to construct a full `RadarInfo`. If the field
         /// type changes, the caller fails to compile.
         pub(super) fn dummy_is_idle_field() -> Arc<AtomicBool> {
             Arc::new(AtomicBool::new(false))
+        }
+
+        /// A radar with the `AutoStandby` control at its default, keyed on
+        /// `serial` plus the optional dual-range suffix.
+        pub(super) fn radar_info(
+            radars: &SharedRadars,
+            serial: &str,
+            dual: Option<&str>,
+        ) -> RadarInfo {
+            let args = Cli::parse_from(["mayara-server"]);
+            let addr = SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 2), 6878);
+            RadarInfo::new(
+                radars,
+                &args,
+                Brand::Emulator,
+                Some(serial),
+                None,
+                dual,
+                16,
+                2048,
+                512,
+                addr,
+                Ipv4Addr::new(10, 0, 0, 1),
+                addr,
+                addr,
+                addr,
+                |id, tx| {
+                    let mut controls = HashMap::new();
+                    new_auto_standby().build(&mut controls);
+                    SharedControls::new(id, tx, &args, controls)
+                },
+                false,
+                false,
+            )
         }
     }
 
