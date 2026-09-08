@@ -5,16 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.13.0] - 2026-09-08
+
+### Added
+
+- **pcap:** reassemble fragmented UDP datagrams (#654) ([PR #654](https://github.com/MarineYachtRadar/mayara-server/pull/654))
+- **navico:** let an unwatched radar stand down after a set time (#663) ([PR #663](https://github.com/MarineYachtRadar/mayara-server/pull/663))
+- **raymarine:** let an unwatched radar stand down after a set time (#668) ([PR #668](https://github.com/MarineYachtRadar/mayara-server/pull/668))
+- **furuno:** stand down a radar that transmits on mayara's behalf (#669) ([PR #669](https://github.com/MarineYachtRadar/mayara-server/pull/669))
+- **koden:** let an unwatched radar stand down after a set time (#670) ([PR #670](https://github.com/MarineYachtRadar/mayara-server/pull/670))
+- **garmin:** stand down a radar that transmits on mayara's behalf (#671) ([PR #671](https://github.com/MarineYachtRadar/mayara-server/pull/671))
+
+### Changed
+
+- **usage:** document the flags mayara actually accepts (#657) ([PR #657](https://github.com/MarineYachtRadar/mayara-server/pull/657))
+- **furuno:** use the shared transmit claim helper (#672) ([PR #672](https://github.com/MarineYachtRadar/mayara-server/pull/672))
+
+### Fixed
+
+- **fixtures:** leave a fixture alone when its packets are unchanged (#651) ([PR #651](https://github.com/MarineYachtRadar/mayara-server/pull/651))
+- **replay:** count listeners, not the addresses they listen on (#659) ([PR #659](https://github.com/MarineYachtRadar/mayara-server/pull/659))
+- **garmin:** record the transmit channel mode instead of refusing it (#660) ([PR #660](https://github.com/MarineYachtRadar/mayara-server/pull/660))
+- **controls:** let a value-only report leave the auto flag standing (#662) ([PR #662](https://github.com/MarineYachtRadar/mayara-server/pull/662))
+
 ## [3.12.5] - 2026-09-04
 
 ### Fixed
 
-- **navdata:** let a fixed position outrank the navigation source (#642)
-- **stream:** deliver fixed-policy subscriptions on schedule (#632)
-- **navdata:** accept a host name as a navigation address (#643)
-- **replay:** register both ranges of a dual-range radar (#644)
-- **stream:** honour policy, period and minPeriod on navigation (#646)
-- **stream:** honour subscription terms on a self or all stream (#648)
+- **navdata:** let a fixed position outrank the navigation source (#642) ([PR #642](https://github.com/MarineYachtRadar/mayara-server/pull/642))
+- **stream:** deliver fixed-policy subscriptions on schedule (#632) ([PR #632](https://github.com/MarineYachtRadar/mayara-server/pull/632))
+- **navdata:** accept a host name as a navigation address (#643) ([PR #643](https://github.com/MarineYachtRadar/mayara-server/pull/643))
+- **replay:** register both ranges of a dual-range radar (#644) ([PR #644](https://github.com/MarineYachtRadar/mayara-server/pull/644))
+- **stream:** honour policy, period and minPeriod on navigation (#646) ([PR #646](https://github.com/MarineYachtRadar/mayara-server/pull/646))
+- **stream:** honour subscription terms on a self or all stream (#648) ([PR #648](https://github.com/MarineYachtRadar/mayara-server/pull/648))
 
 ## [3.12.4] - 2026-09-03
 
@@ -463,6 +486,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **ci:** use PR for changelog commit to respect branch protection (#73) ([PR #73](https://github.com/MarineYachtRadar/mayara-server/pull/73))
 - **ci:** fall back to immediate merge when auto-merge not needed (#77) ([PR #77](https://github.com/MarineYachtRadar/mayara-server/pull/77))
 
+[3.13.0]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.12.5...v3.13.0
 [3.12.5]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.12.4...v3.12.5
 [3.12.4]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.12.3...v3.12.4
 [3.12.3]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.12.2...v3.12.3
