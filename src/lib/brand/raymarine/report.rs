@@ -43,6 +43,18 @@ const WAKE_INTERVAL: Duration = Duration::from_secs(3);
 const OBSERVATION_WINDOW: Duration = Duration::from_secs(5);
 const EXTERNAL_QUIET_WINDOW: Duration = Duration::from_secs(60);
 
+/// The keep-alives one heartbeat tick sends: the 1 s heartbeat, and every
+/// fifth tick the extended 5 s one. Nothing while the radar should stand
+/// down: the heartbeat is what holds the radar up for us, and the radar
+/// drops a controller it has not heard from for ~60 s. `counter` is the
+/// number of heartbeats sent so far.
+fn heartbeats_for_tick(stand_down: bool, counter: u32) -> (bool, bool) {
+    if stand_down {
+        return (false, false);
+    }
+    (true, (counter + 1).is_multiple_of(5))
+}
+
 /// Decide how a Power request affects the "re-apply transmit once the radar
 /// reaches standby" flag, given the radar's last reported power state.
 /// Returns `Some(new_flag)` when the request changes it, `None` to leave it.
@@ -184,6 +196,9 @@ pub(crate) struct RaymarineReportReceiver {
     command_sender: Option<Command>,
     heartbeat_deadline: Instant,
     heartbeat_counter: u32,
+    /// Whether the last heartbeat tick left the keep-alives out, so the
+    /// transition is logged once rather than every second.
+    stood_down: bool,
     wake_deadline: Instant,
     external_seen: Arc<ExternalControllerWitness>,
     reported_unknown: HashMap<u32, bool>,
@@ -291,6 +306,7 @@ impl RaymarineReportReceiver {
             command_sender,
             heartbeat_deadline: now + HEARTBEAT_INTERVAL,
             heartbeat_counter: 0,
+            stood_down: false,
             wake_deadline: now + OBSERVATION_WINDOW,
             external_seen,
             reported_unknown: HashMap::new(),
@@ -522,12 +538,26 @@ impl RaymarineReportReceiver {
         // busy-loops. The next tick retries the heartbeat a second later.
         self.heartbeat_deadline += HEARTBEAT_INTERVAL;
         if let Some(ref mut cs) = self.command_sender {
-            cs.send_heartbeat().await?;
-
-            // Every 5th heartbeat (every 5 seconds), also send the
-            // extended keep-alive with MARPA/AIS option data.
-            self.heartbeat_counter += 1;
-            if self.heartbeat_counter.is_multiple_of(5) {
+            // An MFD using the radar keeps it up with its own heartbeat, so
+            // standing down needs no "am I the only controller" check.
+            let stand_down = self.common.info.stand_down();
+            if stand_down != self.stood_down {
+                self.stood_down = stand_down;
+                if stand_down {
+                    log::info!(
+                        "{}: nobody watching, dropping heartbeat so the radar can stand down",
+                        self.common.key
+                    );
+                } else {
+                    log::info!("{}: client connected, resuming heartbeat", self.common.key);
+                }
+            }
+            let (heartbeat, extended) = heartbeats_for_tick(stand_down, self.heartbeat_counter);
+            if heartbeat {
+                cs.send_heartbeat().await?;
+                self.heartbeat_counter += 1;
+            }
+            if extended {
                 cs.send_heartbeat_5s().await?;
             }
         }
@@ -691,8 +721,35 @@ impl RaymarineReportReceiver {
 
 #[cfg(test)]
 mod tests {
-    use super::{should_reapply_transmit, transmit_should_defer};
+    use super::{heartbeats_for_tick, should_reapply_transmit, transmit_should_defer};
     use crate::radar::Power;
+
+    // ----- heartbeat ticks (stand-down, issue #664) -----
+
+    #[test]
+    fn every_fifth_heartbeat_carries_the_extended_keep_alive() {
+        let sent: Vec<(bool, bool)> = (0..10).map(|n| heartbeats_for_tick(false, n)).collect();
+        assert!(sent.iter().all(|(heartbeat, _)| *heartbeat));
+        let extended: Vec<u32> = (0..10u32)
+            .filter(|n| heartbeats_for_tick(false, *n).1)
+            .collect();
+        assert_eq!(extended, vec![4, 9]);
+    }
+
+    #[test]
+    fn standing_down_sends_no_keep_alive_at_all() {
+        for n in 0..10 {
+            assert_eq!(heartbeats_for_tick(true, n), (false, false));
+        }
+    }
+
+    #[test]
+    fn resuming_picks_the_cadence_up_where_it_left_off() {
+        // Four heartbeats sent, then a stand-down; the first tick after
+        // resuming is the fifth and carries the extended keep-alive.
+        assert_eq!(heartbeats_for_tick(true, 4), (false, false));
+        assert_eq!(heartbeats_for_tick(false, 4), (true, true));
+    }
 
     /// Drive a `pending_transmit` flag through the same two decisions the
     /// receiver applies — arm on a Power request (`note_power_request`), and

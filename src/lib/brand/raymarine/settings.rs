@@ -6,8 +6,8 @@ use crate::{
     radar::Power,
     radar::RadarInfo,
     radar::settings::{
-        ControlId, HAS_AUTO_NOT_ADJUSTABLE, SharedControls, new_auto, new_list, new_numeric,
-        new_sector, new_string,
+        ControlId, HAS_AUTO_NOT_ADJUSTABLE, SharedControls, new_auto, new_auto_standby, new_list,
+        new_numeric, new_sector, new_string,
     },
     radar::units::Units,
     stream::SignalKDelta,
@@ -107,6 +107,9 @@ pub(crate) fn new(
     }
     new_string(ControlId::SerialNumber).build(&mut controls);
 
+    // The report receiver drops the heartbeat while the radar should stand down
+    new_auto_standby().build(&mut controls);
+
     // Raymarine is nautical-only - no RangeUnits control, default is already 0 (Nautical)
     SharedControls::new(radar_id, sk_client_tx, args, controls)
 }
@@ -152,5 +155,24 @@ pub(crate) fn update_when_model_known(
     // the Radar API exposes and accepts Off for these radars.
     if model.model == BaseModel::Quantum {
         controls.add_valid_value(&ControlId::Power, Power::Off as i32);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+    use std::time::Duration;
+
+    /// Both Raymarine families are held up by the same heartbeat, so both
+    /// offer the control, enabled at its default.
+    #[test]
+    fn raymarine_offers_auto_standby_at_one_minute() {
+        let args = Cli::parse_from(["mayara-server"]);
+        for model in [BaseModel::Quantum, BaseModel::RD] {
+            let tx = tokio::sync::broadcast::Sender::new(1);
+            let controls = new("ray1234".to_string(), tx, &args, model);
+            assert_eq!(controls.auto_standby(), Some(Duration::from_secs(60)));
+        }
     }
 }
