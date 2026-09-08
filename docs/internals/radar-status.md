@@ -120,7 +120,10 @@ the radar never stands down. Per brand:
   memory is set only by a Transmit request that reached the radar through mayara and
   cleared by a Standby request through mayara or by the radar reporting anything but
   Transmit.
-- **Koden, Garmin**: not yet; see #665, #667.
+- **Koden**: the radar answers a keep-alive mayara sends every 10 s; it is left out while
+  standing down. Whether the radar then leaves Transmit by itself is still to be confirmed
+  on hardware (#665).
+- **Garmin**: not yet; see #667.
 
 ## ARPA counts as a subscriber — for idle
 

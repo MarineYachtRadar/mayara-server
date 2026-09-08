@@ -5,8 +5,8 @@ use super::protocol::KODEN_ANGLE_SCALE;
 use crate::{
     Cli,
     radar::settings::{
-        ControlId, HAS_AUTO_NOT_ADJUSTABLE, SharedControls, new_auto, new_list, new_numeric,
-        new_sector, new_string,
+        ControlId, HAS_AUTO_NOT_ADJUSTABLE, SharedControls, new_auto, new_auto_standby, new_list,
+        new_numeric, new_sector, new_string,
     },
     stream::SignalKDelta,
 };
@@ -53,5 +53,25 @@ pub(crate) fn new(
         .wire_offset(-1.)
         .build(&mut controls);
 
+    // The report receiver drops the keep-alive while the radar should stand down
+    new_auto_standby().build(&mut controls);
+
     SharedControls::new(radar_id, sk_client_tx, args, controls)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+    use std::time::Duration;
+
+    /// The receiver drops the keep-alive while standing down, so the control
+    /// is offered, enabled at its default.
+    #[test]
+    fn koden_offers_auto_standby_at_one_minute() {
+        let args = Cli::parse_from(["mayara-server"]);
+        let tx = tokio::sync::broadcast::Sender::new(1);
+        let controls = new("kod1234".to_string(), tx, &args);
+        assert_eq!(controls.auto_standby(), Some(Duration::from_secs(60)));
+    }
 }
