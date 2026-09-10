@@ -75,8 +75,13 @@ pub(crate) fn new(
             new_numeric(ControlId::SeaClutterCurve, 1., 2.).build(&mut controls);
         }
         BaseModel::RD => {
-            new_numeric(ControlId::TransmitTime, 0., 65535.)
+            // The scanner's "Heater hour count": lifetime magnetron heater time,
+            // standby and transmit summed, as a u16 in tenths of an hour.
+            // Confirmed against an E120 self-test screen showing 2792.3 h for a
+            // wire value of 27923.
+            new_numeric(ControlId::OperatingTime, 0., 6553.5)
                 .read_only(true)
+                .wire_scale_step(0.1)
                 .wire_units(Units::Hours)
                 .build(&mut controls);
             new_numeric(ControlId::MagnetronCurrent, 0., 65535.)
