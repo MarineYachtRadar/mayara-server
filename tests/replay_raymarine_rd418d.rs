@@ -10,6 +10,7 @@
 
 mod common;
 
+use mayara::radar::settings::ControlId;
 use mayara::{Cli, replay};
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::Path;
@@ -85,10 +86,26 @@ async fn replay_raymarine_rd418d() {
                         let key = &keys[0];
                         let info = radars.get_by_key(key).expect("radar info");
 
-                        // Wait until the model has been identified
+                        // The 0x010002 fixed report carries the scanner's
+                        // heater hour count as a u16 in tenths of an hour;
+                        // this capture's scanner reads 6892 on the wire.
+                        let operating_time = info
+                            .controls
+                            .get(&ControlId::OperatingTime)
+                            .and_then(|c| c.value())
+                            .and_then(|v| v.as_f64());
+
+                        // Wait until the model has been identified and the
+                        // fixed report has been seen
                         if info.controls.model_name() == Some("RD418D".to_string())
                             && !info.ranges.all.is_empty()
+                            && operating_time.is_some()
                         {
+                            assert_eq!(
+                                operating_time,
+                                Some(689.2 * 3600.),
+                                "heater hour count 6892 on the wire is 689.2 h, stored in seconds"
+                            );
                             assert!(
                                 key.starts_with("ray"),
                                 "expected Raymarine key, got: {}",
