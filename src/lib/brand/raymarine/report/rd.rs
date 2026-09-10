@@ -522,7 +522,7 @@ pub(super) fn process_status_report(receiver: &mut RaymarineReportReceiver, data
 #[derive(Deserialize, Debug, Clone, Copy)]
 #[repr(C, packed)]
 struct FixedReport {
-    magnetron_time: u16,
+    heater_time: u16, // tenths of an hour, the MFD's "Heater hour count"
     _fieldx_2: [u8; 6],
     magnetron_current: u8,
     _fieldx_3: [u8; 11],
@@ -601,7 +601,7 @@ pub(super) fn process_fixed_report(receiver: &mut RaymarineReportReceiver, data:
     if receiver.model.is_some() {
         receiver
             .common
-            .set_value(&ControlId::TransmitTime, report.magnetron_time);
+            .set_value(&ControlId::OperatingTime, report.heater_time);
         receiver
             .common
             .set_value(&ControlId::MagnetronCurrent, report.magnetron_current);
