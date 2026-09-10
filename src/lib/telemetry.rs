@@ -332,11 +332,16 @@ impl Telemetry {
     }
 }
 
-/// A radar's lifetime transmit counter in whole hours, which is the unit the
-/// radars that keep one count in. `None` when the radar keeps no such counter,
-/// or has not reported it yet.
+/// A radar's lifetime counter in whole hours, which is the unit the radars
+/// that keep one count in. Transmit time where the radar counts that; failing
+/// that its operating time, which is what a Raymarine RD keeps (its magnetron
+/// heater hours, standby and transmit summed). Either one tells how worn the
+/// radar is, which is what the report wants. `None` when the radar keeps no
+/// such counter, or has not reported it yet.
 fn transmit_hours(controls: &SharedControls) -> Option<u64> {
-    let seconds = controls.get(&ControlId::TransmitTime)?.value?;
+    let seconds = [ControlId::TransmitTime, ControlId::OperatingTime]
+        .iter()
+        .find_map(|id| controls.get(id)?.value)?;
     Some((seconds / SECS_PER_HOUR) as u64)
 }
 
@@ -397,6 +402,18 @@ mod tests {
 
     fn without_transmit_time() -> SharedControls {
         shared(HashMap::new())
+    }
+
+    /// The controls of a Raymarine RD: no transmit counter, but an operating
+    /// one, in tenths of an hour on the wire.
+    fn with_operating_time() -> SharedControls {
+        let mut controls = HashMap::new();
+        new_numeric(ControlId::OperatingTime, 0., 6553.5)
+            .read_only(true)
+            .wire_scale_step(0.1)
+            .wire_units(Units::Hours)
+            .build(&mut controls);
+        shared(controls)
     }
 
     fn shared(controls: HashMap<ControlId, Control>) -> SharedControls {
@@ -558,7 +575,20 @@ mod tests {
     #[test]
     fn a_radar_that_has_not_reported_a_transmit_counter_has_no_hours() {
         assert_eq!(transmit_hours(&with_transmit_time()), None);
+        assert_eq!(transmit_hours(&with_operating_time()), None);
         assert_eq!(transmit_hours(&without_transmit_time()), None);
+    }
+
+    /// A radar that counts operating rather than transmit time still reports
+    /// its hours, at the scale the wire value carries: an RD reporting 27923
+    /// (tenths of an hour) is 2792 whole hours, not 27923.
+    #[test]
+    fn operating_time_stands_in_for_a_missing_transmit_counter() {
+        let controls = with_operating_time();
+        controls
+            .set_value_auto_enabled(&ControlId::OperatingTime, 27923., None, None)
+            .unwrap();
+        assert_eq!(transmit_hours(&controls), Some(2792));
     }
 
     #[test]
