@@ -40,6 +40,8 @@ axum-embed = "0.1.0"
 base64 = "0.23.0"
 bincode = { version = "2.0.1", features = ["serde"] }
 bitflags = "2.11.1"
+# Byte-aligned wire formats only: without the `bits` feature deku does not pull in bitvec.
+deku = { version = "0.20.3", default-features = false, features = ["std"] }
 bytes = "1"
 chrono = { version = "0.4.44", features = ["serde"] }
 clap = { version = "4.6.1", features = ["derive"] }

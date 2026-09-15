@@ -1,10 +1,10 @@
 use anyhow::{Error, bail};
+use deku::DekuRead;
 use num_traits::FromPrimitive;
 use serde::Deserialize;
 use std::cmp::min;
 use std::collections::BTreeSet;
 use std::io;
-use std::mem::transmute;
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::time::{Instant, sleep, sleep_until};
@@ -34,6 +34,7 @@ use crate::radar::{
 };
 use crate::replay::RadarSocket;
 use crate::util::PrintableSpoke;
+use crate::util::decode_exact;
 use crate::util::{c_string, c_wide_string, decode_bin};
 
 /*
@@ -235,40 +236,27 @@ const INFO_BY_OTHERS_TIMEOUT: Duration = Duration::from_secs(10);
 // navigation and speed at 250 ms.
 const INFO_BY_US_INTERVAL: Duration = Duration::from_millis(100);
 
-#[derive(Debug)]
-#[repr(C, packed)]
+/// 0xC401 StateMode — fixed 18 bytes.
+#[derive(DekuRead, Debug)]
+#[deku(magic = b"\x01\xc4")]
 struct StateMode {
-    // 0xC401
-    _sub_opcode: u8,
-    _category: u8,
-    status: u8,
-    _u00: [u8; 15],
+    status: u8,     // 2
+    _u00: [u8; 15], // 3..18
 }
 
-impl StateMode {
-    fn transmute(bytes: &[u8]) -> Result<Self, anyhow::Error> {
-        // This is safe as the struct's bits are always all valid representations,
-        // or we convert them using a fail safe function.
-        // The hardwired [u8; 18] on the transmute also verifies length via try_into.
-        Ok(unsafe { transmute::<[u8; 18], Self>(bytes.try_into()?) })
-    }
-}
-
-#[derive(Debug)]
-#[repr(C, packed)]
+/// 0xC402 StateSetup — fixed 99 bytes.
+#[derive(DekuRead, Debug)]
+#[deku(endian = "little", magic = b"\x02\xc4")]
 struct StateSetup {
-    // 0xC402
-    _sub_opcode: u8,
-    _category: u8,
-    range: [u8; 4],             // 2..6 = range
-    _u00: [u8; 1],              // 6
-    mode: u8,                   // 7 = mode
+    range: i32,                 // 2..6
+    _u00: u8,                   // 6
+    mode: u8,                   // 7
     gain_auto: u8,              // 8
     _u01: [u8; 3],              // 9..12
     gain: u8,                   // 12
     sea_auto: u8,               // 13 = sea_auto, 0 = off, 1 = harbor, 2 = offshore
     _u02: [u8; 3],              // 14..17
-    sea: [u8; 4],               // 17..21
+    sea: i32,                   // 17..21
     _u03: u8,                   // 21
     rain: u8,                   // 22
     _u04: [u8; 11],             // 23..34
@@ -280,83 +268,54 @@ struct StateSetup {
     _u07: [u8; 56],             // 43..99
 }
 
-impl StateSetup {
-    fn transmute(bytes: &[u8]) -> Result<Self, anyhow::Error> {
-        // This is safe as the struct's bits are always all valid representations,
-        // or we convert them using a fail safe function.
-        Ok(unsafe { transmute::<[u8; 99], Self>(bytes.try_into()?) })
-    }
-}
-
-#[derive(Debug)]
-#[repr(C, packed)]
+/// 0xC403 StateProperties — fixed 129 bytes.
+#[derive(DekuRead, Debug)]
+#[deku(endian = "little", magic = b"\x03\xc4")]
 struct StateProperties {
-    // 0xC403 — fixed 129 bytes
-    _sub_opcode: u8,                 //   0  0x03
-    _category: u8,                   //   1  0xC4
-    _u00: [u8; 12],                  //   2..14
-    feature_flags: u8,               //  14  bit0=FeaturesReport, bit1=IsDownMast
-    _u01: u8,                        //  15
-    sw_build: [u8; 2],               //  16..18  u16 LE (SW version 3rd field)
-    _u02: [u8; 12],                  //  18..30
-    scanner_type: [u8; 4],           //  30..34  eScannerType (u32 LE, 0..23)
-    transmit_time: [u8; 4],          //  34..38  u32 LE (operating hours)
-    warmup_time: [u8; 4],            //  38..42  u32 LE
-    max_range: [u8; 4],              //  42..46  u32 LE (max range in decimeters)
-    _u03: [u8; 4],                   //  46..50
-    sw_version_major: [u8; 4],       //  50..54  u32 LE
-    sw_version_minor: [u8; 4],       //  54..58  u32 LE
-    build_date: [u8; 32],            //  58..90  UTF-16LE, 16 chars
-    build_time: [u8; 32],            //  90..122 UTF-16LE, 16 chars
-    radar_protocol_version: [u8; 4], // 122..126 u32 LE
-    scanner_detail_supported: u8,    // 126
-    _u04: u8,                        // 127
-    _flag: u8,                       // 128 (zeroed when scanner_type ≤ 9)
+    _u00: [u8; 12],               //   2..14
+    feature_flags: u8,            //  14  bit0=FeaturesReport, bit1=IsDownMast
+    _u01: u8,                     //  15
+    sw_build: u16,                //  16..18  SW version 3rd field
+    _u02: [u8; 12],               //  18..30
+    scanner_type: u32,            //  30..34  eScannerType (0..23)
+    transmit_time: u32,           //  34..38  operating hours
+    warmup_time: u32,             //  38..42
+    max_range: u32,               //  42..46  max range in decimeters
+    _u03: [u8; 4],                //  46..50
+    sw_version_major: u32,        //  50..54
+    sw_version_minor: u32,        //  54..58
+    build_date: [u8; 32],         //  58..90  UTF-16LE, 16 chars
+    build_time: [u8; 32],         //  90..122 UTF-16LE, 16 chars
+    radar_protocol_version: u32,  // 122..126
+    scanner_detail_supported: u8, // 126
+    _u04: u8,                     // 127
+    _flag: u8,                    // 128 (zeroed when scanner_type ≤ 9)
 }
 
-impl StateProperties {
-    fn transmute(bytes: &[u8]) -> Result<Self, anyhow::Error> {
-        // This is safe as the struct's bits are always all valid representations,
-        // or we convert them using a fail safe function.
-        // The hardwired [u8; 129] on the transmute also verifies length via try_into.
-        Ok(unsafe { transmute::<[u8; 129], Self>(bytes.try_into()?) })
-    }
-}
-
-#[derive(Debug)]
-#[repr(C, packed)]
+/// 0xC404 StateConfig — fixed 66 bytes.
+#[derive(DekuRead, Debug)]
+#[deku(endian = "little", magic = b"\x04\xc4")]
 struct StateConfig {
-    // 0xC404
-    _sub_opcode: u8,
-    _category: u8,
     _u00: [u8; 4],                       // 2..6
-    bearing_alignment: [u8; 2],          // 6..8
+    bearing_alignment: i16,              // 6..8
     _u01: [u8; 2],                       // 8..10
-    antenna_height: [u8; 4],             // 10..14 = Antenna height in mm (i32 LE)
+    antenna_height: i32,                 // 10..14 = Antenna height in mm
     _u02: [u8; 5],                       // 14..19
     accent_light: u8,                    // 19 = Accent light
-    antenna_forward: [u8; 2],            // 20..22 = Antenna forward offset in mm (i16 LE)
+    antenna_forward: i16,                // 20..22 = Antenna forward offset in mm
     _u03a: u8,                           // 22
-    antenna_starboard: [u8; 2],          // 23..25 = Antenna starboard offset in mm (i16 LE)
+    antenna_starboard: i16,              // 23..25 = Antenna starboard offset in mm
     _u03b: [u8; 9],                      // 25..34
     blanking: [SectorBlankingReport; 4], // 34..54
     _u04: [u8; 12],                      // 54..66
 }
 
-impl StateConfig {
-    fn transmute(bytes: &[u8]) -> Result<Self, anyhow::Error> {
-        // This is safe as the struct's bits are always all valid representations,
-        // or we convert them using a fail safe function.
-        Ok(unsafe { transmute::<[u8; 66], Self>(bytes.try_into()?) })
-    }
-}
-
-#[derive(Debug, Copy, Clone)]
-#[repr(C, packed)]
+#[derive(DekuRead, Debug)]
+#[deku(ctx = "endian: deku::ctx::Endian", endian = "endian")]
 struct SectorBlankingReport {
     enabled: u8,
-    start_angle: [u8; 2],
-    end_angle: [u8; 2],
+    start_angle: i16,
+    end_angle: i16,
 }
 
 // 0xC406 StateInstallation is TLV-encoded (not fixed-layout).
@@ -871,7 +830,7 @@ impl NavicoReportReceiver {
     }
 
     async fn process_state_mode(&mut self) -> Result<(), Error> {
-        let report = StateMode::transmute(&self.report_buf)?;
+        let report: StateMode = decode_exact(&self.report_buf)?;
 
         log::debug!("{}: report {:?}", self.common.key, report);
 
@@ -946,16 +905,16 @@ impl NavicoReportReceiver {
     }
 
     async fn process_state_setup(&mut self) -> Result<(), Error> {
-        let report = StateSetup::transmute(&self.report_buf)?;
+        let report: StateSetup = decode_exact(&self.report_buf)?;
 
         log::trace!("{}: report {:?}", self.common.key, report);
 
         let mode = report.mode as i32;
-        let range = i32::from_le_bytes(report.range);
+        let range = report.range;
         let gain_auto: u8 = report.gain_auto;
         let gain = report.gain as i32;
         let sea_auto = report.sea_auto;
-        let sea = i32::from_le_bytes(report.sea);
+        let sea = report.sea;
         let rain = report.rain as i32;
         let interference_rejection = report.interference_rejection as i32;
         let target_expansion = report.target_expansion as i32;
@@ -994,20 +953,20 @@ impl NavicoReportReceiver {
     }
 
     async fn process_state_properties(&mut self) -> Result<(), Error> {
-        let report = StateProperties::transmute(&self.report_buf)?;
+        let report: StateProperties = decode_exact(&self.report_buf)?;
 
         log::trace!("{}: report {:?}", self.common.key, report);
 
-        let scanner_type = u32::from_le_bytes(report.scanner_type);
-        let transmit_time = u32::from_le_bytes(report.transmit_time);
-        let warmup_time = u32::from_le_bytes(report.warmup_time);
-        let max_range_dm = u32::from_le_bytes(report.max_range);
-        let sw_major = u32::from_le_bytes(report.sw_version_major);
-        let sw_minor = u32::from_le_bytes(report.sw_version_minor);
-        let sw_build = u16::from_le_bytes(report.sw_build);
+        let scanner_type = report.scanner_type;
+        let transmit_time = report.transmit_time;
+        let warmup_time = report.warmup_time;
+        let max_range_dm = report.max_range;
+        let sw_major = report.sw_version_major;
+        let sw_minor = report.sw_version_minor;
+        let sw_build = report.sw_build;
         let build_date = c_wide_string(&report.build_date);
         let build_time = c_wide_string(&report.build_time);
-        let protocol_version = u32::from_le_bytes(report.radar_protocol_version);
+        let protocol_version = report.radar_protocol_version;
         let scanner_detail_supported = report.scanner_detail_supported;
         let model = Model::from_scanner_type(scanner_type);
 
@@ -1133,44 +1092,35 @@ impl NavicoReportReceiver {
     }
 
     async fn process_state_config(&mut self) -> Result<(), Error> {
-        let report = StateConfig::transmute(&self.report_buf)?;
+        let report: StateConfig = decode_exact(&self.report_buf)?;
 
         log::trace!("{}: report {:?}", self.common.key, report);
 
         self.common.set_value(
             &ControlId::BearingAlignment,
-            i16::from_le_bytes(report.bearing_alignment) as f64,
+            report.bearing_alignment as f64,
         );
-        self.common.set_value(
-            &ControlId::AntennaHeight,
-            i32::from_le_bytes(report.antenna_height) as f64,
-        );
+        self.common
+            .set_value(&ControlId::AntennaHeight, report.antenna_height as f64);
         if self.model.is_halo() {
             self.common
                 .set_value(&ControlId::AccentLight, report.accent_light as f64);
         }
 
-        // Antenna offsets (i16 LE, mm)
-        self.common.set_value(
-            &ControlId::AntennaForward,
-            i16::from_le_bytes(report.antenna_forward) as f64,
-        );
+        self.common
+            .set_value(&ControlId::AntennaForward, report.antenna_forward as f64);
         self.common.set_value(
             &ControlId::AntennaStarboard,
-            i16::from_le_bytes(report.antenna_starboard) as f64,
+            report.antenna_starboard as f64,
         );
 
-        // Sector blanking: 4× {u8 enabled, i16 start, i16 end} at offset 34
         for (i, sector) in super::BLANKING_SECTORS {
             let blanking = &report.blanking[i];
-            let start_angle = i16::from_le_bytes(blanking.start_angle);
-            let end_angle = i16::from_le_bytes(blanking.end_angle);
-            let enabled = Some(blanking.enabled > 0);
             self.common.info.controls.set_sector(
                 &sector,
-                start_angle as f64,
-                end_angle as f64,
-                enabled,
+                blanking.start_angle as f64,
+                blanking.end_angle as f64,
+                Some(blanking.enabled > 0),
             )?;
         }
 
@@ -1551,9 +1501,222 @@ fn error_name(code: u32) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::{
-        LookupDoppler, Model, NavicoReportReceiver, error_name, parse_radar_errors, wire_to_legend,
+        LookupDoppler, Model, NavicoReportReceiver, StateConfig, StateMode, StateProperties,
+        StateSetup, error_name, parse_radar_errors, wire_to_legend,
     };
     use crate::radar::Legend;
+    use crate::util::{c_wide_string, decode_exact};
+
+    fn state_report(sub_opcode: u8, len: usize) -> Vec<u8> {
+        let mut bytes = vec![0u8; len];
+        bytes[0] = sub_opcode;
+        bytes[1] = 0xc4;
+        bytes
+    }
+
+    #[test]
+    fn state_mode_decodes_status() {
+        let mut bytes = state_report(0x01, 18);
+        bytes[2] = 2;
+        let report: StateMode = decode_exact(&bytes).unwrap();
+        assert_eq!(report.status, 2);
+    }
+
+    #[test]
+    fn state_report_of_wrong_length_is_rejected() {
+        assert!(decode_exact::<StateMode>(&state_report(0x01, 17)).is_err());
+        assert!(decode_exact::<StateMode>(&state_report(0x01, 19)).is_err());
+    }
+
+    #[test]
+    fn state_report_with_other_sub_opcode_is_rejected() {
+        assert!(decode_exact::<StateSetup>(&state_report(0x03, 99)).is_err());
+    }
+
+    #[test]
+    fn state_setup_decodes_fields_at_their_offsets() {
+        let mut bytes = state_report(0x02, 99);
+        bytes[2..6].copy_from_slice(&1852i32.to_le_bytes());
+        bytes[7] = 1;
+        bytes[8] = 1;
+        bytes[12] = 200;
+        bytes[13] = 2;
+        bytes[17..21].copy_from_slice(&(-5i32).to_le_bytes());
+        bytes[22] = 77;
+        bytes[34] = 2;
+        bytes[38] = 3;
+        bytes[42] = 1;
+
+        let report: StateSetup = decode_exact(&bytes).unwrap();
+
+        assert_eq!(report.range, 1852);
+        assert_eq!(report.mode, 1);
+        assert_eq!(report.gain_auto, 1);
+        assert_eq!(report.gain, 200);
+        assert_eq!(report.sea_auto, 2);
+        assert_eq!(report.sea, -5);
+        assert_eq!(report.rain, 77);
+        assert_eq!(report.interference_rejection, 2);
+        assert_eq!(report.target_expansion, 3);
+        assert_eq!(report.target_boost, 1);
+    }
+
+    #[test]
+    fn state_properties_decodes_fields_at_their_offsets() {
+        let mut bytes = state_report(0x03, 129);
+        bytes[14] = 0x01;
+        bytes[16..18].copy_from_slice(&321u16.to_le_bytes());
+        bytes[30..34].copy_from_slice(&23u32.to_le_bytes());
+        bytes[34..38].copy_from_slice(&1234u32.to_le_bytes());
+        bytes[42..46].copy_from_slice(&740_800u32.to_le_bytes());
+        bytes[50..54].copy_from_slice(&3u32.to_le_bytes());
+        bytes[54..58].copy_from_slice(&1u32.to_le_bytes());
+        bytes[58] = b'J';
+        bytes[122..126].copy_from_slice(&7u32.to_le_bytes());
+        bytes[126] = 1;
+
+        let report: StateProperties = decode_exact(&bytes).unwrap();
+
+        assert_eq!(report.feature_flags, 0x01);
+        assert_eq!(report.sw_build, 321);
+        assert_eq!(report.scanner_type, 23);
+        assert_eq!(report.transmit_time, 1234);
+        assert_eq!(report.max_range, 740_800);
+        assert_eq!(report.sw_version_major, 3);
+        assert_eq!(report.sw_version_minor, 1);
+        assert_eq!(report.build_date[0], b'J');
+        assert_eq!(report.radar_protocol_version, 7);
+        assert_eq!(report.scanner_detail_supported, 1);
+    }
+
+    #[test]
+    fn state_config_decodes_signed_offsets_and_blanking_sectors() {
+        let mut bytes = state_report(0x04, 66);
+        bytes[6..8].copy_from_slice(&(-15i16).to_le_bytes());
+        bytes[10..14].copy_from_slice(&4500i32.to_le_bytes());
+        bytes[19] = 3;
+        bytes[20..22].copy_from_slice(&(-300i16).to_le_bytes());
+        bytes[23..25].copy_from_slice(&150i16.to_le_bytes());
+        // Third sector: 34 + 2 * 5
+        bytes[44] = 1;
+        bytes[45..47].copy_from_slice(&(-900i16).to_le_bytes());
+        bytes[47..49].copy_from_slice(&900i16.to_le_bytes());
+
+        let report: StateConfig = decode_exact(&bytes).unwrap();
+
+        assert_eq!(report.bearing_alignment, -15);
+        assert_eq!(report.antenna_height, 4500);
+        assert_eq!(report.accent_light, 3);
+        assert_eq!(report.antenna_forward, -300);
+        assert_eq!(report.antenna_starboard, 150);
+        assert_eq!(report.blanking[2].enabled, 1);
+        assert_eq!(report.blanking[2].start_angle, -900);
+        assert_eq!(report.blanking[2].end_angle, 900);
+        assert_eq!(report.blanking[1].enabled, 0);
+    }
+
+    // State reports captured from a HALO24 (testdata/pcap/navico-halo24.pcap.gz).
+    const HALO24_STATE_MODE: [u8; 18] = [
+        0x01, 0xc4, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x01,
+    ];
+    const HALO24_STATE_SETUP: [u8; 99] = [
+        0x02, 0xc4, 0x16, 0x12, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x80, 0x01, 0x00,
+        0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+    const HALO24_STATE_PROPERTIES: [u8; 129] = [
+        0x03, 0xc4, 0x01, 0x00, 0x07, 0x00, 0x1c, 0x00, 0x09, 0x00, 0x78, 0xc0, 0x00, 0x00, 0x05,
+        0x58, 0x00, 0x00, 0x6f, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x10, 0x00, 0x00, 0x00, 0xf9, 0x0e, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x80, 0x90, 0x0d,
+        0x00, 0x01, 0x00, 0x97, 0x00, 0x07, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x4f, 0x00,
+        0x63, 0x00, 0x74, 0x00, 0x20, 0x00, 0x32, 0x00, 0x34, 0x00, 0x20, 0x00, 0x32, 0x00, 0x30,
+        0x00, 0x32, 0x00, 0x35, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x30, 0x00, 0x30, 0x00, 0x3a, 0x00, 0x31, 0x00, 0x38, 0x00, 0x3a, 0x00, 0x32, 0x00, 0x37,
+        0x00, 0x20, 0x00, 0x32, 0x00, 0x33, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00,
+    ];
+    const HALO24_STATE_CONFIG: [u8; 66] = [
+        0x04, 0xc4, 0x00, 0x00, 0x00, 0x00, 0xde, 0x0d, 0x00, 0x00, 0x40, 0x1f, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0xf2, 0x03, 0x00, 0x54, 0x0b, 0x00, 0x14, 0x00, 0x00, 0x00,
+        0xb4, 0x00, 0x00, 0x00, 0x01, 0x78, 0x0a, 0x7c, 0x0b, 0x00, 0x06, 0x0e, 0x0a, 0x00, 0x00,
+        0xd4, 0x08, 0x50, 0x05, 0x00, 0xc8, 0x05, 0xe6, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+
+    #[test]
+    fn captured_halo24_state_mode_is_standby() {
+        let report: StateMode = decode_exact(&HALO24_STATE_MODE).unwrap();
+        assert_eq!(report.status, 1);
+    }
+
+    #[test]
+    fn captured_halo24_state_setup_decodes() {
+        let report: StateSetup = decode_exact(&HALO24_STATE_SETUP).unwrap();
+
+        assert_eq!(report.range, 4630);
+        assert_eq!(report.mode, 0);
+        assert_eq!(report.gain_auto, 1);
+        assert_eq!(report.gain, 128);
+        assert_eq!(report.sea_auto, 1);
+        assert_eq!(report.sea, 64);
+        assert_eq!(report.rain, 0);
+        assert_eq!(report.interference_rejection, 2);
+        assert_eq!(report.target_expansion, 1);
+        assert_eq!(report.target_boost, 0);
+    }
+
+    #[test]
+    fn captured_halo24_state_properties_identify_the_radar() {
+        let report: StateProperties = decode_exact(&HALO24_STATE_PROPERTIES).unwrap();
+
+        assert_eq!(Model::from_scanner_type(report.scanner_type), Model::Halo24);
+        assert_eq!(report.feature_flags, 0x05);
+        assert_eq!(report.transmit_time, 3833);
+        assert_eq!(report.warmup_time, 1);
+        assert_eq!(report.max_range, 888_960);
+        assert_eq!(
+            (
+                report.sw_version_major,
+                report.sw_version_minor,
+                report.sw_build
+            ),
+            (7, 2, 0)
+        );
+        assert_eq!(c_wide_string(&report.build_date), "Oct 24 2025");
+        assert_eq!(c_wide_string(&report.build_time), "00:18:27 23");
+        assert_eq!(report.radar_protocol_version, 2);
+        assert_eq!(report.scanner_detail_supported, 0);
+    }
+
+    #[test]
+    fn captured_halo24_state_config_decodes_installation() {
+        let report: StateConfig = decode_exact(&HALO24_STATE_CONFIG).unwrap();
+
+        assert_eq!(report.bearing_alignment, 3550);
+        assert_eq!(report.antenna_height, 8000);
+        assert_eq!(report.accent_light, 0);
+        assert_eq!(report.antenna_forward, 1010);
+        assert_eq!(report.antenna_starboard, 2900);
+        let sectors: Vec<_> = report
+            .blanking
+            .iter()
+            .map(|s| (s.enabled, s.start_angle, s.end_angle))
+            .collect();
+        assert_eq!(
+            sectors,
+            [
+                (1, 2680, 2940),
+                (0, 3590, 10),
+                (0, 2260, 1360),
+                (0, 1480, 230)
+            ]
+        );
+    }
 
     /// Real spoke headers captured from a Broadband 3G dome, one per range the
     /// operator selected. A 3G uses the Gen3+ (4G-style) header, so
