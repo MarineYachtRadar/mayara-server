@@ -41,8 +41,9 @@ use super::protocol::GmnHeader;
 use crate::util::decode_head;
 
 /// The fixed 12-byte prefix of a heartbeat body, i.e. what is left once the
-/// 8-byte GMN header has been stripped. Everything we need to identify the
-/// device is in here.
+/// 8-byte GMN header has been stripped. This says what kind of device is
+/// talking; which one it is comes from the identifier past the service array,
+/// in [`CdmHeartbeatWithId`].
 #[derive(DekuRead, Debug)]
 #[deku(
     ctx = "endian: deku::ctx::Endian",

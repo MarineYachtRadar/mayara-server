@@ -1605,6 +1605,19 @@ impl GarminReportReceiver {
     /// Extract value from status packet based on length (static).
     fn extract_value(data: &[u8]) -> Result<u32, Error> {
         let report: ScalarReport = decode_head(data)?;
+
+        // A width we have no layout for still has to be on the wire. Without
+        // this, a header claiming three bytes while carrying none would read
+        // as zero, and a caller would publish that as a setting.
+        let declared = GMN_HEADER_LEN + report.header.payload_len as usize;
+        if data.len() < declared {
+            bail!(
+                "scalar report declares {} payload bytes, datagram carries {}",
+                report.header.payload_len,
+                data.len() - GMN_HEADER_LEN
+            );
+        }
+
         Ok(report.value.as_u32())
     }
 
@@ -1676,6 +1689,15 @@ mod tests {
         let odd = scalar_packet(3, &[0x01, 0x02, 0x03]);
 
         assert_eq!(GarminReportReceiver::extract_value(&odd).unwrap(), 0);
+    }
+
+    /// ... but only when the packet actually carries that width. Reading a
+    /// width we cannot decode must not turn a truncated datagram into a
+    /// setting worth publishing.
+    #[test]
+    fn scalar_report_of_an_unknown_width_must_still_carry_it() {
+        assert!(GarminReportReceiver::extract_value(&scalar_packet(3, &[])).is_err());
+        assert!(GarminReportReceiver::extract_value(&scalar_packet(3, &[0x01, 0x02])).is_err());
     }
 
     /// The radar sends one setting per packet, but a datagram may carry more
