@@ -22,7 +22,10 @@
 
 #![allow(dead_code)]
 
+use deku::DekuRead;
+
 use crate::radar::range::Ranges;
+use crate::util::decode_head;
 
 /// Maximum number of range entries we will accept from a single
 /// `0x09B2` message. Captured xHD radars report 16; the MFD
@@ -44,25 +47,24 @@ const RANGES_OFFSET: usize = 8;
 /// or `None` if the body is malformed (truncated, count too large, or
 /// the declared length doesn't match the data we got).
 pub(crate) fn parse(payload: &[u8]) -> Option<Ranges> {
-    if payload.len() < RANGES_OFFSET {
-        return None;
-    }
-    let count =
-        u32::from_le_bytes(payload[COUNT_OFFSET..COUNT_OFFSET + 4].try_into().ok()?) as usize;
-    if count == 0 || count > MAX_RANGE_ENTRIES {
-        return None;
-    }
-    let ranges_end = RANGES_OFFSET + count * 4;
-    if payload.len() < ranges_end {
-        return None;
-    }
-    let mut distances = Vec::with_capacity(count);
-    for i in 0..count {
-        let off = RANGES_OFFSET + i * 4;
-        let meters = u32::from_le_bytes(payload[off..off + 4].try_into().ok()?);
-        distances.push(meters as i32);
-    }
+    let body: RangeTableBody = decode_head(payload).ok()?;
+
+    let distances: Vec<i32> = body.ranges.iter().map(|&meters| meters as i32).collect();
     Some(Ranges::new_by_distance(&distances))
+}
+
+/// The body of a `0x09B2`. The count is checked before the list it sizes is
+/// read, so a packet claiming thousands of ranges is rejected rather than
+/// believed.
+#[derive(DekuRead, Debug, PartialEq)]
+#[deku(endian = "little")]
+struct RangeTableBody {
+    _version: u16,
+    _length: u16,
+    #[deku(assert = "*count > 0 && *count as usize <= MAX_RANGE_ENTRIES")]
+    count: u32,
+    #[deku(count = "count")]
+    ranges: Vec<u32>,
 }
 
 #[cfg(test)]

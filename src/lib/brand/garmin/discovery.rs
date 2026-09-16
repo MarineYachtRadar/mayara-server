@@ -35,16 +35,42 @@
 
 #![allow(dead_code)]
 
-use super::protocol::{
-    CDM_OFFSET_PRODUCT_ID, CDM_OFFSET_PRODUCT_SUBTYPE, CDM_OFFSET_SERVICE_COUNT,
-    CDM_OFFSET_SIMULATOR_MODE, CDM_OFFSET_SYC_GROUP_ID, CDM_OFFSET_VERSION_MARKER,
-    CDM_SERVICE_ARRAY_OFFSET, CDM_SERVICE_ID_LEN,
-};
+use deku::DekuRead;
 
-/// Minimum number of bytes the CDM heartbeat body must contain (i.e.
-/// after the 8-byte GMN header has been stripped) for us to extract
-/// the product_id, subtype, and syc_group_id.
-const MIN_CDM_BODY_LEN: usize = 12;
+use crate::util::decode_head;
+
+/// The fixed 12-byte prefix of a heartbeat body, i.e. what is left once the
+/// 8-byte GMN header has been stripped. Everything we need to identify the
+/// device is in here.
+#[derive(DekuRead, Debug)]
+#[deku(
+    ctx = "endian: deku::ctx::Endian",
+    endian = "endian",
+    ctx_default = "deku::ctx::Endian::Little"
+)]
+struct CdmHeartbeatPrefix {
+    version: u8,         // +00
+    _padding: u8,        // +01
+    product_id: u16,     // +02
+    simulator_mode: u8,  // +04
+    product_subtype: u8, // +05
+    syc_group_id: u8,    // +06
+    _constant: u8,       // +07
+    service_count: u8,   // +08
+    _padding_2: [u8; 3], // +09..0c
+}
+
+/// The prefix, the services the device publishes, and the identifier that
+/// follows them. A device publishing fewer services carries its identifier
+/// closer to the front, so the offset is not fixed.
+#[derive(DekuRead, Debug)]
+#[deku(endian = "little")]
+struct CdmHeartbeatWithId {
+    prefix: CdmHeartbeatPrefix,
+    #[deku(count = "prefix.service_count")]
+    _service_ids: Vec<u32>,
+    unique_id: u32,
+}
 
 /// Decoded fields from a `0x038e` CDM heartbeat.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,37 +99,28 @@ pub(crate) struct CdmHeartbeat {
 /// **after** the 8-byte GMN header. Returns `None` if the body is too
 /// short or has the wrong version marker.
 pub(crate) fn parse(payload: &[u8]) -> Option<CdmHeartbeat> {
-    if payload.len() < MIN_CDM_BODY_LEN {
-        return None;
-    }
-    let version = payload[CDM_OFFSET_VERSION_MARKER];
+    let prefix: CdmHeartbeatPrefix = decode_head(payload).ok()?;
+
     // Garmin only emits version 2 heartbeats. We accept it
     // strictly so a stray packet with the same multicast address but
     // a different format doesn't poison our state.
-    if version != 2 {
+    if prefix.version != 2 {
         return None;
     }
-    let product_id = u16::from_le_bytes(
-        payload[CDM_OFFSET_PRODUCT_ID..CDM_OFFSET_PRODUCT_ID + 2]
-            .try_into()
-            .ok()?,
-    );
-    // The identifier sits after a variable-length service array, so its
-    // offset depends on how many services this device publishes.
-    let unique_id = payload
-        .get(CDM_OFFSET_SERVICE_COUNT)
-        .map(|count| CDM_SERVICE_ARRAY_OFFSET + *count as usize * CDM_SERVICE_ID_LEN)
-        .and_then(|at| payload.get(at..at + 4))
-        .and_then(|b| b.try_into().ok())
-        .map(u32::from_le_bytes);
+
+    // A body that stops before the identifier still says who the device is,
+    // so the identifier is read separately and may be missing.
+    let unique_id = decode_head::<CdmHeartbeatWithId>(payload)
+        .ok()
+        .map(|body| body.unique_id);
 
     Some(CdmHeartbeat {
-        version,
-        product_id,
+        version: prefix.version,
+        product_id: prefix.product_id,
         unique_id,
-        simulator_mode: payload[CDM_OFFSET_SIMULATOR_MODE],
-        product_subtype: payload[CDM_OFFSET_PRODUCT_SUBTYPE],
-        syc_group_id: payload[CDM_OFFSET_SYC_GROUP_ID],
+        simulator_mode: prefix.simulator_mode,
+        product_subtype: prefix.product_subtype,
+        syc_group_id: prefix.syc_group_id,
     })
 }
 
@@ -131,15 +148,23 @@ pub(crate) struct CdmProductData {
 /// Parse the body of a `0x0392` product data response. `payload` is the
 /// slice after the 8-byte GMN header.
 pub(crate) fn parse_product_data(payload: &[u8]) -> Option<CdmProductData> {
-    if payload.len() < MIN_PRODUCT_DATA_LEN {
-        return None;
-    }
-    let device_name = crate::util::c_string(&payload[0x04..0x04 + 30])?;
-    let device_alias = crate::util::c_string(&payload[0x23..0x23 + 31])?;
+    let body: CdmProductDataBody = decode_head(payload).ok()?;
+
     Some(CdmProductData {
-        device_name: device_name.to_string(),
-        device_alias: device_alias.to_string(),
+        device_name: crate::util::c_string(&body.device_name)?.to_string(),
+        device_alias: crate::util::c_string(&body.device_alias)?.to_string(),
     })
+}
+
+/// The body of a `0x0392`. Both names are fixed-width and NUL-padded; what
+/// the byte between them is for is not known.
+#[derive(DekuRead, Debug)]
+#[deku(endian = "little")]
+struct CdmProductDataBody {
+    _u00: [u8; 4],          // 0x00..0x04
+    device_name: [u8; 30],  // 0x04..0x22
+    _u01: u8,               // 0x22
+    device_alias: [u8; 31], // 0x23..0x42
 }
 
 /// Build a minimal `0x0391` request packet (just the 8-byte GMN header,
@@ -192,6 +217,9 @@ pub(crate) fn product_name(product_id: u16) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // The parser no longer needs the offset constants — the layout is the
+    // struct — but a test that corrupts one field still names where it is.
+    use crate::brand::garmin::protocol::CDM_OFFSET_VERSION_MARKER;
 
     /// CDM heartbeat body from the Fantom Pro radar in
     /// `radar-recordings/garmin/fantom_pro/`. Two published services, so
