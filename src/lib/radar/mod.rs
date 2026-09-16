@@ -76,6 +76,8 @@ pub enum RadarError {
     Io(#[from] std::io::Error),
     #[error("Axum operation failed")]
     Axum(#[from] axum::Error),
+    #[error("Cannot encode radar command: {0}")]
+    Encode(#[from] deku::DekuError),
     #[error("Interface '{0}' is not available")]
     InterfaceNotFound(String),
     #[error("Interface '{0}' has no valid IPv4 address")]

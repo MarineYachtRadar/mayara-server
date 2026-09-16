@@ -1,3 +1,4 @@
+use deku::DekuRead;
 use num_derive::{FromPrimitive, ToPrimitive};
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::{fmt, io};
@@ -9,7 +10,7 @@ use crate::radar::range::Ranges;
 use crate::radar::settings::ControlId;
 use crate::radar::{RadarInfo, SharedRadars};
 use crate::util::PrintableSlice;
-use crate::util::c_string;
+use crate::util::{c_string, decode_exact};
 use crate::{Brand, Cli};
 
 use super::{LocatorId, RadarLocator};
@@ -146,77 +147,110 @@ struct RadarScanner {
 
 #[derive(Debug)]
 #[allow(dead_code)]
-struct Gen3PlusBeacon<'a> {
-    serial_no: &'a str,
+struct Gen3PlusBeacon {
+    serial_no: String,
     radar_addr: SocketAddrV4,
     num_devices: u16,
     scanners: Vec<RadarScanner>,
 }
 
-/// Parse a Gen3+ beacon packet (3G, 4G, HALO) using the dynamic device/service
-/// format instead of fixed-size structs. The packet layout is:
+/// The fixed head of a beacon, up to and including the device count.
+#[derive(DekuRead, Debug)]
+#[deku(endian = "little", magic = b"\x01\xb2")]
+struct BeaconHeader {
+    serial_no: [u8; 16],
+    /// Addresses travel in network order, unlike the rest of the packet.
+    #[deku(endian = "big")]
+    radar_ip: Ipv4Addr,
+    #[deku(endian = "big")]
+    radar_port: u16,
+    num_devices: u16,
+}
+
+/// One device group: what it serves, which scanner it belongs to, and how many
+/// service entries follow it.
+#[derive(DekuRead, Debug)]
+#[deku(endian = "little")]
+struct DeviceGroupHeader {
+    service_type: u16,
+    _reserved: u8,
+    subcomponent: u8,
+    num_services: u16,
+}
+
+/// One service entry: which service, and the address it runs on.
+#[derive(DekuRead, Debug)]
+#[deku(endian = "little")]
+struct ServiceEntry {
+    subtype: u16,
+    _unknown: [u8; 2],
+    #[deku(endian = "big")]
+    ip: Ipv4Addr,
+    #[deku(endian = "big")]
+    port: u16,
+}
+
+const BEACON_HEADER_LENGTH: usize = 26;
+const DEVICE_GROUP_HEADER_LENGTH: usize = 6;
+const SERVICE_ENTRY_LENGTH: usize = 10;
+
+/// Parse a Gen3+ beacon packet (3G, 4G, HALO). The packet layout is:
 ///
 ///   [opcode: 2] [serial: 16] [radar_addr: 6] [num_devices: 2]
 ///   For each device group:
 ///     [service_type: 2] [reserved: 1] [subcomponent: 1] [num_services: 2]
 ///     For each service entry:
 ///       [subtype: 2] [unknown: 2] [ip: 4] [port: 2]
-fn parse_gen3plus_beacon(data: &[u8]) -> Option<Gen3PlusBeacon<'_>> {
-    if data.len() < 26 {
+///
+/// A beacon that stops early still yields the groups that did arrive: a radar
+/// we can reach is worth more than a packet we can vouch for in full.
+fn parse_gen3plus_beacon(data: &[u8]) -> Option<Gen3PlusBeacon> {
+    if data.len() < BEACON_HEADER_LENGTH {
         return None;
     }
 
-    let serial_no = c_string(&data[2..18])?;
-    let radar_ip = Ipv4Addr::new(data[18], data[19], data[20], data[21]);
-    let radar_port = u16::from_be_bytes([data[22], data[23]]);
-    let radar_addr = SocketAddrV4::new(radar_ip, radar_port);
-    let num_devices = u16::from_le_bytes([data[24], data[25]]);
+    let header: BeaconHeader = decode_exact(&data[..BEACON_HEADER_LENGTH]).ok()?;
+    let serial_no = c_string(&header.serial_no)?.to_string();
+    let radar_addr = SocketAddrV4::new(header.radar_ip, header.radar_port);
 
-    let mut offset = 26;
+    let mut offset = BEACON_HEADER_LENGTH;
     let mut scanner_pairs: Vec<(u8, RadarScanner)> = Vec::new();
 
-    for _ in 0..num_devices {
-        if offset + 6 > data.len() {
+    for _ in 0..header.num_devices {
+        if offset + DEVICE_GROUP_HEADER_LENGTH > data.len() {
             break;
         }
-        let service_type = u16::from_le_bytes([data[offset], data[offset + 1]]);
-        let subcomponent = data[offset + 3];
-        let num_services = u16::from_le_bytes([data[offset + 4], data[offset + 5]]) as usize;
-        offset += 6;
+        let group: DeviceGroupHeader =
+            decode_exact(&data[offset..offset + DEVICE_GROUP_HEADER_LENGTH]).ok()?;
+        offset += DEVICE_GROUP_HEADER_LENGTH;
 
-        let services_len = num_services * 10;
+        let services_len = group.num_services as usize * SERVICE_ENTRY_LENGTH;
         if offset + services_len > data.len() {
             break;
         }
 
-        if service_type == RADAR_SERVICE_TYPE {
+        if group.service_type == RADAR_SERVICE_TYPE {
             let mut data_addr = None;
             let mut send_addr = None;
             let mut report_addr = None;
 
-            for _ in 0..num_services {
-                let subtype = u16::from_le_bytes([data[offset], data[offset + 1]]);
-                let ip = Ipv4Addr::new(
-                    data[offset + 4],
-                    data[offset + 5],
-                    data[offset + 6],
-                    data[offset + 7],
-                );
-                let port = u16::from_be_bytes([data[offset + 8], data[offset + 9]]);
-                let addr = SocketAddrV4::new(ip, port);
+            for _ in 0..group.num_services {
+                let service: ServiceEntry =
+                    decode_exact(&data[offset..offset + SERVICE_ENTRY_LENGTH]).ok()?;
+                let addr = SocketAddrV4::new(service.ip, service.port);
 
-                match subtype {
+                match service.subtype {
                     SPOKE_DATA_SUBTYPE => data_addr = Some(addr),
                     COMMAND_SUBTYPE => send_addr = Some(addr),
                     REPORT_SUBTYPE => report_addr = Some(addr),
                     _ => {}
                 }
-                offset += 10;
+                offset += SERVICE_ENTRY_LENGTH;
             }
 
             if let (Some(d), Some(s), Some(r)) = (data_addr, send_addr, report_addr) {
                 scanner_pairs.push((
-                    subcomponent,
+                    group.subcomponent,
                     RadarScanner {
                         data: d,
                         send: s,
@@ -236,7 +270,7 @@ fn parse_gen3plus_beacon(data: &[u8]) -> Option<Gen3PlusBeacon<'_>> {
     Some(Gen3PlusBeacon {
         serial_no,
         radar_addr,
-        num_devices,
+        num_devices: header.num_devices,
         scanners,
     })
 }
@@ -343,7 +377,7 @@ impl NavicoLocator {
                 radars,
                 &self.args,
                 Brand::Navico,
-                Some(beacon.serial_no),
+                Some(beacon.serial_no.as_str()),
                 None,
                 suffix,
                 16,

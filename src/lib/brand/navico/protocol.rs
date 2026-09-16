@@ -285,6 +285,30 @@ pub(crate) const CMD_STAY_ON_A: u8 = 0xA0;
 /// `0xC1C0` — No-transmit sector range (step 2 of a 2-part command).
 pub(crate) const CMD_NOTRANSMIT_SECTOR: u8 = 0xC0;
 
+/// The two opcode bytes of a control command, `[sub-opcode][0xC1]`, as the
+/// little-endian u16 they go on the wire as.
+pub(crate) const fn control_opcode(cmd: u8) -> u16 {
+    ((CATEGORY_CONTROL as u16) << 8) | cmd as u16
+}
+
+// =============================================================================
+// Gain-style command (0xC106) variants
+// =============================================================================
+
+/// Main gain. Payload: u32 LE auto flag + u8 level.
+pub(crate) const GAIN_VARIANT_GAIN: u8 = 0x00;
+
+/// Sea clutter on BR24/3G/4G — the one command whose payload is big-endian.
+/// Payload: u32 BE auto flag + u32 BE level.
+pub(crate) const GAIN_VARIANT_SEA: u8 = 0x02;
+
+/// Rain clutter. Payload: u8 level after seven filler bytes.
+pub(crate) const GAIN_VARIANT_RAIN: u8 = 0x04;
+
+/// Side lobe suppression. Payload: u8 auto flag + u8 level, each after three
+/// filler bytes.
+pub(crate) const GAIN_VARIANT_SIDELOBE: u8 = 0x05;
+
 // =============================================================================
 // Installation command (0xC130) tags
 // =============================================================================

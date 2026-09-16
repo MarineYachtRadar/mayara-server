@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use deku::{DekuContainerWrite, DekuWrite};
 use tokio::net::UdpSocket;
 
 use crate::brand::CommandSender;
@@ -8,13 +9,14 @@ use crate::radar::{Power, RadarError, RadarInfo};
 
 use super::Model;
 use super::protocol::{
-    CATEGORY_CONTROL, CMD_ACCENT_LIGHT, CMD_BEARING_ALIGNMENT, CMD_DOPPLER,
-    CMD_DOPPLER_SPEED_THRESHOLD, CMD_GAIN_VARIANT, CMD_HALO_SEA, CMD_HALO_TARGET_EXPANSION,
-    CMD_INSTALLATION, CMD_INTERFERENCE_REJECTION, CMD_LOCAL_INTERFERENCE_REJECTION,
-    CMD_NOISE_REJECTION, CMD_NOTRANSMIT_ENABLE, CMD_NOTRANSMIT_SECTOR, CMD_POWER_ON, CMD_RANGE,
-    CMD_SCAN_SPEED, CMD_SEA_STATE, CMD_TARGET_BOOST, CMD_TARGET_EXPANSION, CMD_TARGET_SEPARATION,
-    CMD_TRANSMIT, CMD_USE_MODE, COMMAND_STAY_ON_A, INSTALL_TAG_ANTENNA_HEIGHT,
-    INSTALL_TAG_ANTENNA_OFFSET, REQUEST_STATE_BATCH, REQUEST_STATE_PROPERTIES,
+    CMD_ACCENT_LIGHT, CMD_BEARING_ALIGNMENT, CMD_DOPPLER, CMD_DOPPLER_SPEED_THRESHOLD,
+    CMD_GAIN_VARIANT, CMD_HALO_SEA, CMD_HALO_TARGET_EXPANSION, CMD_INSTALLATION,
+    CMD_INTERFERENCE_REJECTION, CMD_LOCAL_INTERFERENCE_REJECTION, CMD_NOISE_REJECTION,
+    CMD_NOTRANSMIT_ENABLE, CMD_NOTRANSMIT_SECTOR, CMD_POWER_ON, CMD_RANGE, CMD_SCAN_SPEED,
+    CMD_SEA_STATE, CMD_TARGET_BOOST, CMD_TARGET_EXPANSION, CMD_TARGET_SEPARATION, CMD_TRANSMIT,
+    CMD_USE_MODE, COMMAND_STAY_ON_A, GAIN_VARIANT_GAIN, GAIN_VARIANT_RAIN, GAIN_VARIANT_SEA,
+    GAIN_VARIANT_SIDELOBE, INSTALL_TAG_ANTENNA_HEIGHT, INSTALL_TAG_ANTENNA_OFFSET,
+    REQUEST_STATE_BATCH, REQUEST_STATE_PROPERTIES, control_opcode,
 };
 
 // Last byte of the HALO sea clutter command: which of the three things the
@@ -22,6 +24,117 @@ use super::protocol::{
 const HALO_SEA_MODE: u8 = 0x01;
 const HALO_SEA_MANUAL: u8 = 0x02;
 const HALO_SEA_AUTO_OFFSET: u8 = 0x04;
+
+/// A command frame: `[sub-opcode][0xC1][body]`. The two opcode bytes are one
+/// little-endian u16, so each variant's id reads as the `0xC1xx` opcode
+/// `protocol.rs` documents it under.
+#[derive(DekuWrite, Debug, PartialEq)]
+#[deku(endian = "little", id_type = "u16")]
+pub(super) enum ControlCommand {
+    #[deku(id = "control_opcode(CMD_POWER_ON)")]
+    PowerOn { on: u8 },
+    #[deku(id = "control_opcode(CMD_TRANSMIT)")]
+    Transmit { transmit: u8 },
+    #[deku(id = "control_opcode(CMD_RANGE)")]
+    Range { decimeters: i32 },
+    #[deku(id = "control_opcode(CMD_BEARING_ALIGNMENT)")]
+    BearingAlignment { deci_degrees: i16 },
+    #[deku(id = "control_opcode(CMD_GAIN_VARIANT)")]
+    GainStyle(GainCommand),
+    #[deku(id = "control_opcode(CMD_INTERFERENCE_REJECTION)")]
+    InterferenceRejection { level: u8 },
+    #[deku(id = "control_opcode(CMD_TARGET_EXPANSION)")]
+    TargetExpansion { level: u8 },
+    #[deku(id = "control_opcode(CMD_HALO_TARGET_EXPANSION)")]
+    HaloTargetExpansion { level: u8 },
+    #[deku(id = "control_opcode(CMD_TARGET_BOOST)")]
+    TargetBoost { level: u8 },
+    #[deku(id = "control_opcode(CMD_SEA_STATE)")]
+    SeaState { level: u8 },
+    /// Both value bytes carry the one setting being changed; see
+    /// [`Command::halo_sea_command`].
+    #[deku(id = "control_opcode(CMD_HALO_SEA)")]
+    HaloSea {
+        auto: u8,
+        positive_setting: u8,
+        signed_setting: u8,
+        mode: u8,
+    },
+    #[deku(id = "control_opcode(CMD_NOTRANSMIT_ENABLE)")]
+    NoTransmitEnable {
+        sector: u8,
+        #[deku(pad_bytes_before = "3")]
+        enabled: u8,
+    },
+    #[deku(id = "control_opcode(CMD_NOTRANSMIT_SECTOR)")]
+    NoTransmitSector {
+        sector: u8,
+        #[deku(pad_bytes_before = "3")]
+        enabled: u8,
+        start_deci_degrees: i16,
+        end_deci_degrees: i16,
+    },
+    #[deku(id = "control_opcode(CMD_LOCAL_INTERFERENCE_REJECTION)")]
+    LocalInterferenceRejection { level: u8 },
+    #[deku(id = "control_opcode(CMD_SCAN_SPEED)")]
+    ScanSpeed { level: u8 },
+    #[deku(id = "control_opcode(CMD_USE_MODE)")]
+    UseMode { mode: u8, variant: u8 },
+    #[deku(id = "control_opcode(CMD_NOISE_REJECTION)")]
+    NoiseRejection { level: u8 },
+    #[deku(id = "control_opcode(CMD_TARGET_SEPARATION)")]
+    TargetSeparation { level: u8 },
+    #[deku(id = "control_opcode(CMD_DOPPLER)")]
+    Doppler { mode: u8 },
+    #[deku(id = "control_opcode(CMD_DOPPLER_SPEED_THRESHOLD)")]
+    DopplerSpeedThreshold { cm_per_second: u16 },
+    #[deku(id = "control_opcode(CMD_INSTALLATION)")]
+    Installation(InstallCommand),
+    #[deku(id = "control_opcode(CMD_ACCENT_LIGHT)")]
+    AccentLight { level: u8 },
+}
+
+/// The `0xC106` commands, told apart by the variant byte that follows the
+/// opcode.
+#[derive(DekuWrite, Debug, PartialEq)]
+#[deku(ctx = "endian: deku::ctx::Endian", endian = "endian", id_type = "u8")]
+pub(super) enum GainCommand {
+    #[deku(id = "GAIN_VARIANT_GAIN")]
+    Gain {
+        #[deku(pad_bytes_before = "3")]
+        auto: u32,
+        value: u8,
+    },
+    #[deku(id = "GAIN_VARIANT_SEA")]
+    Sea {
+        #[deku(endian = "big")]
+        auto: u32,
+        #[deku(endian = "big")]
+        value: u32,
+    },
+    #[deku(id = "GAIN_VARIANT_RAIN")]
+    Rain {
+        #[deku(pad_bytes_before = "7")]
+        value: u8,
+    },
+    #[deku(id = "GAIN_VARIANT_SIDELOBE")]
+    SideLobeSuppression {
+        #[deku(pad_bytes_before = "3")]
+        auto: u8,
+        #[deku(pad_bytes_before = "3")]
+        value: u8,
+    },
+}
+
+/// The `0xC130` settings, told apart by the 4-byte tag that follows the opcode.
+#[derive(DekuWrite, Debug, PartialEq)]
+#[deku(ctx = "endian: deku::ctx::Endian", endian = "endian", id_type = "u32")]
+pub(super) enum InstallCommand {
+    #[deku(id = "INSTALL_TAG_ANTENNA_HEIGHT as u32")]
+    AntennaHeight { height_mm: i32 },
+    #[deku(id = "INSTALL_TAG_ANTENNA_OFFSET as u32")]
+    AntennaOffset { ahead_mm: i32, starboard_mm: i32 },
+}
 
 pub(crate) struct Command {
     key: String,
@@ -107,7 +220,11 @@ impl Command {
     /// the mode we believe the radar is in: that belief arrives by report and
     /// can lag, and a repeated mode command costs one frame, while a skipped
     /// one costs the user the change they asked for.
-    fn halo_sea_frames(auto: bool, setting: Option<f64>, mode_requested: bool) -> Vec<[u8; 6]> {
+    fn halo_sea_frames(
+        auto: bool,
+        setting: Option<f64>,
+        mode_requested: bool,
+    ) -> Vec<ControlCommand> {
         let mut frames = Vec::with_capacity(2);
         if setting.is_some() && mode_requested {
             frames.push(Self::halo_sea_command(auto, None));
@@ -130,7 +247,7 @@ impl Command {
     /// 11c10100ce04 = Auto-50   11c100000001 = Mode manual
     /// 11c101323204 = Auto+50   11c101000001 = Mode auto
     /// ```
-    fn halo_sea_command(auto: bool, setting: Option<f64>) -> [u8; 6] {
+    fn halo_sea_command(auto: bool, setting: Option<f64>) -> ControlCommand {
         let mode = match (setting, auto) {
             (None, _) => HALO_SEA_MODE,
             (Some(_), false) => HALO_SEA_MANUAL,
@@ -138,14 +255,12 @@ impl Command {
         };
         let setting = setting.unwrap_or(0.).round() as i8;
 
-        [
-            CMD_HALO_SEA,
-            CATEGORY_CONTROL,
-            auto as u8,
-            setting.max(0) as u8,
-            setting as u8,
+        ControlCommand::HaloSea {
+            auto: auto as u8,
+            positive_setting: setting.max(0) as u8,
+            signed_setting: setting as u8,
             mode,
-        ]
+        }
     }
 
     fn generate_fake_error(v: i32) -> Result<(), RadarError> {
@@ -163,8 +278,6 @@ impl Command {
         enabled: u8,
         sector: u8,
     ) -> Result<Vec<u8>, RadarError> {
-        let mut cmd = Vec::with_capacity(12);
-
         log::info!(
             "send_no_transmit({}, {}, {}, {})",
             sector,
@@ -173,30 +286,16 @@ impl Command {
             enabled
         );
 
-        cmd.extend_from_slice(&[
-            CMD_NOTRANSMIT_ENABLE,
-            CATEGORY_CONTROL,
-            sector,
-            0,
-            0,
-            0,
-            enabled,
-        ]);
-        self.send(&cmd).await?;
-        cmd.clear();
-        cmd.extend_from_slice(&[
-            CMD_NOTRANSMIT_SECTOR,
-            CATEGORY_CONTROL,
-            sector,
-            0,
-            0,
-            0,
-            enabled,
-        ]);
-        cmd.extend_from_slice(&value_start.to_le_bytes());
-        cmd.extend_from_slice(&value_end.to_le_bytes());
+        let enable = ControlCommand::NoTransmitEnable { sector, enabled }.to_bytes()?;
+        self.send(&enable).await?;
 
-        Ok(cmd)
+        Ok(ControlCommand::NoTransmitSector {
+            sector,
+            enabled,
+            start_deci_degrees: value_start,
+            end_deci_degrees: value_end,
+        }
+        .to_bytes()?)
     }
 
     /// The datagrams of one report-request tick. The stay-alive is what holds
@@ -228,7 +327,7 @@ impl CommandSender for Command {
         cv: &ControlValue,
         controls: &SharedControls,
     ) -> Result<(), RadarError> {
-        let mut cmd = Vec::with_capacity(12);
+        let cmd: Vec<u8>;
 
         log::debug!("Command handling request {:?}", cv);
 
@@ -258,39 +357,28 @@ impl CommandSender for Command {
                     _ => 0,
                 };
 
-                cmd.extend_from_slice(&[CMD_POWER_ON, CATEGORY_CONTROL, 0x01]);
-                self.send(&cmd).await?;
-                cmd.clear();
-                cmd.extend_from_slice(&[CMD_TRANSMIT, CATEGORY_CONTROL, value]);
+                let power_on = ControlCommand::PowerOn { on: 0x01 }.to_bytes()?;
+                self.send(&power_on).await?;
+                cmd = ControlCommand::Transmit { transmit: value }.to_bytes()?;
             }
 
             ControlId::Range => {
                 let decimeters: i32 = deci_value;
                 log::trace!("range {value} -> {decimeters}");
 
-                cmd.extend_from_slice(&[CMD_RANGE, CATEGORY_CONTROL]);
-                cmd.extend_from_slice(&decimeters.to_le_bytes());
+                cmd = ControlCommand::Range { decimeters }.to_bytes()?;
             }
             ControlId::BearingAlignment => {
-                let value: i16 = Self::mod_deci_degrees(deci_value) as i16;
+                let deci_degrees: i16 = Self::mod_deci_degrees(deci_value) as i16;
 
-                cmd.extend_from_slice(&[CMD_BEARING_ALIGNMENT, CATEGORY_CONTROL]);
-                cmd.extend_from_slice(&value.to_le_bytes());
+                cmd = ControlCommand::BearingAlignment { deci_degrees }.to_bytes()?;
             }
             ControlId::Gain => {
-                let v = Self::scale_100_to_byte(value);
-                let auto = auto as u32;
-
-                cmd.extend_from_slice(&[
-                    CMD_GAIN_VARIANT,
-                    CATEGORY_CONTROL,
-                    0x00,
-                    0x00,
-                    0x00,
-                    0x00,
-                ]);
-                cmd.extend_from_slice(&auto.to_le_bytes());
-                cmd.extend_from_slice(&v.to_le_bytes());
+                cmd = ControlCommand::GainStyle(GainCommand::Gain {
+                    auto: auto as u32,
+                    value: Self::scale_100_to_byte(value),
+                })
+                .to_bytes()?;
             }
             ControlId::Sea => {
                 if self.model.is_halo() {
@@ -310,71 +398,48 @@ impl CommandSender for Command {
                     // leaves through the common tail below.
                     let last = frames.pop().expect("a Sea request is at least one frame");
                     for frame in frames {
+                        let frame = frame.to_bytes()?;
                         log::debug!("{}: Send command {:02X?}", self.info.key(), frame);
                         self.send(&frame).await?;
                     }
-                    cmd.extend_from_slice(&last);
+                    cmd = last.to_bytes()?;
                 } else {
-                    let v: u32 = Self::scale_100_to_byte(value) as u32;
-                    let auto = auto as u32;
-
-                    cmd.extend_from_slice(&[CMD_GAIN_VARIANT, CATEGORY_CONTROL, 0x02]);
-                    cmd.extend_from_slice(&auto.to_be_bytes());
-                    cmd.extend_from_slice(&v.to_be_bytes());
+                    cmd = ControlCommand::GainStyle(GainCommand::Sea {
+                        auto: auto as u32,
+                        value: Self::scale_100_to_byte(value) as u32,
+                    })
+                    .to_bytes()?;
                 }
             }
             ControlId::Rain => {
-                let v = Self::scale_100_to_byte(value);
-                cmd.extend_from_slice(&[
-                    CMD_GAIN_VARIANT,
-                    CATEGORY_CONTROL,
-                    0x04,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    v,
-                ]);
+                cmd = ControlCommand::GainStyle(GainCommand::Rain {
+                    value: Self::scale_100_to_byte(value),
+                })
+                .to_bytes()?;
             }
             ControlId::SideLobeSuppression => {
-                let v = Self::scale_100_to_byte(value);
-
-                cmd.extend_from_slice(&[
-                    CMD_GAIN_VARIANT,
-                    CATEGORY_CONTROL,
-                    0x05,
-                    0,
-                    0,
-                    0,
+                cmd = ControlCommand::GainStyle(GainCommand::SideLobeSuppression {
                     auto,
-                    0,
-                    0,
-                    0,
-                    v,
-                ]);
+                    value: Self::scale_100_to_byte(value),
+                })
+                .to_bytes()?;
             }
             ControlId::InterferenceRejection => {
-                cmd.extend_from_slice(&[CMD_INTERFERENCE_REJECTION, CATEGORY_CONTROL, value as u8]);
+                cmd = ControlCommand::InterferenceRejection { level: value as u8 }.to_bytes()?;
             }
             ControlId::TargetExpansion => {
-                if self.model.is_halo() {
-                    cmd.extend_from_slice(&[
-                        CMD_HALO_TARGET_EXPANSION,
-                        CATEGORY_CONTROL,
-                        value as u8,
-                    ]);
+                let level = value as u8;
+                cmd = if self.model.is_halo() {
+                    ControlCommand::HaloTargetExpansion { level }.to_bytes()?
                 } else {
-                    cmd.extend_from_slice(&[CMD_TARGET_EXPANSION, CATEGORY_CONTROL, value as u8]);
-                }
+                    ControlCommand::TargetExpansion { level }.to_bytes()?
+                };
             }
             ControlId::TargetBoost => {
-                cmd.extend_from_slice(&[CMD_TARGET_BOOST, CATEGORY_CONTROL, value as u8]);
+                cmd = ControlCommand::TargetBoost { level: value as u8 }.to_bytes()?;
             }
             ControlId::SeaState => {
-                cmd.extend_from_slice(&[CMD_SEA_STATE, CATEGORY_CONTROL, value as u8]);
+                cmd = ControlCommand::SeaState { level: value as u8 }.to_bytes()?;
             }
             ControlId::NoTransmitSector1
             | ControlId::NoTransmitSector2
@@ -398,14 +463,11 @@ impl CommandSender for Command {
                     .await?;
             }
             ControlId::LocalInterferenceRejection => {
-                cmd.extend_from_slice(&[
-                    CMD_LOCAL_INTERFERENCE_REJECTION,
-                    CATEGORY_CONTROL,
-                    value as u8,
-                ]);
+                cmd =
+                    ControlCommand::LocalInterferenceRejection { level: value as u8 }.to_bytes()?;
             }
             ControlId::ScanSpeed => {
-                cmd.extend_from_slice(&[CMD_SCAN_SPEED, CATEGORY_CONTROL, value as u8]);
+                cmd = ControlCommand::ScanSpeed { level: value as u8 }.to_bytes()?;
             }
             ControlId::Mode => {
                 // Bird Plus (value 6) maps to tUseMode { mode: 5, variant: 1 }
@@ -415,22 +477,20 @@ impl CommandSender for Command {
                 } else {
                     (value as u8, 0u8)
                 };
-                cmd.extend_from_slice(&[CMD_USE_MODE, CATEGORY_CONTROL, mode, variant]);
+                cmd = ControlCommand::UseMode { mode, variant }.to_bytes()?;
             }
             ControlId::NoiseRejection => {
-                cmd.extend_from_slice(&[CMD_NOISE_REJECTION, CATEGORY_CONTROL, value as u8]);
+                cmd = ControlCommand::NoiseRejection { level: value as u8 }.to_bytes()?;
             }
             ControlId::TargetSeparation => {
-                cmd.extend_from_slice(&[CMD_TARGET_SEPARATION, CATEGORY_CONTROL, value as u8]);
+                cmd = ControlCommand::TargetSeparation { level: value as u8 }.to_bytes()?;
             }
             ControlId::Doppler => {
-                cmd.extend_from_slice(&[CMD_DOPPLER, CATEGORY_CONTROL, value as u8]);
+                cmd = ControlCommand::Doppler { mode: value as u8 }.to_bytes()?;
             }
             ControlId::DopplerSpeedThreshold => {
-                let value = f64::round(value * 100.0) as u16;
-                let value = value.clamp(0, 1594);
-                cmd.extend_from_slice(&[CMD_DOPPLER_SPEED_THRESHOLD, CATEGORY_CONTROL]);
-                cmd.extend_from_slice(&value.to_le_bytes());
+                let cm_per_second = (f64::round(value * 100.0) as u16).clamp(0, 1594);
+                cmd = ControlCommand::DopplerSpeedThreshold { cm_per_second }.to_bytes()?;
             }
             ControlId::AntennaForward | ControlId::AntennaStarboard => {
                 let (ahead_mm, starboard_mm) = if cv.id == ControlId::AntennaForward {
@@ -446,31 +506,20 @@ impl CommandSender for Command {
                         (value * 1000.) as i32,
                     )
                 };
-                cmd.extend_from_slice(&[
-                    CMD_INSTALLATION,
-                    CATEGORY_CONTROL,
-                    INSTALL_TAG_ANTENNA_OFFSET,
-                    0,
-                    0,
-                    0,
-                ]);
-                cmd.extend_from_slice(&ahead_mm.to_le_bytes());
-                cmd.extend_from_slice(&starboard_mm.to_le_bytes());
+                cmd = ControlCommand::Installation(InstallCommand::AntennaOffset {
+                    ahead_mm,
+                    starboard_mm,
+                })
+                .to_bytes()?;
             }
             ControlId::AntennaHeight => {
-                let height_mm = (value * 1000.) as i32;
-                cmd.extend_from_slice(&[
-                    CMD_INSTALLATION,
-                    CATEGORY_CONTROL,
-                    INSTALL_TAG_ANTENNA_HEIGHT,
-                    0,
-                    0,
-                    0,
-                ]);
-                cmd.extend_from_slice(&height_mm.to_le_bytes());
+                cmd = ControlCommand::Installation(InstallCommand::AntennaHeight {
+                    height_mm: (value * 1000.) as i32,
+                })
+                .to_bytes()?;
             }
             ControlId::AccentLight => {
-                cmd.extend_from_slice(&[CMD_ACCENT_LIGHT, CATEGORY_CONTROL, value as u8]);
+                cmd = ControlCommand::AccentLight { level: value as u8 }.to_bytes()?;
             }
             // RangeUnits is a client-side display preference on Navico:
             // the radar always reports distances in meters and the unit
@@ -499,7 +548,12 @@ impl CommandSender for Command {
 
 #[cfg(test)]
 mod tests {
-    use super::Command;
+    use super::{Command, ControlCommand, GainCommand, InstallCommand};
+    use deku::DekuContainerWrite;
+
+    fn encoded(frames: &[ControlCommand]) -> Vec<Vec<u8>> {
+        frames.iter().map(|f| f.to_bytes().unwrap()).collect()
+    }
 
     /// A number and a mode are two commands. Asking for both has to send
     /// both, mode first, or the radar applies the number and stays in the
@@ -510,10 +564,10 @@ mod tests {
         let frames = Command::halo_sea_frames(false, Some(90.), true);
 
         assert_eq!(
-            frames,
+            encoded(&frames),
             vec![
-                [0x11, 0xc1, 0x00, 0x00, 0x00, 0x01], // mode manual
-                [0x11, 0xc1, 0x00, 0x5a, 0x5a, 0x02], // level 90
+                vec![0x11, 0xc1, 0x00, 0x00, 0x00, 0x01], // mode manual
+                vec![0x11, 0xc1, 0x00, 0x5a, 0x5a, 0x02], // level 90
             ]
         );
     }
@@ -524,15 +578,18 @@ mod tests {
     fn a_sea_request_carrying_only_a_number_sends_one_frame() {
         let frames = Command::halo_sea_frames(false, Some(90.), false);
 
-        assert_eq!(frames, vec![[0x11, 0xc1, 0x00, 0x5a, 0x5a, 0x02]]);
+        assert_eq!(
+            encoded(&frames),
+            vec![vec![0x11, 0xc1, 0x00, 0x5a, 0x5a, 0x02]]
+        );
     }
 
     /// A mode on its own is already one frame, and must not be sent twice.
     #[test]
     fn a_sea_request_carrying_only_a_mode_sends_one_frame() {
         assert_eq!(
-            Command::halo_sea_frames(true, None, true),
-            vec![[0x11, 0xc1, 0x01, 0x00, 0x00, 0x01]]
+            encoded(&Command::halo_sea_frames(true, None, true)),
+            vec![vec![0x11, 0xc1, 0x01, 0x00, 0x00, 0x01]]
         );
     }
 
@@ -543,56 +600,119 @@ mod tests {
         let frames = Command::halo_sea_frames(true, Some(-50.), true);
 
         assert_eq!(
-            frames,
+            encoded(&frames),
             vec![
-                [0x11, 0xc1, 0x01, 0x00, 0x00, 0x01], // mode auto
-                [0x11, 0xc1, 0x01, 0x00, 0xce, 0x04], // auto offset -50
+                vec![0x11, 0xc1, 0x01, 0x00, 0x00, 0x01], // mode auto
+                vec![0x11, 0xc1, 0x01, 0x00, 0xce, 0x04], // auto offset -50
             ]
         );
+    }
+
+    /// Every control command's bytes, so a layout change shows up here rather
+    /// than on the water. The expected bytes are what the hand-built frames
+    /// carried before deku.
+    #[test]
+    fn control_commands_encode_to_their_wire_frames() {
+        let cases: [(ControlCommand, &[u8]); 11] = [
+            (ControlCommand::PowerOn { on: 1 }, &[0x00, 0xc1, 0x01]),
+            (
+                ControlCommand::Transmit { transmit: 1 },
+                &[0x01, 0xc1, 0x01],
+            ),
+            (
+                ControlCommand::Range { decimeters: 1852 },
+                &[0x03, 0xc1, 0x3c, 0x07, 0x00, 0x00],
+            ),
+            (
+                ControlCommand::BearingAlignment { deci_degrees: 3550 },
+                &[0x05, 0xc1, 0xde, 0x0d],
+            ),
+            (
+                ControlCommand::GainStyle(GainCommand::Gain {
+                    auto: 1,
+                    value: 200,
+                }),
+                &[
+                    0x06, 0xc1, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0xc8,
+                ],
+            ),
+            (
+                // The only big-endian payload on the wire.
+                ControlCommand::GainStyle(GainCommand::Sea {
+                    auto: 1,
+                    value: 128,
+                }),
+                &[
+                    0x06, 0xc1, 0x02, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x80,
+                ],
+            ),
+            (
+                ControlCommand::GainStyle(GainCommand::Rain { value: 77 }),
+                &[0x06, 0xc1, 0x04, 0, 0, 0, 0, 0, 0, 0, 77],
+            ),
+            (
+                ControlCommand::GainStyle(GainCommand::SideLobeSuppression { auto: 1, value: 50 }),
+                &[0x06, 0xc1, 0x05, 0, 0, 0, 0x01, 0, 0, 0, 50],
+            ),
+            // A sector change is two frames: this one goes out first.
+            (
+                ControlCommand::NoTransmitEnable {
+                    sector: 2,
+                    enabled: 1,
+                },
+                &[0x0d, 0xc1, 0x02, 0, 0, 0, 0x01],
+            ),
+            (
+                ControlCommand::NoTransmitSector {
+                    sector: 2,
+                    enabled: 1,
+                    start_deci_degrees: -900,
+                    end_deci_degrees: 900,
+                },
+                &[0xc0, 0xc1, 0x02, 0, 0, 0, 0x01, 0x7c, 0xfc, 0x84, 0x03],
+            ),
+            (
+                ControlCommand::Installation(InstallCommand::AntennaOffset {
+                    ahead_mm: 1010,
+                    starboard_mm: 2900,
+                }),
+                &[
+                    0x30, 0xc1, 0x04, 0, 0, 0, 0xf2, 0x03, 0x00, 0x00, 0x54, 0x0b, 0x00, 0x00,
+                ],
+            ),
+        ];
+
+        for (command, expected) in cases {
+            assert_eq!(command.to_bytes().unwrap(), expected, "{:?}", command);
+        }
     }
 
     /// Every frame an MFD was captured sending for sea clutter, so a HALO is
     /// told about a change the same way whoever sends it.
     #[test]
     fn halo_sea_command_matches_mfd_captures() {
+        let bytes = |auto, setting| Command::halo_sea_command(auto, setting).to_bytes().unwrap();
+
         // Mode alone, carrying no number.
-        assert_eq!(
-            Command::halo_sea_command(false, None),
-            [0x11, 0xc1, 0x00, 0x00, 0x00, 0x01]
-        );
-        assert_eq!(
-            Command::halo_sea_command(true, None),
-            [0x11, 0xc1, 0x01, 0x00, 0x00, 0x01]
-        );
+        assert_eq!(bytes(false, None), [0x11, 0xc1, 0x00, 0x00, 0x00, 0x01]);
+        assert_eq!(bytes(true, None), [0x11, 0xc1, 0x01, 0x00, 0x00, 0x01]);
 
         // Auto, adjusted by an offset that is signed in the second byte and
         // only present in the first while positive.
+        assert_eq!(bytes(true, Some(0.)), [0x11, 0xc1, 0x01, 0x00, 0x00, 0x04]);
+        assert_eq!(bytes(true, Some(-1.)), [0x11, 0xc1, 0x01, 0x00, 0xff, 0x04]);
         assert_eq!(
-            Command::halo_sea_command(true, Some(0.)),
-            [0x11, 0xc1, 0x01, 0x00, 0x00, 0x04]
-        );
-        assert_eq!(
-            Command::halo_sea_command(true, Some(-1.)),
-            [0x11, 0xc1, 0x01, 0x00, 0xff, 0x04]
-        );
-        assert_eq!(
-            Command::halo_sea_command(true, Some(-50.)),
+            bytes(true, Some(-50.)),
             [0x11, 0xc1, 0x01, 0x00, 0xce, 0x04]
         );
-        assert_eq!(
-            Command::halo_sea_command(true, Some(50.)),
-            [0x11, 0xc1, 0x01, 0x32, 0x32, 0x04]
-        );
+        assert_eq!(bytes(true, Some(50.)), [0x11, 0xc1, 0x01, 0x32, 0x32, 0x04]);
 
         // Manual, where the level reaches 100 and both bytes carry it.
         assert_eq!(
-            Command::halo_sea_command(false, Some(100.)),
+            bytes(false, Some(100.)),
             [0x11, 0xc1, 0x00, 0x64, 0x64, 0x02]
         );
-        assert_eq!(
-            Command::halo_sea_command(false, Some(0.)),
-            [0x11, 0xc1, 0x00, 0x00, 0x00, 0x02]
-        );
+        assert_eq!(bytes(false, Some(0.)), [0x11, 0xc1, 0x00, 0x00, 0x00, 0x02]);
     }
 
     /// The manual level and the auto offset are separate settings; sending one
@@ -604,7 +724,7 @@ mod tests {
         let manual_level_is_irrelevant = Command::halo_sea_command(true, Some(-50.));
 
         assert_eq!(
-            manual_level_is_irrelevant,
+            manual_level_is_irrelevant.to_bytes().unwrap(),
             [0x11, 0xc1, 0x01, 0x00, 0xce, 0x04]
         );
     }

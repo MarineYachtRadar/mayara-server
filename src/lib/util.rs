@@ -16,6 +16,19 @@ pub(crate) fn decode_bin<T: DeserializeOwned>(
     bincode::serde::decode_from_slice(bytes, bincode::config::legacy()).map(|(value, _)| value)
 }
 
+/// Decode a packet that must fill `bytes` exactly. A packet of any other
+/// length has a layout we do not know, so it is rejected rather than
+/// half-read.
+pub(crate) fn decode_exact<'a, T: deku::DekuContainerRead<'a>>(
+    bytes: &'a [u8],
+) -> Result<T, anyhow::Error> {
+    let ((rest, _), value) = T::from_bytes((bytes, 0))?;
+    if !rest.is_empty() {
+        anyhow::bail!("{} unexpected bytes after the packet", rest.len());
+    }
+    Ok(value)
+}
+
 pub(crate) fn c_string(bytes: &[u8]) -> Option<&str> {
     let bytes_without_null = match bytes.iter().position(|&b| b == 0) {
         Some(ix) => &bytes[..ix],
