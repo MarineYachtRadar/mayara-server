@@ -1,4 +1,5 @@
 use anyhow::{Error, bail};
+use deku::DekuRead;
 use std::collections::HashMap;
 use std::io;
 use std::time::Duration;
@@ -20,12 +21,56 @@ use crate::radar::{
     RadarError, RadarInfo, SharedRadars, transmit_claim_after_report, transmit_claim_after_request,
 };
 use crate::replay::RadarSocket;
-use crate::util::c_string;
+use crate::util::{c_string, decode_head};
 use serde_json::Value;
 
 /// How often the receiver checks whether the radar should stand down; the
 /// watchdog that decides it ticks at the same rate.
 const STAND_DOWN_CHECK_INTERVAL: Duration = Duration::from_secs(5);
+
+/// A scalar setting report: the 8-byte GMN header followed by the value.
+///
+/// The radar sends the same logical setting as one, two or four bytes, and it
+/// is the header's length field that says which — not the opcode. A packet
+/// whose payload is shorter than the length it declares fails to decode
+/// rather than reading past the end of the datagram.
+#[derive(DekuRead, Debug, PartialEq)]
+#[deku(endian = "little")]
+struct ScalarReport {
+    _packet_type: u32,
+    payload_len: u32,
+    #[deku(ctx = "*payload_len")]
+    value: ScalarValue,
+}
+
+#[derive(DekuRead, Debug, PartialEq)]
+#[deku(
+    ctx = "endian: deku::ctx::Endian, payload_len: u32",
+    endian = "endian",
+    id = "payload_len"
+)]
+enum ScalarValue {
+    #[deku(id = "1")]
+    U8(u8),
+    #[deku(id = "2")]
+    U16(u16),
+    #[deku(id = "4")]
+    U32(u32),
+    /// A width we have no layout for. Reported as zero, as it always has been.
+    #[deku(id_pat = "_")]
+    Unknown,
+}
+
+impl ScalarValue {
+    fn as_u32(&self) -> u32 {
+        match *self {
+            ScalarValue::U8(v) => v as u32,
+            ScalarValue::U16(v) => v as u32,
+            ScalarValue::U32(v) => v,
+            ScalarValue::Unknown => 0,
+        }
+    }
+}
 
 /// Lookup table for converting raw wire pixel values to legend indices.
 /// For xHD, values are halved to make room for special legend entries.
@@ -1516,18 +1561,8 @@ impl GarminReportReceiver {
 
     /// Extract value from status packet based on length (static).
     fn extract_value(data: &[u8]) -> Result<u32, Error> {
-        if data.len() < 9 {
-            bail!("packet too short");
-        }
-
-        let len = u32::from_le_bytes(data[4..8].try_into().unwrap());
-
-        match len {
-            1 => Ok(data[8] as u32),
-            2 => Ok(u16::from_le_bytes(data[8..10].try_into().unwrap()) as u32),
-            4 => Ok(u32::from_le_bytes(data[8..12].try_into().unwrap())),
-            _ => Ok(0),
-        }
+        let report: ScalarReport = decode_head(data)?;
+        Ok(report.value.as_u32())
     }
 
     /// Push combined gain state to a CommonRadar (static version for
@@ -1566,6 +1601,63 @@ fn unpack_hd_spoke(packed: &[u8], wire_to_legend: &WireToLegendTable) -> Generic
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A scalar setting report: the GMN header, then `payload` as the value.
+    /// `declared_len` is written into the header's length field, which is what
+    /// picks the value's width — it is not always `payload.len()`.
+    fn scalar_packet(declared_len: u32, payload: &[u8]) -> Vec<u8> {
+        let mut packet = Vec::new();
+        packet.extend_from_slice(&MSG_RPM_MODE.to_le_bytes());
+        packet.extend_from_slice(&declared_len.to_le_bytes());
+        packet.extend_from_slice(payload);
+        packet
+    }
+
+    #[test]
+    fn scalar_report_reads_the_width_the_header_declares() {
+        let one = scalar_packet(1, &[0x2a]);
+        let two = scalar_packet(2, &0x1234u16.to_le_bytes());
+        let four = scalar_packet(4, &0xdead_beefu32.to_le_bytes());
+
+        assert_eq!(GarminReportReceiver::extract_value(&one).unwrap(), 0x2a);
+        assert_eq!(GarminReportReceiver::extract_value(&two).unwrap(), 0x1234);
+        assert_eq!(
+            GarminReportReceiver::extract_value(&four).unwrap(),
+            0xdead_beef
+        );
+    }
+
+    /// A width we have no layout for reads as zero, as it always has.
+    #[test]
+    fn scalar_report_of_an_unknown_width_reads_as_zero() {
+        let odd = scalar_packet(3, &[0x01, 0x02, 0x03]);
+
+        assert_eq!(GarminReportReceiver::extract_value(&odd).unwrap(), 0);
+    }
+
+    /// The radar sends one setting per packet, but a datagram may carry more
+    /// bytes than the value; they are not part of it.
+    #[test]
+    fn scalar_report_ignores_bytes_after_the_value() {
+        let padded = scalar_packet(1, &[0x2a, 0xff, 0xff, 0xff]);
+
+        assert_eq!(GarminReportReceiver::extract_value(&padded).unwrap(), 0x2a);
+    }
+
+    /// A packet whose payload is shorter than the width it declares must fail
+    /// to decode. Reading the declared width out of the datagram regardless
+    /// used to panic and take the report receiver down with it.
+    #[test]
+    fn scalar_report_shorter_than_its_declared_width_is_an_error() {
+        let claims_four_has_one = scalar_packet(4, &[0x2a]);
+        let claims_two_has_one = scalar_packet(2, &[0x2a]);
+        let header_only = scalar_packet(1, &[]);
+
+        assert!(GarminReportReceiver::extract_value(&claims_four_has_one).is_err());
+        assert!(GarminReportReceiver::extract_value(&claims_two_has_one).is_err());
+        assert!(GarminReportReceiver::extract_value(&header_only).is_err());
+        assert!(GarminReportReceiver::extract_value(&[]).is_err());
+    }
 
     fn identity_lookup() -> WireToLegendTable {
         let mut lookup = [0u8; BYTE_LOOKUP_LENGTH];

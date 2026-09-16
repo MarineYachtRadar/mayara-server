@@ -29,6 +29,15 @@ pub(crate) fn decode_exact<'a, T: deku::DekuContainerRead<'a>>(
     Ok(value)
 }
 
+/// Decode the head of `bytes`, ignoring whatever follows it. Use
+/// [`decode_exact`] where the packet must fill the slice exactly; use this
+/// where a header is followed by a payload this decoder does not describe.
+pub(crate) fn decode_head<'a, T: deku::DekuContainerRead<'a>>(
+    bytes: &'a [u8],
+) -> Result<T, anyhow::Error> {
+    Ok(T::from_bytes((bytes, 0))?.1)
+}
+
 pub(crate) fn c_string(bytes: &[u8]) -> Option<&str> {
     let bytes_without_null = match bytes.iter().position(|&b| b == 0) {
         Some(ix) => &bytes[..ix],
