@@ -651,6 +651,55 @@ mod tests {
     use super::*;
 
     #[test]
+    fn hd_sea_frame_layout() {
+        // 0x02B5 is the one command with an 8-byte payload: gain, then the
+        // mode (2 = auto, 1 = manual). It bypasses the three builders, so
+        // nothing else pins its bytes.
+        let buf = encode(&CommandSeaHd {
+            header: GmnHeader {
+                packet_type: CMD_HD_SET_SEA,
+                payload_len: PAYLOAD_LEN_SEA_HD,
+            },
+            gain: 51,
+            mode: 2,
+        });
+
+        assert_eq!(
+            buf,
+            [
+                0xb5, 0x02, 0x00, 0x00, // packet_type = 0x02b5
+                0x08, 0x00, 0x00, 0x00, // payload_len = 8
+                0x33, 0x00, 0x00, 0x00, // gain = 51
+                0x02, 0x00, 0x00, 0x00, // mode = auto
+            ]
+        );
+    }
+
+    #[test]
+    fn hd_ftc_frame_layout() {
+        // 0x02FC carries a gain byte the radar expects even though mayara
+        // models FTC as a plain on/off control.
+        let buf = encode(&CommandTargetExpansionHd {
+            header: GmnHeader {
+                packet_type: CMD_HD_SET_FTC,
+                payload_len: PAYLOAD_LEN_FTC_HD,
+            },
+            gain: 50,
+            on: 1,
+        });
+
+        assert_eq!(
+            buf,
+            [
+                0xfc, 0x02, 0x00, 0x00, // packet_type = 0x02fc
+                0x02, 0x00, 0x00, 0x00, // payload_len = 2
+                0x32, // gain = 50
+                0x01, // on
+            ]
+        );
+    }
+
+    #[test]
     fn build_packet_9_layout() {
         // 0x919 = MSG_TRANSMIT_MODE; payload `1` puts the radar in
         // transmit mode (the same example used in

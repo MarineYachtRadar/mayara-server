@@ -238,7 +238,67 @@ mod tests {
     use super::*;
     // The parser no longer needs the offset constants — the layout is the
     // struct — but a test that corrupts one field still names where it is.
-    use crate::brand::garmin::protocol::CDM_OFFSET_VERSION_MARKER;
+    use crate::brand::garmin::protocol::{CDM_OFFSET_VERSION_MARKER, GMN_HEADER_LEN};
+
+    /// A `0x0392` body with both names at the offsets the radar writes them.
+    fn product_data_body(name: &str, alias: &str) -> Vec<u8> {
+        let mut body = vec![0u8; MIN_PRODUCT_DATA_LEN];
+        body[0x04..0x04 + name.len()].copy_from_slice(name.as_bytes());
+        body[0x23..0x23 + alias.len()].copy_from_slice(alias.as_bytes());
+        body
+    }
+
+    #[test]
+    fn product_data_reads_both_names() {
+        let body = product_data_body("GMR Fantom 24", "Bow Radar");
+
+        let data = parse_product_data(&body).unwrap();
+
+        assert_eq!(data.device_name, "GMR Fantom 24");
+        assert_eq!(data.device_alias, "Bow Radar");
+    }
+
+    /// A body that stops inside the alias has no alias to report.
+    #[test]
+    fn product_data_shorter_than_its_layout_is_rejected() {
+        let body = product_data_body("GMR xHD", "Mast");
+
+        assert!(parse_product_data(&body[..MIN_PRODUCT_DATA_LEN - 1]).is_none());
+        assert!(parse_product_data(&[]).is_none());
+    }
+
+    #[test]
+    fn product_data_request_is_a_bare_header() {
+        assert_eq!(
+            build_product_data_request(),
+            [
+                0x91, 0x03, 0x00, 0x00, // packet_type = 0x0391
+                0x00, 0x00, 0x00, 0x00, // payload_len = 0
+            ]
+        );
+    }
+
+    #[test]
+    fn set_alias_pads_the_name_to_its_full_width() {
+        let buf = build_set_alias("Bow Radar");
+
+        assert_eq!(buf.len(), GMN_HEADER_LEN + SET_ALIAS_PAYLOAD_LEN);
+        assert_eq!(buf[0..4], MSG_CDM_SET_ALIAS.to_le_bytes());
+        assert_eq!(buf[4..8], (SET_ALIAS_PAYLOAD_LEN as u32).to_le_bytes());
+        assert_eq!(&buf[8..17], b"Bow Radar");
+        assert!(buf[17..].iter().all(|&b| b == 0), "alias is NUL-padded");
+    }
+
+    /// The field holds 30 characters; a longer name loses the rest rather
+    /// than running into the two bytes that follow it.
+    #[test]
+    fn set_alias_truncates_a_name_that_does_not_fit() {
+        let buf = build_set_alias("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
+
+        assert_eq!(buf.len(), GMN_HEADER_LEN + SET_ALIAS_PAYLOAD_LEN);
+        assert_eq!(&buf[8..38], b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123");
+        assert_eq!(&buf[38..], &[0, 0]);
+    }
 
     /// CDM heartbeat body from the Fantom Pro radar in
     /// `radar-recordings/garmin/fantom_pro/`. Two published services, so
