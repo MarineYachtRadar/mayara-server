@@ -1,5 +1,4 @@
-use serde::Deserialize;
-use std::mem::size_of;
+use deku::DekuRead;
 
 use crate::brand::raymarine::report::wire_to_legend;
 use crate::brand::raymarine::{RaymarineModel, hd_to_pixel_values, settings};
@@ -7,12 +6,12 @@ use crate::radar::Power;
 use crate::radar::range::{Range, Ranges};
 use crate::radar::settings::ControlId;
 use crate::radar::spoke::GenericSpoke;
-use crate::util::decode_bin;
+use crate::util::decode_head;
 
 use super::{RaymarineReportReceiver, ReceiverState};
 
-#[derive(Deserialize, Debug, Clone, Copy)]
-#[repr(C, packed)]
+#[derive(DekuRead, Debug, Clone, Copy)]
+#[deku(endian = "little")]
 struct FrameHeader {
     field01: u32, // 0x00010003
     _zero_1: u32,
@@ -24,15 +23,15 @@ struct FrameHeader {
     _fieldx_4: u32, // 0 on an RD418D; on an RD418HD the first spoke's block length
 }
 
-#[derive(Deserialize, Debug, Clone, Copy)]
-#[repr(C, packed)]
+#[derive(DekuRead, Debug, Clone, Copy)]
+#[deku(endian = "little")]
 struct SpokeHeader2 {
     field01: u32,
     length: u32, // total block length: 8 where only the two header words follow, 28 on an RD418D
 }
 
-#[derive(Deserialize, Debug, Clone, Copy)]
-#[repr(C, packed)]
+#[derive(DekuRead, Debug, Clone, Copy)]
+#[deku(endian = "little")]
 struct SpokeHeader1 {
     field01: u32, // 0x00000001
     length: u32,  // 0x00000028
@@ -46,8 +45,8 @@ struct SpokeHeader1 {
     fieldx_7: u32, // 0x00000001
 }
 
-#[derive(Deserialize, Debug, Clone, Copy)]
-#[repr(C, packed)]
+#[derive(DekuRead, Debug, Clone, Copy)]
+#[deku(endian = "little")]
 struct SpokeHeader3 {
     field01: u32, // 0x00000003
     length: u32,
@@ -61,10 +60,13 @@ struct SpokeHeader3 {
 /// (`scan_len` / `returns_per_range`).
 const RD_SPOKE_RANGE_FACTOR: u32 = 2;
 
-const FRAME_HEADER_LENGTH: usize = size_of::<FrameHeader>();
-const SPOKE_HEADER_2_LENGTH: usize = size_of::<SpokeHeader2>();
-const SPOKE_HEADER_1_LENGTH: usize = size_of::<SpokeHeader1>();
-const SPOKE_DATA_LENGTH: usize = size_of::<SpokeHeader3>();
+// Wire lengths of the structs above. They were `size_of` of packed structs;
+// without `repr(packed)` that is no longer the wire size, so each one is
+// stated here and checked against its declaration in the tests.
+const FRAME_HEADER_LENGTH: usize = 32;
+const SPOKE_HEADER_2_LENGTH: usize = 8;
+const SPOKE_HEADER_1_LENGTH: usize = 40;
+const SPOKE_DATA_LENGTH: usize = 12;
 
 pub(crate) fn process_frame(receiver: &mut RaymarineReportReceiver, data: &[u8]) {
     if receiver.state != ReceiverState::StatusRequestReceived {
@@ -83,7 +85,7 @@ pub(crate) fn process_frame(receiver: &mut RaymarineReportReceiver, data: &[u8])
 
     let header = &data[..FRAME_HEADER_LENGTH];
     log::trace!("{}: header1 {:?}", receiver.common.key, header);
-    let header: FrameHeader = match decode_bin(header) {
+    let header: FrameHeader = match decode_head(header) {
         Ok(h) => h,
         Err(e) => {
             log::error!(
@@ -128,7 +130,7 @@ pub(crate) fn process_frame(receiver: &mut RaymarineReportReceiver, data: &[u8])
         let spoke_header_1 = &data[next_offset..next_offset + SPOKE_HEADER_1_LENGTH];
         log::trace!("{}: header3 {:?}", receiver.common.key, spoke_header_1);
 
-        let spoke_header_1: SpokeHeader1 = match decode_bin(spoke_header_1) {
+        let spoke_header_1: SpokeHeader1 = match decode_head(spoke_header_1) {
             Ok(h) => h,
             Err(e) => {
                 log::error!(
@@ -172,11 +174,14 @@ pub(crate) fn process_frame(receiver: &mut RaymarineReportReceiver, data: &[u8])
 
         next_offset += SPOKE_HEADER_1_LENGTH;
 
-        // Now check if the optional "Header2" marker is present
-        let header2 = &data[next_offset..next_offset + SPOKE_HEADER_2_LENGTH];
+        // Now check if the optional "Header2" marker is present. The slice is
+        // taken to the end of the datagram rather than to a fixed width: a
+        // spoke header that ends within eight bytes of it used to index past
+        // the end and panic.
+        let header2 = &data[next_offset..];
         log::trace!("{}: header2 {:?}", receiver.common.key, header2);
 
-        let header2: SpokeHeader2 = match decode_bin(header2) {
+        let header2: SpokeHeader2 = match decode_head(header2) {
             Ok(h) => h,
             Err(e) => {
                 log::error!(
@@ -206,9 +211,9 @@ pub(crate) fn process_frame(receiver: &mut RaymarineReportReceiver, data: &[u8])
         }
 
         // Followed by the actual spoke data
-        let header3 = &data[next_offset..next_offset + SPOKE_DATA_LENGTH];
+        let header3 = &data[next_offset..];
         log::trace!("{}: SpokeData {:?}", receiver.common.key, header3);
-        let header3: SpokeHeader3 = match decode_bin(header3) {
+        let header3: SpokeHeader3 = match decode_head(header3) {
             Ok(h) => h,
             Err(e) => {
                 log::error!(
@@ -220,7 +225,12 @@ pub(crate) fn process_frame(receiver: &mut RaymarineReportReceiver, data: &[u8])
             }
         };
         log::trace!("{}: SpokeData {:?}", receiver.common.key, header3);
-        if (header3.field01 & 0x7fffffff) != 0x00000003 || header3.length < header3.data_len + 8 {
+        // `length` covers this header plus the payload, so anything shorter
+        // than the header itself would underflow the advance below.
+        if (header3.field01 & 0x7fffffff) != 0x00000003
+            || (header3.length as usize) < SPOKE_DATA_LENGTH
+            || header3.length < header3.data_len.saturating_add(8)
+        {
             log::warn!(
                 "{}: spoke_data header check failed {:02X?}",
                 receiver.common.key,
@@ -309,14 +319,14 @@ fn process_spoke(
     unpacked_data
 }
 
-#[derive(Deserialize, Debug, Clone, Copy)]
-#[repr(C, packed)]
+#[derive(DekuRead, Debug, Clone, Copy)]
+#[deku(endian = "little")]
 struct StatusReport {
-    field01: u32,          // 0x010001  // 0-3
+    field01: u32,          // 0 - 3
     ranges: [u32; 11],     // 4 - 47
-    _fieldx_1a: [u32; 10], // 48 - 97
-    _fieldx_1b: [u32; 10], // 98 - 137
-    _fieldx_1c: [u32; 13], // 138 - 169
+    _fieldx_1a: [u32; 10], // 48 - 87
+    _fieldx_1b: [u32; 10], // 88 - 127
+    _fieldx_1c: [u32; 13], // 128 - 179
 
     status: u8, // 2 - warmup, 1 - transmit, 0 - standby, 6 - shutting down (warmup time - countdown), 3 - shutdown  // 180
     _fieldx_2: [u8; 3], // 181
@@ -349,7 +359,7 @@ struct StatusReport {
     mbs_enabled: u8, // Main Bang Suppression enabled if 1
 }
 
-const STATUS_REPORT_LENGTH: usize = size_of::<StatusReport>();
+const STATUS_REPORT_LENGTH: usize = 245;
 
 /// Offset of the power-state byte in the HD (0x018801) status report. The
 /// D/analog (0x010001) report carries it at `StatusReport::status` (180),
@@ -383,7 +393,7 @@ pub(super) fn process_status_report(receiver: &mut RaymarineReportReceiver, data
         data.len(),
         data
     );
-    let report: StatusReport = match decode_bin(&data[..STATUS_REPORT_LENGTH]) {
+    let report: StatusReport = match decode_head(&data[..STATUS_REPORT_LENGTH]) {
         Ok(h) => h,
         Err(e) => {
             log::error!(
@@ -443,9 +453,7 @@ pub(super) fn process_status_report(receiver: &mut RaymarineReportReceiver, data
 
     if receiver.common.info.ranges.is_empty() {
         let mut ranges = Ranges::empty();
-        let report_ranges = report.ranges; // copy for alignment
-
-        for (i, &raw) in report_ranges.iter().enumerate() {
+        for (i, &raw) in report.ranges.iter().enumerate() {
             let meters = (raw as f64 * 1.852f64) as i32; // Convert to nautical miles
 
             ranges.push(Range::new(meters, i));
@@ -519,8 +527,8 @@ pub(super) fn process_status_report(receiver: &mut RaymarineReportReceiver, data
         .set_value(&ControlId::SignalStrength, report.signal_strength);
 }
 
-#[derive(Deserialize, Debug, Clone, Copy)]
-#[repr(C, packed)]
+#[derive(DekuRead, Debug, Clone, Copy)]
+#[deku(endian = "little")]
 struct FixedReport {
     heater_time: u16, // tenths of an hour, the MFD's "Heater hour count"
     _fieldx_2: [u8; 6],
@@ -554,7 +562,7 @@ struct FixedReport {
     _fieldx_9: [u8; 2],
 }
 
-const FIXED_REPORT_LENGTH: usize = size_of::<FixedReport>();
+const FIXED_REPORT_LENGTH: usize = 91;
 const FIXED_REPORT_PREFIX: usize = 217;
 
 pub(super) fn process_fixed_report(receiver: &mut RaymarineReportReceiver, data: &[u8]) {
@@ -581,7 +589,7 @@ pub(super) fn process_fixed_report(receiver: &mut RaymarineReportReceiver, data:
     );
     let report = &data[FIXED_REPORT_PREFIX..FIXED_REPORT_PREFIX + FIXED_REPORT_LENGTH];
     log::trace!("{}: fixed report {:02X?}", receiver.common.key, report);
-    let report: FixedReport = match decode_bin(report) {
+    let report: FixedReport = match decode_head(report) {
         Ok(h) => h,
         Err(e) => {
             log::error!(
@@ -805,7 +813,39 @@ pub(super) fn process_hd_info_report(receiver: &mut RaymarineReportReceiver, dat
 
 #[cfg(test)]
 mod tests {
-    use super::{hd_info_string, model_from_info_field, model_from_serial};
+    use super::{
+        FIXED_REPORT_LENGTH, FRAME_HEADER_LENGTH, FixedReport, FrameHeader, SPOKE_DATA_LENGTH,
+        SPOKE_HEADER_1_LENGTH, SPOKE_HEADER_2_LENGTH, STATUS_REPORT_LENGTH, SpokeHeader1,
+        SpokeHeader2, SpokeHeader3, StatusReport, hd_info_string, model_from_info_field,
+        model_from_serial,
+    };
+    use crate::util::{decode_exact, decode_head};
+
+    /// Each struct is read at a length stated as a constant. That used to be
+    /// `size_of` of a packed struct; now the declaration and the constant are
+    /// two separate statements of the same fact, and this is what stops them
+    /// drifting apart. `decode_exact` fails both when a struct wants more
+    /// bytes than the constant and when it leaves some unread.
+    #[test]
+    fn rd_structs_are_as_long_as_the_code_reads_them() {
+        assert!(decode_exact::<FrameHeader>(&[0u8; FRAME_HEADER_LENGTH]).is_ok());
+        assert!(decode_head::<FrameHeader>(&[0u8; FRAME_HEADER_LENGTH - 1]).is_err());
+
+        assert!(decode_exact::<SpokeHeader1>(&[0u8; SPOKE_HEADER_1_LENGTH]).is_ok());
+        assert!(decode_head::<SpokeHeader1>(&[0u8; SPOKE_HEADER_1_LENGTH - 1]).is_err());
+
+        assert!(decode_exact::<SpokeHeader2>(&[0u8; SPOKE_HEADER_2_LENGTH]).is_ok());
+        assert!(decode_head::<SpokeHeader2>(&[0u8; SPOKE_HEADER_2_LENGTH - 1]).is_err());
+
+        assert!(decode_exact::<SpokeHeader3>(&[0u8; SPOKE_DATA_LENGTH]).is_ok());
+        assert!(decode_head::<SpokeHeader3>(&[0u8; SPOKE_DATA_LENGTH - 1]).is_err());
+
+        assert!(decode_exact::<StatusReport>(&[0u8; STATUS_REPORT_LENGTH]).is_ok());
+        assert!(decode_head::<StatusReport>(&[0u8; STATUS_REPORT_LENGTH - 1]).is_err());
+
+        assert!(decode_exact::<FixedReport>(&[0u8; FIXED_REPORT_LENGTH]).is_ok());
+        assert!(decode_head::<FixedReport>(&[0u8; FIXED_REPORT_LENGTH - 1]).is_err());
+    }
 
     #[test]
     fn model_from_concatenated_serial() {
