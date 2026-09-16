@@ -2,6 +2,7 @@ use std::io;
 use std::net::SocketAddrV4;
 
 use async_trait::async_trait;
+use deku::DekuWrite;
 use tokio::net::UdpSocket;
 
 use super::GarminRadarType;
@@ -9,6 +10,7 @@ use super::protocol::*;
 use crate::brand::CommandSender;
 use crate::radar::settings::{ControlId, ControlValue, SharedControls};
 use crate::radar::{DopplerMode, Power, RadarError};
+use crate::util::encode;
 
 /// Garmin command sender. In dual-range mode each range gets its own
 /// `Command` instance — Range B's instance has `range_b = true` and
@@ -204,13 +206,15 @@ impl Command {
     }
 
     async fn set_sea_hd(&mut self, auto: bool, value: u8) -> io::Result<()> {
-        // HD: 0x2b5 with an 8-byte payload (gain + auto flag, both u32 LE).
+        let buf = encode(&CommandSeaHd {
+            header: GmnHeader {
+                packet_type: CMD_HD_SET_SEA,
+                payload_len: PAYLOAD_LEN_SEA_HD,
+            },
+            gain: value as u32,
+            mode: if auto { 2 } else { 1 },
+        });
         let socket = self.ensure_socket().await?;
-        let mut buf = [0u8; 16];
-        buf[0..4].copy_from_slice(&CMD_HD_SET_SEA.to_le_bytes());
-        buf[4..8].copy_from_slice(&8u32.to_le_bytes()); // len = 8
-        buf[8..12].copy_from_slice(&(value as u32).to_le_bytes());
-        buf[12..16].copy_from_slice(&(if auto { 2u32 } else { 1u32 }).to_le_bytes());
         socket.send(&buf).await?;
         Ok(())
     }
@@ -251,15 +255,20 @@ impl Command {
     }
 
     async fn set_target_expansion_hd(&mut self, on: bool) -> io::Result<()> {
-        // HD FTC: 0x02FC, payload [u8 gain][u8 mode]. We model FTC as a
-        // simple on/off list control, so the gain byte is fixed to a
-        // mid-range value (matches what radar_pi sends when toggled).
+        // We model FTC as a simple on/off list control, so the gain byte is
+        // fixed to a mid-range value (matches what radar_pi sends when
+        // toggled).
+        const FTC_GAIN: u8 = 50;
+
+        let buf = encode(&CommandTargetExpansionHd {
+            header: GmnHeader {
+                packet_type: CMD_HD_SET_FTC,
+                payload_len: PAYLOAD_LEN_FTC_HD,
+            },
+            gain: FTC_GAIN,
+            on: if on { 1 } else { 0 },
+        });
         let socket = self.ensure_socket().await?;
-        let mut buf = [0u8; 10];
-        buf[0..4].copy_from_slice(&CMD_HD_SET_FTC.to_le_bytes());
-        buf[4..8].copy_from_slice(&2u32.to_le_bytes());
-        buf[8] = 50; // gain
-        buf[9] = if on { 1 } else { 0 };
         socket.send(&buf).await?;
         log::debug!("Garmin {}: sent FTC command on={}", self.radar_type, on);
         Ok(())
@@ -544,36 +553,151 @@ impl CommandSender for Command {
 // against the byte sequences documented in the protocol research.
 // -------------------------------------------------------------------------
 
+/// The payload width each command shape declares. The radar reads the length
+/// before the value, so these belong to the layout rather than to the call
+/// that happens to use it.
+const PAYLOAD_LEN_U8: u32 = 1;
+const PAYLOAD_LEN_U16: u32 = 2;
+const PAYLOAD_LEN_U32: u32 = 4;
+
+/// `0x02B5` carries a gain and a mode, both u32.
+const PAYLOAD_LEN_SEA_HD: u32 = 8;
+
+/// `0x02FC` carries a gain byte and an on/off byte.
+const PAYLOAD_LEN_FTC_HD: u32 = 2;
+
+/// A command frame carrying one byte: `[u32 packet_type][u32 len=1][u8]`.
+///
+/// The opcode is data here, not a layout selector: the same three shapes
+/// carry dozens of different settings. The constructors are what keep the
+/// declared length and the payload from drifting apart.
+#[derive(DekuWrite, Debug, PartialEq)]
+#[deku(endian = "little")]
+struct CommandU8 {
+    header: GmnHeader,
+    value: u8,
+}
+
+/// A command frame carrying a u16: `[u32 packet_type][u32 len=2][u16]`.
+#[derive(DekuWrite, Debug, PartialEq)]
+#[deku(endian = "little")]
+struct CommandU16 {
+    header: GmnHeader,
+    value: u16,
+}
+
+/// A command frame carrying a u32: `[u32 packet_type][u32 len=4][u32]`.
+#[derive(DekuWrite, Debug, PartialEq)]
+#[deku(endian = "little")]
+struct CommandU32 {
+    header: GmnHeader,
+    value: u32,
+}
+
+/// `0x02B5` — HD sea clutter, the one command with an 8-byte payload.
+#[derive(DekuWrite, Debug, PartialEq)]
+#[deku(endian = "little")]
+struct CommandSeaHd {
+    header: GmnHeader,
+    gain: u32,
+    mode: u32,
+}
+
+/// `0x02FC` — HD FTC, whose payload is a gain byte the radar expects even
+/// though mayara models FTC as a plain on/off control.
+#[derive(DekuWrite, Debug, PartialEq)]
+#[deku(endian = "little")]
+struct CommandTargetExpansionHd {
+    header: GmnHeader,
+    gain: u8,
+    on: u8,
+}
+
 /// Build a 9-byte command frame: `[u32 LE packet_type][u32 LE len=1][u8 value]`.
-fn build_packet_9(packet_type: u32, value: u8) -> [u8; 9] {
-    let mut buf = [0u8; 9];
-    buf[0..4].copy_from_slice(&packet_type.to_le_bytes());
-    buf[4..8].copy_from_slice(&1u32.to_le_bytes());
-    buf[8] = value;
-    buf
+fn build_packet_9(packet_type: u32, value: u8) -> Vec<u8> {
+    encode(&CommandU8 {
+        header: GmnHeader {
+            packet_type,
+            payload_len: PAYLOAD_LEN_U8,
+        },
+        value,
+    })
 }
 
 /// Build a 10-byte command frame: `[u32 LE packet_type][u32 LE len=2][u16 LE value]`.
-fn build_packet_10(packet_type: u32, value: u16) -> [u8; 10] {
-    let mut buf = [0u8; 10];
-    buf[0..4].copy_from_slice(&packet_type.to_le_bytes());
-    buf[4..8].copy_from_slice(&2u32.to_le_bytes());
-    buf[8..10].copy_from_slice(&value.to_le_bytes());
-    buf
+fn build_packet_10(packet_type: u32, value: u16) -> Vec<u8> {
+    encode(&CommandU16 {
+        header: GmnHeader {
+            packet_type,
+            payload_len: PAYLOAD_LEN_U16,
+        },
+        value,
+    })
 }
 
 /// Build a 12-byte command frame: `[u32 LE packet_type][u32 LE len=4][u32 LE value]`.
-fn build_packet_12(packet_type: u32, value: u32) -> [u8; 12] {
-    let mut buf = [0u8; 12];
-    buf[0..4].copy_from_slice(&packet_type.to_le_bytes());
-    buf[4..8].copy_from_slice(&4u32.to_le_bytes());
-    buf[8..12].copy_from_slice(&value.to_le_bytes());
-    buf
+fn build_packet_12(packet_type: u32, value: u32) -> Vec<u8> {
+    encode(&CommandU32 {
+        header: GmnHeader {
+            packet_type,
+            payload_len: PAYLOAD_LEN_U32,
+        },
+        value,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hd_sea_frame_layout() {
+        // 0x02B5 is the one command with an 8-byte payload: gain, then the
+        // mode (2 = auto, 1 = manual). It bypasses the three builders, so
+        // nothing else pins its bytes.
+        let buf = encode(&CommandSeaHd {
+            header: GmnHeader {
+                packet_type: CMD_HD_SET_SEA,
+                payload_len: PAYLOAD_LEN_SEA_HD,
+            },
+            gain: 51,
+            mode: 2,
+        });
+
+        assert_eq!(
+            buf,
+            [
+                0xb5, 0x02, 0x00, 0x00, // packet_type = 0x02b5
+                0x08, 0x00, 0x00, 0x00, // payload_len = 8
+                0x33, 0x00, 0x00, 0x00, // gain = 51
+                0x02, 0x00, 0x00, 0x00, // mode = auto
+            ]
+        );
+    }
+
+    #[test]
+    fn hd_ftc_frame_layout() {
+        // 0x02FC carries a gain byte the radar expects even though mayara
+        // models FTC as a plain on/off control.
+        let buf = encode(&CommandTargetExpansionHd {
+            header: GmnHeader {
+                packet_type: CMD_HD_SET_FTC,
+                payload_len: PAYLOAD_LEN_FTC_HD,
+            },
+            gain: 50,
+            on: 1,
+        });
+
+        assert_eq!(
+            buf,
+            [
+                0xfc, 0x02, 0x00, 0x00, // packet_type = 0x02fc
+                0x02, 0x00, 0x00, 0x00, // payload_len = 2
+                0x32, // gain = 50
+                0x01, // on
+            ]
+        );
+    }
 
     #[test]
     fn build_packet_9_layout() {

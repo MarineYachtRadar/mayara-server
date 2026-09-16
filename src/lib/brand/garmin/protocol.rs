@@ -69,6 +69,24 @@ pub(crate) const DATA_PORT: u16 = 50102;
 /// with: `[u32 LE packet_type][u32 LE payload_len]`.
 pub(crate) const GMN_HEADER_LEN: usize = 8;
 
+use deku::{DekuRead, DekuWrite};
+
+/// The header every Garmin packet starts with, in both directions.
+///
+/// `payload_len` counts the bytes after this header. For the scalar setting
+/// reports it also picks the value's width; everywhere else it is advisory,
+/// and the layout that follows says how long the packet really is.
+#[derive(DekuRead, DekuWrite, Debug, PartialEq)]
+#[deku(
+    ctx = "endian: deku::ctx::Endian",
+    endian = "endian",
+    ctx_default = "deku::ctx::Endian::Little"
+)]
+pub(crate) struct GmnHeader {
+    pub(crate) packet_type: u32,
+    pub(crate) payload_len: u32,
+}
+
 // =============================================================================
 // Spoke geometry — HD (legacy)
 // =============================================================================

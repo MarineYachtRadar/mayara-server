@@ -15,6 +15,10 @@
 
 #![allow(dead_code)]
 
+use deku::DekuRead;
+
+use crate::util::decode_head;
+
 /// Number of u64 capability words on the wire.
 const CAP_WORDS: usize = 5;
 
@@ -26,6 +30,16 @@ const CAP_BODY_FIRST_WORD_OFFSET: usize = 8;
 /// Total length (in bytes) of a `0x09B1` message body, including the 8-byte
 /// header offset prefix.
 const CAP_BODY_TOTAL_LEN: usize = CAP_BODY_FIRST_WORD_OFFSET + CAP_WORDS * 8;
+
+/// The body of a `0x09B1`. What the bytes before the first capability word
+/// mean is not known; 0x30 among them is the body length and 0x01 looks like
+/// a version, but nothing on the wire confirms either.
+#[derive(DekuRead, Debug, PartialEq)]
+#[deku(endian = "little")]
+struct CapabilityBody {
+    _u00: [u8; CAP_BODY_FIRST_WORD_OFFSET],
+    bits: [u64; CAP_WORDS],
+}
 
 /// Capability bit identifiers. Numeric values match the per-bit indices
 /// used by the Garmin MFD; the multi-byte u64 layout is hidden inside
@@ -150,14 +164,10 @@ impl GarminCapabilities {
     /// network**, including the 8-byte capability-message header that
     /// precedes the five u64 words).
     pub(crate) fn parse(payload: &[u8]) -> Option<Self> {
-        if payload.len() < CAP_BODY_TOTAL_LEN {
-            return None;
-        }
+        let body: CapabilityBody = decode_head(payload).ok()?;
+
         let mut caps = Self::empty();
-        for word in 0..CAP_WORDS {
-            let start = CAP_BODY_FIRST_WORD_OFFSET + word * 8;
-            caps.bits[word] = u64::from_le_bytes(payload[start..start + 8].try_into().ok()?);
-        }
+        caps.bits = body.bits;
         Some(caps)
     }
 

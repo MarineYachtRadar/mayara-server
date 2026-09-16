@@ -10,6 +10,7 @@ use crate::brand::{LocatorId, RadarLocator};
 use crate::locator::LocatorAddress;
 use crate::radar::range::Ranges;
 use crate::radar::{RadarInfo, SharedRadars};
+use crate::util::decode_head;
 use crate::{Brand, Cli};
 
 mod capabilities;
@@ -251,11 +252,11 @@ impl GarminLocator {
         radars: &SharedRadars,
         subsys: &SubsystemHandle,
     ) -> io::Result<()> {
-        if report.len() < GMN_HEADER_LEN {
+        // A packet too short to carry a header says nothing about who sent it.
+        let Ok(header) = decode_head::<GmnHeader>(report) else {
             return Ok(());
-        }
-
-        let packet_type = u32::from_le_bytes(report[0..4].try_into().unwrap());
+        };
+        let packet_type = header.packet_type;
 
         // CDM messages (broadcast on a separate multicast group).
         if packet_type == MSG_CDM_HEARTBEAT {

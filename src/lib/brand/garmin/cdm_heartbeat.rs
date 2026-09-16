@@ -92,30 +92,57 @@ const PAYLOAD_LEN: usize = 22;
 /// Full datagram length: GMN header + payload.
 const PACKET_LEN: usize = GMN_HEADER_LEN + PAYLOAD_LEN;
 
+use deku::DekuWrite;
+
+/// The heartbeat mayara broadcasts: the GMN header and the V2 payload.
+///
+/// We publish no services, so the service array is empty. A peer looking for
+/// the identifier after that array lands on the 4-byte service-section
+/// padding, which makes the identifier mayara advertises zero.
+#[derive(DekuWrite, Debug, PartialEq)]
+#[deku(endian = "little")]
+struct HeartbeatPacket {
+    packet_type: u32,
+    payload_len: u32,
+    version: u8,               // +00
+    _padding: u8,              // +01
+    product_id: u16,           // +02
+    _simulator_mode: u8,       // +04
+    product_subtype: u8,       // +05
+    syc_group_id: u8,          // +06
+    _constant: u8,             // +07
+    _service_count: u8,        // +08
+    _padding_2: [u8; 3],       // +09..0c
+    _service_padding: [u8; 4], // +0c..10, the firmware's minimum
+    tail_tag: u8,              // +10
+    tail_len: u8,              // +11
+    seq: u32,                  // +12..16
+}
+
 /// Build the full 30-byte GMN packet (8-byte header + 22-byte payload).
 pub(crate) fn build(syc_group_id: u8, seq: u32) -> [u8; PACKET_LEN] {
+    let packet = HeartbeatPacket {
+        packet_type: MSG_CDM_HEARTBEAT,
+        payload_len: PAYLOAD_LEN as u32,
+        version: 2,
+        _padding: 0,
+        product_id: MAYARA_PRODUCT_ID,
+        _simulator_mode: 0,
+        product_subtype: MAYARA_PRODUCT_SUBTYPE,
+        syc_group_id,
+        _constant: 1,
+        _service_count: 0,
+        _padding_2: [0; 3],
+        _service_padding: [0; 4],
+        tail_tag: 0x01,
+        tail_len: 0x04,
+        seq,
+    };
+
+    let bytes = crate::util::encode(&packet);
+
     let mut p = [0u8; PACKET_LEN];
-
-    // GMN header: msg_id + payload_len.
-    p[0..4].copy_from_slice(&MSG_CDM_HEARTBEAT.to_le_bytes());
-    p[4..8].copy_from_slice(&(PAYLOAD_LEN as u32).to_le_bytes());
-
-    // Payload — offsets relative to GMN_HEADER_LEN (= 8).
-    const H: usize = GMN_HEADER_LEN;
-    p[H] = 2; // +00 version_marker
-    // p[H + 1] = 0; // pad
-    p[H + 2..H + 4].copy_from_slice(&MAYARA_PRODUCT_ID.to_le_bytes());
-    // p[H + 4] = 0; // simulator_mode
-    p[H + 5] = MAYARA_PRODUCT_SUBTYPE;
-    p[H + 6] = syc_group_id;
-    p[H + 7] = 1; // constant
-    // p[H + 8] = 0; // service_count
-    // p[H + 9..H + 12] = pad
-    // p[H + 12..H + 16] = service-section padding (firmware minimum)
-    p[H + 16] = 0x01; // tail tag type
-    p[H + 17] = 0x04; // tail tag length
-    p[H + 18..H + 22].copy_from_slice(&seq.to_le_bytes());
-
+    p.copy_from_slice(&bytes);
     p
 }
 

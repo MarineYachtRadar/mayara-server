@@ -35,16 +35,44 @@
 
 #![allow(dead_code)]
 
-use super::protocol::{
-    CDM_OFFSET_PRODUCT_ID, CDM_OFFSET_PRODUCT_SUBTYPE, CDM_OFFSET_SERVICE_COUNT,
-    CDM_OFFSET_SIMULATOR_MODE, CDM_OFFSET_SYC_GROUP_ID, CDM_OFFSET_VERSION_MARKER,
-    CDM_SERVICE_ARRAY_OFFSET, CDM_SERVICE_ID_LEN,
-};
+use deku::{DekuRead, DekuWrite};
 
-/// Minimum number of bytes the CDM heartbeat body must contain (i.e.
-/// after the 8-byte GMN header has been stripped) for us to extract
-/// the product_id, subtype, and syc_group_id.
-const MIN_CDM_BODY_LEN: usize = 12;
+use super::protocol::GmnHeader;
+use crate::util::decode_head;
+
+/// The fixed 12-byte prefix of a heartbeat body, i.e. what is left once the
+/// 8-byte GMN header has been stripped. This says what kind of device is
+/// talking; which one it is comes from the identifier past the service array,
+/// in [`CdmHeartbeatWithId`].
+#[derive(DekuRead, Debug)]
+#[deku(
+    ctx = "endian: deku::ctx::Endian",
+    endian = "endian",
+    ctx_default = "deku::ctx::Endian::Little"
+)]
+struct CdmHeartbeatPrefix {
+    version: u8,         // +00
+    _padding: u8,        // +01
+    product_id: u16,     // +02
+    simulator_mode: u8,  // +04
+    product_subtype: u8, // +05
+    syc_group_id: u8,    // +06
+    _constant: u8,       // +07
+    service_count: u8,   // +08
+    _padding_2: [u8; 3], // +09..0c
+}
+
+/// The prefix, the services the device publishes, and the identifier that
+/// follows them. A device publishing fewer services carries its identifier
+/// closer to the front, so the offset is not fixed.
+#[derive(DekuRead, Debug)]
+#[deku(endian = "little")]
+struct CdmHeartbeatWithId {
+    prefix: CdmHeartbeatPrefix,
+    #[deku(count = "prefix.service_count")]
+    _service_ids: Vec<u32>,
+    unique_id: u32,
+}
 
 /// Decoded fields from a `0x038e` CDM heartbeat.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,37 +101,28 @@ pub(crate) struct CdmHeartbeat {
 /// **after** the 8-byte GMN header. Returns `None` if the body is too
 /// short or has the wrong version marker.
 pub(crate) fn parse(payload: &[u8]) -> Option<CdmHeartbeat> {
-    if payload.len() < MIN_CDM_BODY_LEN {
-        return None;
-    }
-    let version = payload[CDM_OFFSET_VERSION_MARKER];
+    let prefix: CdmHeartbeatPrefix = decode_head(payload).ok()?;
+
     // Garmin only emits version 2 heartbeats. We accept it
     // strictly so a stray packet with the same multicast address but
     // a different format doesn't poison our state.
-    if version != 2 {
+    if prefix.version != 2 {
         return None;
     }
-    let product_id = u16::from_le_bytes(
-        payload[CDM_OFFSET_PRODUCT_ID..CDM_OFFSET_PRODUCT_ID + 2]
-            .try_into()
-            .ok()?,
-    );
-    // The identifier sits after a variable-length service array, so its
-    // offset depends on how many services this device publishes.
-    let unique_id = payload
-        .get(CDM_OFFSET_SERVICE_COUNT)
-        .map(|count| CDM_SERVICE_ARRAY_OFFSET + *count as usize * CDM_SERVICE_ID_LEN)
-        .and_then(|at| payload.get(at..at + 4))
-        .and_then(|b| b.try_into().ok())
-        .map(u32::from_le_bytes);
+
+    // A body that stops before the identifier still says who the device is,
+    // so the identifier is read separately and may be missing.
+    let unique_id = decode_head::<CdmHeartbeatWithId>(payload)
+        .ok()
+        .map(|body| body.unique_id);
 
     Some(CdmHeartbeat {
-        version,
-        product_id,
+        version: prefix.version,
+        product_id: prefix.product_id,
         unique_id,
-        simulator_mode: payload[CDM_OFFSET_SIMULATOR_MODE],
-        product_subtype: payload[CDM_OFFSET_PRODUCT_SUBTYPE],
-        syc_group_id: payload[CDM_OFFSET_SYC_GROUP_ID],
+        simulator_mode: prefix.simulator_mode,
+        product_subtype: prefix.product_subtype,
+        syc_group_id: prefix.syc_group_id,
     })
 }
 
@@ -131,23 +150,35 @@ pub(crate) struct CdmProductData {
 /// Parse the body of a `0x0392` product data response. `payload` is the
 /// slice after the 8-byte GMN header.
 pub(crate) fn parse_product_data(payload: &[u8]) -> Option<CdmProductData> {
-    if payload.len() < MIN_PRODUCT_DATA_LEN {
-        return None;
-    }
-    let device_name = crate::util::c_string(&payload[0x04..0x04 + 30])?;
-    let device_alias = crate::util::c_string(&payload[0x23..0x23 + 31])?;
+    let body: CdmProductDataBody = decode_head(payload).ok()?;
+
     Some(CdmProductData {
-        device_name: device_name.to_string(),
-        device_alias: device_alias.to_string(),
+        device_name: crate::util::c_string(&body.device_name)?.to_string(),
+        device_alias: crate::util::c_string(&body.device_alias)?.to_string(),
     })
+}
+
+/// The body of a `0x0392`. Both names are fixed-width and NUL-padded; what
+/// the byte between them is for is not known.
+#[derive(DekuRead, Debug)]
+#[deku(endian = "little")]
+struct CdmProductDataBody {
+    _u00: [u8; 4],          // 0x00..0x04
+    device_name: [u8; 30],  // 0x04..0x22
+    _u01: u8,               // 0x22
+    device_alias: [u8; 31], // 0x23..0x42
 }
 
 /// Build a minimal `0x0391` request packet (just the 8-byte GMN header,
 /// no payload). The radar responds with a `0x0392` on the same port.
 pub(crate) fn build_product_data_request() -> [u8; 8] {
+    let request = GmnHeader {
+        packet_type: MSG_CDM_PRODUCT_DATA_REQUEST,
+        payload_len: 0,
+    };
+
     let mut buf = [0u8; 8];
-    buf[0..4].copy_from_slice(&MSG_CDM_PRODUCT_DATA_REQUEST.to_le_bytes());
-    // payload_len = 0
+    buf.copy_from_slice(&crate::util::encode(&request));
     buf
 }
 
@@ -164,13 +195,27 @@ pub(crate) const CDM_CONTROL_PORT: u16 = 50051;
 pub(crate) fn build_set_alias(alias: &str) -> Vec<u8> {
     let alias_bytes = alias.as_bytes();
     let copy_len = alias_bytes.len().min(30);
-    let payload_len: u32 = 32; // 30 chars + 2 padding/null bytes
-    let mut buf = vec![0u8; 8 + payload_len as usize];
-    buf[0..4].copy_from_slice(&MSG_CDM_SET_ALIAS.to_le_bytes());
-    buf[4..8].copy_from_slice(&payload_len.to_le_bytes());
-    buf[8..8 + copy_len].copy_from_slice(&alias_bytes[..copy_len]);
-    // Rest is already zeroed (NUL padding)
-    buf
+
+    let mut padded = [0u8; SET_ALIAS_PAYLOAD_LEN];
+    padded[..copy_len].copy_from_slice(&alias_bytes[..copy_len]);
+
+    crate::util::encode(&SetAliasPacket {
+        packet_type: MSG_CDM_SET_ALIAS,
+        payload_len: SET_ALIAS_PAYLOAD_LEN as u32,
+        alias: padded,
+    })
+}
+
+/// 30 characters of alias, then two bytes the MFD sends as well.
+const SET_ALIAS_PAYLOAD_LEN: usize = 32;
+
+/// A `0x0393`, whose alias is NUL-padded to its full width.
+#[derive(DekuWrite, Debug, PartialEq)]
+#[deku(endian = "little")]
+struct SetAliasPacket {
+    packet_type: u32,
+    payload_len: u32,
+    alias: [u8; SET_ALIAS_PAYLOAD_LEN],
 }
 
 /// Map a Garmin marine `product_id` to a human-readable model name.
@@ -192,6 +237,69 @@ pub(crate) fn product_name(product_id: u16) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // The parser no longer needs the offset constants — the layout is the
+    // struct — but a test that corrupts one field still names where it is.
+    use crate::brand::garmin::protocol::{CDM_OFFSET_VERSION_MARKER, GMN_HEADER_LEN};
+
+    /// A `0x0392` body with both names at the offsets the radar writes them.
+    fn product_data_body(name: &str, alias: &str) -> Vec<u8> {
+        let mut body = vec![0u8; MIN_PRODUCT_DATA_LEN];
+        body[0x04..0x04 + name.len()].copy_from_slice(name.as_bytes());
+        body[0x23..0x23 + alias.len()].copy_from_slice(alias.as_bytes());
+        body
+    }
+
+    #[test]
+    fn product_data_reads_both_names() {
+        let body = product_data_body("GMR Fantom 24", "Bow Radar");
+
+        let data = parse_product_data(&body).unwrap();
+
+        assert_eq!(data.device_name, "GMR Fantom 24");
+        assert_eq!(data.device_alias, "Bow Radar");
+    }
+
+    /// A body that stops inside the alias has no alias to report.
+    #[test]
+    fn product_data_shorter_than_its_layout_is_rejected() {
+        let body = product_data_body("GMR xHD", "Mast");
+
+        assert!(parse_product_data(&body[..MIN_PRODUCT_DATA_LEN - 1]).is_none());
+        assert!(parse_product_data(&[]).is_none());
+    }
+
+    #[test]
+    fn product_data_request_is_a_bare_header() {
+        assert_eq!(
+            build_product_data_request(),
+            [
+                0x91, 0x03, 0x00, 0x00, // packet_type = 0x0391
+                0x00, 0x00, 0x00, 0x00, // payload_len = 0
+            ]
+        );
+    }
+
+    #[test]
+    fn set_alias_pads_the_name_to_its_full_width() {
+        let buf = build_set_alias("Bow Radar");
+
+        assert_eq!(buf.len(), GMN_HEADER_LEN + SET_ALIAS_PAYLOAD_LEN);
+        assert_eq!(buf[0..4], MSG_CDM_SET_ALIAS.to_le_bytes());
+        assert_eq!(buf[4..8], (SET_ALIAS_PAYLOAD_LEN as u32).to_le_bytes());
+        assert_eq!(&buf[8..17], b"Bow Radar");
+        assert!(buf[17..].iter().all(|&b| b == 0), "alias is NUL-padded");
+    }
+
+    /// The field holds 30 characters; a longer name loses the rest rather
+    /// than running into the two bytes that follow it.
+    #[test]
+    fn set_alias_truncates_a_name_that_does_not_fit() {
+        let buf = build_set_alias("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
+
+        assert_eq!(buf.len(), GMN_HEADER_LEN + SET_ALIAS_PAYLOAD_LEN);
+        assert_eq!(&buf[8..38], b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123");
+        assert_eq!(&buf[38..], &[0, 0]);
+    }
 
     /// CDM heartbeat body from the Fantom Pro radar in
     /// `radar-recordings/garmin/fantom_pro/`. Two published services, so
