@@ -1,22 +1,53 @@
+use deku::DekuWrite;
+
 use crate::radar::settings::{ControlId, ControlValue, SharedControls};
 use crate::radar::{Power, RadarError};
+use crate::util::encode;
 
 use super::Command;
 
+/// A 24-byte RD command that carries a level, at offset 20.
+#[derive(DekuWrite, Debug, Default, PartialEq)]
+#[deku(endian = "little")]
+struct RdValueCommand {
+    lead: [u8; 2],
+    _head: [u8; 18],
+    value: u8,
+    _tail: [u8; 3],
+}
+
+/// A 24-byte RD command that carries an on/off flag, which sits four bytes
+/// earlier in the frame than a level does.
+#[derive(DekuWrite, Debug, Default, PartialEq)]
+#[deku(endian = "little")]
+struct RdOnOffCommand {
+    lead: [u8; 2],
+    _head: [u8; 14],
+    on_off: u8,
+    _tail: [u8; 7],
+}
+
 fn standard_command(cmd: &mut Vec<u8>, lead: &[u8], value: u8) {
-    cmd.extend_from_slice(lead);
-    cmd.extend_from_slice(&[
-        0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, value, 0x00, 0x00, 0x00,
-    ]);
+    cmd.extend_from_slice(&encode(&RdValueCommand {
+        lead: [lead[0], lead[1]],
+        _head: [
+            0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+        ],
+        value,
+        _tail: [0x00; 3],
+    }));
 }
 
 fn on_off_command(cmd: &mut Vec<u8>, lead: &[u8], on_off: u8) {
-    cmd.extend_from_slice(lead);
-    cmd.extend_from_slice(&[
-        0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, on_off,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    ]);
+    cmd.extend_from_slice(&encode(&RdOnOffCommand {
+        lead: [lead[0], lead[1]],
+        _head: [
+            0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ],
+        on_off,
+        _tail: [0x00; 7],
+    }));
 }
 
 pub async fn set_control(
@@ -129,4 +160,36 @@ pub async fn set_control(
     command.send(&cmd).await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RdOnOffCommand, RdValueCommand, on_off_command, standard_command};
+    use crate::util::encode;
+
+    /// Nothing pinned the RD command frames before. Both are 24 bytes and
+    /// differ only in where their payload sits, which is exactly the kind of
+    /// thing that goes wrong unnoticed -- as it did while writing this.
+    #[test]
+    fn rd_command_templates_put_their_payload_where_the_radar_reads_it() {
+        let mut cmd = Vec::new();
+        standard_command(&mut cmd, &[0x01, 0x83], 0x42);
+        assert_eq!(cmd.len(), 24);
+        assert_eq!(cmd[0..2], [0x01, 0x83]);
+        assert_eq!(cmd[20], 0x42, "a level sits at offset 20");
+        assert_eq!(cmd[16], 0x00, "and not where an on/off flag goes");
+
+        let mut cmd = Vec::new();
+        on_off_command(&mut cmd, &[0x01, 0x83], 1);
+        assert_eq!(cmd.len(), 24);
+        assert_eq!(cmd[0..2], [0x01, 0x83]);
+        assert_eq!(cmd[16], 0x01, "a flag sits at offset 16");
+        assert_eq!(cmd[20], 0x00, "and not where a level goes");
+    }
+
+    #[test]
+    fn rd_command_structs_are_both_24_bytes() {
+        assert_eq!(encode(&RdValueCommand::default()).len(), 24);
+        assert_eq!(encode(&RdOnOffCommand::default()).len(), 24);
+    }
 }

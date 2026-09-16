@@ -1,7 +1,48 @@
+use deku::DekuWrite;
+
 use crate::radar::settings::{ControlId, ControlValue, SharedControls};
 use crate::radar::{Power, RadarError};
+use crate::util::encode;
 
 use super::Command;
+
+/// Every Quantum command is these eight bytes: a two-byte opcode, the `28 00`
+/// that marks the family, and two little-endian values. Which of the two
+/// carries the payload depends on whether the command has a channel byte.
+#[derive(DekuWrite, Debug, PartialEq)]
+#[deku(
+    ctx = "endian: deku::ctx::Endian",
+    endian = "endian",
+    ctx_default = "deku::ctx::Endian::Little"
+)]
+struct QuantumCommand {
+    lead: [u8; 2],
+    family: [u8; 2],
+    value1: u16,
+    value2: u16,
+}
+
+impl QuantumCommand {
+    fn new(lead: [u8; 2], value1: u16, value2: u16) -> Self {
+        QuantumCommand {
+            lead,
+            family: QUANTUM_COMMAND_FAMILY,
+            value1,
+            value2,
+        }
+    }
+}
+
+/// The no-transmit sector bounds are the one command with a ninth byte, the
+/// sector the bounds belong to.
+#[derive(DekuWrite, Debug, PartialEq)]
+#[deku(endian = "little")]
+struct QuantumSectorCommand {
+    command: QuantumCommand,
+    sector: u8,
+}
+
+const QUANTUM_COMMAND_FAMILY: [u8; 2] = [0x28, 0x00];
 
 fn one_byte_command(cmd: &mut Vec<u8>, lead: &[u8], value: u8) {
     two_byte_command(cmd, lead, (value as u16) << 8);
@@ -24,10 +65,11 @@ fn two_byte_command(cmd: &mut Vec<u8>, lead: &[u8], value: u16) {
 }
 
 fn two_value_command(cmd: &mut Vec<u8>, lead: &[u8], value1: u16, value2: u16) {
-    cmd.extend_from_slice(lead);
-    cmd.extend_from_slice(&[0x28, 0x00]);
-    cmd.extend_from_slice(&value1.to_le_bytes());
-    cmd.extend_from_slice(&value2.to_le_bytes());
+    cmd.extend_from_slice(&encode(&QuantumCommand::new(
+        [lead[0], lead[1]],
+        value1,
+        value2,
+    )));
 }
 
 pub async fn set_control(
@@ -53,7 +95,7 @@ pub async fn set_control(
                 super::super::send_wake_burst(&command.info.nic_addr).await;
             }
             let code = power_mode_code(power);
-            cmd.extend_from_slice(&[0x10, 0x00, 0x28, 0x00, code, 0x00, 0x00, 0x00]);
+            two_byte_command(&mut cmd, &[0x10, 0x00], code as u16);
         }
 
         ControlId::Range => {
@@ -184,21 +226,34 @@ async fn send_no_transmit_cmd(
     command.send(&cmd).await?;
     cmd.clear();
 
-    two_value_command(
-        &mut cmd,
-        &[0x03, 0x04],
-        value_start as u16,
-        value_end as u16,
-    );
-    cmd.extend_from_slice(&[sector]);
-
-    Ok(cmd)
+    Ok(encode(&QuantumSectorCommand {
+        command: QuantumCommand::new([0x03, 0x04], value_start as u16, value_end as u16),
+        sector,
+    }))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{one_byte_command, power_mode_code, two_byte_command};
+    use super::{
+        QuantumCommand, QuantumSectorCommand, one_byte_command, power_mode_code, two_byte_command,
+    };
     use crate::radar::Power;
+    use crate::util::encode;
+
+    /// The sector bounds are the only Quantum command that is not eight
+    /// bytes, and the sector byte rides outside the frame the helper builds.
+    #[test]
+    fn sector_bounds_command_carries_its_sector_in_a_ninth_byte() {
+        let bytes = encode(&QuantumSectorCommand {
+            command: QuantumCommand::new([0x03, 0x04], -900i16 as u16, 900u16),
+            sector: 2,
+        });
+
+        assert_eq!(
+            bytes,
+            vec![0x03, 0x04, 0x28, 0x00, 0x7c, 0xfc, 0x84, 0x03, 0x02]
+        );
+    }
 
     // Wire-confirmed Quantum SetRadarMode codes (issue #160): standby 0,
     // transmit 1, off 3. Off must not collapse into standby.
