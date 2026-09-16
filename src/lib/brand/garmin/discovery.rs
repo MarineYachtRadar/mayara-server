@@ -35,7 +35,7 @@
 
 #![allow(dead_code)]
 
-use deku::{DekuContainerWrite, DekuRead, DekuWrite};
+use deku::{DekuRead, DekuWrite};
 
 use super::protocol::GmnHeader;
 use crate::util::decode_head;
@@ -177,15 +177,8 @@ pub(crate) fn build_product_data_request() -> [u8; 8] {
     };
 
     let mut buf = [0u8; 8];
-    buf.copy_from_slice(&frame(&request));
+    buf.copy_from_slice(&crate::util::encode(&request));
     buf
-}
-
-/// Writing a fixed-size frame into memory has nothing to fail on.
-fn frame(packet: &impl DekuContainerWrite) -> Vec<u8> {
-    packet
-        .to_bytes()
-        .expect("a CDM frame is fixed size and in memory")
 }
 
 /// `0x0393` — Set device alias. The MFD sends this to rename a device
@@ -205,7 +198,7 @@ pub(crate) fn build_set_alias(alias: &str) -> Vec<u8> {
     let mut padded = [0u8; SET_ALIAS_PAYLOAD_LEN];
     padded[..copy_len].copy_from_slice(&alias_bytes[..copy_len]);
 
-    frame(&SetAliasPacket {
+    crate::util::encode(&SetAliasPacket {
         packet_type: MSG_CDM_SET_ALIAS,
         payload_len: SET_ALIAS_PAYLOAD_LEN as u32,
         alias: padded,

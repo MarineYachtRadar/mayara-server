@@ -92,12 +92,13 @@ const PAYLOAD_LEN: usize = 22;
 /// Full datagram length: GMN header + payload.
 const PACKET_LEN: usize = GMN_HEADER_LEN + PAYLOAD_LEN;
 
-use deku::{DekuContainerWrite, DekuWrite};
+use deku::DekuWrite;
 
 /// The heartbeat mayara broadcasts: the GMN header and the V2 payload.
 ///
-/// We publish no services, so the service array is empty and the identifier
-/// the radar would find after it is the tail tag instead.
+/// We publish no services, so the service array is empty. A peer looking for
+/// the identifier after that array lands on the 4-byte service-section
+/// padding, which makes the identifier mayara advertises zero.
 #[derive(DekuWrite, Debug, PartialEq)]
 #[deku(endian = "little")]
 struct HeartbeatPacket {
@@ -138,9 +139,7 @@ pub(crate) fn build(syc_group_id: u8, seq: u32) -> [u8; PACKET_LEN] {
         seq,
     };
 
-    let bytes = packet
-        .to_bytes()
-        .expect("a heartbeat is fixed size and in memory");
+    let bytes = crate::util::encode(&packet);
 
     let mut p = [0u8; PACKET_LEN];
     p.copy_from_slice(&bytes);

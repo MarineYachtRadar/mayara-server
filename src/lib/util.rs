@@ -38,6 +38,14 @@ pub(crate) fn decode_head<'a, T: deku::DekuContainerRead<'a>>(
     Ok(T::from_bytes((bytes, 0))?.1)
 }
 
+/// Write a fixed-size packet into memory, which has nothing to fail on. The
+/// reading side is [`decode_exact`] and [`decode_head`].
+pub(crate) fn encode(packet: &impl deku::DekuContainerWrite) -> Vec<u8> {
+    packet
+        .to_bytes()
+        .expect("a fixed-size packet written into memory")
+}
+
 pub(crate) fn c_string(bytes: &[u8]) -> Option<&str> {
     let bytes_without_null = match bytes.iter().position(|&b| b == 0) {
         Some(ix) => &bytes[..ix],

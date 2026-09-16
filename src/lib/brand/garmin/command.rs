@@ -2,7 +2,7 @@ use std::io;
 use std::net::SocketAddrV4;
 
 use async_trait::async_trait;
-use deku::{DekuContainerWrite, DekuWrite};
+use deku::DekuWrite;
 use tokio::net::UdpSocket;
 
 use super::GarminRadarType;
@@ -10,6 +10,7 @@ use super::protocol::*;
 use crate::brand::CommandSender;
 use crate::radar::settings::{ControlId, ControlValue, SharedControls};
 use crate::radar::{DopplerMode, Power, RadarError};
+use crate::util::encode;
 
 /// Garmin command sender. In dual-range mode each range gets its own
 /// `Command` instance — Range B's instance has `range_b = true` and
@@ -205,9 +206,11 @@ impl Command {
     }
 
     async fn set_sea_hd(&mut self, auto: bool, value: u8) -> io::Result<()> {
-        let buf = frame(&CommandSeaHd {
-            packet_type: CMD_HD_SET_SEA,
-            payload_len: 8,
+        let buf = encode(&CommandSeaHd {
+            header: GmnHeader {
+                packet_type: CMD_HD_SET_SEA,
+                payload_len: PAYLOAD_LEN_SEA_HD,
+            },
             gain: value as u32,
             mode: if auto { 2 } else { 1 },
         });
@@ -257,9 +260,11 @@ impl Command {
         // toggled).
         const FTC_GAIN: u8 = 50;
 
-        let buf = frame(&CommandTargetExpansionHd {
-            packet_type: CMD_HD_SET_FTC,
-            payload_len: 2,
+        let buf = encode(&CommandTargetExpansionHd {
+            header: GmnHeader {
+                packet_type: CMD_HD_SET_FTC,
+                payload_len: PAYLOAD_LEN_FTC_HD,
+            },
             gain: FTC_GAIN,
             on: if on { 1 } else { 0 },
         });
@@ -548,6 +553,19 @@ impl CommandSender for Command {
 // against the byte sequences documented in the protocol research.
 // -------------------------------------------------------------------------
 
+/// The payload width each command shape declares. The radar reads the length
+/// before the value, so these belong to the layout rather than to the call
+/// that happens to use it.
+const PAYLOAD_LEN_U8: u32 = 1;
+const PAYLOAD_LEN_U16: u32 = 2;
+const PAYLOAD_LEN_U32: u32 = 4;
+
+/// `0x02B5` carries a gain and a mode, both u32.
+const PAYLOAD_LEN_SEA_HD: u32 = 8;
+
+/// `0x02FC` carries a gain byte and an on/off byte.
+const PAYLOAD_LEN_FTC_HD: u32 = 2;
+
 /// A command frame carrying one byte: `[u32 packet_type][u32 len=1][u8]`.
 ///
 /// The opcode is data here, not a layout selector: the same three shapes
@@ -556,8 +574,7 @@ impl CommandSender for Command {
 #[derive(DekuWrite, Debug, PartialEq)]
 #[deku(endian = "little")]
 struct CommandU8 {
-    packet_type: u32,
-    payload_len: u32,
+    header: GmnHeader,
     value: u8,
 }
 
@@ -565,8 +582,7 @@ struct CommandU8 {
 #[derive(DekuWrite, Debug, PartialEq)]
 #[deku(endian = "little")]
 struct CommandU16 {
-    packet_type: u32,
-    payload_len: u32,
+    header: GmnHeader,
     value: u16,
 }
 
@@ -574,8 +590,7 @@ struct CommandU16 {
 #[derive(DekuWrite, Debug, PartialEq)]
 #[deku(endian = "little")]
 struct CommandU32 {
-    packet_type: u32,
-    payload_len: u32,
+    header: GmnHeader,
     value: u32,
 }
 
@@ -583,8 +598,7 @@ struct CommandU32 {
 #[derive(DekuWrite, Debug, PartialEq)]
 #[deku(endian = "little")]
 struct CommandSeaHd {
-    packet_type: u32,
-    payload_len: u32,
+    header: GmnHeader,
     gain: u32,
     mode: u32,
 }
@@ -594,42 +608,40 @@ struct CommandSeaHd {
 #[derive(DekuWrite, Debug, PartialEq)]
 #[deku(endian = "little")]
 struct CommandTargetExpansionHd {
-    packet_type: u32,
-    payload_len: u32,
+    header: GmnHeader,
     gain: u8,
     on: u8,
 }
 
-/// Writing a fixed-size frame into memory has nothing to fail on.
-fn frame(command: &impl DekuContainerWrite) -> Vec<u8> {
-    command
-        .to_bytes()
-        .expect("a command frame is fixed size and in memory")
-}
-
 /// Build a 9-byte command frame: `[u32 LE packet_type][u32 LE len=1][u8 value]`.
 fn build_packet_9(packet_type: u32, value: u8) -> Vec<u8> {
-    frame(&CommandU8 {
-        packet_type,
-        payload_len: 1,
+    encode(&CommandU8 {
+        header: GmnHeader {
+            packet_type,
+            payload_len: PAYLOAD_LEN_U8,
+        },
         value,
     })
 }
 
 /// Build a 10-byte command frame: `[u32 LE packet_type][u32 LE len=2][u16 LE value]`.
 fn build_packet_10(packet_type: u32, value: u16) -> Vec<u8> {
-    frame(&CommandU16 {
-        packet_type,
-        payload_len: 2,
+    encode(&CommandU16 {
+        header: GmnHeader {
+            packet_type,
+            payload_len: PAYLOAD_LEN_U16,
+        },
         value,
     })
 }
 
 /// Build a 12-byte command frame: `[u32 LE packet_type][u32 LE len=4][u32 LE value]`.
 fn build_packet_12(packet_type: u32, value: u32) -> Vec<u8> {
-    frame(&CommandU32 {
-        packet_type,
-        payload_len: 4,
+    encode(&CommandU32 {
+        header: GmnHeader {
+            packet_type,
+            payload_len: PAYLOAD_LEN_U32,
+        },
         value,
     })
 }
