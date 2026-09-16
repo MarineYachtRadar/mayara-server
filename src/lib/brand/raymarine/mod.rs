@@ -1,5 +1,5 @@
 use anyhow::{Error, bail};
-use serde::Deserialize;
+use deku::DekuRead;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::{Arc, Mutex};
@@ -12,7 +12,7 @@ use crate::locator::LocatorAddress;
 use crate::network::LittleEndianSocketAddrV4;
 use crate::radar::settings::ControlId;
 use crate::radar::{RadarInfo, SharedRadars};
-use crate::util::{PrintableSlice, c_string, decode_bin};
+use crate::util::{PrintableSlice, c_string, decode_exact};
 use crate::{Brand, Cli};
 
 use super::LocatorId;
@@ -194,30 +194,30 @@ which the next 36 byte beacon also contains.
 We put them in a map for now, but probably we only need to store the last one.
  */
 
-#[derive(Deserialize, Debug, Copy, Clone)]
-#[repr(C, packed)]
+#[derive(DekuRead, Debug, Copy, Clone)]
+#[deku(endian = "little")]
 struct RaymarineBeacon36 {
-    beacon_type: [u8; 4],              // 0: always 0
-    link_id: [u8; 4],                  // 4
-    subtype: [u8; 4],                  // 8
-    _field5: [u8; 4],                  // 12
-    _field6: [u8; 4],                  // 16
+    beacon_type: u32,                  // 0: always 0
+    link_id: u32,                      // 4
+    subtype: u32,                      // 8
+    _field5: u32,                      // 12
+    _field6: u32,                      // 16
     report: LittleEndianSocketAddrV4,  // 20
     _align1: [u8; 2],                  // 26
     command: LittleEndianSocketAddrV4, // 28
     _align2: [u8; 2],                  // 34
 }
 
-#[derive(Deserialize, Debug, Copy, Clone)]
-#[repr(C, packed)]
+#[derive(DekuRead, Debug, Copy, Clone)]
+#[deku(endian = "little")]
 struct RaymarineBeacon56 {
-    beacon_type: [u8; 4], // 0: always 1
-    subtype: [u8; 4],     // 4
-    link_id: [u8; 4],     // 8
-    _field4: [u8; 4],     // 12
-    _field5: [u8; 4],     // 16
+    beacon_type: u32,     // 0: always 1
+    subtype: u32,         // 4
+    link_id: u32,         // 8
+    _field4: u32,         // 12
+    _field5: u32,         // 16
     model_name: [u8; 32], // 20: String like "QuantumRadar" (subtype 0x66), "Ethernet Dome" (subtype 0x0b) or "Digital Radar" (subtype 0x0a)
-    _field7: [u8; 4],     // 52
+    _field7: u32,         // 52
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -288,11 +288,11 @@ impl RaymarineLocator {
         from: &Ipv4Addr,
         radars: &SharedRadars,
     ) -> Result<Option<(RadarInfo, BaseModel)>, Error> {
-        match decode_bin::<RaymarineBeacon36>(report) {
+        match decode_exact::<RaymarineBeacon36>(report) {
             Ok(data) => {
-                let beacon_type = u32::from_le_bytes(data.beacon_type);
-                let link_id_preview = u32::from_le_bytes(data.link_id);
-                let subtype_preview = u32::from_le_bytes(data.subtype);
+                let beacon_type = data.beacon_type;
+                let link_id_preview = data.link_id;
+                let subtype_preview = data.subtype;
                 log::debug!(
                     "{}: Beacon 36: type=0x{:x} link_id=0x{:08x} subtype=0x{:x} report={} cmd={}",
                     from,
@@ -311,7 +311,7 @@ impl RaymarineLocator {
                     return Ok(None);
                 }
 
-                let link_id = u32::from_le_bytes(data.link_id);
+                let link_id = data.link_id;
 
                 if let Some(info) = self.ids.get(&link_id) {
                     log::debug!(
@@ -324,7 +324,7 @@ impl RaymarineLocator {
                     log::trace!("{}: data {:?}", from, data);
 
                     let model = info.model;
-                    let subtype = u32::from_le_bytes(data.subtype);
+                    let subtype = data.subtype;
 
                     match model {
                         BaseModel::Quantum => {
@@ -437,11 +437,11 @@ impl RaymarineLocator {
     }
 
     fn process_beacon_56_report(&mut self, report: &[u8], from: &Ipv4Addr) -> Result<(), Error> {
-        match decode_bin::<RaymarineBeacon56>(report) {
+        match decode_exact::<RaymarineBeacon56>(report) {
             Ok(data) => {
-                let beacon_type = u32::from_le_bytes(data.beacon_type);
-                let subtype = u32::from_le_bytes(data.subtype);
-                let link_id = u32::from_le_bytes(data.link_id);
+                let beacon_type = data.beacon_type;
+                let subtype = data.subtype;
+                let link_id = data.link_id;
                 log::debug!(
                     "{}: Beacon 56: type=0x{:x} subtype=0x{:x} link_id=0x{:08x} model={:?}",
                     from,
@@ -466,8 +466,8 @@ impl RaymarineLocator {
                     return Ok(());
                 }
 
-                let link_id = u32::from_le_bytes(data.link_id);
-                let subtype = u32::from_le_bytes(data.subtype);
+                let link_id = data.link_id;
+                let subtype = data.subtype;
 
                 match subtype {
                     protocol::beacon56::QUANTUM => {
