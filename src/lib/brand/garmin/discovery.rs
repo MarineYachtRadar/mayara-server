@@ -37,6 +37,7 @@
 
 use deku::{DekuContainerWrite, DekuRead, DekuWrite};
 
+use super::protocol::GmnHeader;
 use crate::util::decode_head;
 
 /// The fixed 12-byte prefix of a heartbeat body, i.e. what is left once the
@@ -178,14 +179,6 @@ pub(crate) fn build_product_data_request() -> [u8; 8] {
     let mut buf = [0u8; 8];
     buf.copy_from_slice(&frame(&request));
     buf
-}
-
-/// A GMN header with nothing after it.
-#[derive(DekuWrite, Debug, PartialEq)]
-#[deku(endian = "little")]
-struct GmnHeader {
-    packet_type: u32,
-    payload_len: u32,
 }
 
 /// Writing a fixed-size frame into memory has nothing to fail on.

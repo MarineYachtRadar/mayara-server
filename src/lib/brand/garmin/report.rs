@@ -37,9 +37,8 @@ const STAND_DOWN_CHECK_INTERVAL: Duration = Duration::from_secs(5);
 #[derive(DekuRead, Debug, PartialEq)]
 #[deku(endian = "little")]
 struct ScalarReport {
-    _packet_type: u32,
-    payload_len: u32,
-    #[deku(ctx = "*payload_len")]
+    header: GmnHeader,
+    #[deku(ctx = "header.payload_len")]
     value: ScalarValue,
 }
 
@@ -550,17 +549,16 @@ impl GarminReportReceiver {
             bail!("Report too short: {} bytes", data.len());
         }
 
-        let packet_type = u32::from_le_bytes(data[0..4].try_into().unwrap());
-        let len = u32::from_le_bytes(data[4..8].try_into().unwrap());
+        let header: GmnHeader = decode_head(data)?;
 
         log::trace!(
             "{}: Report packet_type={:04X} len={}",
             self.common.key,
-            packet_type,
-            len
+            header.packet_type,
+            header.payload_len
         );
 
-        match packet_type {
+        match header.packet_type {
             // HD spoke data (on same port as reports)
             MSG_HD_SPOKE if self.radar_type == GarminRadarType::HD => {
                 self.process_hd_spoke(data)?;
@@ -735,14 +733,14 @@ impl GarminReportReceiver {
             MSG_CAPABILITY => self.process_capability(data)?,
             MSG_RANGE_TABLE => self.process_range_table(data)?,
             _ => {
-                if !self.reported_unknown.contains_key(&packet_type) {
+                if !self.reported_unknown.contains_key(&header.packet_type) {
                     log::debug!(
                         "{}: Unknown report packet_type={:04X} len={}",
                         self.common.key,
-                        packet_type,
-                        len
+                        header.packet_type,
+                        header.payload_len
                     );
-                    self.reported_unknown.insert(packet_type, true);
+                    self.reported_unknown.insert(header.packet_type, true);
                 }
             }
         }
