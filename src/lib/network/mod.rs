@@ -65,8 +65,17 @@ impl fmt::Debug for NetworkSocketAddrV4 {
     }
 }
 
-#[derive(Deserialize, Copy, Clone)]
+use deku::DekuRead;
+
+/// An address as Raymarine writes it: both halves little-endian, unlike
+/// [`NetworkSocketAddrV4`], which carries them in network order.
+#[derive(Deserialize, DekuRead, Copy, Clone)]
 #[repr(C)]
+#[deku(
+    ctx = "endian: deku::ctx::Endian",
+    endian = "endian",
+    ctx_default = "deku::ctx::Endian::Little"
+)]
 pub(crate) struct LittleEndianSocketAddrV4 {
     addr: [u8; 4],
     port: [u8; 2],

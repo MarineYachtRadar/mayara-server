@@ -8,6 +8,7 @@
 //! The message is 32 bytes: a 4-byte sub-ID, a 4-byte flags bitmask
 //! indicating which fields are valid, then 6 × i32 navigation values.
 
+use deku::DekuWrite;
 use std::f64::consts::TAU;
 use std::time::Duration;
 use tokio::net::UdpSocket;
@@ -58,47 +59,106 @@ pub(super) async fn run(subsys: &mut SubsystemHandle, socket: UdpSocket) -> Resu
     }
 }
 
-fn build_navdata_message() -> Vec<u8> {
-    let mut buf = vec![0u8; 32];
-    buf[0..4].copy_from_slice(&protocol::NAVDATA_SUB_ID.to_le_bytes());
+/// The 32-byte message. A field the vessel has no value for is sent as zero
+/// and its flag left clear, which is what `flags` is for.
+#[derive(DekuWrite, Debug, Default, PartialEq)]
+#[deku(endian = "little")]
+struct NavDataMessage {
+    sub_id: u32,
+    flags: u32,
+    heading: i32,
+    /// Speed through water, which Signal K does not give us; always zero.
+    stw: i32,
+    cog: i32,
+    sog: i32,
+    latitude: i32,
+    longitude: i32,
+}
 
-    let mut flags: u32 = 0;
+fn build_navdata_message() -> Vec<u8> {
+    let mut msg = NavDataMessage {
+        sub_id: protocol::NAVDATA_SUB_ID,
+        ..Default::default()
+    };
 
     if let Some(heading) = get_heading_true() {
-        flags |= FLAG_HEADING;
-        let val = radians_to_fixed(heading);
-        buf[8..12].copy_from_slice(&val.to_le_bytes());
+        msg.flags |= FLAG_HEADING;
+        msg.heading = radians_to_fixed(heading);
     }
 
-    // STW not commonly available via Signal K; skip for now
-    // flags |= FLAG_STW;
-    // buf[12..16].copy_from_slice(&stw.to_le_bytes());
-
     if let Some(cog) = get_cog() {
-        flags |= FLAG_COG;
-        let val = radians_to_fixed(cog);
-        buf[16..20].copy_from_slice(&val.to_le_bytes());
+        msg.flags |= FLAG_COG;
+        msg.cog = radians_to_fixed(cog);
     }
 
     if let Some(sog) = get_sog() {
-        flags |= FLAG_SOG;
+        msg.flags |= FLAG_SOG;
         // SOG is float × 10, as i32 (m/s × 10)
-        let val = (sog * 10.0) as i32;
-        buf[20..24].copy_from_slice(&val.to_le_bytes());
+        msg.sog = (sog * 10.0) as i32;
     }
 
     let (lat, lon) = get_position();
     if let (Some(lat), Some(lon)) = (lat, lon) {
-        flags |= FLAG_POSITION;
+        msg.flags |= FLAG_POSITION;
         // Lat/lon in fixed-point format — the research says "from
         // CLatLong, rounded" which is likely degrees × 1e7 (standard
         // marine fixed-point), but this needs verification.
-        let lat_fixed = (lat * 1e7) as i32;
-        let lon_fixed = (lon * 1e7) as i32;
-        buf[24..28].copy_from_slice(&lat_fixed.to_le_bytes());
-        buf[28..32].copy_from_slice(&lon_fixed.to_le_bytes());
+        msg.latitude = (lat * 1e7) as i32;
+        msg.longitude = (lon * 1e7) as i32;
     }
 
-    buf[4..8].copy_from_slice(&flags.to_le_bytes());
-    buf
+    crate::util::encode(&msg)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        FLAG_COG, FLAG_HEADING, FLAG_POSITION, FLAG_SOG, NavDataMessage, radians_to_fixed,
+    };
+    use crate::util::encode;
+
+    const NAVDATA_MESSAGE_LENGTH: usize = 32;
+
+    /// Nothing pinned this message's bytes before. The radar reads the flags
+    /// word to decide which of the six values to believe, so the flags and
+    /// the values have to agree about where they are.
+    #[test]
+    fn navdata_message_layout() {
+        let msg = NavDataMessage {
+            sub_id: 0x2800_0018,
+            flags: FLAG_HEADING | FLAG_COG | FLAG_SOG | FLAG_POSITION,
+            heading: radians_to_fixed(std::f64::consts::PI),
+            stw: 0,
+            cog: 1000,
+            sog: 55,
+            latitude: 523_456_789,
+            longitude: -43_210_987,
+        };
+
+        let bytes = encode(&msg);
+
+        assert_eq!(bytes.len(), NAVDATA_MESSAGE_LENGTH);
+        assert_eq!(bytes[0..4], 0x2800_0018u32.to_le_bytes());
+        assert_eq!(bytes[4..8], 0x1du32.to_le_bytes()); // heading|cog|sog|position
+        assert_eq!(bytes[8..12], 31415i32.to_le_bytes()); // π in 0.0001 rad
+        assert_eq!(bytes[12..16], 0i32.to_le_bytes()); // speed through water
+        assert_eq!(bytes[16..20], 1000i32.to_le_bytes());
+        assert_eq!(bytes[20..24], 55i32.to_le_bytes());
+        assert_eq!(bytes[24..28], 523_456_789i32.to_le_bytes());
+        assert_eq!(bytes[28..32], (-43_210_987i32).to_le_bytes());
+    }
+
+    /// A vessel with no data at all still sends a well-formed message: the
+    /// radar is told that none of the values mean anything.
+    #[test]
+    fn navdata_message_without_any_data_flags_nothing() {
+        let bytes = encode(&NavDataMessage {
+            sub_id: 0x2800_0018,
+            ..Default::default()
+        });
+
+        assert_eq!(bytes.len(), NAVDATA_MESSAGE_LENGTH);
+        assert_eq!(bytes[4..8], 0u32.to_le_bytes());
+        assert!(bytes[8..].iter().all(|&b| b == 0));
+    }
 }
