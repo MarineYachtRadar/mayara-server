@@ -2,6 +2,7 @@ use std::io;
 use std::net::SocketAddrV4;
 
 use async_trait::async_trait;
+use deku::{DekuContainerWrite, DekuWrite};
 use tokio::net::UdpSocket;
 
 use super::GarminRadarType;
@@ -204,13 +205,13 @@ impl Command {
     }
 
     async fn set_sea_hd(&mut self, auto: bool, value: u8) -> io::Result<()> {
-        // HD: 0x2b5 with an 8-byte payload (gain + auto flag, both u32 LE).
+        let buf = frame(&CommandSeaHd {
+            packet_type: CMD_HD_SET_SEA,
+            payload_len: 8,
+            gain: value as u32,
+            mode: if auto { 2 } else { 1 },
+        });
         let socket = self.ensure_socket().await?;
-        let mut buf = [0u8; 16];
-        buf[0..4].copy_from_slice(&CMD_HD_SET_SEA.to_le_bytes());
-        buf[4..8].copy_from_slice(&8u32.to_le_bytes()); // len = 8
-        buf[8..12].copy_from_slice(&(value as u32).to_le_bytes());
-        buf[12..16].copy_from_slice(&(if auto { 2u32 } else { 1u32 }).to_le_bytes());
         socket.send(&buf).await?;
         Ok(())
     }
@@ -251,15 +252,18 @@ impl Command {
     }
 
     async fn set_target_expansion_hd(&mut self, on: bool) -> io::Result<()> {
-        // HD FTC: 0x02FC, payload [u8 gain][u8 mode]. We model FTC as a
-        // simple on/off list control, so the gain byte is fixed to a
-        // mid-range value (matches what radar_pi sends when toggled).
+        // We model FTC as a simple on/off list control, so the gain byte is
+        // fixed to a mid-range value (matches what radar_pi sends when
+        // toggled).
+        const FTC_GAIN: u8 = 50;
+
+        let buf = frame(&CommandTargetExpansionHd {
+            packet_type: CMD_HD_SET_FTC,
+            payload_len: 2,
+            gain: FTC_GAIN,
+            on: if on { 1 } else { 0 },
+        });
         let socket = self.ensure_socket().await?;
-        let mut buf = [0u8; 10];
-        buf[0..4].copy_from_slice(&CMD_HD_SET_FTC.to_le_bytes());
-        buf[4..8].copy_from_slice(&2u32.to_le_bytes());
-        buf[8] = 50; // gain
-        buf[9] = if on { 1 } else { 0 };
         socket.send(&buf).await?;
         log::debug!("Garmin {}: sent FTC command on={}", self.radar_type, on);
         Ok(())
@@ -544,31 +548,90 @@ impl CommandSender for Command {
 // against the byte sequences documented in the protocol research.
 // -------------------------------------------------------------------------
 
+/// A command frame carrying one byte: `[u32 packet_type][u32 len=1][u8]`.
+///
+/// The opcode is data here, not a layout selector: the same three shapes
+/// carry dozens of different settings. The constructors are what keep the
+/// declared length and the payload from drifting apart.
+#[derive(DekuWrite, Debug, PartialEq)]
+#[deku(endian = "little")]
+struct CommandU8 {
+    packet_type: u32,
+    payload_len: u32,
+    value: u8,
+}
+
+/// A command frame carrying a u16: `[u32 packet_type][u32 len=2][u16]`.
+#[derive(DekuWrite, Debug, PartialEq)]
+#[deku(endian = "little")]
+struct CommandU16 {
+    packet_type: u32,
+    payload_len: u32,
+    value: u16,
+}
+
+/// A command frame carrying a u32: `[u32 packet_type][u32 len=4][u32]`.
+#[derive(DekuWrite, Debug, PartialEq)]
+#[deku(endian = "little")]
+struct CommandU32 {
+    packet_type: u32,
+    payload_len: u32,
+    value: u32,
+}
+
+/// `0x02B5` — HD sea clutter, the one command with an 8-byte payload.
+#[derive(DekuWrite, Debug, PartialEq)]
+#[deku(endian = "little")]
+struct CommandSeaHd {
+    packet_type: u32,
+    payload_len: u32,
+    gain: u32,
+    mode: u32,
+}
+
+/// `0x02FC` — HD FTC, whose payload is a gain byte the radar expects even
+/// though mayara models FTC as a plain on/off control.
+#[derive(DekuWrite, Debug, PartialEq)]
+#[deku(endian = "little")]
+struct CommandTargetExpansionHd {
+    packet_type: u32,
+    payload_len: u32,
+    gain: u8,
+    on: u8,
+}
+
+/// Writing a fixed-size frame into memory has nothing to fail on.
+fn frame(command: &impl DekuContainerWrite) -> Vec<u8> {
+    command
+        .to_bytes()
+        .expect("a command frame is fixed size and in memory")
+}
+
 /// Build a 9-byte command frame: `[u32 LE packet_type][u32 LE len=1][u8 value]`.
-fn build_packet_9(packet_type: u32, value: u8) -> [u8; 9] {
-    let mut buf = [0u8; 9];
-    buf[0..4].copy_from_slice(&packet_type.to_le_bytes());
-    buf[4..8].copy_from_slice(&1u32.to_le_bytes());
-    buf[8] = value;
-    buf
+fn build_packet_9(packet_type: u32, value: u8) -> Vec<u8> {
+    frame(&CommandU8 {
+        packet_type,
+        payload_len: 1,
+        value,
+    })
 }
 
 /// Build a 10-byte command frame: `[u32 LE packet_type][u32 LE len=2][u16 LE value]`.
-fn build_packet_10(packet_type: u32, value: u16) -> [u8; 10] {
-    let mut buf = [0u8; 10];
-    buf[0..4].copy_from_slice(&packet_type.to_le_bytes());
-    buf[4..8].copy_from_slice(&2u32.to_le_bytes());
-    buf[8..10].copy_from_slice(&value.to_le_bytes());
-    buf
+fn build_packet_10(packet_type: u32, value: u16) -> Vec<u8> {
+    frame(&CommandU16 {
+        packet_type,
+        payload_len: 2,
+        value,
+    })
 }
 
 /// Build a 12-byte command frame: `[u32 LE packet_type][u32 LE len=4][u32 LE value]`.
-fn build_packet_12(packet_type: u32, value: u32) -> [u8; 12] {
-    let mut buf = [0u8; 12];
-    buf[0..4].copy_from_slice(&packet_type.to_le_bytes());
-    buf[4..8].copy_from_slice(&4u32.to_le_bytes());
-    buf[8..12].copy_from_slice(&value.to_le_bytes());
-    buf
+fn build_packet_12(packet_type: u32, value: u32) -> Vec<u8> {
+    frame(&CommandU32 {
+        packet_type,
+        payload_len: 4,
+        value,
+    })
 }
 
 #[cfg(test)]

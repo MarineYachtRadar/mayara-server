@@ -35,7 +35,7 @@
 
 #![allow(dead_code)]
 
-use deku::DekuRead;
+use deku::{DekuContainerWrite, DekuRead, DekuWrite};
 
 use crate::util::decode_head;
 
@@ -170,10 +170,29 @@ struct CdmProductDataBody {
 /// Build a minimal `0x0391` request packet (just the 8-byte GMN header,
 /// no payload). The radar responds with a `0x0392` on the same port.
 pub(crate) fn build_product_data_request() -> [u8; 8] {
+    let request = GmnHeader {
+        packet_type: MSG_CDM_PRODUCT_DATA_REQUEST,
+        payload_len: 0,
+    };
+
     let mut buf = [0u8; 8];
-    buf[0..4].copy_from_slice(&MSG_CDM_PRODUCT_DATA_REQUEST.to_le_bytes());
-    // payload_len = 0
+    buf.copy_from_slice(&frame(&request));
     buf
+}
+
+/// A GMN header with nothing after it.
+#[derive(DekuWrite, Debug, PartialEq)]
+#[deku(endian = "little")]
+struct GmnHeader {
+    packet_type: u32,
+    payload_len: u32,
+}
+
+/// Writing a fixed-size frame into memory has nothing to fail on.
+fn frame(packet: &impl DekuContainerWrite) -> Vec<u8> {
+    packet
+        .to_bytes()
+        .expect("a CDM frame is fixed size and in memory")
 }
 
 /// `0x0393` — Set device alias. The MFD sends this to rename a device
@@ -189,13 +208,27 @@ pub(crate) const CDM_CONTROL_PORT: u16 = 50051;
 pub(crate) fn build_set_alias(alias: &str) -> Vec<u8> {
     let alias_bytes = alias.as_bytes();
     let copy_len = alias_bytes.len().min(30);
-    let payload_len: u32 = 32; // 30 chars + 2 padding/null bytes
-    let mut buf = vec![0u8; 8 + payload_len as usize];
-    buf[0..4].copy_from_slice(&MSG_CDM_SET_ALIAS.to_le_bytes());
-    buf[4..8].copy_from_slice(&payload_len.to_le_bytes());
-    buf[8..8 + copy_len].copy_from_slice(&alias_bytes[..copy_len]);
-    // Rest is already zeroed (NUL padding)
-    buf
+
+    let mut padded = [0u8; SET_ALIAS_PAYLOAD_LEN];
+    padded[..copy_len].copy_from_slice(&alias_bytes[..copy_len]);
+
+    frame(&SetAliasPacket {
+        packet_type: MSG_CDM_SET_ALIAS,
+        payload_len: SET_ALIAS_PAYLOAD_LEN as u32,
+        alias: padded,
+    })
+}
+
+/// 30 characters of alias, then two bytes the MFD sends as well.
+const SET_ALIAS_PAYLOAD_LEN: usize = 32;
+
+/// A `0x0393`, whose alias is NUL-padded to its full width.
+#[derive(DekuWrite, Debug, PartialEq)]
+#[deku(endian = "little")]
+struct SetAliasPacket {
+    packet_type: u32,
+    payload_len: u32,
+    alias: [u8; SET_ALIAS_PAYLOAD_LEN],
 }
 
 /// Map a Garmin marine `product_id` to a human-readable model name.
