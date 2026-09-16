@@ -1,7 +1,6 @@
 use anyhow::{Error, bail};
 use deku::DekuRead;
 use num_traits::FromPrimitive;
-use serde::Deserialize;
 use std::cmp::min;
 use std::collections::BTreeSet;
 use std::io;
@@ -34,8 +33,7 @@ use crate::radar::{
 };
 use crate::replay::RadarSocket;
 use crate::util::PrintableSpoke;
-use crate::util::decode_exact;
-use crate::util::{c_string, c_wide_string, decode_bin};
+use crate::util::{c_string, c_wide_string, decode_exact};
 
 /*
  Heading on radar. Observed in field:
@@ -61,59 +59,48 @@ fn extract_heading_value(x: u16) -> Option<u16> {
     }
 }
 
-#[derive(Deserialize, Debug, Clone, Copy)]
-#[repr(C, packed)]
+#[derive(DekuRead, Debug, Clone, Copy)]
+#[deku(endian = "little")]
 struct GenBr24Header {
-    header_len: u8,        // 1 bytes
-    status: u8,            // 1 bytes
-    _scan_number: [u8; 2], // 2 bytes
-    _mark: [u8; 4],        // 4 bytes, on BR24 this is always 0x00, 0x44, 0x0d, 0x0e
-    angle: [u8; 2],        // 2 bytes
-    heading: [u8; 2],      // 2 bytes heading with RI-10/11. See bitmask explanation above.
-    range: [u8; 4],        // 4 bytes
-    _u01: [u8; 2],         // 2 bytes blank
-    _u02: [u8; 2],         // 2 bytes
-    _u03: [u8; 4],         // 4 bytes blank
-} /* total size = 24 */
+    header_len: u8,        // 0
+    status: u8,            // 1
+    _scan_number: [u8; 2], // 2..4
+    _mark: [u8; 4],        // 4..8, on BR24 this is always 0x00, 0x44, 0x0d, 0x0e
+    angle: u16,            // 8..10
+    heading: u16,          // 10..12 heading with RI-10/11. See bitmask explanation above.
+    range: u32,            // 12..16
+    _u01: [u8; 2],         // 16..18 blank
+    _u02: [u8; 2],         // 18..20
+    _u03: [u8; 4],         // 20..24 blank
+}
 
-#[derive(Deserialize, Debug, Clone, Copy)]
-#[repr(C, packed)]
+#[derive(DekuRead, Debug, Clone, Copy)]
+#[deku(endian = "little")]
 struct Gen3PlusHeader {
-    header_len: u8,        // 1 bytes
-    status: u8,            // 1 bytes
-    _scan_number: [u8; 2], // 1 byte (HALO and newer), 2 bytes (4G and older)
-    _mark: [u8; 2],        // 2 bytes
-    large_range: [u8; 2],  // 2 bytes, on 4G and up
-    angle: [u8; 2],        // 2 bytes
-    heading: [u8; 2],      // 2 bytes heading with RI-10/11. See bitmask explanation above.
-    small_range: [u8; 2],  // 2 bytes or -1
-    _rotation: [u8; 2],    // 2 bytes or -1
-    _u01: [u8; 4],         // 4 bytes signed integer, always -1
-    _u02: [u8; 4], // 4 bytes signed integer, mostly -1 (0x80 in last byte) or 0xa0 in last byte
-} /* total size = 24 */
-
-#[derive(Debug, Clone, Copy)]
-#[repr(C, packed)]
-struct RadarLine {
-    _header: Gen3PlusHeader, // or GenBr24Header
-    _data: [u8; SPOKE_DATA_LENGTH],
+    header_len: u8,        // 0
+    status: u8,            // 1
+    _scan_number: [u8; 2], // 2..4, 1 byte (HALO and newer), 2 bytes (4G and older)
+    _mark: [u8; 2],        // 4..6
+    large_range: u16,      // 6..8, on 4G and up
+    angle: u16,            // 8..10
+    heading: u16,          // 10..12 heading with RI-10/11. See bitmask explanation above.
+    small_range: u16,      // 12..14 or -1
+    _rotation: [u8; 2],    // 14..16 or -1
+    _u01: [u8; 4],         // 16..20 signed integer, always -1
+    _u02: [u8; 4],         // 20..24 signed integer, mostly -1 (0x80 in last byte) or 0xa0
 }
 
-#[repr(C, packed)]
-struct FrameHeader {
-    _frame_hdr: [u8; 8],
-}
+/// The 8 bytes of frame preamble before the first spoke.
+const FRAME_HEADER_LENGTH: usize = 8;
 
-#[repr(C, packed)]
-struct RadarFramePkt {
-    _header: FrameHeader,
-    _line: [RadarLine; SPOKES_PER_FRAME], //  scan lines, or spokes
-}
+/// Both header layouts are 24 bytes; the radar states its own header length in
+/// the first byte, which `validate_*_header` checks against this.
+const RADAR_LINE_HEADER_LENGTH: usize = 24;
 
-const FRAME_HEADER_LENGTH: usize = size_of::<FrameHeader>();
-const RADAR_LINE_HEADER_LENGTH: usize = size_of::<Gen3PlusHeader>();
+const RADAR_LINE_LENGTH: usize = RADAR_LINE_HEADER_LENGTH + SPOKE_DATA_LENGTH;
 
-const RADAR_LINE_LENGTH: usize = size_of::<RadarLine>();
+/// A full data frame: the preamble plus [`SPOKES_PER_FRAME`] spokes.
+const RADAR_FRAME_LENGTH: usize = FRAME_HEADER_LENGTH + SPOKES_PER_FRAME * RADAR_LINE_LENGTH;
 
 // The LookupSpokeEnum is an index into an array, really
 enum LookupDoppler {
@@ -407,7 +394,7 @@ impl NavicoReportReceiver {
             active_errors: BTreeSet::new(),
             reported_power: Power::Standby,
             stood_down: false,
-            data_buf: Vec::with_capacity(size_of::<RadarFramePkt>()),
+            data_buf: Vec::with_capacity(RADAR_FRAME_LENGTH),
             data_socket: None,
             doppler: DopplerMode::None,
             wire_to_legend,
@@ -1337,7 +1324,7 @@ impl NavicoReportReceiver {
     ) -> Option<(u32, SpokeBearing, Option<u16>)> {
         match model {
             Model::Unknown => None,
-            Model::BR24 => match decode_bin::<GenBr24Header>(header_slice) {
+            Model::BR24 => match decode_exact::<GenBr24Header>(header_slice) {
                 Ok(header) => {
                     log::trace!("Received {:04} header {:?}", scanline, header);
 
@@ -1348,7 +1335,7 @@ impl NavicoReportReceiver {
                     None
                 }
             },
-            _ => match decode_bin::<Gen3PlusHeader>(header_slice) {
+            _ => match decode_exact::<Gen3PlusHeader>(header_slice) {
                 Ok(header) => {
                     log::trace!("Received {:04} header {:?}", scanline, header);
 
@@ -1378,19 +1365,17 @@ impl NavicoReportReceiver {
             return None;
         }
 
-        let heading = u16::from_le_bytes(header.heading);
-        let angle = u16::from_le_bytes(header.angle) / 2;
-        let large_range = u16::from_le_bytes(header.large_range);
-        let small_range = u16::from_le_bytes(header.small_range);
+        let heading = header.heading;
+        let angle = header.angle / 2;
 
-        let range = if large_range == 0x80 {
-            if small_range == 0xffff {
+        let range = if header.large_range == 0x80 {
+            if header.small_range == 0xffff {
                 0
             } else {
-                (small_range as u32) / 4
+                (header.small_range as u32) / 4
             }
         } else {
-            ((large_range as u32) * (small_range as u32)) / 512
+            ((header.large_range as u32) * (header.small_range as u32)) / 512
         };
 
         // Navico encodes heading in SPOKES_RAW (4096) units; halve to bring it
@@ -1416,11 +1401,10 @@ impl NavicoReportReceiver {
             return None;
         }
 
-        let heading = u16::from_le_bytes(header.heading);
-        let angle = u16::from_le_bytes(header.angle) / 2;
+        let heading = header.heading;
+        let angle = header.angle / 2;
         const BR24_RANGE_FACTOR: f64 = 10.0 / 1.414; // 10 m / sqrt(2)
-        let range =
-            ((u32::from_le_bytes(header.range) & 0xffffff) as f64 * BR24_RANGE_FACTOR) as u32;
+        let range = ((header.range & 0xffffff) as f64 * BR24_RANGE_FACTOR) as u32;
 
         // BR24 encodes heading in SPOKES_RAW (4096) units like 4G+; halve
         // to bring it into the SPOKES_PER_REVOLUTION (2048) space
