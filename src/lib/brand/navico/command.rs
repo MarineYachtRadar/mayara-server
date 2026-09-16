@@ -613,7 +613,7 @@ mod tests {
     /// carried before deku.
     #[test]
     fn control_commands_encode_to_their_wire_frames() {
-        let cases: [(ControlCommand, &[u8]); 10] = [
+        let cases: [(ControlCommand, &[u8]); 11] = [
             (ControlCommand::PowerOn { on: 1 }, &[0x00, 0xc1, 0x01]),
             (
                 ControlCommand::Transmit { transmit: 1 },
@@ -653,6 +653,14 @@ mod tests {
             (
                 ControlCommand::GainStyle(GainCommand::SideLobeSuppression { auto: 1, value: 50 }),
                 &[0x06, 0xc1, 0x05, 0, 0, 0, 0x01, 0, 0, 0, 50],
+            ),
+            // A sector change is two frames: this one goes out first.
+            (
+                ControlCommand::NoTransmitEnable {
+                    sector: 2,
+                    enabled: 1,
+                },
+                &[0x0d, 0xc1, 0x02, 0, 0, 0, 0x01],
             ),
             (
                 ControlCommand::NoTransmitSector {
