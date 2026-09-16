@@ -72,6 +72,70 @@ impl ScalarValue {
     }
 }
 
+/// The 36-byte header of an enhanced-protocol spoke; the samples follow it.
+///
+/// `scan_length` and `scan_length_i` repeat the sample count the radar is
+/// about to send, and nothing explains why there are three of them; only
+/// `scan_length_bytes` is used.
+#[derive(DekuRead, Debug, PartialEq)]
+#[deku(endian = "little")]
+struct EnhancedSpokeHeader {
+    _packet_type: u32,      //  0..4
+    _payload_len: u32,      //  4..8
+    _fill_1: [u8; 2],       //  8..10
+    _scan_length: u16,      // 10..12
+    angle: u16,             // 12..14, eighths of a degree
+    _fill_2: [u8; 2],       // 14..16
+    range_meters: u32,      // 16..20
+    _display_meters: u32,   // 20..24
+    range_indicator: u8,    // 24, 1 selects Range B on a dual-range radar
+    _fill_3: u8,            // 25
+    scan_length_bytes: u16, // 26..28
+    _fills_4: [u8; 2],      // 28..30
+    _scan_length_i: u32,    // 30..34
+    _fills_5: [u8; 2],      // 34..36
+}
+
+/// The 52-byte header of an HD spoke packet, which carries
+/// [`HD_SPOKES_PER_PACKET`] spokes' worth of 1-bit samples after it.
+#[derive(DekuRead, Debug, PartialEq)]
+#[deku(endian = "little")]
+struct HdSpokeHeader {
+    _packet_type: u32, //  0..4
+    _payload_len: u32, //  4..8
+    angle: u16,        //  8..10
+    scan_length: u16,  // 10..12
+    _u00: [u8; 4],     // 12..16
+    range_meters: u32, // 16..20, one less than the range it means
+    _u01: [u8; 32],    // 20..52
+}
+
+/// The 48-byte HD state report (`0x02A5`). The bytes this leaves unread are
+/// undocumented rather than known to be empty.
+#[derive(DekuRead, Debug, PartialEq)]
+#[deku(endian = "little")]
+struct HdStatusReport {
+    _packet_type: u32,      //  0..4
+    _payload_len: u32,      //  4..8
+    scanner_state: u16,     //  8..10
+    warmup: u16,            // 10..12
+    range_meters: u32,      // 12..16, one less than the range it means
+    gain_level: u8,         // 16
+    gain_mode: u8,          // 17
+    _u00: [u8; 2],          // 18..20
+    sea_clutter_level: u8,  // 20
+    sea_clutter_mode: u8,   // 21
+    _u01: [u8; 2],          // 22..24
+    rain_clutter_level: u8, // 24
+    _u02: [u8; 3],          // 25..28
+    dome_offset: i16,       // 28..30
+    _u03: u8,               // 30
+    crosstalk_onoff: u8,    // 31
+    _u04: [u8; 8],          // 32..40
+    dome_speed: u8,         // 40
+    _u05: [u8; 7],          // 41..48
+}
+
 /// Lookup table for converting raw wire pixel values to legend indices.
 /// For xHD, values are halved to make room for special legend entries.
 type WireToLegendTable = [u8; BYTE_LOOKUP_LENGTH];
@@ -687,24 +751,16 @@ impl GarminReportReceiver {
     }
 
     fn process_data(&mut self, data: &[u8]) -> Result<(), Error> {
-        if data.len() < SPOKE_HEADER_SIZE {
-            bail!("Data too short: {} bytes", data.len());
-        }
+        let header: EnhancedSpokeHeader = decode_head(data)?;
 
-        // In dual-range mode, the range indicator at data[24] selects
-        // which CommonRadar / RangeState receives the spoke.
-        let range_indicator = if data.len() > SPOKE_RANGE_INDICATOR_OFFSET {
-            data[SPOKE_RANGE_INDICATOR_OFFSET]
-        } else {
-            0
-        };
-
-        if range_indicator == 1 {
+        // In dual-range mode, the range indicator selects which CommonRadar /
+        // RangeState receives the spoke.
+        if header.range_indicator == 1 {
             if let (Some(common_b), Some(rs)) = (&mut self.common_b, &mut self.range_b) {
-                Self::process_spoke_for(common_b, rs, data)?;
+                Self::process_spoke_for(common_b, rs, &header, data)?;
             }
         } else {
-            Self::process_spoke_for(&mut self.common, &mut self.range_a, data)?;
+            Self::process_spoke_for(&mut self.common, &mut self.range_a, &header, data)?;
         }
 
         Ok(())
@@ -715,10 +771,10 @@ impl GarminReportReceiver {
             bail!("HD spoke packet too short: {} bytes", data.len());
         }
 
-        // Parse header
-        let angle = u16::from_le_bytes(data[8..10].try_into().unwrap());
-        let scan_length = u16::from_le_bytes(data[10..12].try_into().unwrap()) as usize;
-        let range_meters = u32::from_le_bytes(data[16..20].try_into().unwrap()) + 1;
+        let header: HdSpokeHeader = decode_head(data)?;
+        let angle = header.angle;
+        let scan_length = header.scan_length as usize;
+        let range_meters = header.range_meters + 1;
 
         log::trace!(
             "{}: HD spoke: angle={} scan_length={} range={}m data_len={}",
@@ -781,21 +837,12 @@ impl GarminReportReceiver {
     fn process_spoke_for(
         common: &mut CommonRadar,
         rs: &mut RangeState,
+        header: &EnhancedSpokeHeader,
         data: &[u8],
     ) -> Result<(), Error> {
-        if data.len() < SPOKE_HEADER_SIZE {
-            bail!("spoke packet too short: {} bytes", data.len());
-        }
-
-        // Parse header (matching C++ radar_line struct)
-        // Offsets: packet_type(0-3), len1(4-7), fill_1(8-9), scan_length(10-11),
-        //          angle(12-13), fill_2(14-15), range_meters(16-19), display_meters(20-23),
-        //          range_indicator(24), fill(25), scan_length_bytes_s(26-27),
-        //          fills_4(28-29), scan_length_bytes_i(30-33), fills_5(34-35),
-        //          line_data(36+)
-        let angle = u16::from_le_bytes(data[12..14].try_into().unwrap());
-        let range_meters = u32::from_le_bytes(data[16..20].try_into().unwrap());
-        let scan_length_bytes = u16::from_le_bytes(data[26..28].try_into().unwrap()) as usize;
+        let angle = header.angle;
+        let range_meters = header.range_meters;
+        let scan_length_bytes = header.scan_length_bytes as usize;
 
         // Validate packet has enough data
         if data.len() < SPOKE_HEADER_SIZE + scan_length_bytes {
@@ -847,21 +894,19 @@ impl GarminReportReceiver {
     }
 
     fn process_hd_status(&mut self, data: &[u8]) -> Result<(), Error> {
-        if data.len() < 48 {
-            bail!("HD status packet too short");
-        }
+        let report: HdStatusReport = decode_head(data)?;
 
-        let scanner_state = u16::from_le_bytes(data[8..10].try_into().unwrap());
-        let warmup = u16::from_le_bytes(data[10..12].try_into().unwrap());
-        let range_meters = u32::from_le_bytes(data[12..16].try_into().unwrap()) + 1;
-        let gain_level = data[16];
-        let gain_mode = data[17];
-        let sea_clutter_level = data[20];
-        let sea_clutter_mode = data[21];
-        let rain_clutter_level = data[24];
-        let dome_offset = i16::from_le_bytes(data[28..30].try_into().unwrap());
-        let crosstalk_onoff = data[31];
-        let dome_speed = data[40];
+        let scanner_state = report.scanner_state;
+        let warmup = report.warmup;
+        let range_meters = report.range_meters + 1;
+        let gain_level = report.gain_level;
+        let gain_mode = report.gain_mode;
+        let sea_clutter_level = report.sea_clutter_level;
+        let sea_clutter_mode = report.sea_clutter_mode;
+        let rain_clutter_level = report.rain_clutter_level;
+        let dome_offset = report.dome_offset;
+        let crosstalk_onoff = report.crosstalk_onoff;
+        let dome_speed = report.dome_speed;
 
         log::debug!(
             "{}: HD status: state={} warmup={} range={}m gain={}({}) sea={}({}) rain={} bearing={} ir={} speed={}",
@@ -1657,6 +1702,96 @@ mod tests {
         assert!(GarminReportReceiver::extract_value(&claims_two_has_one).is_err());
         assert!(GarminReportReceiver::extract_value(&header_only).is_err());
         assert!(GarminReportReceiver::extract_value(&[]).is_err());
+    }
+
+    /// An enhanced spoke header with the fields written at the offsets the
+    /// old hand-written parser read them from.
+    fn enhanced_spoke_header(
+        angle: u16,
+        range_meters: u32,
+        scan_length_bytes: u16,
+        range_indicator: u8,
+    ) -> [u8; SPOKE_HEADER_SIZE] {
+        let mut header = [0u8; SPOKE_HEADER_SIZE];
+        header[12..14].copy_from_slice(&angle.to_le_bytes());
+        header[16..20].copy_from_slice(&range_meters.to_le_bytes());
+        header[SPOKE_RANGE_INDICATOR_OFFSET] = range_indicator;
+        header[26..28].copy_from_slice(&scan_length_bytes.to_le_bytes());
+        header
+    }
+
+    #[test]
+    fn enhanced_spoke_header_reads_its_fields() {
+        let bytes = enhanced_spoke_header(11519, 1852, 1024, 1);
+
+        let header: EnhancedSpokeHeader = decode_head(&bytes).unwrap();
+
+        assert_eq!(header.angle, 11519);
+        assert_eq!(header.range_meters, 1852);
+        assert_eq!(header.scan_length_bytes, 1024);
+        assert_eq!(header.range_indicator, 1);
+    }
+
+    /// The header must fill its 36 bytes; samples follow it and are not part
+    /// of it.
+    #[test]
+    fn enhanced_spoke_header_needs_its_full_length() {
+        let bytes = enhanced_spoke_header(8, 1852, 4, 0);
+
+        assert!(decode_head::<EnhancedSpokeHeader>(&bytes[..SPOKE_HEADER_SIZE - 1]).is_err());
+
+        let mut with_samples = bytes.to_vec();
+        with_samples.extend_from_slice(&[1, 2, 3, 4]);
+        let header: EnhancedSpokeHeader = decode_head(&with_samples).unwrap();
+        assert_eq!(header.angle, 8);
+    }
+
+    #[test]
+    fn hd_spoke_header_reads_its_fields() {
+        let mut bytes = [0u8; HD_SPOKE_HEADER_SIZE];
+        bytes[0..4].copy_from_slice(&MSG_HD_SPOKE.to_le_bytes());
+        bytes[8..10].copy_from_slice(&359u16.to_le_bytes());
+        bytes[10..12].copy_from_slice(&1008u16.to_le_bytes());
+        // The wire carries one less than the range it means.
+        bytes[16..20].copy_from_slice(&5555u32.to_le_bytes());
+
+        let header: HdSpokeHeader = decode_head(&bytes).unwrap();
+
+        assert_eq!(header.angle, 359);
+        assert_eq!(header.scan_length, 1008);
+        assert_eq!(header.range_meters + 1, 5556);
+    }
+
+    #[test]
+    fn hd_status_report_reads_its_fields() {
+        let mut bytes = [0u8; 48];
+        bytes[0..4].copy_from_slice(&MSG_HD_STATE.to_le_bytes());
+        bytes[8..10].copy_from_slice(&HD_STATE_TRANSMIT.to_le_bytes());
+        bytes[10..12].copy_from_slice(&90u16.to_le_bytes());
+        bytes[12..16].copy_from_slice(&1851u32.to_le_bytes());
+        bytes[16] = 200; // gain level
+        bytes[17] = 1; // gain mode
+        bytes[20] = 51; // sea level
+        bytes[21] = 2; // sea mode: auto
+        bytes[24] = 77; // rain
+        bytes[28..30].copy_from_slice(&(-15i16).to_le_bytes());
+        bytes[31] = 1; // crosstalk
+        bytes[40] = 2; // dome speed
+
+        let report: HdStatusReport = decode_head(&bytes).unwrap();
+
+        assert_eq!(report.scanner_state, HD_STATE_TRANSMIT);
+        assert_eq!(report.warmup, 90);
+        assert_eq!(report.range_meters + 1, 1852);
+        assert_eq!(report.gain_level, 200);
+        assert_eq!(report.gain_mode, 1);
+        assert_eq!(report.sea_clutter_level, 51);
+        assert_eq!(report.sea_clutter_mode, 2);
+        assert_eq!(report.rain_clutter_level, 77);
+        assert_eq!(report.dome_offset, -15);
+        assert_eq!(report.crosstalk_onoff, 1);
+        assert_eq!(report.dome_speed, 2);
+        assert!(decode_head::<HdStatusReport>(&bytes[..47]).is_err());
     }
 
     fn identity_lookup() -> WireToLegendTable {
