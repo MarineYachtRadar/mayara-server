@@ -1,6 +1,5 @@
 use anyhow::bail;
-use serde::Deserialize;
-use std::mem::size_of;
+use deku::DekuRead;
 
 use crate::brand::raymarine::command::Command;
 use crate::brand::raymarine::report::{LookupDoppler, WireToLegendTable, wire_to_legend};
@@ -9,14 +8,14 @@ use crate::radar::range::{Range, Ranges};
 use crate::radar::settings::ControlId;
 use crate::radar::spoke::GenericSpoke;
 use crate::radar::{Power, SpokeBearing};
-use crate::util::decode_bin;
+use crate::util::decode_head;
 
 use super::{RaymarineReportReceiver, ReceiverState};
 
 const QUANTUM_RADAR_RANGES: usize = 20;
 
-#[derive(Deserialize, Debug, Clone, Copy)]
-#[repr(C, packed)]
+#[derive(DekuRead, Debug, Clone, Copy)]
+#[deku(endian = "little")]
 struct FrameHeader {
     _type: u32, // 0x00280003
     _seq_num: u16,
@@ -29,7 +28,9 @@ struct FrameHeader {
     data_len: u16, // length of the rest of the data
 }
 
-const FRAME_HEADER_LENGTH: usize = size_of::<FrameHeader>();
+// Stated rather than derived: once the layout is the declaration, `size_of`
+// is no longer the wire size. A test pins it against the struct.
+const FRAME_HEADER_LENGTH: usize = 20;
 
 pub(crate) fn process_frame(receiver: &mut RaymarineReportReceiver, data: &[u8]) {
     if receiver.state != ReceiverState::StatusRequestReceived {
@@ -45,7 +46,7 @@ pub(crate) fn process_frame(receiver: &mut RaymarineReportReceiver, data: &[u8])
         return;
     }
     let header = &data[..FRAME_HEADER_LENGTH];
-    let header: FrameHeader = match decode_bin(header) {
+    let header: FrameHeader = match decode_head(header) {
         Ok(h) => h,
         Err(e) => {
             log::error!(
@@ -155,8 +156,12 @@ fn process_spoke(
     unpacked_data
 }
 
-#[derive(Deserialize, Debug, Copy, Clone)]
-#[repr(C, packed)]
+#[derive(DekuRead, Debug, Copy, Clone)]
+#[deku(
+    ctx = "endian: deku::ctx::Endian",
+    endian = "endian",
+    ctx_default = "deku::ctx::Endian::Little"
+)]
 struct ControlsPerMode {
     gain_auto: u8,       // @ 0
     gain: u8,            // @ 1
@@ -168,13 +173,13 @@ struct ControlsPerMode {
     rain: u8,            // @ 7
 }
 
-#[derive(Deserialize, Debug, Copy, Clone)]
-#[repr(C, packed)]
+#[derive(DekuRead, Debug, Copy, Clone)]
+#[deku(endian = "little")]
 struct StatusReport {
-    _id: [u8; 4],                        // @0 0x280002
+    _id: u32,                            // @0 0x280002
     status: u8,                          // @4 0 - standby ; 1 - transmitting
     _something_1: [u8; 9],               // @5
-    bearing_offset: [u8; 2],             // @14
+    bearing_offset: i16,                 // @14
     _something_2: u8,                    // @16
     interference_rejection: u8,          // @17
     _something_3: [u8; 2],               // @18
@@ -186,19 +191,19 @@ struct StatusReport {
     _something_10: [u8; 3],              // @56
     mbs_enabled: u8,                     // @59
     _something_11: [u32; 18],            // @60
-    blank_start_1: [u8; 2],              // @132
-    blank_end_1: [u8; 2],                // @134
+    blank_start_1: u16,                  // @132
+    blank_end_1: u16,                    // @134
     blank_enabled_1: u8,                 // @136
     _pad_1: [u8; 3],                     // @137
-    blank_start_2: [u8; 2],              // @140
-    blank_end_2: [u8; 2],                // @142
+    blank_start_2: u16,                  // @140
+    blank_end_2: u16,                    // @142
     blank_enabled_2: u8,                 // @144
     _pad_2: [u8; 3],                     // @145
     ranges: [u32; QUANTUM_RADAR_RANGES], // @148
     _something_12: [u8; 32],             // @228
 }
 
-const STATUS_REPORT_LENGTH: usize = size_of::<StatusReport>();
+const STATUS_REPORT_LENGTH: usize = 260;
 
 impl StatusReport {
     fn transmute(receiver: &RaymarineReportReceiver, data: &[u8]) -> Result<Self, anyhow::Error> {
@@ -210,7 +215,7 @@ impl StatusReport {
             );
         }
         let report = &data[0..STATUS_REPORT_LENGTH];
-        let report: StatusReport = match decode_bin(report) {
+        let report: StatusReport = match decode_head(report) {
             Ok(h) => h,
             Err(e) => {
                 bail!(
@@ -294,9 +299,7 @@ pub(super) fn process_status_report(receiver: &mut RaymarineReportReceiver, data
     if receiver.common.info.ranges.is_empty() {
         let mut ranges = Ranges::empty();
 
-        // Can't use rust's iter() over report.ranges as it complains about packed data alignment
-        for i in 0..QUANTUM_RADAR_RANGES {
-            let range = report.ranges[i];
+        for (i, &range) in report.ranges.iter().enumerate() {
             let meters = (range as f64 * 1.852f64) as i32; // Convert to nautical miles
 
             ranges.push(Range::new(meters, i));
@@ -356,24 +359,23 @@ pub(super) fn process_status_report(receiver: &mut RaymarineReportReceiver, data
         &ControlId::InterferenceRejection,
         report.interference_rejection as f64,
     );
-    receiver.common.set_value(
-        &ControlId::BearingAlignment,
-        i16::from_le_bytes(report.bearing_offset) as f64,
-    );
+    receiver
+        .common
+        .set_value(&ControlId::BearingAlignment, report.bearing_offset as f64);
     receiver
         .common
         .set_value(&ControlId::MainBangSuppression, report.mbs_enabled as f64);
 
     receiver.common.set_sector(
         &ControlId::NoTransmitSector1,
-        u16::from_le_bytes(report.blank_start_1) as f64,
-        u16::from_le_bytes(report.blank_end_1) as f64,
+        report.blank_start_1 as f64,
+        report.blank_end_1 as f64,
         Some(report.blank_enabled_1 > 0),
     );
     receiver.common.set_sector(
         &ControlId::NoTransmitSector2,
-        u16::from_le_bytes(report.blank_start_2) as f64,
-        u16::from_le_bytes(report.blank_end_2) as f64,
+        report.blank_start_2 as f64,
+        report.blank_end_2 as f64,
         Some(report.blank_enabled_2 > 0),
     );
 }
@@ -637,10 +639,31 @@ pub(super) fn process_self_test_results(receiver: &mut RaymarineReportReceiver, 
 #[cfg(test)]
 mod tests {
     use super::{
-        SELF_TEST_ITEM_COUNT, SELF_TEST_LAYOUT, SelfTestKind, item_is_failing, process_spoke,
+        FRAME_HEADER_LENGTH, FrameHeader, SELF_TEST_ITEM_COUNT, SELF_TEST_LAYOUT,
+        STATUS_REPORT_LENGTH, SelfTestKind, StatusReport, item_is_failing, process_spoke,
         status_to_power,
     };
     use crate::radar::{BYTE_LOOKUP_LENGTH, Power};
+    use crate::util::{decode_exact, decode_head};
+
+    /// Both structs are read at a length stated as a constant, so the
+    /// declaration and the constant are two statements of the same fact and
+    /// nothing else keeps them together. `decode_exact` fails both when a
+    /// struct wants more bytes than the constant and when it leaves some
+    /// unread, which also pins the nested per-mode control block inside the
+    /// status report.
+    ///
+    /// This matters more here than on the RD side: no capture in the test
+    /// suite carries a Quantum spoke, so no replay would notice the frame
+    /// header drifting.
+    #[test]
+    fn quantum_structs_are_as_long_as_the_code_reads_them() {
+        assert!(decode_exact::<FrameHeader>(&[0u8; FRAME_HEADER_LENGTH]).is_ok());
+        assert!(decode_head::<FrameHeader>(&[0u8; FRAME_HEADER_LENGTH - 1]).is_err());
+
+        assert!(decode_exact::<StatusReport>(&[0u8; STATUS_REPORT_LENGTH]).is_ok());
+        assert!(decode_head::<StatusReport>(&[0u8; STATUS_REPORT_LENGTH - 1]).is_err());
+    }
 
     #[test]
     fn self_test_layout_has_one_label_per_wire_byte() {
