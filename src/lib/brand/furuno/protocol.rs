@@ -23,7 +23,7 @@
 
 #![allow(dead_code)]
 
-use deku::DekuRead;
+use deku::{DekuRead, DekuWrite};
 use enum_primitive_derive::Primitive;
 use std::fmt::{self, Display};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
@@ -159,7 +159,7 @@ pub(crate) const LOGIN_EXPECTED_HEADER: [u8; 8] = [0x9, 0x1, 0x0, 0xc, 0x1, 0x0,
 /// radar agrees on is declared. `length` counts everything after the 8-byte
 /// outer header, which is what [`BEACON_REPORT_LENGTH_MIN`] is measured
 /// against.
-#[derive(DekuRead, Debug, Copy, Clone)]
+#[derive(DekuRead, DekuWrite, Debug, Copy, Clone)]
 #[deku(endian = "little")]
 pub(crate) struct FurunoRadarReport {
     pub _header: [u8; 11],
