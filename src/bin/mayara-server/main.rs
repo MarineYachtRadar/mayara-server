@@ -58,6 +58,12 @@ async fn main() -> Result<()> {
 
     network::set_replay(args.is_replay());
 
+    // A position off the globe is a typo, and a shore installation that
+    // started anyway would simply never know where it is.
+    if let Err(e) = args.validate_static_position() {
+        return Err(miette::miette!("{}", e));
+    }
+
     // Install the upstream Signal K token before any subsystem can read it
     // (start_session spawns the AIS Seed task in turn).
     if let Err(e) = mayara::install_signalk_token(&args) {

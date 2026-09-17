@@ -252,6 +252,26 @@ pub struct StaticPosition {
     pub heading: f64,
 }
 
+/// How far a latitude can be from the equator, in degrees: pole to pole.
+pub const LATITUDE_BOUND: f64 = 90.0;
+
+/// How far a longitude can be from the prime meridian, in degrees: half way
+/// round the globe in either direction.
+pub const LONGITUDE_BOUND: f64 = 180.0;
+
+impl StaticPosition {
+    /// Whether this position is one that exists on the globe. A heading
+    /// outside 0..360 is not rejected -- it is normalised when converted to
+    /// radians -- but it does have to be a number.
+    pub fn is_within_bounds(&self) -> bool {
+        self.lat.is_finite()
+            && self.lon.is_finite()
+            && self.heading.is_finite()
+            && (-LATITUDE_BOUND..=LATITUDE_BOUND).contains(&self.lat)
+            && (-LONGITUDE_BOUND..=LONGITUDE_BOUND).contains(&self.lon)
+    }
+}
+
 impl Cli {
     /// Returns true if any replay mode is active (pcap or legacy).
     pub fn is_replay(&self) -> bool {
@@ -281,6 +301,31 @@ impl Cli {
                 None
             }
         })
+    }
+
+    /// Reject a `--static-position` that is not on the globe while the user
+    /// is still looking at their terminal. A shore installation whose
+    /// position was quietly discarded at startup does not look like a
+    /// mistyped argument; it looks like a radar that does not work.
+    pub fn validate_static_position(&self) -> Result<(), String> {
+        let Some(position) = self.get_static_position() else {
+            return match self.static_position {
+                Some(_) => Err("--static-position takes three values: LAT LON HEADING".to_string()),
+                None => Ok(()),
+            };
+        };
+
+        if position.is_within_bounds() {
+            return Ok(());
+        }
+
+        Err(format!(
+            "--static-position is not a position on the globe \
+             (lat={}, lon={}, heading={}). \
+             Expected lat ∈ [-{LATITUDE_BOUND},{LATITUDE_BOUND}], \
+             lon ∈ [-{LONGITUDE_BOUND},{LONGITUDE_BOUND}], and a finite heading.",
+            position.lat, position.lon, position.heading
+        ))
     }
 
     /// Resolve the upstream Signal K bearer token by precedence:
@@ -841,13 +886,11 @@ pub async fn start_session(
     // whose position is known and fixed). The seeding makes these values
     // authoritative -- see navdata::set_static_nav -- and the task below
     // re-asserts them so they stay fresh and reach late-joining GUI clients.
+    // The command line is rejected before startup, but a `Cli` built in code
+    // -- the web layer, tests, replay -- never passes through that check, so
+    // the bounds are enforced here too rather than trusted.
     if let Some(static_pos) = args.get_static_position() {
-        if static_pos.lat.is_finite()
-            && static_pos.lon.is_finite()
-            && static_pos.heading.is_finite()
-            && (-90.0..=90.0).contains(&static_pos.lat)
-            && (-180.0..=180.0).contains(&static_pos.lon)
-        {
+        if static_pos.is_within_bounds() {
             let heading_rad = static_pos.heading.to_radians();
             navdata::set_static_nav(static_pos.lat, static_pos.lon, heading_rad);
 
@@ -881,10 +924,14 @@ pub async fn start_session(
             log::warn!(
                 "--static-position ignored: values out of range \
                  (lat={}, lon={}, heading={}). \
-                 Expected lat ∈ [-90,90], lon ∈ [-180,180], finite heading.",
+                 Expected lat ∈ [-{},{}], lon ∈ [-{},{}], finite heading.",
                 static_pos.lat,
                 static_pos.lon,
-                static_pos.heading
+                static_pos.heading,
+                LATITUDE_BOUND,
+                LATITUDE_BOUND,
+                LONGITUDE_BOUND,
+                LONGITUDE_BOUND
             );
         }
     }
@@ -1283,6 +1330,104 @@ mod tests {
         let mut full = vec!["mayara-server"];
         full.extend_from_slice(args);
         Cli::parse_from(full)
+    }
+
+    /// Set the position directly rather than on the command line: clap's
+    /// handling of leading hyphens is a separate concern, and these tests are
+    /// about which positions mayara accepts, not how they are typed.
+    fn cli_with_position(values: Vec<f64>) -> Cli {
+        Cli {
+            static_position: Some(values),
+            ..parse_cli(&[])
+        }
+    }
+
+    /// The poles and the antimeridian are real places.
+    #[test]
+    fn a_position_on_the_bounds_is_accepted() {
+        for values in [
+            vec![LATITUDE_BOUND, LONGITUDE_BOUND, 0.0],
+            vec![-LATITUDE_BOUND, -LONGITUDE_BOUND, 359.9],
+        ] {
+            assert!(
+                cli_with_position(values.clone())
+                    .validate_static_position()
+                    .is_ok(),
+                "{values:?} should be accepted"
+            );
+        }
+    }
+
+    /// Southern latitudes and western longitudes are ordinary positions, and
+    /// are what a boat in the Pacific or the Atlantic actually reports.
+    #[test]
+    fn a_southern_western_position_is_accepted() {
+        assert!(
+            cli_with_position(vec![-20.12, -70.34, 45.0])
+                .validate_static_position()
+                .is_ok()
+        );
+    }
+
+    /// The same position as it is actually typed. Clap reads a leading hyphen
+    /// as the start of a flag unless told otherwise, so this covers the whole
+    /// path -- parsed from the command line, then bounds-checked -- rather
+    /// than each half on its own.
+    #[test]
+    fn a_southern_western_position_survives_the_command_line() {
+        let cli = parse_cli(&["--static-position", "-20.12", "-70.34", "45.0"]);
+
+        assert_eq!(cli.static_position, Some(vec![-20.12, -70.34, 45.0]));
+        assert!(cli.validate_static_position().is_ok());
+
+        let position = cli.get_static_position().expect("three values were given");
+        assert_eq!(position.lat, -20.12);
+        assert_eq!(position.lon, -70.34);
+        assert_eq!(position.heading, 45.0);
+    }
+
+    #[test]
+    fn a_position_off_the_globe_is_rejected() {
+        for values in [
+            vec![LATITUDE_BOUND + 0.1, 0.0, 0.0],
+            vec![-LATITUDE_BOUND - 0.1, 0.0, 0.0],
+            vec![0.0, LONGITUDE_BOUND + 0.1, 0.0],
+            vec![0.0, -LONGITUDE_BOUND - 0.1, 0.0],
+        ] {
+            assert!(
+                cli_with_position(values.clone())
+                    .validate_static_position()
+                    .is_err(),
+                "{values:?} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn a_position_that_is_not_a_number_is_rejected() {
+        for values in [
+            vec![f64::NAN, 4.9, 45.0],
+            vec![52.3, f64::INFINITY, 45.0],
+            vec![52.3, 4.9, f64::NAN],
+        ] {
+            assert!(
+                cli_with_position(values.clone())
+                    .validate_static_position()
+                    .is_err(),
+                "{values:?} should be rejected"
+            );
+        }
+    }
+
+    /// Three values or none: two is a mistake worth naming.
+    #[test]
+    fn a_position_without_three_values_is_rejected() {
+        assert!(
+            cli_with_position(vec![52.3, 4.9])
+                .validate_static_position()
+                .is_err()
+        );
+        assert!(parse_cli(&[]).validate_static_position().is_ok());
     }
 
     #[test]
