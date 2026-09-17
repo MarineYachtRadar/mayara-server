@@ -43,12 +43,59 @@ fn login_to_radar(radar_addr: SocketAddrV4) -> Result<u16, io::Error> {
     }
     stream.read_exact(&mut buf[0..4])?;
 
-    let port = BASE_PORT + ((buf[0] as u16) << 8) + buf[1] as u16;
+    let port = login_reply_port(buf[0], buf[1])?;
     log::debug!(
         "Furuno radar logged in; using port {} for report/command data",
         port
     );
     Ok(port)
+}
+
+/// The port the radar tells us to talk to, as an offset from [`BASE_PORT`]
+/// in the first two bytes of the login reply, most significant byte first.
+///
+/// The offset comes off the socket, so it can say anything: an offset that
+/// would carry the port past the end of the port range is a reply we cannot
+/// act on, not a port to wrap around to.
+fn login_reply_port(high: u8, low: u8) -> Result<u16, io::Error> {
+    let offset = u16::from_be_bytes([high, low]);
+
+    BASE_PORT.checked_add(offset).ok_or_else(|| {
+        io::Error::other(format!(
+            "login reply asks for port {} + {}, which is not a port",
+            BASE_PORT, offset
+        ))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::login_reply_port;
+    use crate::brand::furuno::protocol::BASE_PORT;
+
+    /// The radar names its report port as an offset from the base port.
+    #[test]
+    fn a_login_reply_names_a_port() {
+        assert_eq!(login_reply_port(0x00, 0x00).unwrap(), BASE_PORT);
+        assert_eq!(login_reply_port(0x00, 0x18).unwrap(), BASE_PORT + 0x18);
+        assert_eq!(login_reply_port(0x01, 0x00).unwrap(), BASE_PORT + 256);
+    }
+
+    /// The offset arrives off the socket, so it can name a port that does not
+    /// exist. That used to carry the sum past the end of a u16 and panic.
+    #[test]
+    fn a_login_reply_past_the_last_port_is_refused() {
+        assert!(login_reply_port(0xff, 0xff).is_err());
+        assert!(login_reply_port(0xd9, 0x00).is_err());
+
+        // The last offset that still lands inside the port range.
+        let last = u16::MAX - BASE_PORT;
+        assert_eq!(
+            login_reply_port((last >> 8) as u8, last as u8).unwrap(),
+            u16::MAX
+        );
+        assert!(login_reply_port(((last + 1) >> 8) as u8, (last + 1) as u8).is_err());
+    }
 }
 
 #[derive(Clone)]
