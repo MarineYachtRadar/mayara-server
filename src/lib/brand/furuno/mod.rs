@@ -25,6 +25,10 @@ const REPLAY_FIRMWARE_VERSION: &str = "00.00";
 /// disagree.
 pub(crate) use protocol::{BEACON_REPORT_HEADER, BEACON_REPORT_LENGTH_MIN, FurunoRadarReport};
 
+/// Only a replay writes a report; a radar is the one that sends them here.
+#[cfg(feature = "pcap-replay")]
+pub(crate) use protocol::BEACON_REPORT_FILLER;
+
 use protocol::{
     ANNOUNCE_MAYARA_PACKET, BASE_PORT, BEACON_ADDRESS, DATA_PORT, FurunoRadarModelReport,
     LOGIN_EXPECTED_HEADER, LOGIN_MESSAGE, LOGIN_TIMEOUT, MODEL_REPORT_LENGTH, PIXEL_VALUES,
@@ -39,7 +43,7 @@ fn login_to_radar(radar_addr: SocketAddrV4) -> Result<u16, io::Error> {
     stream.set_write_timeout(Some(LOGIN_TIMEOUT))?;
     stream.set_read_timeout(Some(LOGIN_TIMEOUT))?;
 
-    stream.write_all(&LOGIN_MESSAGE)?;
+    stream.write_all(LOGIN_MESSAGE.as_slice())?;
 
     let mut buf: [u8; 8] = [0; 8];
     stream.read_exact(&mut buf)?;
@@ -458,9 +462,9 @@ pub(super) fn new(args: &Cli, addresses: &mut Vec<LocatorAddress>) {
             &BEACON_ADDRESS,
             Brand::Furuno,
             vec![
-                &REQUEST_BEACON_PACKET,
-                &REQUEST_MODEL_PACKET,
-                &ANNOUNCE_MAYARA_PACKET,
+                REQUEST_BEACON_PACKET.as_slice(),
+                REQUEST_MODEL_PACKET.as_slice(),
+                ANNOUNCE_MAYARA_PACKET.as_slice(),
             ],
             Box::new(FurunoLocator::new(args.clone())),
         ));

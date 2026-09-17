@@ -15,7 +15,9 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::Path;
 use std::time::Duration;
 
-use crate::brand::furuno::{BEACON_REPORT_HEADER, BEACON_REPORT_LENGTH_MIN, FurunoRadarReport};
+use crate::brand::furuno::{
+    BEACON_REPORT_FILLER, BEACON_REPORT_HEADER, BEACON_REPORT_LENGTH_MIN, FurunoRadarReport,
+};
 use crate::pcap::PcapPacket;
 use crate::util::encode;
 
@@ -297,7 +299,7 @@ fn synthesize_beacon_packets(model: &str) -> Vec<PcapPacket> {
     let mut beacon = encode(&FurunoRadarReport {
         _header: BEACON_REPORT_HEADER,
         length: BEACON_REPORT_LENGTH_MIN as u8, // everything after the 8-byte outer header
-        _filler2: [0; 4],
+        _filler2: BEACON_REPORT_FILLER,
         name: *b"RD003212", // 8 bytes, starting with 'R'
     });
     beacon.resize(32, 0);
