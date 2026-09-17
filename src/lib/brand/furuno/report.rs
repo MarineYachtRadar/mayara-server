@@ -944,11 +944,11 @@ impl FurunoReportReceiver {
                 target.set_value(&ControlId::RangeUnits, range_units_value);
             }
             CommandId::OnTime => {
-                let seconds = numbers[0];
+                let seconds = first_number(&numbers, "OnTime")?;
                 self.common.set_value(&ControlId::OperatingTime, seconds);
             }
             CommandId::TxTime => {
-                let seconds = numbers[0];
+                let seconds = first_number(&numbers, "TxTime")?;
                 self.common.set_value(&ControlId::TransmitTime, seconds);
             }
             CommandId::MainBangSize => {
@@ -1247,14 +1247,13 @@ impl FurunoReportReceiver {
     /// $N96,0359360-01.05,0359358-01.01,0359359-01.01,0359361-01.05,,,
     /// The 4th, 5th and 6th values are for the FPGA and other parts, we don't store
     /// that (yet).
-    fn parse_modules(&mut self, values: &Vec<&str>) {
+    fn parse_modules(&mut self, values: &[&str]) {
         if self.model_known {
             return;
         }
         self.model_known = true; // We set this even if we can't parse the model, there is no point in logging errors many times.
 
-        if let Some((model, version)) = values[0].split_once('-') {
-            let model = RadarModel::from_part_number(model);
+        if let Some((model, version)) = model_and_version(values) {
             log::info!(
                 "{}: Radar model {} version {}",
                 self.common.key,
@@ -2209,10 +2208,56 @@ async fn conditional_read(
     }
 }
 
+/// The first argument of a report that needs one. A radar is free to send
+/// `$N8E` with nothing after it -- and mayara asks for exactly that with
+/// `$R8E,0` -- so the absence has to be an error rather than an index.
+fn first_number(numbers: &[f64], command: &str) -> Result<f64, Error> {
+    match numbers.first() {
+        Some(value) => Ok(*value),
+        None => bail!("Insufficient (0) arguments for {} command", command),
+    }
+}
+
+/// The model and firmware version out of a `$N96` module list, whose first
+/// entry reads `<part number>-<version>`. A reply carrying no entries, or a
+/// first entry in another shape, names no model.
+fn model_and_version<'a>(values: &[&'a str]) -> Option<(RadarModel, &'a str)> {
+    let (part, version) = values.first()?.split_once('-')?;
+
+    Some((RadarModel::from_part_number(part), version))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::radar::Legend;
+
+    /// A report that should carry a number but does not must be refused, not
+    /// indexed. `$N8E` and `$N8F` arrive bare, and mayara solicits them.
+    #[test]
+    fn a_report_without_its_number_is_an_error() {
+        assert_eq!(first_number(&[42.0], "OnTime").unwrap(), 42.0);
+        assert!(first_number(&[], "OnTime").is_err());
+        assert!(first_number(&[], "TxTime").is_err());
+    }
+
+    /// `$N96` names the model in its first entry. Anything else names none.
+    #[test]
+    fn a_module_list_names_a_model_only_when_it_can() {
+        let (model, version) =
+            model_and_version(&["0359360-01.05", "0359358-01.01"]).expect("a DRS4D-NXT part");
+        assert_eq!(model, RadarModel::DRS4DNXT);
+        assert_eq!(version, "01.05");
+
+        // An unknown part number is still a model/version split.
+        let (model, version) = model_and_version(&["9999999-02.00"]).expect("a split");
+        assert_eq!(model, RadarModel::Unknown);
+        assert_eq!(version, "02.00");
+
+        // A bare `$N96`, or an entry that is not a part number at all.
+        assert!(model_and_version(&[]).is_none());
+        assert!(model_and_version(&["0359360"]).is_none());
+    }
 
     /// A radar that keeps dropping the control session must be backed off
     /// exponentially: hammering relogins exhausts the firmware's session slot
