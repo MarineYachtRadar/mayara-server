@@ -283,6 +283,19 @@ fn process_spoke(
     let mut unpacked_data: Vec<u8> = Vec::with_capacity(10240);
     let mut src_offset: usize = 0;
     while src_offset < data_len {
+        // An RLE marker is a 3-byte tuple `(0x5c, count, value)`. A spoke
+        // that ends inside one is truncated rather than a fill, so stop
+        // here: the buffer comes straight off a UDP payload, and reading
+        // the count and value regardless indexes past the end of it.
+        if spoke[src_offset] == 0x5c && src_offset + 3 > spoke.len() {
+            log::warn!(
+                "truncated RD RLE marker at offset {} (spoke len {}); rest of spoke dropped",
+                src_offset,
+                spoke.len()
+            );
+            break;
+        }
+
         if hd_type {
             if spoke[src_offset] != 0x5c {
                 unpacked_data.push(spoke[src_offset] >> 1);
@@ -817,7 +830,7 @@ mod tests {
         FIXED_REPORT_LENGTH, FRAME_HEADER_LENGTH, FixedReport, FrameHeader, SPOKE_DATA_LENGTH,
         SPOKE_HEADER_1_LENGTH, SPOKE_HEADER_2_LENGTH, STATUS_REPORT_LENGTH, SpokeHeader1,
         SpokeHeader2, SpokeHeader3, StatusReport, hd_info_string, model_from_info_field,
-        model_from_serial,
+        model_from_serial, process_spoke,
     };
     use crate::util::{decode_exact, decode_head};
 
@@ -845,6 +858,51 @@ mod tests {
 
         assert!(decode_exact::<FixedReport>(&[0u8; FIXED_REPORT_LENGTH]).is_ok());
         assert!(decode_head::<FixedReport>(&[0u8; FIXED_REPORT_LENGTH - 1]).is_err());
+    }
+
+    /// A whole RLE marker still fills, on both radar generations. HD halves
+    /// each sample; a D radar splits every byte into two nibbles.
+    #[test]
+    fn process_spoke_fills_from_a_whole_rle_marker() {
+        // `0x5c 0x03 0x42` is "fill 3 with 0x42", then one plain sample.
+        let spoke = [0x5c, 0x03, 0x42, 0x11];
+
+        let hd = process_spoke(true, 32, &spoke, spoke.len());
+        assert_eq!(hd, vec![0x21, 0x21, 0x21, 0x08]);
+
+        // A D radar splits 0x42 into (0x2 << 3, 0x40 >> 1) = (0x10, 0x20).
+        let d = process_spoke(false, 32, &spoke, spoke.len());
+        assert_eq!(d, vec![0x10, 0x20, 0x10, 0x20, 0x10, 0x20, 0x08, 0x08]);
+    }
+
+    /// A spoke whose last bytes are half an RLE marker used to read past the
+    /// end of the datagram and panic, taking the report receiver with it.
+    /// The Quantum decoder already guards this; the RD one did not.
+    #[test]
+    fn process_spoke_truncated_rle_does_not_panic() {
+        // Marker and count, but the value byte never arrived.
+        let spoke = [0x55, 0x5c, 0x03];
+
+        assert_eq!(process_spoke(true, 32, &spoke, spoke.len()), vec![0x2a]);
+        assert_eq!(
+            process_spoke(false, 32, &spoke, spoke.len()),
+            vec![0x28, 0x28]
+        );
+    }
+
+    /// The marker is the very last byte, so even the count is missing.
+    #[test]
+    fn process_spoke_marker_at_very_end_does_not_panic() {
+        let spoke = [0x12, 0x34, 0x5c];
+
+        assert_eq!(
+            process_spoke(true, 32, &spoke, spoke.len()),
+            vec![0x09, 0x1a]
+        );
+        assert_eq!(
+            process_spoke(false, 32, &spoke, spoke.len()),
+            vec![0x10, 0x08, 0x20, 0x18]
+        );
     }
 
     #[test]
