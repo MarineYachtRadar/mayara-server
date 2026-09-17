@@ -173,7 +173,7 @@ pub struct Cli {
 
     /// Static position for stationary radar: latitude longitude heading
     /// Example: --static-position 52.3676 4.9041 45.0
-    #[arg(long, value_names = ["LAT", "LON", "HEADING"], num_args = 3)]
+    #[arg(long, value_names = ["LAT", "LON", "HEADING"], num_args = 3, allow_negative_numbers = true)]
     pub static_position: Option<Vec<f64>>,
 
     /// Multi-radar mode keeps locators running even when one radar is found
