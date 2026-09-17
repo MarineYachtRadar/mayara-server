@@ -14,10 +14,8 @@ use tokio_graceful_shutdown::SubsystemHandle;
 use super::command::Command;
 use super::protocol::{
     CommandId, DATA_BROADCAST_ADDRESS, ECHO_FLOOR, ENCODING_1_REPEAT_DEFAULT,
-    ENCODING_3_REPEAT_DEFAULT, FRAME_DUAL_RANGE_BIT, FRAME_ENCODING_MASK, FRAME_ENCODING_SHIFT,
-    FRAME_HEADING_VALID_BIT, FRAME_MAGIC, FRAME_SCALE_HIGH_MASK, FRAME_SPOKE_DATA_LEN_HIGH_BIT,
-    FRAME_SWEEP_LEN_HIGH_MASK, FRAME_WIRE_INDEX_MASK, PIXEL_VALUES, RadarModel,
-    SPOKE_ALIGNMENT_MASK, SPOKE_ANGLE_HIGH_MASK, SPOKE_LEN, SPOKES, TILE_MAGIC,
+    ENCODING_3_REPEAT_DEFAULT, FurunoImoFrameHeader, FurunoTileFrameHeader, PIXEL_VALUES,
+    RadarModel, SPOKE_ALIGNMENT_MASK, SPOKE_ANGLE_HIGH_MASK, SPOKE_LEN, SPOKES, TILE_MAGIC,
     TILE_REPEAT_DEFAULT, TILE_SCALE, WIRE_UNIT_KM, WIRE_UNIT_NM, wire_index_to_meters_for_unit,
 };
 use super::settings;
@@ -32,7 +30,7 @@ use crate::radar::{
     DUAL_RANGE_A, DUAL_RANGE_B, Power, RadarError, RadarInfo, transmit_claim_after_request,
 };
 use crate::replay::RadarSocket;
-use crate::util::PrintableSpoke;
+use crate::util::{PrintableSpoke, decode_head};
 use serde_json::Value;
 
 /// TCP keepalive timing for the Furuno control socket. Tunes how quickly the
@@ -1414,21 +1412,20 @@ impl FurunoReportReceiver {
             return;
         }
 
-        // Tile echo format: first uint32 bits 29-31 == TILE_MAGIC (2)
-        if data.len() >= 12 {
-            let header_word = u32::from_le_bytes([data[8], data[9], data[10], data[11]]);
-            if (header_word >> 29) == TILE_MAGIC {
-                self.process_tile_frame(data);
-                return;
-            }
-        }
-
-        if data[0] != FRAME_MAGIC {
-            log::debug!("Dropping invalid frame (magic={:#04x})", data[0]);
+        // The word at byte 8 is what tells the two echo formats apart.
+        if let Ok(header) = decode_head::<FurunoTileFrameHeader>(&data[8..])
+            && header.magic as u32 == TILE_MAGIC
+        {
+            self.process_tile_frame(data);
             return;
         }
 
-        let metadata: FurunoSpokeMetadata = self.parse_metadata_header(data);
+        // The declaration carries the frame magic, so a frame that is not an
+        // IMO echo frame fails to decode rather than being checked for first.
+        let Some(metadata) = self.parse_metadata_header(data) else {
+            log::debug!("Dropping invalid frame (magic={:#04x})", data[0]);
+            return;
+        };
 
         let sweep_count = metadata.sweep_count;
         let sweep_len = metadata.sweep_len as usize;
@@ -1570,9 +1567,10 @@ impl FurunoReportReceiver {
             return;
         }
 
-        // First header word at byte offset 8
-        let header_word = u32::from_le_bytes([data[8], data[9], data[10], data[11]]);
-        let content_length = (header_word & 0x7FF) as usize; // bits 0-10
+        let Ok(header) = decode_head::<FurunoTileFrameHeader>(&data[8..]) else {
+            return;
+        };
+        let content_length = header.content_length as usize;
 
         // Dual range ID: check byte 15 bit 6, same position as IMO format.
         // If this turns out wrong for Tile, we fall back to Range A only.
@@ -2084,7 +2082,7 @@ impl FurunoReportReceiver {
     // Some more headers from FAR-2127:
     // [2, 250, 0, 1, 0, 0, 0, 0, 36, 49, 116, 59, 0, 0, 240, 9]
 
-    fn parse_metadata_header(&self, data: &[u8]) -> FurunoSpokeMetadata {
+    fn parse_metadata_header(&self, data: &[u8]) -> Option<FurunoSpokeMetadata> {
         // Frame header layout (16 bytes), derived from radar.dll disassembly:
         //
         // Bytes 0-7: Packet header
@@ -2108,22 +2106,15 @@ impl FurunoReportReceiver {
         //          bits 4-5: echo_type; bit 6: dual_range_id (0=A, 1=B);
         //          bit 7: unknown
 
-        let _spoke_data_len =
-            (data[8] as u32 + (data[9] as u32 & FRAME_SPOKE_DATA_LEN_HIGH_BIT as u32) * 256) * 4
-                + 4;
-        let sweep_count = (data[9] >> 1) as u32;
-        let sweep_len = ((data[11] & FRAME_SWEEP_LEN_HIGH_MASK) as u32) << 8 | data[10] as u32;
-        let encoding = (data[11] & FRAME_ENCODING_MASK) >> FRAME_ENCODING_SHIFT;
-        let have_heading = (data[11] & FRAME_HEADING_VALID_BIT) >> 5;
-        let radar_no = (data[15] & FRAME_DUAL_RANGE_BIT) >> 6;
-        let wire_index = (data[12] & FRAME_WIRE_INDEX_MASK) as i32;
+        let header = decode_head::<FurunoImoFrameHeader>(data).ok()?;
+        let wire_index = header.wire_index as i32;
 
         // The radar's active range unit (NM / km) determines which wire-index
         // table to use: the same wire index means different physical distances
         // in nautical vs metric mode. Read RangeUnits from the controls that
         // belong to the specific range this spoke is for — Range A and Range B
         // can be configured with different units.
-        let range_controls = if radar_no == 1 {
+        let range_controls = if header.radar_no == 1 {
             self.common_b
                 .as_ref()
                 .map(|cb| &cb.info.controls)
@@ -2154,37 +2145,30 @@ impl FurunoReportReceiver {
         let range = range as u32;
 
         // scale = effective sample count for the configured display range.
-        // Extracted from bytes 14-15: ((byte[15] & 0x07) << 8) | byte[14].
         // The radar always transmits sweep_len total samples, but only the
         // first `scale` map to 0..range_meters. Verified against radar.dll
         // disassembly (DecodeImoEchoFormat) and the ARM MFD firmware
         // (libNAVNETDLL.so, not-stripped symbols from imoecho.c).
-        let scale = (((data[15] & FRAME_SCALE_HIGH_MASK) as u32) << 8) | data[14] as u32;
-        // Fall back to sweep_len if scale is zero (malformed packet)
-        let scale = if scale == 0 { sweep_len } else { scale };
+        //
+        // Fall back to sweep_len if scale is zero (malformed packet).
+        let scale = if header.scale == 0 {
+            header.sweep_len
+        } else {
+            header.scale
+        };
 
         let metadata = FurunoSpokeMetadata {
-            sweep_count,
-            sweep_len,
-            encoding,
-            have_heading,
+            sweep_count: header.sweep_count,
+            sweep_len: header.sweep_len,
+            encoding: header.encoding,
+            have_heading: header.have_heading,
             range,
-            radar_no,
+            radar_no: header.radar_no,
             scale,
         };
-        log::trace!(
-            "header {:?} -> sweep_count={} sweep_len={} encoding={} have_heading={} range={} radar_no={} scale={}",
-            &data[0..16],
-            sweep_count,
-            sweep_len,
-            encoding,
-            have_heading,
-            range,
-            radar_no,
-            scale,
-        );
+        log::trace!("header {:?} -> {:?}", &data[0..16], metadata);
 
-        metadata
+        Some(metadata)
     }
 }
 

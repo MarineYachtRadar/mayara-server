@@ -715,29 +715,62 @@ pub(crate) fn wire_unit_for_meters(meters: i32) -> i32 {
 /// Byte 0 of every IMO echo frame must be this value.
 pub(crate) const FRAME_MAGIC: u8 = 0x02;
 
-/// Byte 9 bit 0: high bit of `spoke_data_len`.
-pub(crate) const FRAME_SPOKE_DATA_LEN_HIGH_BIT: u8 = 0x01;
-
-/// Byte 11 bits 0–2: high bits of `sweep_len` (sample_count).
-pub(crate) const FRAME_SWEEP_LEN_HIGH_MASK: u8 = 0x07;
-
-/// Byte 11 bits 3–4: encoding mode (0–3).
-pub(crate) const FRAME_ENCODING_MASK: u8 = 0x18;
-
-/// Right-shift for encoding mode extraction from byte 11.
-pub(crate) const FRAME_ENCODING_SHIFT: u8 = 3;
-
-/// Byte 11 bit 5: heading data present in per-spoke sub-header.
-pub(crate) const FRAME_HEADING_VALID_BIT: u8 = 0x20;
-
-/// Byte 12 bits 0–5: range wire index.
-pub(crate) const FRAME_WIRE_INDEX_MASK: u8 = 0x3F;
-
-/// Byte 15 bits 0–2: high bits of `scale`.
-pub(crate) const FRAME_SCALE_HIGH_MASK: u8 = 0x07;
-
-/// Byte 15 bit 6: dual range identifier (0 = Range A, 1 = Range B).
-pub(crate) const FRAME_DUAL_RANGE_BIT: u8 = 0x40;
+/// The 16-byte header an IMO echo frame opens with.
+///
+/// Most of its fields are runs of bits rather than whole bytes, and they run
+/// from the least significant bit up, so the declaration reads them in that
+/// order. A field that crosses a byte boundary -- `sweep_len` and `scale`
+/// both do -- is one field here, not a high half to be shifted onto a low
+/// one by hand.
+#[derive(DekuRead, Debug, Copy, Clone)]
+#[deku(
+    endian = "little",
+    bit_order = "lsb",
+    magic = b"\x02",
+    ctx = "_: deku::ctx::Endian",
+    ctx_default = "deku::ctx::Endian::Little"
+)]
+pub(crate) struct FurunoImoFrameHeader {
+    pub _sequence_number: u8,
+    /// Big-endian, unlike everything after it, and unread.
+    pub _total_length: [u8; 2],
+    pub _timestamp: u32,
+    /// Bytes 8-9: the length of the spoke data, and the number of spokes
+    /// that follow this header.
+    #[deku(bits = 9)]
+    pub _spoke_data_len: u16,
+    #[deku(bits = 7)]
+    pub sweep_count: u32,
+    /// Bytes 10-11: how many samples each spoke carries, and how they are
+    /// encoded.
+    #[deku(bits = 11)]
+    pub sweep_len: u32,
+    #[deku(bits = 2)]
+    pub encoding: u8,
+    #[deku(bits = 1)]
+    pub have_heading: u8,
+    #[deku(bits = 2)]
+    pub _unknown1: u8,
+    /// Byte 12: which range the radar is on, as an index into the wire index
+    /// table rather than a distance.
+    #[deku(bits = 6)]
+    pub wire_index: u8,
+    #[deku(bits = 2)]
+    pub _range_status: u8,
+    pub _range_resolution: u8,
+    /// Bytes 14-15: how many of the `sweep_len` samples cover the configured
+    /// display range, and which of a dual range's two antennas sent this.
+    #[deku(bits = 11)]
+    pub scale: u32,
+    #[deku(bits = 1)]
+    pub _flag: u8,
+    #[deku(bits = 2)]
+    pub _echo_type: u8,
+    #[deku(bits = 1)]
+    pub radar_no: u8,
+    #[deku(bits = 1)]
+    pub _unknown2: u8,
+}
 
 /// Per-spoke sub-header: bits 0–4 of angle/heading byte 1 or 3.
 pub(crate) const SPOKE_ANGLE_HIGH_MASK: u8 = 0x1F;
@@ -767,6 +800,26 @@ pub(crate) const ECHO_FLOOR: u16 = 10;
 /// Bits 29-31 of the first header word must equal this value for a Tile frame.
 pub(crate) const TILE_MAGIC: u32 = 2;
 
+/// The word at byte 8 of a frame, which is what tells the two echo formats
+/// apart: on a Tile frame its top three bits are [`TILE_MAGIC`]. The same
+/// bytes are `_spoke_data_len` and `sweep_count` in an IMO frame.
+#[derive(DekuRead, Debug, Copy, Clone)]
+#[deku(
+    endian = "little",
+    bit_order = "lsb",
+    ctx = "_: deku::ctx::Endian",
+    ctx_default = "deku::ctx::Endian::Little"
+)]
+pub(crate) struct FurunoTileFrameHeader {
+    /// Where the spoke records end, measured from byte 8 less seven.
+    #[deku(bits = 11)]
+    pub content_length: u16,
+    #[deku(bits = 18)]
+    pub _unknown: u32,
+    #[deku(bits = 3)]
+    pub magic: u8,
+}
+
 /// Tile echo format uses a hardcoded scale of 496 at all ranges.
 /// From `DecodeTileEchoFormat` in libNAVNETDLL.so (Ghidra decompilation).
 pub(crate) const TILE_SCALE: u32 = 496;
@@ -787,6 +840,7 @@ pub(crate) const GUARD_MODE_FAN: i32 = 1;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::decode_head;
 
     /// The packets mayara sends are built from declarations now rather than
     /// written out by hand. These are the bytes that went out before, kept
@@ -857,5 +911,60 @@ mod tests {
             assert_eq!(packet[..OUTER_HEADER.len()], OUTER_HEADER);
         }
         assert_eq!(BEACON_REPORT_HEADER[..OUTER_HEADER.len()], OUTER_HEADER);
+    }
+
+    /// The header a DRS-4D NXT sends, as captured in the notes above
+    /// `parse_metadata_header`, which read it apart by hand with masks and
+    /// shifts. Its fields are bit runs counted from the least significant bit
+    /// up, and two of them cross a byte boundary, so this pins that the
+    /// declaration lands them where the masks used to.
+    #[test]
+    fn a_captured_imo_frame_header_reads_as_it_always_did() {
+        let header: FurunoImoFrameHeader =
+            decode_head(&[2, 149, 0, 1, 0, 0, 0, 0, 48, 17, 116, 219, 6, 0, 240, 9]).unwrap();
+
+        assert_eq!(header.sweep_count, 8);
+        assert_eq!(header.sweep_len, 884);
+        assert_eq!(header.encoding, 3);
+        assert_eq!(header.have_heading, 0);
+        assert_eq!(header.wire_index, 6);
+        assert_eq!(header.radar_no, 0);
+        assert_eq!(header.scale, 496);
+
+        // And one from a FAR-2127, a different model entirely.
+        let header: FurunoImoFrameHeader =
+            decode_head(&[2, 250, 0, 1, 0, 0, 0, 0, 36, 49, 116, 59, 0, 0, 240, 9]).unwrap();
+
+        assert_eq!(header.sweep_count, 24);
+        assert_eq!(header.sweep_len, 884);
+        assert_eq!(header.encoding, 3);
+        assert_eq!(header.wire_index, 0);
+        assert_eq!(header.scale, 496);
+    }
+
+    /// A frame that is not an IMO echo frame has to fail to decode rather
+    /// than be read as one, which is what the magic byte is for now that the
+    /// dispatcher no longer checks it separately.
+    #[test]
+    fn a_frame_without_the_magic_is_not_an_imo_frame() {
+        let mut data = [2, 149, 0, 1, 0, 0, 0, 0, 48, 17, 116, 219, 6, 0, 240, 9];
+        data[0] = 0x03;
+
+        assert!(decode_head::<FurunoImoFrameHeader>(&data).is_err());
+    }
+
+    /// The two echo formats are told apart by the top three bits of the word
+    /// at byte 8, so that word has to come out of the same bytes the hand
+    /// written `u32::from_le_bytes` used to read.
+    #[test]
+    fn the_tile_magic_sits_where_the_frame_dispatcher_looks() {
+        let tile: FurunoTileFrameHeader = decode_head(&[0x2c, 0x01, 0x00, 0x40]).unwrap();
+        assert_eq!(tile.magic as u32, TILE_MAGIC);
+        assert_eq!(tile.content_length, 300);
+
+        // The same offset in the captured IMO header above, which must not
+        // look like a Tile frame.
+        let not_tile: FurunoTileFrameHeader = decode_head(&[48, 17, 116, 219]).unwrap();
+        assert_ne!(not_tile.magic as u32, TILE_MAGIC);
     }
 }

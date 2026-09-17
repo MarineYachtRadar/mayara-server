@@ -39,10 +39,10 @@ axum-core = "0.5.6"
 axum-embed = "0.1.0"
 base64 = "0.23.0"
 bitflags = "2.11.1"
-# Byte-aligned wire formats only, so far: nothing decoded yet needs a bitwise
-# reader. That is the reason the `bits` feature is off, not the dependency --
-# bitvec is already in the tree, by way of nmea-parser.
-deku = { version = "0.20.3", default-features = false, features = ["std"] }
+# `bits` is on for the Furuno spoke frame headers, whose fields are bit runs
+# inside little-endian bytes rather than whole bytes. It costs no new
+# dependency: bitvec is already in the tree, by way of nmea-parser.
+deku = { version = "0.20.3", default-features = false, features = ["std", "bits"] }
 bytes = "1"
 chrono = { version = "0.4.44", features = ["serde"] }
 clap = { version = "4.6.1", features = ["derive"] }
