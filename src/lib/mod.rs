@@ -1369,6 +1369,23 @@ mod tests {
         );
     }
 
+    /// The same position as it is actually typed. Clap reads a leading hyphen
+    /// as the start of a flag unless told otherwise, so this covers the whole
+    /// path -- parsed from the command line, then bounds-checked -- rather
+    /// than each half on its own.
+    #[test]
+    fn a_southern_western_position_survives_the_command_line() {
+        let cli = parse_cli(&["--static-position", "-20.12", "-70.34", "45.0"]);
+
+        assert_eq!(cli.static_position, Some(vec![-20.12, -70.34, 45.0]));
+        assert!(cli.validate_static_position().is_ok());
+
+        let position = cli.get_static_position().expect("three values were given");
+        assert_eq!(position.lat, -20.12);
+        assert_eq!(position.lon, -70.34);
+        assert_eq!(position.heading, 45.0);
+    }
+
     #[test]
     fn a_position_off_the_globe_is_rejected() {
         for values in [
