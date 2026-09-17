@@ -23,8 +23,8 @@
 
 #![allow(dead_code)]
 
+use deku::DekuRead;
 use enum_primitive_derive::Primitive;
-use serde::Deserialize;
 use std::fmt::{self, Display};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::time::Duration;
@@ -105,8 +105,10 @@ pub(crate) const REQUEST_MODEL_PACKET: [u8; 16] = [
 pub(crate) const BEACON_REPORT_HEADER: [u8; 11] =
     [0x1, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, 0x0];
 
-/// Minimum beacon report size (= `size_of::<FurunoRadarReport>()`).
-pub(crate) const BEACON_REPORT_LENGTH_MIN: usize = std::mem::size_of::<FurunoRadarReport>();
+/// Minimum beacon report size: the part [`FurunoRadarReport`] describes.
+/// Stated rather than derived -- once the layout is a deku declaration,
+/// `size_of` is no longer the wire size -- and pinned by a test.
+pub(crate) const BEACON_REPORT_LENGTH_MIN: usize = 24;
 
 /// Fixed length of the 170-byte model report.
 pub(crate) const MODEL_REPORT_LENGTH: usize = 170;
@@ -151,9 +153,14 @@ pub(crate) const LOGIN_EXPECTED_HEADER: [u8; 8] = [0x9, 0x1, 0x0, 0xc, 0x1, 0x0,
 // [01, 00, 00, 01, 00, 00, 00, 00, 00, 01, 00, 1C, 01, 00, 00, 00, 4D, 46, 30, 30, 33, 31, 35, 30, 01, 01, 00, 04, 00, 0B, 00, 15, 00, 14, 00, 16] len 36
 // [ .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   M   F   0   0   3   1   5   0   .   .   .   .   .   .   .   .   .   .   .   .]
 
-/// 32-byte beacon report — radar serial/name identification.
-#[derive(Deserialize, Debug, Copy, Clone)]
-#[repr(C, packed)]
+/// The identifying head of a beacon report. The packets themselves run
+/// longer than this -- 32 bytes on a DRS-4D NXT, 34 on a FAR-2127, 36 from
+/// TimeZero -- and what follows differs by model, so only the part every
+/// radar agrees on is declared. `length` counts everything after the 8-byte
+/// outer header, which is what [`BEACON_REPORT_LENGTH_MIN`] is measured
+/// against.
+#[derive(DekuRead, Debug, Copy, Clone)]
+#[deku(endian = "little")]
 pub(crate) struct FurunoRadarReport {
     pub _header: [u8; 11],
     pub length: u8,
@@ -162,8 +169,8 @@ pub(crate) struct FurunoRadarReport {
 }
 
 /// 170-byte model report — radar model name, firmware versions, serial number.
-#[derive(Deserialize, Debug, Copy, Clone)]
-#[repr(C, packed)]
+#[derive(DekuRead, Debug, Copy, Clone)]
+#[deku(endian = "little")]
 pub(crate) struct FurunoRadarModelReport {
     pub _filler1: [u8; 18],
     /// MAC address of the device this report describes. Note "describes",

@@ -2,20 +2,6 @@
 
 use std::fmt;
 
-use serde::de::DeserializeOwned;
-
-/// Decode a bincode-encoded slice into `T` using the legacy
-/// (bincode v1) wire format: little-endian, fixed-int encoding, no
-/// length limit. Every brand-specific report parser in this crate
-/// uses the same `T: serde::Deserialize` path, so funnel them all
-/// through one helper that hides bincode v2's `decode_from_slice`
-/// signature (which returns `(T, usize)` and takes a config).
-pub(crate) fn decode_bin<T: DeserializeOwned>(
-    bytes: &[u8],
-) -> Result<T, bincode::error::DecodeError> {
-    bincode::serde::decode_from_slice(bytes, bincode::config::legacy()).map(|(value, _)| value)
-}
-
 /// Decode a packet that must fill `bytes` exactly. A packet of any other
 /// length has a layout we do not know, so it is rejected rather than
 /// half-read.
@@ -197,36 +183,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde::Serialize;
-
-    #[derive(Debug, Serialize, serde::Deserialize, PartialEq)]
-    struct WireSample {
-        value: u32,
-        flag: bool,
-    }
-
-    /// Decode a hand-written legacy-format byte string and check it
-    /// reconstructs the expected value. Using hardcoded wire bytes
-    /// (rather than round-tripping through bincode's own encoder)
-    /// guards against bincode silently regressing the legacy() config
-    /// AND against any change to decode_bin that picks up a different
-    /// endianness or int encoding. The brand wire parsers consume
-    /// bytes that arrive from the radar — so the test must too.
-    ///
-    /// Legacy layout for `WireSample { value: 0xDEADBEEF, flag: true }`:
-    ///   - u32 little-endian, fixed-int: EF BE AD DE
-    ///   - bool true:                    01
-    ///   - total: 5 bytes
-    #[test]
-    fn decode_bin_round_trips_legacy_wire_format() {
-        let expected = WireSample {
-            value: 0xDEADBEEF,
-            flag: true,
-        };
-        let encoded: [u8; 5] = [0xEF, 0xBE, 0xAD, 0xDE, 0x01];
-        let decoded: WireSample = decode_bin(&encoded).expect("decode_bin must succeed");
-        assert_eq!(decoded, expected);
-    }
 
     #[derive(Debug, serde::Deserialize, PartialEq)]
     struct Sample {
@@ -269,17 +225,5 @@ mod tests {
         assert!(parse(r#"{"n": []}"#).is_err());
         assert!(parse(r#"{"n": "NaN"}"#).is_err());
         assert!(parse(r#"{"n": "inf"}"#).is_err());
-    }
-
-    /// Garbage bytes shorter than the expected struct must surface
-    /// as an Err rather than panicking or silently zero-padding.
-    #[test]
-    fn decode_bin_rejects_truncated_input() {
-        let truncated = [0u8; 3];
-        let result: Result<WireSample, _> = decode_bin(&truncated);
-        assert!(
-            result.is_err(),
-            "decode_bin must reject a 3-byte buffer for a 5+ byte struct",
-        );
     }
 }

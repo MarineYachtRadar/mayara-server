@@ -6,7 +6,7 @@ use tokio_graceful_shutdown::{SubsystemBuilder, SubsystemHandle};
 
 use crate::locator::LocatorAddress;
 use crate::radar::{RadarInfo, SharedRadars, identity_discriminator, mac_identity};
-use crate::util::{PrintableSlice, c_string, decode_bin};
+use crate::util::{PrintableSlice, c_string, decode_exact, decode_head};
 use crate::{Brand, Cli};
 
 use super::{LocatorId, RadarLocator};
@@ -247,7 +247,7 @@ impl FurunoLocator {
         from: &SocketAddrV4,
         nic_addr: &Ipv4Addr,
     ) -> Result<(), io::Error> {
-        match decode_bin::<FurunoRadarReport>(report) {
+        match decode_head::<FurunoRadarReport>(report) {
             Ok(data) => {
                 if data.length as usize + 8 != report.len() {
                     log::error!(
@@ -291,7 +291,7 @@ impl FurunoLocator {
         radars: &SharedRadars,
         subsys: &SubsystemHandle,
     ) -> Result<(), io::Error> {
-        match decode_bin::<FurunoRadarModelReport>(report) {
+        match decode_exact::<FurunoRadarModelReport>(report) {
             Ok(data) => {
                 let model = c_string(&data.model);
                 let serial_no = c_string(&data.serial_no);
@@ -419,5 +419,49 @@ pub(super) fn new(args: &Cli, addresses: &mut Vec<LocatorAddress>) {
             ],
             Box::new(FurunoLocator::new(args.clone())),
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        BEACON_REPORT_HEADER, BEACON_REPORT_LENGTH_MIN, FurunoRadarModelReport, FurunoRadarReport,
+        MODEL_REPORT_LENGTH,
+    };
+    use crate::util::{decode_exact, decode_head};
+
+    /// Both reports are read at a length stated as a constant, and the
+    /// dispatcher matches on those same constants: a beacon report has to be
+    /// at least this long, a model report exactly that long. `decode_exact`
+    /// fails both when a struct wants more bytes than the constant and when it
+    /// leaves some unread, which is what holds the declaration and the
+    /// constant together now that `size_of` no longer can.
+    #[test]
+    fn the_reports_are_as_long_as_the_dispatcher_expects() {
+        assert!(decode_exact::<FurunoRadarReport>(&[0u8; BEACON_REPORT_LENGTH_MIN]).is_ok());
+        assert!(decode_head::<FurunoRadarReport>(&[0u8; BEACON_REPORT_LENGTH_MIN - 1]).is_err());
+
+        assert!(decode_exact::<FurunoRadarModelReport>(&[0u8; MODEL_REPORT_LENGTH]).is_ok());
+        assert!(decode_head::<FurunoRadarModelReport>(&[0u8; MODEL_REPORT_LENGTH - 1]).is_err());
+    }
+
+    /// A real beacon report carries more than the part we declare -- 32 bytes
+    /// from a DRS-4D NXT, and what follows differs by model -- so it is read
+    /// as a head rather than exactly.
+    #[test]
+    fn a_beacon_report_reads_past_its_declaration() {
+        // The DRS-4D NXT capture documented in protocol.rs: 32 bytes, name
+        // "RD003212", byte 11 = 0x18 = 24 = the length after the outer header.
+        let mut packet = [0u8; 32];
+        packet[0..11].copy_from_slice(&BEACON_REPORT_HEADER);
+        packet[11] = 0x18;
+        packet[16..24].copy_from_slice(b"RD003212");
+
+        let report: FurunoRadarReport = decode_head(&packet).expect("a beacon report");
+
+        assert_eq!(report.length as usize + 8, packet.len());
+        assert_eq!(&report.name, b"RD003212");
+        // Byte 16 is what the dispatcher tests for 'R'.
+        assert_eq!(report.name[0], b'R');
     }
 }

@@ -38,9 +38,10 @@ axum = { version = "0.8.9", features = ["http2", "json", "macros", "tokio", "tow
 axum-core = "0.5.6"
 axum-embed = "0.1.0"
 base64 = "0.23.0"
-bincode = { version = "2.0.1", features = ["serde"] }
 bitflags = "2.11.1"
-# Byte-aligned wire formats only: without the `bits` feature deku does not pull in bitvec.
+# Byte-aligned wire formats only, so far: nothing decoded yet needs a bitwise
+# reader. That is the reason the `bits` feature is off, not the dependency --
+# bitvec is already in the tree, by way of nmea-parser.
 deku = { version = "0.20.3", default-features = false, features = ["std"] }
 bytes = "1"
 chrono = { version = "0.4.44", features = ["serde"] }

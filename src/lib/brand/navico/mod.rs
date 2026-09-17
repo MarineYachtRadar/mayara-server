@@ -493,49 +493,7 @@ const BLANKING_SECTORS: [(usize, ControlId); 4] = [
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::network::NetworkSocketAddrV4;
-    use crate::util::decode_bin;
-    use serde::Deserialize as TestDeserialize;
     use std::net::{Ipv4Addr, SocketAddrV4};
-
-    // Old fixed-size beacon structs, retained here to verify the dynamic parser
-    // produces identical results. These were the production structs before the
-    // switch to dynamic parsing.
-
-    #[derive(TestDeserialize, Debug, Copy, Clone)]
-    #[repr(C, packed)]
-    struct NavicoBeaconHeader {
-        _id: u16,
-        _serial_no: [u8; 16],
-        _radar_addr: NetworkSocketAddrV4,
-        _filler1: [u8; 12],
-        _addr1: NetworkSocketAddrV4,
-        _filler2: [u8; 4],
-        _addr2: NetworkSocketAddrV4,
-        _filler3: [u8; 10],
-        _addr3: NetworkSocketAddrV4,
-        _filler4: [u8; 4],
-        _addr4: NetworkSocketAddrV4,
-    }
-
-    #[derive(TestDeserialize, Debug, Copy, Clone)]
-    #[repr(C, packed)]
-    struct NavicoBeaconRadar {
-        _filler1: [u8; 10],
-        data: NetworkSocketAddrV4,
-        _filler2: [u8; 4],
-        send: NetworkSocketAddrV4,
-        _filler3: [u8; 4],
-        report: NetworkSocketAddrV4,
-    }
-
-    #[derive(TestDeserialize, Debug, Copy, Clone)]
-    #[repr(C, packed)]
-    struct NavicoBeaconDual {
-        _header: NavicoBeaconHeader,
-        a: NavicoBeaconRadar,
-        b: NavicoBeaconRadar,
-    }
 
     // Real 4G dual-range beacon (222 bytes) — serial 1403302452, IP 169.254.24.199
     const BEACON_4G: [u8; 222] = [
@@ -715,60 +673,6 @@ mod tests {
             beacon.scanners[1].report,
             SocketAddrV4::new(Ipv4Addr::new(236, 6, 9, 53), 7064)
         );
-    }
-
-    /// Verify the dynamic parser extracts the same radar addresses as the old
-    /// fixed-struct bincode approach for all three captured beacons.
-    #[test]
-    fn dynamic_parser_matches_fixed_structs() {
-        for (name, packet) in [
-            ("4G", &BEACON_4G[..]),
-            ("HALO 20+", &BEACON_HALO20P[..]),
-            ("HALO 24", &BEACON_HALO24[..]),
-        ] {
-            let old: NavicoBeaconDual =
-                decode_bin(packet).unwrap_or_else(|_| panic!("{}: bincode failed", name));
-            let new = parse_gen3plus_beacon(packet)
-                .unwrap_or_else(|| panic!("{}: dynamic parse failed", name));
-
-            let old_a_data: SocketAddrV4 = old.a.data.into();
-            let old_a_send: SocketAddrV4 = old.a.send.into();
-            let old_a_report: SocketAddrV4 = old.a.report.into();
-            let old_b_data: SocketAddrV4 = old.b.data.into();
-            let old_b_send: SocketAddrV4 = old.b.send.into();
-            let old_b_report: SocketAddrV4 = old.b.report.into();
-
-            assert_eq!(
-                new.scanners[0].data, old_a_data,
-                "{}: A data mismatch",
-                name
-            );
-            assert_eq!(
-                new.scanners[0].send, old_a_send,
-                "{}: A send mismatch",
-                name
-            );
-            assert_eq!(
-                new.scanners[0].report, old_a_report,
-                "{}: A report mismatch",
-                name
-            );
-            assert_eq!(
-                new.scanners[1].data, old_b_data,
-                "{}: B data mismatch",
-                name
-            );
-            assert_eq!(
-                new.scanners[1].send, old_b_send,
-                "{}: B send mismatch",
-                name
-            );
-            assert_eq!(
-                new.scanners[1].report, old_b_report,
-                "{}: B report mismatch",
-                name
-            );
-        }
     }
 
     // Real BR24 beacon (98 bytes) — serial 1047300043, IP 169.254.210.23

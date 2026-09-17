@@ -1,4 +1,3 @@
-use serde::Deserialize;
 use socket2::{Domain, Protocol, Type};
 use std::fmt;
 use std::net::SocketAddrV4;
@@ -28,48 +27,11 @@ static G_REPLAY: AtomicBool = AtomicBool::new(false);
 pub fn set_replay(replay: bool) {
     G_REPLAY.store(replay, std::sync::atomic::Ordering::Relaxed);
 }
-// This is like a SocketAddrV4 but with known layout
-#[derive(Deserialize, Copy, Clone)]
-#[repr(C)]
-pub(crate) struct NetworkSocketAddrV4 {
-    addr: [u8; 4],
-    port: [u8; 2],
-}
-
-impl From<NetworkSocketAddrV4> for SocketAddrV4 {
-    fn from(item: NetworkSocketAddrV4) -> Self {
-        SocketAddrV4::new(
-            u32::from_be_bytes(item.addr).into(),
-            u16::from_be_bytes(item.port),
-        )
-    }
-}
-
-impl std::fmt::Display for NetworkSocketAddrV4 {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}:{}",
-            Ipv4Addr::from(u32::from_be_bytes(self.addr)),
-            u16::from_be_bytes(self.port)
-        )
-    }
-}
-
-impl fmt::Debug for NetworkSocketAddrV4 {
-    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt.debug_struct("NetworkSocketAddrV4")
-            .field("addr", &self.addr)
-            .field("port", &format_args!("{}", u16::from_be_bytes(self.port)))
-            .finish()
-    }
-}
-
 use deku::DekuRead;
 
-/// An address as Raymarine writes it: both halves little-endian, unlike
-/// [`NetworkSocketAddrV4`], which carries them in network order.
-#[derive(Deserialize, DekuRead, Copy, Clone)]
+/// An address as Raymarine writes it: both halves little-endian, rather than
+/// in the network order the rest of the world uses.
+#[derive(DekuRead, Copy, Clone)]
 #[repr(C)]
 #[deku(
     ctx = "endian: deku::ctx::Endian",
