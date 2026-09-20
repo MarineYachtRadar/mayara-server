@@ -291,6 +291,20 @@ impl CommandSender for Command {
                 .and_then(|c| c.value)
                 .map(|v| v as i32)
                 .unwrap_or(0),
+            // Power is the one control whose value need not be a number: it
+            // reads the value itself, and takes "transmit" as readily as 2,
+            // as Navico and Garmin do. A word it does not know is still
+            // refused here, or it would arrive as the standby the parser
+            // falls back to and stand a transmitting radar down.
+            Err(_)
+                if cv.id == ControlId::Power
+                    && cv
+                        .value
+                        .as_ref()
+                        .is_some_and(|v| Power::from_value(v).is_ok()) =>
+            {
+                0
+            }
             Err(e) => return Err(e),
         };
         let auto: i32 = if cv.auto.unwrap_or(false) { 1 } else { 0 };
@@ -831,15 +845,15 @@ mod tests {
         }
     }
 
-    /// `Power::from_value` reads "transmit" as readily as 2, but a control
-    /// value is turned into a number before it ever gets there, so the named
-    /// form is refused. The GUI only ever sends the number.
+    /// A word the power parser does not know is refused, rather than
+    /// arriving as the standby it falls back to: a client that misspells
+    /// "transmit" must not stand a turning antenna down.
     #[tokio::test]
-    async fn a_power_value_by_name_is_not_understood() {
+    async fn a_power_value_that_names_nothing_is_refused() {
         let (mut command, info, wire) = nxt();
 
         let err = command
-            .set_control(&cv(ControlId::Power, json!("transmit")), &info.controls)
+            .set_control(&cv(ControlId::Power, json!("tranmsit")), &info.controls)
             .await
             .unwrap_err();
 
@@ -848,6 +862,24 @@ mod tests {
             "{err:?}"
         );
         assert!(wire.sentences().is_empty());
+    }
+
+    /// Power is read by name as readily as by number, the way Navico and
+    /// Garmin read it. The GUI sends the number, but a client speaking the
+    /// API directly need not.
+    #[tokio::test]
+    async fn a_power_value_by_name_is_understood() {
+        for (value, expected) in [
+            (json!("transmit"), "$S69,2,0,0,60,540,0"),
+            (json!("standby"), "$S69,1,0,0,60,540,0"),
+            (json!("2"), "$S69,2,0,0,60,540,0"),
+        ] {
+            let (mut command, info, wire) = nxt();
+
+            set(&mut command, &info, cv(ControlId::Power, value.clone())).await;
+
+            assert_eq!(wire.first(), expected, "power {value}");
+        }
     }
 
     /// Timed idle is a duty cycle, not a period: the standby half is whatever
