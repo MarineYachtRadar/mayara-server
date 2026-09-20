@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 use std::fmt::Write;
-use tokio::io::{AsyncWriteExt, WriteHalf};
-use tokio::net::TcpStream;
+use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 use std::f64::consts::TAU;
 
@@ -16,7 +15,7 @@ use crate::radar::{Power, RadarError, RadarInfo};
 
 pub(crate) struct Command {
     key: String,
-    write: Option<WriteHalf<TcpStream>>,
+    write: Option<Box<dyn AsyncWrite + Send + Unpin>>,
     controls: SharedControls,
     ranges: Ranges,
     /// Dual range ID appended to per-range commands (0 = Range A, 1 = Range B).
@@ -38,8 +37,8 @@ impl Command {
         }
     }
 
-    pub(crate) fn set_writer(&mut self, write: WriteHalf<TcpStream>) {
-        self.write = Some(write);
+    pub(crate) fn set_writer<W: AsyncWrite + Send + Unpin + 'static>(&mut self, write: W) {
+        self.write = Some(Box::new(write));
     }
 
     pub(crate) fn set_ranges(&mut self, ranges: Ranges) {
@@ -615,4 +614,690 @@ impl CommandSender for Command {
 /// Convert an angle in radians to Furuno spoke units (0–8191).
 fn radians_to_spokes(radians: f64) -> i32 {
     ((radians / TAU * SPOKES as f64).round() as i32).rem_euclid(SPOKES as i32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Brand;
+    use crate::Cli;
+    use crate::brand::furuno::protocol::{PIXEL_VALUES, RadarModel, SPOKE_LEN};
+    use crate::brand::furuno::settings;
+    use crate::config::GuardZone;
+    use crate::radar::SharedRadars;
+    use clap::Parser;
+    use serde_json::json;
+    use std::io;
+    use std::net::{Ipv4Addr, SocketAddrV4};
+    use std::pin::Pin;
+    use std::sync::{Arc, Mutex};
+    use std::task::{Context, Poll};
+
+    /// Everything the radar would have received, in order.
+    #[derive(Clone, Default)]
+    struct Wire(Arc<Mutex<Vec<u8>>>);
+
+    impl Wire {
+        /// The sentences sent so far, with their line endings stripped.
+        fn sentences(&self) -> Vec<String> {
+            String::from_utf8(self.0.lock().unwrap().clone())
+                .unwrap()
+                .split_terminator('\n')
+                .map(|s| s.trim_end_matches('\r').to_string())
+                .collect()
+        }
+
+        /// The first sentence, which for a control set is the command itself;
+        /// what follows is the read-back every set is chased with.
+        fn first(&self) -> String {
+            self.sentences().first().expect("a sentence").clone()
+        }
+    }
+
+    impl AsyncWrite for Wire {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Poll::Ready(Ok(buf.len()))
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    /// A radar of `model` with its writer captured, as the receiver would hand
+    /// it over once the control socket is up.
+    fn radar(model: RadarModel) -> (Command, RadarInfo, Wire) {
+        let radars = SharedRadars::new();
+        let args = Cli::parse_from(["mayara-server"]);
+        let addr = SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 2), 10000);
+        let mut info = RadarInfo::new(
+            &radars,
+            &args,
+            Brand::Furuno,
+            Some("TEST0001"),
+            None,
+            None,
+            PIXEL_VALUES,
+            SPOKES,
+            SPOKE_LEN,
+            addr,
+            Ipv4Addr::new(10, 0, 0, 1),
+            addr,
+            addr,
+            addr,
+            |id, tx| settings::new(id, tx, &args),
+            true,
+            true,
+        );
+        // The discovery path names the radar before the model report arrives.
+        info.controls.set_user_name(info.key());
+        settings::update_when_model_known(&mut info, model, "1.00");
+
+        let has_dual_range = matches!(
+            model,
+            RadarModel::DRS4DNXT
+                | RadarModel::DRS6ANXT
+                | RadarModel::DRS12ANXT
+                | RadarModel::DRS25ANXT
+        );
+        let mut command = Command::new(&info, has_dual_range);
+        let wire = Wire::default();
+        command.set_writer(wire.clone());
+        (command, info, wire)
+    }
+
+    /// An NXT, the model with every control the brand knows about.
+    fn nxt() -> (Command, RadarInfo, Wire) {
+        radar(RadarModel::DRS4DNXT)
+    }
+
+    fn cv(id: ControlId, value: serde_json::Value) -> ControlValue {
+        ControlValue::new(id, value)
+    }
+
+    async fn set(command: &mut Command, info: &RadarInfo, cv: ControlValue) {
+        command
+            .set_control(&cv, &info.controls)
+            .await
+            .expect("the control is one the radar has a command for");
+    }
+
+    // ----- The sentence itself -----
+
+    /// Every command is an NMEA-style sentence: a `$`, the mode letter, the
+    /// command id in hex, comma-separated arguments, CR LF.
+    #[tokio::test]
+    async fn a_command_is_a_sentence_the_radar_can_parse() {
+        let (mut command, _info, wire) = nxt();
+
+        command
+            .send(CommandMode::Set, CommandId::Gain, &[0, 80, 0, 80, 0])
+            .await
+            .unwrap();
+
+        assert_eq!(wire.0.lock().unwrap().as_slice(), b"$S63,0,80,0,80,0\r\n");
+    }
+
+    /// The login sentence is the one packet that ends in a bare LF: it carries
+    /// its arguments as trailing commas, and the radar rejects it with a CR.
+    #[tokio::test]
+    async fn trailing_commas_replace_the_carriage_return() {
+        let (mut command, _info, wire) = nxt();
+
+        command
+            .send_with_commas(CommandMode::Request, CommandId::Status, &[], 3)
+            .await
+            .unwrap();
+
+        assert_eq!(wire.0.lock().unwrap().as_slice(), b"$R69,,,\n");
+    }
+
+    /// A Furuno radar drops its control socket when idle. The write that
+    /// discovers this has to drop the writer, or every later PUT queues onto a
+    /// socket that will never drain and the reconnect never happens.
+    #[tokio::test]
+    async fn a_command_without_a_connection_is_refused() {
+        let (mut command, info, _wire) = nxt();
+        command.write = None;
+
+        let err = command
+            .set_control(&cv(ControlId::Gain, json!(80)), &info.controls)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, RadarError::NotConnected), "{err:?}");
+    }
+
+    /// Controls mayara keeps to itself -- the ones the radar has no command
+    /// for -- must be refused rather than sent as some default sentence.
+    #[tokio::test]
+    async fn a_control_the_radar_has_no_command_for_is_refused() {
+        let (mut command, info, wire) = nxt();
+
+        let err = command
+            .set_control(&cv(ControlId::TargetTrails, json!(1)), &info.controls)
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, RadarError::CannotSetControlId(ControlId::TargetTrails)),
+            "{err:?}"
+        );
+        assert!(wire.sentences().is_empty(), "nothing goes out");
+    }
+
+    // ----- Power and the watchman -----
+
+    /// Transmit is status 2, and carries the watchman periods with it: the
+    /// radar takes power and timed idle in one sentence.
+    #[tokio::test]
+    async fn a_transmit_request_carries_the_watchman_periods() {
+        let (mut command, info, wire) = nxt();
+
+        set(&mut command, &info, cv(ControlId::Power, json!(2))).await;
+
+        assert_eq!(wire.first(), "$S69,2,0,0,60,540,0");
+    }
+
+    /// Standby is status 1. Anything that is not Transmit -- including a value
+    /// the radar never sends, like Fault -- stands the antenna down rather
+    /// than leaving it turning.
+    #[tokio::test]
+    async fn anything_that_is_not_transmit_stands_the_antenna_down() {
+        for value in [json!(0), json!(1), json!(4)] {
+            let (mut command, info, wire) = nxt();
+
+            set(&mut command, &info, cv(ControlId::Power, value.clone())).await;
+
+            assert_eq!(wire.first(), "$S69,1,0,0,60,540,0", "power {value}");
+        }
+    }
+
+    /// `Power::from_value` reads "transmit" as readily as 2, but a control
+    /// value is turned into a number before it ever gets there, so the named
+    /// form is refused. The GUI only ever sends the number.
+    #[tokio::test]
+    async fn a_power_value_by_name_is_not_understood() {
+        let (mut command, info, wire) = nxt();
+
+        let err = command
+            .set_control(&cv(ControlId::Power, json!("transmit")), &info.controls)
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, RadarError::CannotSetControlId(ControlId::Power)),
+            "{err:?}"
+        );
+        assert!(wire.sentences().is_empty());
+    }
+
+    /// Timed idle is a duty cycle, not a period: the standby half is whatever
+    /// is left of ten minutes after the transmit half.
+    #[tokio::test]
+    async fn the_timed_idle_cycle_stays_at_ten_minutes() {
+        let (mut command, info, wire) = nxt();
+
+        set(&mut command, &info, cv(ControlId::TimedRun, json!(300))).await;
+
+        assert_eq!(wire.first(), "$S69,1,0,0,300,300,0");
+    }
+
+    /// A transmit period long enough to leave no standby is clamped: the radar
+    /// is given a minute off rather than a zero it would have to interpret.
+    #[tokio::test]
+    async fn a_transmit_period_that_fills_the_cycle_still_leaves_a_minute() {
+        let (mut command, info, wire) = nxt();
+
+        set(&mut command, &info, cv(ControlId::TimedRun, json!(580))).await;
+
+        assert_eq!(wire.first(), "$S69,1,0,0,580,60,0");
+    }
+
+    // ----- Range -----
+
+    /// Six nautical miles is wire index 9 in unit 0. The indices are not in
+    /// range order, so nothing but the table can produce them.
+    #[tokio::test]
+    async fn a_nautical_range_is_sent_as_its_wire_index() {
+        let (mut command, info, wire) = nxt();
+
+        set(&mut command, &info, cv(ControlId::Range, json!(11112))).await;
+
+        assert_eq!(wire.first(), "$S62,9,0,0");
+    }
+
+    /// A metric range switches the unit as well as the index: 4 km is index 8
+    /// in unit 1, where index 8 in unit 0 would have been 4 nm.
+    #[tokio::test]
+    async fn a_metric_range_switches_the_wire_unit() {
+        let (mut command, info, wire) = nxt();
+
+        set(&mut command, &info, cv(ControlId::Range, json!(4000))).await;
+
+        assert_eq!(wire.first(), "$S62,8,1,0");
+    }
+
+    /// Range B is the same command with the dual range id set. Getting this
+    /// wrong points both ranges at one antenna half.
+    #[tokio::test]
+    async fn a_range_b_command_carries_the_dual_range_id() {
+        let (mut command, info, wire) = nxt();
+        command.dual_range_id = 1;
+
+        set(&mut command, &info, cv(ControlId::Range, json!(11112))).await;
+
+        assert_eq!(wire.first(), "$S62,9,0,1");
+    }
+
+    /// Changing the unit re-sends the range the radar is already on, read in
+    /// the new unit's table: 6 nm becomes the nearest kilometre range rather
+    /// than the same index in a different unit.
+    #[tokio::test]
+    async fn changing_the_unit_resends_the_current_range() {
+        let (mut command, info, wire) = nxt();
+        info.controls
+            .set_value(&ControlId::Range, json!(11112))
+            .expect("range");
+
+        set(&mut command, &info, cv(ControlId::RangeUnits, json!(1))).await;
+
+        assert_eq!(wire.first(), "$S62,11,1,0");
+    }
+
+    // ----- Gain, sea, rain -----
+
+    /// Gain, sea and rain each put the dual range id in a different place, and
+    /// each carries a fixed auto value the radar expects but mayara does not
+    /// expose. These are the sentences that went out before any of this was
+    /// tested; they are pinned so a re-ordering shows up here.
+    #[tokio::test]
+    async fn the_clutter_controls_each_order_their_arguments_differently() {
+        let cases = [
+            (ControlId::Gain, "$S63,0,80,0,80,0"),
+            (ControlId::Sea, "$S64,0,80,50,0,0,0"),
+            (ControlId::Rain, "$S65,0,80,0,0,0,0"),
+        ];
+
+        for (id, expected) in cases {
+            let (mut command, info, wire) = nxt();
+
+            set(&mut command, &info, cv(id, json!(80))).await;
+
+            assert_eq!(wire.first(), expected, "{id:?}");
+        }
+    }
+
+    /// Asking for auto keeps the number: the radar is told which mode to be in
+    /// and what to fall back to, in one sentence.
+    #[tokio::test]
+    async fn an_auto_request_keeps_the_number_beside_the_flag() {
+        let (mut command, info, wire) = nxt();
+        let mut value = cv(ControlId::Gain, json!(55));
+        value.auto = Some(true);
+
+        set(&mut command, &info, value).await;
+
+        assert_eq!(wire.first(), "$S63,1,55,0,80,0");
+    }
+
+    /// A GUI that flips auto on without touching the slider sends no value at
+    /// all. The radar still needs one, so the value it is already on is used
+    /// rather than a zero that would dim the picture.
+    #[tokio::test]
+    async fn an_auto_request_without_a_value_uses_the_value_the_radar_is_on() {
+        let (mut command, info, wire) = nxt();
+        info.controls
+            .set_value(&ControlId::Gain, json!(42))
+            .expect("gain");
+        let mut value = ControlValue {
+            auto: Some(true),
+            ..cv(ControlId::Gain, json!(0))
+        };
+        value.value = None;
+
+        set(&mut command, &info, value).await;
+
+        assert_eq!(wire.first(), "$S63,1,42,0,80,0");
+    }
+
+    // ----- No-transmit sectors -----
+
+    /// The GUI gives a sector as start and end; the radar wants start and
+    /// width. A sector that straddles north has an end below its start, and
+    /// the width has to come out positive.
+    #[tokio::test]
+    async fn a_sector_across_north_still_has_a_positive_width() {
+        let (mut command, info, wire) = nxt();
+        let mut value = cv(ControlId::NoTransmitSector1, json!(350));
+        value.end_value = Some(10.);
+        value.enabled = Some(true);
+
+        set(&mut command, &info, value).await;
+
+        // The second sector rides along at the angles its control was built
+        // with, cleared by the enable flag rather than by its width.
+        assert_eq!(wire.first(), "$S77,0,350,20,-180,180");
+    }
+
+    /// Both sectors travel in one sentence, so setting the second one carries
+    /// the first one along, at the angles the radar last reported for it.
+    ///
+    /// Those angles come out wrong: the report stores them in SI, so a sector
+    /// the radar reported at 100 degrees is held as 1.745 radians and sent
+    /// back as 1 degree. Changing one sector therefore collapses the other.
+    /// This pins what mayara does today; the conversion is a fix of its own.
+    #[tokio::test]
+    async fn setting_the_second_sector_carries_the_first_one_along() {
+        let (mut command, info, wire) = nxt();
+        info.controls
+            .set_sector(&ControlId::NoTransmitSector1, 100., 130., Some(true))
+            .expect("sector 1 as the radar reported it");
+
+        let mut second = cv(ControlId::NoTransmitSector2, json!(200));
+        second.end_value = Some(260.);
+        second.enabled = Some(true);
+        set(&mut command, &info, second).await;
+
+        assert_eq!(wire.first(), "$S77,1,1,1,200,60");
+    }
+
+    /// Only the second sector has an enable flag on the wire. The first is
+    /// turned off by having no width.
+    #[tokio::test]
+    async fn a_disabled_second_sector_clears_the_only_enable_flag_there_is() {
+        let (mut command, info, wire) = nxt();
+        let mut value = cv(ControlId::NoTransmitSector2, json!(200));
+        value.end_value = Some(260.);
+        value.enabled = Some(false);
+
+        set(&mut command, &info, value).await;
+
+        assert_eq!(wire.first(), "$S77,0,-180,180,200,60");
+    }
+
+    // ----- Signal processing -----
+
+    /// Main bang suppression is a percentage to the user and a byte to the
+    /// radar.
+    #[tokio::test]
+    async fn main_bang_suppression_scales_percent_to_a_byte() {
+        for (percent, expected) in [(0, 0), (50, 127), (100, 255)] {
+            let (mut command, info, wire) = nxt();
+
+            set(
+                &mut command,
+                &info,
+                cv(ControlId::MainBangSuppression, json!(percent)),
+            )
+            .await;
+
+            assert_eq!(wire.first(), format!("$S83,{expected},0"), "{percent}%");
+        }
+    }
+
+    /// Noise reduction and interference rejection are the same command with a
+    /// different feature number -- and interference rejection is switched on
+    /// with a 2, not the 1 that every other flag uses.
+    #[tokio::test]
+    async fn the_two_signal_processing_features_differ_in_more_than_their_number() {
+        let (mut command, info, wire) = nxt();
+
+        set(&mut command, &info, cv(ControlId::NoiseRejection, json!(1))).await;
+        set(
+            &mut command,
+            &info,
+            cv(ControlId::InterferenceRejection, json!(1)),
+        )
+        .await;
+        set(&mut command, &info, cv(ControlId::NoiseRejection, json!(0))).await;
+        set(
+            &mut command,
+            &info,
+            cv(ControlId::InterferenceRejection, json!(0)),
+        )
+        .await;
+
+        let sent: Vec<String> = wire
+            .sentences()
+            .into_iter()
+            .filter(|s| s.starts_with("$S67"))
+            .collect();
+        assert_eq!(
+            sent,
+            [
+                "$S67,0,3,1,0",
+                "$S67,0,0,2,0",
+                "$S67,0,3,0,0",
+                "$S67,0,0,0,0"
+            ]
+        );
+    }
+
+    /// The Doppler control is one number to the user and two to the radar: on
+    /// or off, and which of the two modes. A value outside the three the GUI
+    /// offers turns it off rather than picking a mode at random.
+    #[tokio::test]
+    async fn doppler_splits_into_an_enable_and_a_mode() {
+        let cases = [
+            (0, "$SEF,0,0,0"),
+            (1, "$SEF,1,0,0"),
+            (2, "$SEF,1,1,0"),
+            (7, "$SEF,0,0,0"),
+        ];
+
+        for (value, expected) in cases {
+            let (mut command, info, wire) = nxt();
+
+            set(&mut command, &info, cv(ControlId::Doppler, json!(value))).await;
+
+            assert_eq!(wire.first(), expected, "doppler {value}");
+        }
+    }
+
+    /// The level controls that take a screen argument, and the ones that take
+    /// the dual range id. Both trail their value with a number that is not the
+    /// value, which is exactly the kind of thing that gets swapped.
+    #[tokio::test]
+    async fn the_level_controls_send_their_trailing_argument() {
+        let cases = [
+            (ControlId::TargetSeparation, "$SEE,2,0"),
+            (ControlId::BirdMode, "$SED,2,0"),
+            (ControlId::NearStcCurve, "$S85,2,0"),
+            (ControlId::MiddleStcCurve, "$S86,2,0"),
+            (ControlId::FarStcCurve, "$S87,2,0"),
+            (ControlId::StcRange, "$SD2,2,0"),
+            (ControlId::ScanSpeed, "$S89,2,0"),
+            (ControlId::AntiJamming, "$SE8,2"),
+            (ControlId::AntennaHeight, "$S84,0,2,0"),
+            (ControlId::Tune, "$S75,0,2,0"),
+        ];
+
+        for (id, expected) in cases {
+            let (mut command, info, wire) = nxt();
+
+            set(&mut command, &info, cv(id, json!(2))).await;
+
+            assert_eq!(wire.first(), expected, "{id:?}");
+        }
+    }
+
+    /// The STC curves and tuning are per-range; on Range B they have to say so.
+    #[tokio::test]
+    async fn the_per_range_controls_carry_the_dual_range_id() {
+        let cases = [
+            (ControlId::NearStcCurve, "$S85,2,1"),
+            (ControlId::MiddleStcCurve, "$S86,2,1"),
+            (ControlId::FarStcCurve, "$S87,2,1"),
+            (ControlId::StcRange, "$SD2,2,1"),
+            (ControlId::Tune, "$S75,0,2,1"),
+        ];
+
+        for (id, expected) in cases {
+            let (mut command, info, wire) = nxt();
+            command.dual_range_id = 1;
+
+            set(&mut command, &info, cv(id, json!(2))).await;
+
+            assert_eq!(wire.first(), expected, "{id:?}");
+        }
+    }
+
+    // ----- Guard zones -----
+
+    /// A guard zone is two sentences: where the fan is, then the mode that
+    /// switches it on. The angles go out in the radar's 8192 spokes per turn,
+    /// not degrees or radians.
+    #[tokio::test]
+    async fn an_enabled_guard_zone_sends_its_fan_and_then_its_mode() {
+        let (mut command, info, wire) = nxt();
+        info.controls.set_guard_zone(
+            &ControlId::GuardZone1,
+            &GuardZone {
+                start_angle: 0.,
+                end_angle: std::f64::consts::FRAC_PI_2,
+                start_distance: 100.,
+                end_distance: 500.,
+                enabled: true,
+            },
+        );
+
+        set(&mut command, &info, cv(ControlId::GuardZone1, json!(1))).await;
+
+        assert_eq!(wire.sentences(), ["$S99,0,0,2048,100,500", "$S98,1,0,0"]);
+    }
+
+    /// Switching a zone off sends the mode alone: there is no fan to describe.
+    #[tokio::test]
+    async fn a_disabled_guard_zone_sends_only_its_mode() {
+        let (mut command, info, wire) = nxt();
+        info.controls.set_guard_zone(
+            &ControlId::GuardZone2,
+            &GuardZone {
+                start_angle: 0.,
+                end_angle: 1.,
+                start_distance: 100.,
+                end_distance: 500.,
+                enabled: false,
+            },
+        );
+
+        set(&mut command, &info, cv(ControlId::GuardZone2, json!(0))).await;
+
+        assert_eq!(wire.sentences(), ["$S98,0,0,1"]);
+    }
+
+    /// A zone the radar was never told about is switched off, not left in
+    /// whatever state the last zone put it in.
+    #[tokio::test]
+    async fn a_guard_zone_that_was_never_set_is_switched_off() {
+        let (mut command, info, wire) = nxt();
+
+        set(&mut command, &info, cv(ControlId::GuardZone1, json!(1))).await;
+
+        assert_eq!(wire.sentences(), ["$S98,0,0,0"]);
+    }
+
+    /// Angles arrive as radians and have to come out inside one turn: a full
+    /// turn is spoke 0, and a negative angle counts back from the top.
+    #[test]
+    fn an_angle_is_wrapped_into_the_radars_spokes() {
+        assert_eq!(radians_to_spokes(0.), 0);
+        assert_eq!(radians_to_spokes(TAU), 0);
+        assert_eq!(radians_to_spokes(TAU / 4.), 2048);
+        assert_eq!(radians_to_spokes(-TAU / 4.), 6144);
+        assert_eq!(radians_to_spokes(3. * TAU), 0);
+    }
+
+    // ----- What a set is chased with -----
+
+    /// Every set is followed by a read-back, because the radar does not
+    /// acknowledge a set and the GUI would otherwise show the value the user
+    /// asked for rather than the one the radar took.
+    #[tokio::test]
+    async fn a_set_is_chased_with_a_read_back() {
+        let (mut command, info, wire) = nxt();
+
+        set(&mut command, &info, cv(ControlId::Gain, json!(80))).await;
+
+        assert_eq!(wire.sentences(), ["$S63,0,80,0,80,0", "$R66"]);
+    }
+
+    /// A magnetron radar picks its own pulse width from the range, so its
+    /// read-back asks for that too. A solid-state NXT has no pulse to report.
+    #[tokio::test]
+    async fn a_magnetron_radar_is_also_asked_for_its_pulse_width() {
+        let (mut command, info, wire) = radar(RadarModel::DRS4DL);
+
+        set(&mut command, &info, cv(ControlId::Gain, json!(80))).await;
+
+        assert_eq!(wire.sentences(), ["$S63,0,80,0,80,0", "$R66", "$R68"]);
+    }
+
+    // ----- Startup -----
+
+    /// What mayara asks a radar at startup. The list is the whole reason a
+    /// freshly discovered radar arrives in the GUI with its controls filled
+    /// in, and every entry is a control the model actually has.
+    #[tokio::test]
+    async fn the_startup_queries_cover_the_models_controls() {
+        let (mut command, _info, wire) = nxt();
+
+        command.send_report_requests().await.unwrap();
+
+        assert_eq!(
+            wire.sentences(),
+            [
+                "$RE3",     // alive check
+                "$R96",     // modules
+                "$R8E,0",   // operating hours
+                "$R8F,0",   // transmit hours
+                "$R69",     // power status
+                "$R62",     // range
+                "$R63",     // gain
+                "$R64",     // sea
+                "$R65",     // rain
+                "$R75",     // tune
+                "$R89",     // scan speed
+                "$R83,0,0", // main bang size
+                "$R77",     // no-transmit sectors
+                "$RE8",     // anti-jamming
+                "$R85",     // near STC curve
+                "$R86",     // middle STC curve
+                "$R87",     // far STC curve
+                "$R67,0,3", // noise reduction
+                "$R67,0,0", // interference rejection
+                "$REE",     // target separation
+                "$RED",     // bird mode
+                "$REF",     // target analyzer
+            ]
+        );
+    }
+
+    /// A radar without the NXT signal processing is not asked about it: a
+    /// query for a control it does not have draws an error reply.
+    #[tokio::test]
+    async fn a_radar_is_not_asked_about_controls_it_does_not_have() {
+        let (mut command, _info, wire) = radar(RadarModel::DRS4DL);
+
+        command.send_report_requests().await.unwrap();
+
+        let sentences = wire.sentences();
+        for absent in ["$REE", "$RED", "$REF", "$R67,0,3", "$R67,0,0"] {
+            assert!(
+                !sentences.contains(&absent.to_string()),
+                "{absent} went out anyway: {sentences:?}"
+            );
+        }
+        assert!(sentences.contains(&"$R69".to_string()), "{sentences:?}");
+    }
 }
