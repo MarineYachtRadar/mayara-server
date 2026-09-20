@@ -124,8 +124,17 @@ impl Command {
 
     fn get_zone_values(&self, control_id: &ControlId) -> (i32, i32, bool) {
         if let Some(control) = self.controls.get(control_id) {
-            let start = control.value.map(|v| v as i32).unwrap_or(0);
-            let end = control.end_value.map(|v| v as i32).unwrap_or(0);
+            // A control holds SI, which for a sector angle is radians. The
+            // radar wants the degrees its own report arrived in.
+            let to_wire = |v: f64| {
+                control
+                    .item()
+                    .wire_units
+                    .map_or(v, |units| units.from_si(v))
+                    .round() as i32
+            };
+            let start = control.value.map(to_wire).unwrap_or(0);
+            let end = control.end_value.map(to_wire).unwrap_or(0);
             let enabled = control.enabled.unwrap_or(false);
             return (start, end, enabled);
         }
@@ -990,12 +999,9 @@ mod tests {
     }
 
     /// Both sectors travel in one sentence, so setting the second one carries
-    /// the first one along, at the angles the radar last reported for it.
-    ///
-    /// Those angles come out wrong: the report stores them in SI, so a sector
-    /// the radar reported at 100 degrees is held as 1.745 radians and sent
-    /// back as 1 degree. Changing one sector therefore collapses the other.
-    /// This pins what mayara does today; the conversion is a fix of its own.
+    /// the first one along, at the angles the radar last reported for it --
+    /// read back out of the radians a control stores, or a sector reported at
+    /// 100 degrees would go back as 1 and disappear.
     #[tokio::test]
     async fn setting_the_second_sector_carries_the_first_one_along() {
         let (mut command, info, wire) = nxt();
@@ -1008,7 +1014,7 @@ mod tests {
         second.enabled = Some(true);
         set(&mut command, &info, second).await;
 
-        assert_eq!(wire.first(), "$S77,1,1,1,200,60");
+        assert_eq!(wire.first(), "$S77,1,100,30,200,60");
     }
 
     /// Only the second sector has an enable flag on the wire. The first is

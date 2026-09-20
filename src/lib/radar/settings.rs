@@ -2683,6 +2683,13 @@ impl ControlBuilder {
         if let Some(value) = self.control.item.default_value {
             self.control.item.default_value = Some(units.to_si(value).1);
         }
+        // The control was seeded with the default before this conversion, and
+        // everything that reads a control's value reads SI, so the seed has to
+        // come along. Nothing else can have set a value yet: the builder is
+        // frozen here.
+        if let Some(value) = self.control.value {
+            self.control.value = Some(units.to_si(value).1);
+        }
         self.frozen = true;
 
         self
