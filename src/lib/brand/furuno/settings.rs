@@ -327,12 +327,14 @@ pub(crate) fn update_when_model_known(info: &mut RadarInfo, model: RadarModel, v
     if cap.sector_blanking {
         info.controls.add(
             new_sector(ControlId::NoTransmitSector1, -180., 180.)
+                .wire_scale_step(1.)
                 .wire_offset(-1.)
                 .wire_units(Units::Degrees)
                 .has_enabled(),
         );
         info.controls.add(
             new_sector(ControlId::NoTransmitSector2, -180., 180.)
+                .wire_scale_step(1.)
                 .wire_offset(-1.)
                 .wire_units(Units::Degrees)
                 .has_enabled(),
@@ -684,8 +686,67 @@ fn get_ranges_by_model(model: &RadarModel) -> Vec<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::brand::furuno::protocol::{PIXEL_VALUES, SPOKE_LEN, SPOKES};
+    use crate::radar::SharedRadars;
     use clap::Parser;
+    use std::net::{Ipv4Addr, SocketAddrV4};
     use std::time::Duration;
+
+    /// A sector control holds radians, and rounds to the step it was built
+    /// with. Without a step of its own it would round to whole radians, and
+    /// a sector the radar reported at 100 degrees would be kept as 57.
+    #[test]
+    fn a_sector_keeps_the_degree_the_radar_reported() {
+        let radars = SharedRadars::new();
+        let args = Cli::parse_from(["mayara-server"]);
+        let addr = SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 2), 10000);
+        let mut info = RadarInfo::new(
+            &radars,
+            &args,
+            crate::Brand::Furuno,
+            Some("TEST0001"),
+            None,
+            None,
+            PIXEL_VALUES,
+            SPOKES,
+            SPOKE_LEN,
+            addr,
+            Ipv4Addr::new(10, 0, 0, 1),
+            addr,
+            addr,
+            addr,
+            |id, tx| new(id, tx, &args),
+            true,
+            true,
+        );
+        info.controls.set_user_name(info.key());
+        update_when_model_known(&mut info, RadarModel::DRS4DNXT, "1.00");
+
+        info.controls
+            .set_sector(&ControlId::NoTransmitSector1, 100., 130., Some(true))
+            .expect("the sector the radar reported");
+
+        let sector = info.controls.get(&ControlId::NoTransmitSector1).unwrap();
+        assert_eq!(sector.value.unwrap().to_degrees().round(), 100.);
+        assert_eq!(sector.end_value.unwrap().to_degrees().round(), 130.);
+    }
+
+    /// A control is seeded with its default before the unit conversion, so
+    /// the seed has to be converted too: a sector no radar has reported yet
+    /// still reads as the -180 degrees it was declared with.
+    #[test]
+    fn an_unreported_sector_reads_as_the_degrees_it_was_declared_with() {
+        let mut controls = HashMap::new();
+        new_sector(ControlId::NoTransmitSector1, -180., 180.)
+            .wire_scale_step(1.)
+            .wire_offset(-1.)
+            .wire_units(Units::Degrees)
+            .has_enabled()
+            .build(&mut controls);
+
+        let sector = &controls[&ControlId::NoTransmitSector1];
+        assert_eq!(sector.value.unwrap().to_degrees().round(), -180.);
+    }
 
     /// The receiver sends a Standby for a transmit that was ours while
     /// standing down, so the control is offered, enabled at its default.
