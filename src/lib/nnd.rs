@@ -15,17 +15,15 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::Path;
 use std::time::Duration;
 
+use crate::brand::furuno::{
+    BEACON_REPORT_FILLER, BEACON_REPORT_HEADER, BEACON_REPORT_LENGTH_MIN, FurunoRadarReport,
+};
 use crate::pcap::PcapPacket;
+use crate::util::encode;
 
 /// Multicast address for Furuno spoke echo data (239.255.0.2:10024).
 const SPOKE_DATA_MULTICAST_ADDRESS: SocketAddrV4 =
     SocketAddrV4::new(Ipv4Addr::new(239, 255, 0, 2), 10024);
-
-/// Expected header bytes in a Furuno beacon report (bytes 0–10).
-const BEACON_REPORT_HEADER: [u8; 11] = [0x1, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, 0x0];
-
-/// Minimum beacon report size (56 bytes = `size_of::<FurunoRadarReport>()`).
-const BEACON_REPORT_LENGTH_MIN: usize = 56;
 
 /// Beacon address as `SocketAddrV4` (the protocol constant is `SocketAddr`).
 const BEACON_ADDR: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::new(172, 31, 255, 255), 10010);
@@ -290,15 +288,21 @@ fn model_from_filename(path: &Path) -> String {
 
 /// Synthesize beacon and model report packets for radar discovery.
 ///
-/// NND demo files lack beacon packets. We craft a 32-byte beacon report
-/// and a 170-byte model report so the Furuno locator recognizes the radar
-/// and creates a RadarInfo.
+/// NND demo files lack beacon packets. We craft a beacon report and a
+/// 170-byte model report so the Furuno locator recognizes the radar and
+/// creates a RadarInfo.
 fn synthesize_beacon_packets(model: &str) -> Vec<PcapPacket> {
-    // 32-byte beacon report: header[0..11] + length[11] + pad[12..16] + name[16..24]
-    let mut beacon = [0u8; 32];
-    beacon[..BEACON_REPORT_HEADER.len()].copy_from_slice(&BEACON_REPORT_HEADER);
-    beacon[11] = 24; // length = total - 8 header bytes
-    beacon[16..24].copy_from_slice(b"RD003212"); // name (8 bytes, starts with 'R')
+    // The report a radar sends, built from the declaration the locator reads
+    // it back with, so the two cannot describe it differently. A real
+    // DRS-4D NXT sends 32 bytes; what follows the part declared here differs
+    // by model and nothing reads it, so it is left zeroed.
+    let mut beacon = encode(&FurunoRadarReport {
+        _header: BEACON_REPORT_HEADER,
+        length: BEACON_REPORT_LENGTH_MIN as u8, // everything after the 8-byte outer header
+        _filler2: BEACON_REPORT_FILLER,
+        name: *b"RD003212", // 8 bytes, starting with 'R'
+    });
+    beacon.resize(32, 0);
 
     // 170-byte model report: pad[0..24] + model[24..56] + firmware[56..88] +
     //                        firmware2[88..120] + serial[120..152] + pad[152..170]
@@ -314,7 +318,7 @@ fn synthesize_beacon_packets(model: &str) -> Vec<PcapPacket> {
             timestamp: Duration::ZERO,
             src_addr: NND_SRC_ADDR,
             dst_addr: BEACON_ADDR,
-            payload: beacon.to_vec(),
+            payload: beacon,
         },
         PcapPacket {
             timestamp: Duration::ZERO,
@@ -380,6 +384,37 @@ mod tests {
         payload[16] = b'R';
         let pkt = classify_payload(&payload, Duration::ZERO).unwrap();
         assert_eq!(pkt.dst_addr, BEACON_ADDR);
+    }
+
+    /// A real beacon report is 32 bytes. This module used to require 56 --
+    /// a number that claimed to be the size of the report struct, which is
+    /// 24 -- so genuine reports inside a recording were not recognised and
+    /// went to the echo address instead, where they were dropped. The test
+    /// above never caught it because 60 bytes clears either bar.
+    #[test]
+    fn classify_a_real_sized_beacon_report() {
+        let mut payload = vec![0u8; 32];
+        payload[..BEACON_REPORT_HEADER.len()].copy_from_slice(&BEACON_REPORT_HEADER);
+        payload[11] = 24;
+        payload[16..24].copy_from_slice(b"RD003212");
+
+        assert!(is_beacon_report(&payload));
+        let pkt = classify_payload(&payload, Duration::ZERO).unwrap();
+        assert_eq!(pkt.dst_addr, BEACON_ADDR);
+    }
+
+    /// The packets we synthesize for a recording must be the ones the
+    /// locator accepts, since that is the whole point of injecting them.
+    #[test]
+    fn synthesized_beacon_is_recognised_as_one() {
+        let packets = synthesize_beacon_packets("DRS25ANXT");
+
+        assert_eq!(packets.len(), 2);
+        assert_eq!(packets[0].payload.len(), 32);
+        assert!(is_beacon_report(&packets[0].payload));
+        assert_eq!(&packets[0].payload[16..24], b"RD003212");
+        assert_eq!(packets[1].payload.len(), 170);
+        assert_eq!(&packets[1].payload[24..33], b"DRS25ANXT");
     }
 
     #[test]

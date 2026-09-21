@@ -23,13 +23,15 @@
 
 #![allow(dead_code)]
 
+use deku::{DekuRead, DekuWrite};
 use enum_primitive_derive::Primitive;
-use serde::Deserialize;
 use std::fmt::{self, Display};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use crate::radar::{FRAC_NM_2, FRAC_NM_4, FRAC_NM_8, FRAC_NM_16, NM};
+use crate::util::encode;
 
 // =============================================================================
 // Spoke geometry
@@ -84,29 +86,84 @@ pub(crate) const SPOKE_DATA_MULTICAST_ADDRESS: SocketAddrV4 =
 // Discovery and beacon packets
 // =============================================================================
 
-/// 32-byte packet announcing this software to the radar.
-/// Contains embedded ASCII `"MAYARA"` at bytes 16–21.
-pub(crate) const ANNOUNCE_MAYARA_PACKET: [u8; 32] = [
-    0x1, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, 0x0, 0x18, 0x1, 0x0, 0x0, 0x0, b'M', b'A',
-    b'Y', b'A', b'R', b'A', 0x0, 0x0, 0x1, 0x1, 0x0, 0x2, 0x0, 0x1, 0x0, 0x12,
-];
+/// Every discovery packet, in either direction, opens with these eight bytes.
+/// The length that follows shortly after counts what comes after them.
+const OUTER_HEADER: [u8; 8] = [0x1, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, 0x0];
 
-/// 16-byte beacon request packet. Byte 8 = `0x01` (beacon request type).
-pub(crate) const REQUEST_BEACON_PACKET: [u8; 16] = [
-    0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x01, 0x01, 0x00, 0x08, 0x01, 0x00, 0x00, 0x00,
-];
+/// Four bytes between the length and the body of a discovery packet. What
+/// they mean is not known; a radar sends these, so mayara sends them back.
+pub(crate) const BEACON_REPORT_FILLER: [u8; 4] = [0x1, 0x0, 0x0, 0x0];
 
-/// 16-byte model request packet. Byte 8 = `0x14` (model request type).
-pub(crate) const REQUEST_MODEL_PACKET: [u8; 16] = [
-    0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x14, 0x01, 0x00, 0x08, 0x01, 0x00, 0x00, 0x00,
-];
+/// Asks the radars on the link for a report. The two requests mayara sends
+/// differ only in which report they ask for.
+#[derive(DekuWrite, Debug, Copy, Clone)]
+#[deku(endian = "big", magic = b"\x01\x00\x00\x01\x00\x00\x00\x00")]
+struct FurunoReportRequest {
+    /// Which report to send back.
+    report: u8,
+    /// Counts everything after the outer header, as it does in a
+    /// [`FurunoRadarReport`].
+    #[deku(magic = b"\x01")]
+    length: u16,
+    _filler: [u8; 4],
+}
+
+impl FurunoReportRequest {
+    const fn new(report: u8) -> Self {
+        Self {
+            report,
+            length: REPORT_REQUEST_LENGTH,
+            _filler: BEACON_REPORT_FILLER,
+        }
+    }
+}
+
+/// Asks for a beacon report, which names the radar.
+const REPORT_REQUEST_BEACON: u8 = 0x1;
+
+/// Asks for a model report, which carries the model, firmware and serial.
+const REPORT_REQUEST_MODEL: u8 = 0x14;
+
+/// What a request states as its length. Stated rather than derived -- once
+/// the layout is a deku declaration, `size_of` is no longer the wire size --
+/// and pinned by a test, as [`BEACON_REPORT_LENGTH_MIN`] is.
+const REPORT_REQUEST_LENGTH: u16 = 8;
+
+/// The trailer a DRS-4D NXT puts after the name in its beacon report. Its
+/// meaning is not known and it differs by model, so mayara announces itself
+/// with the one model it has been observed sending in full.
+const ANNOUNCE_TRAILER: [u8; 8] = [0x1, 0x1, 0x0, 0x2, 0x0, 0x1, 0x0, 0x12];
+
+/// Announces mayara to the radars on the link. It is a beacon report -- the
+/// one a DRS-4D NXT sends, under mayara's own name -- so it is built from the
+/// same declaration those reports are read back with.
+pub(crate) static ANNOUNCE_MAYARA_PACKET: LazyLock<Vec<u8>> = LazyLock::new(|| {
+    let mut packet = encode(&FurunoRadarReport {
+        _header: BEACON_REPORT_HEADER,
+        length: BEACON_REPORT_LENGTH_MIN as u8,
+        _filler2: BEACON_REPORT_FILLER,
+        name: *b"MAYARA\0\0",
+    });
+    packet.extend_from_slice(&ANNOUNCE_TRAILER);
+    packet
+});
+
+/// Asks every radar on the link to name itself.
+pub(crate) static REQUEST_BEACON_PACKET: LazyLock<Vec<u8>> =
+    LazyLock::new(|| encode(&FurunoReportRequest::new(REPORT_REQUEST_BEACON)));
+
+/// Asks every radar on the link for its model, firmware and serial number.
+pub(crate) static REQUEST_MODEL_PACKET: LazyLock<Vec<u8>> =
+    LazyLock::new(|| encode(&FurunoReportRequest::new(REPORT_REQUEST_MODEL)));
 
 /// Expected header bytes in the 32-byte beacon report (bytes 0–10).
 pub(crate) const BEACON_REPORT_HEADER: [u8; 11] =
     [0x1, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, 0x0];
 
-/// Minimum beacon report size (= `size_of::<FurunoRadarReport>()`).
-pub(crate) const BEACON_REPORT_LENGTH_MIN: usize = std::mem::size_of::<FurunoRadarReport>();
+/// Minimum beacon report size: the part [`FurunoRadarReport`] describes.
+/// Stated rather than derived -- once the layout is a deku declaration,
+/// `size_of` is no longer the wire size -- and pinned by a test.
+pub(crate) const BEACON_REPORT_LENGTH_MIN: usize = 24;
 
 /// Fixed length of the 170-byte model report.
 pub(crate) const MODEL_REPORT_LENGTH: usize = 170;
@@ -118,18 +175,38 @@ pub(crate) const MODEL_REPORT_LENGTH: usize = 170;
 /// TCP connect / read / write timeout for the COPYRIGHT login handshake.
 pub(crate) const LOGIN_TIMEOUT: Duration = Duration::from_millis(500);
 
-/// 56-byte login message sent via TCP to port 10010.
+/// The login message sent via TCP to port 10010.
 ///
-/// From `fnet.dll` function `login_via_copyright`. Byte 9 selects the service
-/// (1 = Radar). The embedded ASCII payload starting at byte 12 reads:
-/// `"COPYRIGHT (C) 2001 FURUNO ELECTRIC CO.,LTD. "`.
-pub(crate) const LOGIN_MESSAGE: [u8; 56] = [
-    //                                              v- byte 9: service ID (1=Radar)
-    0x8, 0x1, 0x0, 0x38, 0x1, 0x0, 0x0, 0x0, 0x0, 0x1, 0x0, 0x0, 0x43, 0x4f, 0x50, 0x59, 0x52, 0x49,
-    0x47, 0x48, 0x54, 0x20, 0x28, 0x43, 0x29, 0x20, 0x32, 0x30, 0x30, 0x31, 0x20, 0x46, 0x55, 0x52,
-    0x55, 0x4e, 0x4f, 0x20, 0x45, 0x4c, 0x45, 0x43, 0x54, 0x52, 0x49, 0x43, 0x20, 0x43, 0x4f, 0x2e,
-    0x2c, 0x4c, 0x54, 0x44, 0x2e, 0x20,
-];
+/// From `fnet.dll` function `login_via_copyright`: a client is let in to a
+/// service by quoting Furuno's copyright line back at the radar.
+#[derive(DekuWrite, Debug, Copy, Clone)]
+#[deku(endian = "big", magic = b"\x08\x01")]
+struct FurunoLoginMessage {
+    /// The whole message, this header included.
+    length: u16,
+    _filler1: [u8; 4],
+    /// Which of the services a Furuno device offers to log in to.
+    service: u16,
+    _filler2: [u8; 2],
+    copyright: [u8; 44],
+}
+
+/// The radar service, as opposed to the others `fnet.dll` can ask for.
+const LOGIN_SERVICE_RADAR: u16 = 1;
+
+/// What the login message states as its length. Stated rather than derived,
+/// and pinned by a test, as [`REPORT_REQUEST_LENGTH`] is.
+const LOGIN_MESSAGE_LENGTH: u16 = 56;
+
+pub(crate) static LOGIN_MESSAGE: LazyLock<Vec<u8>> = LazyLock::new(|| {
+    encode(&FurunoLoginMessage {
+        length: LOGIN_MESSAGE_LENGTH,
+        _filler1: [0x1, 0x0, 0x0, 0x0],
+        service: LOGIN_SERVICE_RADAR,
+        _filler2: [0x0, 0x0],
+        copyright: *b"COPYRIGHT (C) 2001 FURUNO ELECTRIC CO.,LTD. ",
+    })
+});
 
 /// Expected 8-byte reply header from the radar after sending [`LOGIN_MESSAGE`].
 /// The 4 bytes following this header contain the big-endian port offset.
@@ -151,9 +228,14 @@ pub(crate) const LOGIN_EXPECTED_HEADER: [u8; 8] = [0x9, 0x1, 0x0, 0xc, 0x1, 0x0,
 // [01, 00, 00, 01, 00, 00, 00, 00, 00, 01, 00, 1C, 01, 00, 00, 00, 4D, 46, 30, 30, 33, 31, 35, 30, 01, 01, 00, 04, 00, 0B, 00, 15, 00, 14, 00, 16] len 36
 // [ .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   M   F   0   0   3   1   5   0   .   .   .   .   .   .   .   .   .   .   .   .]
 
-/// 32-byte beacon report — radar serial/name identification.
-#[derive(Deserialize, Debug, Copy, Clone)]
-#[repr(C, packed)]
+/// The identifying head of a beacon report. The packets themselves run
+/// longer than this -- 32 bytes on a DRS-4D NXT, 34 on a FAR-2127, 36 from
+/// TimeZero -- and what follows differs by model, so only the part every
+/// radar agrees on is declared. `length` counts everything after the 8-byte
+/// outer header, which is what [`BEACON_REPORT_LENGTH_MIN`] is measured
+/// against.
+#[derive(DekuRead, DekuWrite, Debug, Copy, Clone)]
+#[deku(endian = "little")]
 pub(crate) struct FurunoRadarReport {
     pub _header: [u8; 11],
     pub length: u8,
@@ -162,8 +244,8 @@ pub(crate) struct FurunoRadarReport {
 }
 
 /// 170-byte model report — radar model name, firmware versions, serial number.
-#[derive(Deserialize, Debug, Copy, Clone)]
-#[repr(C, packed)]
+#[derive(DekuRead, Debug, Copy, Clone)]
+#[deku(endian = "little")]
 pub(crate) struct FurunoRadarModelReport {
     pub _filler1: [u8; 18],
     /// MAC address of the device this report describes. Note "describes",
@@ -633,29 +715,62 @@ pub(crate) fn wire_unit_for_meters(meters: i32) -> i32 {
 /// Byte 0 of every IMO echo frame must be this value.
 pub(crate) const FRAME_MAGIC: u8 = 0x02;
 
-/// Byte 9 bit 0: high bit of `spoke_data_len`.
-pub(crate) const FRAME_SPOKE_DATA_LEN_HIGH_BIT: u8 = 0x01;
-
-/// Byte 11 bits 0–2: high bits of `sweep_len` (sample_count).
-pub(crate) const FRAME_SWEEP_LEN_HIGH_MASK: u8 = 0x07;
-
-/// Byte 11 bits 3–4: encoding mode (0–3).
-pub(crate) const FRAME_ENCODING_MASK: u8 = 0x18;
-
-/// Right-shift for encoding mode extraction from byte 11.
-pub(crate) const FRAME_ENCODING_SHIFT: u8 = 3;
-
-/// Byte 11 bit 5: heading data present in per-spoke sub-header.
-pub(crate) const FRAME_HEADING_VALID_BIT: u8 = 0x20;
-
-/// Byte 12 bits 0–5: range wire index.
-pub(crate) const FRAME_WIRE_INDEX_MASK: u8 = 0x3F;
-
-/// Byte 15 bits 0–2: high bits of `scale`.
-pub(crate) const FRAME_SCALE_HIGH_MASK: u8 = 0x07;
-
-/// Byte 15 bit 6: dual range identifier (0 = Range A, 1 = Range B).
-pub(crate) const FRAME_DUAL_RANGE_BIT: u8 = 0x40;
+/// The 16-byte header an IMO echo frame opens with.
+///
+/// Most of its fields are runs of bits rather than whole bytes, and they run
+/// from the least significant bit up, so the declaration reads them in that
+/// order. A field that crosses a byte boundary -- `sweep_len` and `scale`
+/// both do -- is one field here, not a high half to be shifted onto a low
+/// one by hand.
+#[derive(DekuRead, Debug, Copy, Clone)]
+#[deku(
+    endian = "little",
+    bit_order = "lsb",
+    magic = b"\x02",
+    ctx = "_: deku::ctx::Endian",
+    ctx_default = "deku::ctx::Endian::Little"
+)]
+pub(crate) struct FurunoImoFrameHeader {
+    pub _sequence_number: u8,
+    /// Big-endian, unlike everything after it, and unread.
+    pub _total_length: [u8; 2],
+    pub _timestamp: u32,
+    /// Bytes 8-9: the length of the spoke data, and the number of spokes
+    /// that follow this header.
+    #[deku(bits = 9)]
+    pub _spoke_data_len: u16,
+    #[deku(bits = 7)]
+    pub sweep_count: u32,
+    /// Bytes 10-11: how many samples each spoke carries, and how they are
+    /// encoded.
+    #[deku(bits = 11)]
+    pub sweep_len: u32,
+    #[deku(bits = 2)]
+    pub encoding: u8,
+    #[deku(bits = 1)]
+    pub have_heading: u8,
+    #[deku(bits = 2)]
+    pub _unknown1: u8,
+    /// Byte 12: which range the radar is on, as an index into the wire index
+    /// table rather than a distance.
+    #[deku(bits = 6)]
+    pub wire_index: u8,
+    #[deku(bits = 2)]
+    pub _range_status: u8,
+    pub _range_resolution: u8,
+    /// Bytes 14-15: how many of the `sweep_len` samples cover the configured
+    /// display range, and which of a dual range's two antennas sent this.
+    #[deku(bits = 11)]
+    pub scale: u32,
+    #[deku(bits = 1)]
+    pub _flag: u8,
+    #[deku(bits = 2)]
+    pub _echo_type: u8,
+    #[deku(bits = 1)]
+    pub radar_no: u8,
+    #[deku(bits = 1)]
+    pub _unknown2: u8,
+}
 
 /// Per-spoke sub-header: bits 0–4 of angle/heading byte 1 or 3.
 pub(crate) const SPOKE_ANGLE_HIGH_MASK: u8 = 0x1F;
@@ -685,6 +800,26 @@ pub(crate) const ECHO_FLOOR: u16 = 10;
 /// Bits 29-31 of the first header word must equal this value for a Tile frame.
 pub(crate) const TILE_MAGIC: u32 = 2;
 
+/// The word at byte 8 of a frame, which is what tells the two echo formats
+/// apart: on a Tile frame its top three bits are [`TILE_MAGIC`]. The same
+/// bytes are `_spoke_data_len` and `sweep_count` in an IMO frame.
+#[derive(DekuRead, Debug, Copy, Clone)]
+#[deku(
+    endian = "little",
+    bit_order = "lsb",
+    ctx = "_: deku::ctx::Endian",
+    ctx_default = "deku::ctx::Endian::Little"
+)]
+pub(crate) struct FurunoTileFrameHeader {
+    /// Where the spoke records end, measured from byte 8 less seven.
+    #[deku(bits = 11)]
+    pub content_length: u16,
+    #[deku(bits = 18)]
+    pub _unknown: u32,
+    #[deku(bits = 3)]
+    pub magic: u8,
+}
+
 /// Tile echo format uses a hardcoded scale of 496 at all ranges.
 /// From `DecodeTileEchoFormat` in libNAVNETDLL.so (Ghidra decompilation).
 pub(crate) const TILE_SCALE: u32 = 496;
@@ -701,3 +836,135 @@ pub(crate) const GUARD_MODE_OFF: i32 = 0;
 
 /// Guard mode value: fan (sector) zone.
 pub(crate) const GUARD_MODE_FAN: i32 = 1;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::util::decode_head;
+
+    /// The packets mayara sends are built from declarations now rather than
+    /// written out by hand. These are the bytes that went out before, kept
+    /// here so the declarations cannot quietly start saying something else to
+    /// radars that have been answering them all along.
+    #[test]
+    fn the_outgoing_packets_are_the_bytes_that_always_went_out() {
+        assert_eq!(
+            REQUEST_BEACON_PACKET.as_slice(),
+            [
+                0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x01, 0x01, 0x00, 0x08, 0x01, 0x00,
+                0x00, 0x00
+            ]
+        );
+        assert_eq!(
+            REQUEST_MODEL_PACKET.as_slice(),
+            [
+                0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x14, 0x01, 0x00, 0x08, 0x01, 0x00,
+                0x00, 0x00
+            ]
+        );
+        assert_eq!(
+            ANNOUNCE_MAYARA_PACKET.as_slice(),
+            [
+                0x1, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, 0x0, 0x18, 0x1, 0x0, 0x0, 0x0,
+                b'M', b'A', b'Y', b'A', b'R', b'A', 0x0, 0x0, 0x1, 0x1, 0x0, 0x2, 0x0, 0x1, 0x0,
+                0x12
+            ]
+        );
+        assert_eq!(
+            LOGIN_MESSAGE.as_slice(),
+            [
+                0x8, 0x1, 0x0, 0x38, 0x1, 0x0, 0x0, 0x0, 0x0, 0x1, 0x0, 0x0, 0x43, 0x4f, 0x50,
+                0x59, 0x52, 0x49, 0x47, 0x48, 0x54, 0x20, 0x28, 0x43, 0x29, 0x20, 0x32, 0x30, 0x30,
+                0x31, 0x20, 0x46, 0x55, 0x52, 0x55, 0x4e, 0x4f, 0x20, 0x45, 0x4c, 0x45, 0x43, 0x54,
+                0x52, 0x49, 0x43, 0x20, 0x43, 0x4f, 0x2e, 0x2c, 0x4c, 0x54, 0x44, 0x2e, 0x20
+            ]
+        );
+    }
+
+    /// Each packet states its own length, and a radar that disagrees with it
+    /// drops the packet. The numbers are written down rather than measured,
+    /// because `size_of` stopped being the wire size once the layout became a
+    /// deku declaration, so this is what holds the two together.
+    #[test]
+    fn the_stated_lengths_match_the_packets_carrying_them() {
+        assert_eq!(
+            REQUEST_BEACON_PACKET.len(),
+            OUTER_HEADER.len() + REPORT_REQUEST_LENGTH as usize
+        );
+        assert_eq!(
+            ANNOUNCE_MAYARA_PACKET.len(),
+            OUTER_HEADER.len() + BEACON_REPORT_LENGTH_MIN
+        );
+        assert_eq!(LOGIN_MESSAGE.len(), LOGIN_MESSAGE_LENGTH as usize);
+    }
+
+    /// Every discovery packet opens the same way, which is what the locator
+    /// recognises them by -- including the one announcing mayara, since a
+    /// radar answers that with a report of its own.
+    #[test]
+    fn the_discovery_packets_share_an_outer_header() {
+        for packet in [
+            &*REQUEST_BEACON_PACKET,
+            &*REQUEST_MODEL_PACKET,
+            &*ANNOUNCE_MAYARA_PACKET,
+        ] {
+            assert_eq!(packet[..OUTER_HEADER.len()], OUTER_HEADER);
+        }
+        assert_eq!(BEACON_REPORT_HEADER[..OUTER_HEADER.len()], OUTER_HEADER);
+    }
+
+    /// The header a DRS-4D NXT sends, as captured in the notes above
+    /// `parse_metadata_header`, which read it apart by hand with masks and
+    /// shifts. Its fields are bit runs counted from the least significant bit
+    /// up, and two of them cross a byte boundary, so this pins that the
+    /// declaration lands them where the masks used to.
+    #[test]
+    fn a_captured_imo_frame_header_reads_as_it_always_did() {
+        let header: FurunoImoFrameHeader =
+            decode_head(&[2, 149, 0, 1, 0, 0, 0, 0, 48, 17, 116, 219, 6, 0, 240, 9]).unwrap();
+
+        assert_eq!(header.sweep_count, 8);
+        assert_eq!(header.sweep_len, 884);
+        assert_eq!(header.encoding, 3);
+        assert_eq!(header.have_heading, 0);
+        assert_eq!(header.wire_index, 6);
+        assert_eq!(header.radar_no, 0);
+        assert_eq!(header.scale, 496);
+
+        // And one from a FAR-2127, a different model entirely.
+        let header: FurunoImoFrameHeader =
+            decode_head(&[2, 250, 0, 1, 0, 0, 0, 0, 36, 49, 116, 59, 0, 0, 240, 9]).unwrap();
+
+        assert_eq!(header.sweep_count, 24);
+        assert_eq!(header.sweep_len, 884);
+        assert_eq!(header.encoding, 3);
+        assert_eq!(header.wire_index, 0);
+        assert_eq!(header.scale, 496);
+    }
+
+    /// A frame that is not an IMO echo frame has to fail to decode rather
+    /// than be read as one, which is what the magic byte is for now that the
+    /// dispatcher no longer checks it separately.
+    #[test]
+    fn a_frame_without_the_magic_is_not_an_imo_frame() {
+        let mut data = [2, 149, 0, 1, 0, 0, 0, 0, 48, 17, 116, 219, 6, 0, 240, 9];
+        data[0] = 0x03;
+
+        assert!(decode_head::<FurunoImoFrameHeader>(&data).is_err());
+    }
+
+    /// The two echo formats are told apart by the top three bits of the word
+    /// at byte 8, so that word has to come out of the same bytes the hand
+    /// written `u32::from_le_bytes` used to read.
+    #[test]
+    fn the_tile_magic_sits_where_the_frame_dispatcher_looks() {
+        let tile: FurunoTileFrameHeader = decode_head(&[0x2c, 0x01, 0x00, 0x40]).unwrap();
+        assert_eq!(tile.magic as u32, TILE_MAGIC);
+        assert_eq!(tile.content_length, 300);
+
+        // The same offset in the captured IMO header above, which must not
+        // look like a Tile frame.
+        let not_tile: FurunoTileFrameHeader = decode_head(&[48, 17, 116, 219]).unwrap();
+        assert_ne!(not_tile.magic as u32, TILE_MAGIC);
+    }
+}
