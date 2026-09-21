@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.13.1] - 2026-09-21
+
+### Changed
+
+- **navico:** encode and decode packets with deku (#680) ([PR #680](https://github.com/MarineYachtRadar/mayara-server/pull/680))
+- **garmin:** encode and decode packets with deku (#682) ([PR #682](https://github.com/MarineYachtRadar/mayara-server/pull/682))
+- **raymarine:** encode and decode packets with deku (#684) ([PR #684](https://github.com/MarineYachtRadar/mayara-server/pull/684))
+- **furuno:** encode and decode packets with deku (#691) ([PR #691](https://github.com/MarineYachtRadar/mayara-server/pull/691))
+
+### Fixed
+
+- **raymarine:** RD heater hour count is in tenths of an hour (#676) ([PR #676](https://github.com/MarineYachtRadar/mayara-server/pull/676))
+- **raymarine:** don't crash on a truncated spoke (#685) ([PR #685](https://github.com/MarineYachtRadar/mayara-server/pull/685))
+- allow negative numbers in --static-position (#686) ([PR #686](https://github.com/MarineYachtRadar/mayara-server/pull/686))
+- **cli:** reject a static position off the globe (#687) ([PR #687](https://github.com/MarineYachtRadar/mayara-server/pull/687))
+- **furuno:** stop malformed replies crashing the receiver (#688) ([PR #688](https://github.com/MarineYachtRadar/mayara-server/pull/688))
+- **furuno:** stop a no-transmit sector collapsing its neighbour (#694) ([PR #694](https://github.com/MarineYachtRadar/mayara-server/pull/694))
+- **furuno:** accept a power value sent by name (#693) ([PR #693](https://github.com/MarineYachtRadar/mayara-server/pull/693))
+
 ## [3.13.0] - 2026-09-08
 
 ### Added
@@ -486,6 +505,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **ci:** use PR for changelog commit to respect branch protection (#73) ([PR #73](https://github.com/MarineYachtRadar/mayara-server/pull/73))
 - **ci:** fall back to immediate merge when auto-merge not needed (#77) ([PR #77](https://github.com/MarineYachtRadar/mayara-server/pull/77))
 
+[3.13.1]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.13.0...v3.13.1
 [3.13.0]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.12.5...v3.13.0
 [3.12.5]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.12.4...v3.12.5
 [3.12.4]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.12.3...v3.12.4
