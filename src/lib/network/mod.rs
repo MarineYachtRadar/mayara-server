@@ -382,9 +382,8 @@ pub(crate) enum LinkKind {
     /// A link that cannot carry radar traffic at all, such as a Bluetooth
     /// personal area network or a VPN tunnel. Never searched.
     ///
-    /// Only Windows classifies interfaces this way; Linux and macOS never
-    /// construct it.
-    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    /// Windows reads the link type outright; Linux and macOS infer it from
+    /// the interface flags (a point-to-point link is no LAN).
     Unusable,
 }
 
