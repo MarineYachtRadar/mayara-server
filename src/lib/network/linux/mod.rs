@@ -178,20 +178,24 @@ fn is_wireless_interface(interface_name: &str) -> bool {
 mod tests {
     use super::*;
 
-    /// Flag words as read from a Raspberry Pi running tinc: a LAN bridge, the
-    /// Ethernet port behind it, and two tun tunnels.
+    // Flag words as read from a Raspberry Pi running tinc.
+    const LAN_BRIDGE_FLAGS: libc::c_short = 0x1003;
+    const ETHERNET_FLAGS: libc::c_short = 0x1303;
+    const TINC_TUN_FLAGS: libc::c_short = 0x1091;
+    const LOOPBACK_FLAGS: libc::c_short = 0x49;
+
     #[test]
     fn a_lan_carries_radar_traffic_and_a_tunnel_does_not() {
-        assert!(can_carry_radar_traffic(0x1003), "br0, a LAN bridge");
-        assert!(can_carry_radar_traffic(0x1303), "eth0");
-        assert!(!can_carry_radar_traffic(0x1091), "boatnet, a tinc tun");
+        assert!(can_carry_radar_traffic(LAN_BRIDGE_FLAGS));
+        assert!(can_carry_radar_traffic(ETHERNET_FLAGS));
+        assert!(!can_carry_radar_traffic(TINC_TUN_FLAGS));
     }
 
     /// The locator decides about loopback itself: it is searched only when
     /// `--interface` names it, to replay a capture.
     #[test]
     fn loopback_carries_replayed_radar_traffic() {
-        assert!(can_carry_radar_traffic(0x49));
+        assert!(can_carry_radar_traffic(LOOPBACK_FLAGS));
     }
 
     #[test]

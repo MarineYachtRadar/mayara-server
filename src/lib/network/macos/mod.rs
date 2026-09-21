@@ -145,20 +145,24 @@ mod tests {
         InterfaceFlags::from_bits_truncate(bits)
     }
 
-    /// Flag words as read from a Mac running several VPNs: the Ethernet port,
-    /// a utun VPN tunnel and the idle gif tunnel.
+    // Flag words as read from a Mac running several VPNs.
+    const ETHERNET_FLAGS: i32 = 0x8863;
+    const UTUN_VPN_FLAGS: i32 = 0x8051;
+    const IDLE_GIF_TUNNEL_FLAGS: i32 = 0x8010;
+    const LOOPBACK_FLAGS: i32 = 0x8049;
+
     #[test]
     fn a_lan_carries_radar_traffic_and_a_tunnel_does_not() {
-        assert!(can_carry_radar_traffic(flags(0x8863)), "en0");
-        assert!(!can_carry_radar_traffic(flags(0x8051)), "utun0, a VPN");
-        assert!(!can_carry_radar_traffic(flags(0x8010)), "gif0");
+        assert!(can_carry_radar_traffic(flags(ETHERNET_FLAGS)));
+        assert!(!can_carry_radar_traffic(flags(UTUN_VPN_FLAGS)));
+        assert!(!can_carry_radar_traffic(flags(IDLE_GIF_TUNNEL_FLAGS)));
     }
 
     /// The locator decides about loopback itself: it is searched only when
     /// `--interface` names it, to replay a capture.
     #[test]
     fn loopback_carries_replayed_radar_traffic() {
-        assert!(can_carry_radar_traffic(flags(0x8049)));
+        assert!(can_carry_radar_traffic(flags(LOOPBACK_FLAGS)));
     }
 
     #[test]
