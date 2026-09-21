@@ -199,13 +199,7 @@ impl Locator {
                 Err(RadarError::Shutdown)
             });
             let mut rx_ip_change = tx_ip_change.subscribe();
-            set.spawn(async move {
-                rx_ip_change
-                    .recv()
-                    .await
-                    .map_err(|_| RadarError::Shutdown)?;
-                Err(RadarError::IPAddressChanged)
-            });
+            set.spawn(async move { Err(address_change_outcome(rx_ip_change.recv().await)) });
 
             // Add a timeout to the task set to handle cases where no packets are received,
             // and we need to send a wakeup packet
@@ -659,6 +653,22 @@ fn spawn_receive(set: &mut JoinSet<Result<ResultType, RadarError>>, mut socket: 
     });
 }
 
+/// What an address-change notification means for the locator loop.
+///
+/// The channel carries a single slot, so a burst of changes -- a VPN bringing
+/// up two tunnels in the same instant, a link bouncing -- overruns it and
+/// `recv()` reports `Lagged`. That is still news of an address change, so it
+/// asks for a rescan. Only a closed channel, meaning the sender and with it
+/// the program is going away, is a shutdown: answering `Lagged` with one left
+/// the locator gone for good, with the web server still up and its health
+/// check green, and no radar found again until someone restarted the process.
+fn address_change_outcome(result: Result<(), broadcast::error::RecvError>) -> RadarError {
+    match result {
+        Ok(()) | Err(broadcast::error::RecvError::Lagged(_)) => RadarError::IPAddressChanged,
+        Err(broadcast::error::RecvError::Closed) => RadarError::Shutdown,
+    }
+}
+
 async fn send_beacon_requests(
     beacon_messages: &Vec<BeaconRequests>,
     interface_addresses: &Vec<Ipv4Addr>,
@@ -739,4 +749,42 @@ async fn send_beacon_request(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_address_change_asks_for_a_rescan() {
+        assert!(matches!(
+            address_change_outcome(Ok(())),
+            RadarError::IPAddressChanged
+        ));
+    }
+
+    /// Two interfaces coming up at once overrun the single-slot channel; the
+    /// locator must rescan, not stop.
+    #[tokio::test]
+    async fn a_burst_of_changes_still_asks_for_a_rescan() {
+        let (tx, mut rx) = broadcast::channel::<()>(1);
+        tx.send(()).unwrap();
+        tx.send(()).unwrap();
+
+        let outcome = address_change_outcome(rx.recv().await);
+        assert!(
+            matches!(outcome, RadarError::IPAddressChanged),
+            "a lagged receiver means rescan, got {outcome}"
+        );
+    }
+
+    /// Only the sender going away is a shutdown.
+    #[tokio::test]
+    async fn a_closed_channel_is_a_shutdown() {
+        let (tx, mut rx) = broadcast::channel::<()>(1);
+        drop(tx);
+
+        let outcome = address_change_outcome(rx.recv().await);
+        assert!(matches!(outcome, RadarError::Shutdown), "got {outcome}");
+    }
 }
