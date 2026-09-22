@@ -1,5 +1,6 @@
 use std::ptr;
 
+use nix::net::if_::InterfaceFlags;
 use system_configuration::core_foundation::array::CFArray;
 use system_configuration::core_foundation::base::TCFType;
 use system_configuration::core_foundation::runloop::{
@@ -92,15 +93,37 @@ fn wait_for_ip_addr_change(
 }
 
 /// Classify an interface by the link technology behind it.
-///
-/// Only WiFi is distinguished here; macOS has no equally cheap probe for the
-/// link types Windows reports as [`LinkKind::Unusable`].
 pub fn link_kind(interface_name: &str) -> LinkKind {
-    if is_wireless_interface(interface_name) {
+    if let Some(flags) = interface_flags(interface_name)
+        && !can_carry_radar_traffic(flags)
+    {
+        LinkKind::Unusable
+    } else if is_wireless_interface(interface_name) {
         LinkKind::Wireless
     } else {
         LinkKind::Wired
     }
+}
+
+/// A point-to-point link -- the `utun` interface behind every macOS VPN
+/// (WireGuard, Tailscale, tinc, IKEv2), a `gif` tunnel -- is not a LAN
+/// segment: it has no broadcast address and no radar on the other end. A
+/// bridged tap VPN keeps its broadcast flag and stays usable, which is right:
+/// it does carry the LAN.
+///
+/// Loopback has no broadcast address either, but it stays usable: the locator
+/// searches it when `--interface` names it, which is how a capture is replayed.
+fn can_carry_radar_traffic(flags: InterfaceFlags) -> bool {
+    !flags.contains(InterfaceFlags::IFF_POINTOPOINT)
+        && flags.intersects(InterfaceFlags::IFF_BROADCAST | InterfaceFlags::IFF_LOOPBACK)
+}
+
+/// The interface flags, or `None` when the interface has just gone away.
+fn interface_flags(interface_name: &str) -> Option<InterfaceFlags> {
+    nix::ifaddrs::getifaddrs()
+        .ok()?
+        .find(|address| address.interface_name == interface_name)
+        .map(|address| address.flags)
 }
 
 fn is_wireless_interface(interface_name: &str) -> bool {
@@ -112,4 +135,43 @@ fn is_wireless_interface(interface_name: &str) -> bool {
 
     let key = format!("State:/Network/Interface/{}/AirPort", interface_name);
     store.get(key.as_str()).is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn flags(bits: i32) -> InterfaceFlags {
+        InterfaceFlags::from_bits_truncate(bits)
+    }
+
+    // Flag words as read from a Mac running several VPNs.
+    const ETHERNET_FLAGS: i32 = 0x8863;
+    const UTUN_VPN_FLAGS: i32 = 0x8051;
+    const IDLE_GIF_TUNNEL_FLAGS: i32 = 0x8010;
+    const LOOPBACK_FLAGS: i32 = 0x8049;
+
+    #[test]
+    fn a_lan_carries_radar_traffic_and_a_tunnel_does_not() {
+        assert!(can_carry_radar_traffic(flags(ETHERNET_FLAGS)));
+        assert!(!can_carry_radar_traffic(flags(UTUN_VPN_FLAGS)));
+        assert!(!can_carry_radar_traffic(flags(IDLE_GIF_TUNNEL_FLAGS)));
+    }
+
+    /// The locator decides about loopback itself: it is searched only when
+    /// `--interface` names it, to replay a capture.
+    #[test]
+    fn loopback_carries_replayed_radar_traffic() {
+        assert!(can_carry_radar_traffic(flags(LOOPBACK_FLAGS)));
+    }
+
+    #[test]
+    fn an_interface_that_does_not_exist_has_no_flags() {
+        assert_eq!(interface_flags("nosuchif0"), None);
+    }
+
+    #[test]
+    fn loopback_is_classified_usable() {
+        assert!(matches!(link_kind("lo0"), LinkKind::Wired));
+    }
 }

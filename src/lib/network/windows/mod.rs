@@ -9,8 +9,9 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::NetworkManagement::IpHelper::{CancelIPChangeNotify, NotifyAddrChange};
 use windows::Win32::NetworkManagement::Ndis::{
-    NDIS_PHYSICAL_MEDIUM, NdisPhysicalMediumBluetooth, NdisPhysicalMediumNative802_11,
-    NdisPhysicalMediumWirelessLan, NdisPhysicalMediumWirelessWan,
+    NDIS_PHYSICAL_MEDIUM, NET_IF_ACCESS_POINT_TO_POINT, NET_IF_ACCESS_TYPE,
+    NdisPhysicalMediumBluetooth, NdisPhysicalMediumNative802_11, NdisPhysicalMediumWirelessLan,
+    NdisPhysicalMediumWirelessWan,
 };
 use windows::Win32::System::IO::OVERLAPPED;
 use windows::Win32::System::Threading::{
@@ -160,10 +161,10 @@ fn arm_ip_addr_change_notification(overlapped: &mut OVERLAPPED) -> Result<(), Ra
 ///
 /// `interface_name` is an adapter *friendly* name, the same string that
 /// `NetworkInterface::show()` reports. `MIB_IF_ROW2` is the only interface table
-/// carrying the friendly name (`Alias`), the adapter type and the physical
-/// medium together, and all three are needed: Windows reports a Bluetooth
-/// personal area network as `IF_TYPE_ETHERNET_CSMACD`, exactly like real
-/// Ethernet, and only `PhysicalMediumType` tells them apart.
+/// carrying the friendly name (`Alias`), the adapter type, the physical medium
+/// and the access type together, and all are needed: Windows reports a
+/// Bluetooth personal area network as `IF_TYPE_ETHERNET_CSMACD`, exactly like
+/// real Ethernet, and only `PhysicalMediumType` tells them apart.
 ///
 /// An interface missing from the table is reported as [`LinkKind::Wired`] so a
 /// lookup failure never silently hides a radar.
@@ -193,19 +194,27 @@ fn lookup_link_kind(interface_name: &str) -> Option<LinkKind> {
         let kind = rows
             .iter()
             .find(|row| nul_terminated(&row.Alias) == interface_name)
-            .map(|row| classify(row.Type, row.PhysicalMediumType));
+            .map(|row| classify(row.Type, row.PhysicalMediumType, row.AccessType));
 
         FreeMibTable(table as _);
         kind
     }
 }
 
-fn classify(if_type: u32, medium: NDIS_PHYSICAL_MEDIUM) -> LinkKind {
-    use windows::Win32::NetworkManagement::IpHelper::{IF_TYPE_ETHERNET_CSMACD, IF_TYPE_IEEE80211};
+fn classify(
+    if_type: u32,
+    medium: NDIS_PHYSICAL_MEDIUM,
+    access_type: NET_IF_ACCESS_TYPE,
+) -> LinkKind {
+    use windows::Win32::NetworkManagement::IpHelper::{
+        IF_TYPE_ETHERNET_CSMACD, IF_TYPE_IEEE80211, IF_TYPE_SOFTWARE_LOOPBACK,
+    };
 
     // Checked before the adapter type, because a Bluetooth PAN claims to be
-    // Ethernet and would otherwise pass as a usable wired link.
-    if medium == NdisPhysicalMediumBluetooth {
+    // Ethernet and would otherwise pass as a usable wired link. A VPN tunnel
+    // that presents itself as Ethernet is caught the same way: a point-to-point
+    // link is not a LAN segment and has no radar on the other end.
+    if medium == NdisPhysicalMediumBluetooth || access_type == NET_IF_ACCESS_POINT_TO_POINT {
         return LinkKind::Unusable;
     }
 
@@ -217,8 +226,12 @@ fn classify(if_type: u32, medium: NDIS_PHYSICAL_MEDIUM) -> LinkKind {
         IF_TYPE_IEEE80211 => LinkKind::Wireless,
         IF_TYPE_ETHERNET_CSMACD if wireless_medium => LinkKind::Wireless,
         IF_TYPE_ETHERNET_CSMACD => LinkKind::Wired,
-        // Loopback, tunnels (Teredo, 6to4, IP-HTTPS), PPP/VPN dial-up, cellular
-        // modems and the rest cannot carry a radar's multicast spoke stream.
+        // The locator decides about loopback itself: it is searched only when
+        // `--interface` names it, which is how a capture is replayed.
+        IF_TYPE_SOFTWARE_LOOPBACK => LinkKind::Wired,
+        // Tunnels (Teredo, 6to4, IP-HTTPS), VPN adapters (WireGuard, Tailscale),
+        // PPP dial-up, cellular modems and the rest cannot carry a radar's
+        // multicast spoke stream.
         _ => LinkKind::Unusable,
     }
 }
@@ -232,18 +245,24 @@ fn nul_terminated(buffer: &[u16]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use windows::Win32::NetworkManagement::IpHelper::IF_TYPE_PROP_VIRTUAL;
     use windows::Win32::NetworkManagement::IpHelper::{
         IF_TYPE_ETHERNET_CSMACD, IF_TYPE_IEEE80211, IF_TYPE_PPP, IF_TYPE_SOFTWARE_LOOPBACK,
         IF_TYPE_TUNNEL,
     };
     use windows::Win32::NetworkManagement::Ndis::{
-        NdisPhysicalMedium802_3, NdisPhysicalMediumUnspecified,
+        NET_IF_ACCESS_BROADCAST, NET_IF_ACCESS_LOOPBACK, NdisPhysicalMedium802_3,
+        NdisPhysicalMediumUnspecified,
     };
 
     #[test]
     fn ethernet_is_wired() {
         assert_eq!(
-            classify(IF_TYPE_ETHERNET_CSMACD, NdisPhysicalMedium802_3),
+            classify(
+                IF_TYPE_ETHERNET_CSMACD,
+                NdisPhysicalMedium802_3,
+                NET_IF_ACCESS_BROADCAST
+            ),
             LinkKind::Wired
         );
     }
@@ -251,7 +270,11 @@ mod tests {
     #[test]
     fn native_80211_is_wireless() {
         assert_eq!(
-            classify(IF_TYPE_IEEE80211, NdisPhysicalMediumNative802_11),
+            classify(
+                IF_TYPE_IEEE80211,
+                NdisPhysicalMediumNative802_11,
+                NET_IF_ACCESS_BROADCAST
+            ),
             LinkKind::Wireless
         );
     }
@@ -261,21 +284,55 @@ mod tests {
         // Values observed on a real adapter: Windows types a Bluetooth PAN as
         // Ethernet, so only the medium keeps it out of radar discovery.
         assert_eq!(
-            classify(IF_TYPE_ETHERNET_CSMACD, NdisPhysicalMediumBluetooth),
+            classify(
+                IF_TYPE_ETHERNET_CSMACD,
+                NdisPhysicalMediumBluetooth,
+                NET_IF_ACCESS_BROADCAST
+            ),
             LinkKind::Unusable
         );
     }
 
     #[test]
-    fn tunnels_loopback_and_ppp_are_unusable() {
-        for if_type in [IF_TYPE_TUNNEL, IF_TYPE_PPP, IF_TYPE_SOFTWARE_LOOPBACK] {
+    fn tunnels_vpn_adapters_and_ppp_are_unusable() {
+        for if_type in [IF_TYPE_TUNNEL, IF_TYPE_PPP, IF_TYPE_PROP_VIRTUAL] {
             assert_eq!(
-                classify(if_type, NdisPhysicalMediumUnspecified),
+                classify(
+                    if_type,
+                    NdisPhysicalMediumUnspecified,
+                    NET_IF_ACCESS_POINT_TO_POINT
+                ),
                 LinkKind::Unusable,
                 "if_type {} must be unusable",
                 if_type
             );
         }
+    }
+
+    #[test]
+    fn a_point_to_point_link_posing_as_ethernet_is_unusable() {
+        assert_eq!(
+            classify(
+                IF_TYPE_ETHERNET_CSMACD,
+                NdisPhysicalMedium802_3,
+                NET_IF_ACCESS_POINT_TO_POINT
+            ),
+            LinkKind::Unusable
+        );
+    }
+
+    /// The locator decides about loopback itself: it is searched only when
+    /// `--interface` names it, to replay a capture.
+    #[test]
+    fn loopback_carries_replayed_radar_traffic() {
+        assert_eq!(
+            classify(
+                IF_TYPE_SOFTWARE_LOOPBACK,
+                NdisPhysicalMediumUnspecified,
+                NET_IF_ACCESS_LOOPBACK
+            ),
+            LinkKind::Wired
+        );
     }
 
     #[test]

@@ -78,14 +78,64 @@ async fn wait_for_ip_addr_change(
 }
 
 /// Classify an interface by the link technology behind it.
-///
-/// Only WiFi is distinguished here; Linux has no equally cheap probe for the
-/// link types Windows reports as [`LinkKind::Unusable`].
 pub fn link_kind(interface_name: &str) -> LinkKind {
-    if is_wireless_interface(interface_name) {
+    if let Some(flags) = interface_flags(interface_name)
+        && !can_carry_radar_traffic(flags)
+    {
+        LinkKind::Unusable
+    } else if is_wireless_interface(interface_name) {
         LinkKind::Wireless
     } else {
         LinkKind::Wired
+    }
+}
+
+/// A point-to-point link -- a tun VPN such as tinc, OpenVPN or WireGuard, a
+/// PPP dial-up, an IP tunnel -- is not a LAN segment: it has no broadcast
+/// address and no radar on the other end. Binding a multicast sender to one
+/// fails with `EADDRNOTAVAIL`, so before this check every beacon round logged
+/// a screenful of warnings per tunnel, and a radar was hunted for down the
+/// tunnels as if they were the boat's network. A bridged tap VPN keeps its
+/// broadcast flag and stays usable, which is right: it does carry the LAN.
+///
+/// Loopback has no broadcast address either, but it stays usable: the locator
+/// searches it when `--interface` names it, which is how a capture is replayed.
+fn can_carry_radar_traffic(flags: libc::c_short) -> bool {
+    let flags = flags as libc::c_int;
+    flags & libc::IFF_POINTOPOINT == 0 && flags & (libc::IFF_BROADCAST | libc::IFF_LOOPBACK) != 0
+}
+
+/// The interface flags, or `None` when the interface has just gone away.
+fn interface_flags(interface_name: &str) -> Option<libc::c_short> {
+    use libc::{AF_INET, Ioctl, c_void, ifreq, ioctl, strncpy};
+
+    // musl types the request as c_int and glibc as c_ulong; the constant is
+    // c_ulong in both, so cast it to whatever this target's ioctl() wants.
+    const SIOCGIFFLAGS: Ioctl = libc::SIOCGIFFLAGS as Ioctl;
+    use std::ffi::CString;
+
+    let socket_fd = unsafe { libc::socket(AF_INET, libc::SOCK_DGRAM, 0) };
+    if socket_fd < 0 {
+        return None;
+    }
+
+    let mut ifr = unsafe { std::mem::zeroed::<ifreq>() };
+    let iface_cstring = CString::new(interface_name).ok()?;
+    unsafe {
+        strncpy(
+            ifr.ifr_name.as_mut_ptr(),
+            iface_cstring.as_ptr(),
+            ifr.ifr_name.len(),
+        );
+    }
+
+    let res = unsafe { ioctl(socket_fd, SIOCGIFFLAGS, &mut ifr as *mut _ as *mut c_void) };
+    unsafe { libc::close(socket_fd) };
+
+    if res == 0 {
+        Some(unsafe { ifr.ifr_ifru.ifru_flags })
+    } else {
+        None
     }
 }
 
@@ -121,5 +171,40 @@ fn is_wireless_interface(interface_name: &str) -> bool {
     match res {
         0 => true, // The interface supports wireless extensions
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Flag words as read from a Raspberry Pi running tinc.
+    const LAN_BRIDGE_FLAGS: libc::c_short = 0x1003;
+    const ETHERNET_FLAGS: libc::c_short = 0x1303;
+    const TINC_TUN_FLAGS: libc::c_short = 0x1091;
+    const LOOPBACK_FLAGS: libc::c_short = 0x49;
+
+    #[test]
+    fn a_lan_carries_radar_traffic_and_a_tunnel_does_not() {
+        assert!(can_carry_radar_traffic(LAN_BRIDGE_FLAGS));
+        assert!(can_carry_radar_traffic(ETHERNET_FLAGS));
+        assert!(!can_carry_radar_traffic(TINC_TUN_FLAGS));
+    }
+
+    /// The locator decides about loopback itself: it is searched only when
+    /// `--interface` names it, to replay a capture.
+    #[test]
+    fn loopback_carries_replayed_radar_traffic() {
+        assert!(can_carry_radar_traffic(LOOPBACK_FLAGS));
+    }
+
+    #[test]
+    fn an_interface_that_does_not_exist_has_no_flags() {
+        assert_eq!(interface_flags("nosuchif0"), None);
+    }
+
+    #[test]
+    fn loopback_is_classified_usable() {
+        assert!(matches!(link_kind("lo"), LinkKind::Wired));
     }
 }
