@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.13.2] - 2026-09-22
+
+### Fixed
+
+- **locator:** survive a burst of address changes (#697) ([PR #697](https://github.com/MarineYachtRadar/mayara-server/pull/697))
+- **locator:** skip VPN tunnels on every platform (#698) ([PR #698](https://github.com/MarineYachtRadar/mayara-server/pull/698))
+
 ## [3.13.1] - 2026-09-21
 
 ### Changed
@@ -505,6 +512,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **ci:** use PR for changelog commit to respect branch protection (#73) ([PR #73](https://github.com/MarineYachtRadar/mayara-server/pull/73))
 - **ci:** fall back to immediate merge when auto-merge not needed (#77) ([PR #77](https://github.com/MarineYachtRadar/mayara-server/pull/77))
 
+[3.13.2]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.13.1...v3.13.2
 [3.13.1]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.13.0...v3.13.1
 [3.13.0]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.12.5...v3.13.0
 [3.12.5]: https://github.com/MarineYachtRadar/mayara-server/compare/v3.12.4...v3.12.5
