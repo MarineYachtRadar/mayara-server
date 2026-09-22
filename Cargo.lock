@@ -1639,7 +1639,7 @@ dependencies = [
 
 [[package]]
 name = "mayara"
-version = "3.13.2"
+version = "3.13.3-dev"
 dependencies = [
  "anyhow",
  "async-trait",
