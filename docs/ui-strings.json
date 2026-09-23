@@ -1,0 +1,666 @@
+{
+  "controls": [
+    {
+      "id": "accentLight",
+      "name": "Accent light",
+      "description": "Strength of the accent light"
+    },
+    {
+      "id": "antennaForward",
+      "name": "Antenna forward",
+      "description": "Antenna offset forward of GPS position"
+    },
+    {
+      "id": "antennaHeight",
+      "name": "Antenna height",
+      "description": "Height of the antenna above waterline"
+    },
+    {
+      "id": "antennaStarboard",
+      "name": "Antenna starboard",
+      "description": "Antenna offset starboard of GPS position"
+    },
+    {
+      "id": "antiJamming",
+      "name": "Anti-jamming",
+      "description": "Anti-jamming filter reduces interference from other radars on the same frequency"
+    },
+    {
+      "id": "arpaDetectMaxSpeed",
+      "name": "ARPA Max Speed",
+      "description": "Maximum target speed: Normal (25kn), Medium (40kn), Fast (50kn)"
+    },
+    {
+      "id": "autoStandby",
+      "name": "Auto standby",
+      "description": "Let the radar stand down when nobody has watched it for this long"
+    },
+    {
+      "id": "bearingAlignment",
+      "name": "Bearing alignment",
+      "description": "Alignment of the antenna relative to the vessel's bow"
+    },
+    {
+      "id": "birdMode",
+      "name": "Bird mode",
+      "description": "Level of optimization for bird targets"
+    },
+    {
+      "id": "clearTargets",
+      "name": "Clear targets",
+      "description": "Clear all ARPA targets"
+    },
+    {
+      "id": "clearTrails",
+      "name": "Clear trails",
+      "description": "Clear target trails"
+    },
+    {
+      "id": "colorGain",
+      "name": "Color gain",
+      "description": "Adjust the color curve relative to gain"
+    },
+    {
+      "id": "deviceTemperature",
+      "name": "Device temperature",
+      "description": "Internal temperature of the radar"
+    },
+    {
+      "id": "displayTiming",
+      "name": "Display timing",
+      "description": "Display timing"
+    },
+    {
+      "id": "doppler",
+      "name": "Doppler",
+      "description": "Targets coming towards or going away from own ship shown in different colors"
+    },
+    {
+      "id": "dopplerAutoTrack",
+      "name": "Doppler Auto Track",
+      "description": "Convert all Doppler targets to ARPA targets automatically"
+    },
+    {
+      "id": "dopplerMode",
+      "name": "Doppler mode",
+      "description": "For what type of targets Doppler is used"
+    },
+    {
+      "id": "dopplerSpeedThreshold",
+      "name": "Doppler speed threshold",
+      "description": "Threshold speed above which Doppler is applied"
+    },
+    {
+      "id": "dopplerTrailsOnly",
+      "name": "Doppler trails only",
+      "description": "Convert only Doppler targets to target trails"
+    },
+    {
+      "id": "echoFormat",
+      "name": "Echo format",
+      "description": "Experimental echo format request (NXT only: IMO or Tile)"
+    },
+    {
+      "id": "exclusionRect1",
+      "name": "Exclusion rect",
+      "description": "First rectangular exclusion zone (stationary only)"
+    },
+    {
+      "id": "exclusionRect2",
+      "name": "Exclusion rect (2)",
+      "description": "Second rectangular exclusion zone (stationary only)"
+    },
+    {
+      "id": "exclusionRect3",
+      "name": "Exclusion rect (3)",
+      "description": "Third rectangular exclusion zone (stationary only)"
+    },
+    {
+      "id": "exclusionRect4",
+      "name": "Exclusion rect (4)",
+      "description": "Fourth rectangular exclusion zone (stationary only)"
+    },
+    {
+      "id": "exclusionZone1",
+      "name": "Exclusion zone",
+      "description": "First exclusion zone (stationary only)"
+    },
+    {
+      "id": "exclusionZone2",
+      "name": "Exclusion zone (2)",
+      "description": "Second exclusion zone (stationary only)"
+    },
+    {
+      "id": "exclusionZone3",
+      "name": "Exclusion zone (3)",
+      "description": "Third exclusion zone (stationary only)"
+    },
+    {
+      "id": "exclusionZone4",
+      "name": "Exclusion zone (4)",
+      "description": "Fourth exclusion zone (stationary only)"
+    },
+    {
+      "id": "farStcCurve",
+      "name": "Far STC curve",
+      "description": "Far-range STC suppression curve"
+    },
+    {
+      "id": "firmwareVersion",
+      "name": "Firmware version",
+      "description": "Version of the radar firmware"
+    },
+    {
+      "id": "ftc",
+      "name": "FTC",
+      "description": "FTC"
+    },
+    {
+      "id": "gain",
+      "name": "Gain",
+      "description": "How sensitive the radar is to returning echoes"
+    },
+    {
+      "id": "guardZone1",
+      "name": "Guard zone",
+      "description": "First guard zone for target detection"
+    },
+    {
+      "id": "guardZone2",
+      "name": "Guard zone (2)",
+      "description": "Second guard zone for target detection"
+    },
+    {
+      "id": "interferenceRejection",
+      "name": "Interference rejection",
+      "description": "Reduces interference from other radars"
+    },
+    {
+      "id": "localInterferenceRejection",
+      "name": "Local interference rejection",
+      "description": "How much local interference rejection is applied"
+    },
+    {
+      "id": "magnetronCurrent",
+      "name": "Magnetron current",
+      "description": "The current supplied to the magnetron"
+    },
+    {
+      "id": "mainBangSuppression",
+      "name": "Main bang suppression",
+      "description": "Main bang suppression"
+    },
+    {
+      "id": "middleStcCurve",
+      "name": "Middle STC curve",
+      "description": "Middle-range STC suppression curve"
+    },
+    {
+      "id": "mode",
+      "name": "Mode",
+      "description": "Choice of radar mode tuning to certain conditions, or custom"
+    },
+    {
+      "id": "modelName",
+      "name": "Model name",
+      "description": "Manufacturer model name of the radar"
+    },
+    {
+      "id": "nearStcCurve",
+      "name": "Near STC curve",
+      "description": "Near-range STC suppression curve"
+    },
+    {
+      "id": "noTransmitSector1",
+      "name": "No Transmit sector",
+      "description": "First no-transmit sector"
+    },
+    {
+      "id": "noTransmitSector2",
+      "name": "No Transmit sector (2)",
+      "description": "Second no-transmit sector"
+    },
+    {
+      "id": "noTransmitSector3",
+      "name": "No Transmit sector (3)",
+      "description": "Third no-transmit sector"
+    },
+    {
+      "id": "noTransmitSector4",
+      "name": "No Transmit sector (4)",
+      "description": "Fourth no-transmit sector"
+    },
+    {
+      "id": "noiseRejection",
+      "name": "Noise rejection",
+      "description": "Filters out noise"
+    },
+    {
+      "id": "operatingTime",
+      "name": "Operating time",
+      "description": "How long the radar has been operating over its lifetime"
+    },
+    {
+      "id": "parkPosition",
+      "name": "Park position",
+      "description": "Antenna park position when entering standby"
+    },
+    {
+      "id": "power",
+      "name": "Power",
+      "description": "Radar operational state"
+    },
+    {
+      "id": "pulseWidth",
+      "name": "Pulse width",
+      "description": "Current transmit pulse width selected by the radar"
+    },
+    {
+      "id": "rain",
+      "name": "Rain clutter",
+      "description": "Rain clutter suppression"
+    },
+    {
+      "id": "range",
+      "name": "Range",
+      "description": "Maximum distance the radar is looking at"
+    },
+    {
+      "id": "rangeUnits",
+      "name": "Range Units",
+      "description": "Which unit system to use for range values"
+    },
+    {
+      "id": "rotationSpeed",
+      "name": "Rotation speed",
+      "description": "How quickly the radar antenna rotates"
+    },
+    {
+      "id": "scanAverageMode",
+      "name": "Scan average",
+      "description": "Scan-to-scan averaging reduces noise by comparing successive sweeps"
+    },
+    {
+      "id": "scanAverageSensitivity",
+      "name": "Scan average sensitivity",
+      "description": "Threshold for scan averaging filter"
+    },
+    {
+      "id": "scanSpeed",
+      "name": "Scan speed",
+      "description": "Desired rotation speed of the radar antenna"
+    },
+    {
+      "id": "sea",
+      "name": "Sea clutter",
+      "description": "Sea clutter suppression"
+    },
+    {
+      "id": "seaClutterCurve",
+      "name": "Sea clutter curve",
+      "description": "Sea clutter curve"
+    },
+    {
+      "id": "seaState",
+      "name": "Sea state",
+      "description": "Sea state for sea clutter suppression"
+    },
+    {
+      "id": "serialNumber",
+      "name": "Serial Number",
+      "description": "Manufacturer serial number of the radar"
+    },
+    {
+      "id": "sideLobeSuppression",
+      "name": "Side lobe suppression",
+      "description": "Level of side lobe suppression"
+    },
+    {
+      "id": "signalStrength",
+      "name": "Signal strength",
+      "description": "Signal strength of the radar"
+    },
+    {
+      "id": "spokeLength",
+      "name": "Spoke length",
+      "description": "How long the spokes are that the radar transmitted last rotation"
+    },
+    {
+      "id": "spokeProcessing",
+      "name": "Spoke Processing",
+      "description": "How to process spoke data for display"
+    },
+    {
+      "id": "spokes",
+      "name": "Spokes",
+      "description": "How many spokes the radar transmitted last rotation"
+    },
+    {
+      "id": "stcRange",
+      "name": "STC range",
+      "description": "Distance boundary between STC range bands"
+    },
+    {
+      "id": "supplyVoltage",
+      "name": "Supply voltage",
+      "description": "DC supply voltage at the radar"
+    },
+    {
+      "id": "targetBoost",
+      "name": "Target boost",
+      "description": "Level of how much small targets are boosted"
+    },
+    {
+      "id": "targetExpansion",
+      "name": "Target expansion",
+      "description": "Increases target length for small targets"
+    },
+    {
+      "id": "targetSeparation",
+      "name": "Target separation",
+      "description": "Makes separation between targets more prominent"
+    },
+    {
+      "id": "targetTrails",
+      "name": "Target trails",
+      "description": "Whether target trails are shown"
+    },
+    {
+      "id": "timedIdle",
+      "name": "Timed idle",
+      "description": "Periodically switch between transmit and standby"
+    },
+    {
+      "id": "timedRun",
+      "name": "Timed idle transmit",
+      "description": "How long the radar transmits during timed idle"
+    },
+    {
+      "id": "trailsMotion",
+      "name": "Target trails motion",
+      "description": "How target trails behave"
+    },
+    {
+      "id": "transmitChannel",
+      "name": "Transmit channel",
+      "description": "Transmit frequency channel selection (auto or manual)"
+    },
+    {
+      "id": "transmitTime",
+      "name": "Transmit time",
+      "description": "How long the radar has been transmitting over its lifetime"
+    },
+    {
+      "id": "tune",
+      "name": "Tune",
+      "description": "Method to finely tune the radar receiver"
+    },
+    {
+      "id": "tuneFine",
+      "name": "Fine tune",
+      "description": "Fine adjustment of the radar receiver tuning"
+    },
+    {
+      "id": "userName",
+      "name": "Custom name",
+      "description": "User defined name for the radar"
+    },
+    {
+      "id": "warmupTime",
+      "name": "Warmup time",
+      "description": "How long the radar still needs to warm up before transmitting"
+    }
+  ],
+  "enums": [
+    {
+      "control": "accentLight",
+      "labels": [
+        "High",
+        "Low",
+        "Medium",
+        "Off"
+      ]
+    },
+    {
+      "control": "antiJamming",
+      "labels": [
+        "Off",
+        "On"
+      ]
+    },
+    {
+      "control": "arpaDetectMaxSpeed",
+      "labels": [
+        "Fast",
+        "Medium",
+        "Normal"
+      ]
+    },
+    {
+      "control": "autoStandby",
+      "labels": [
+        "1 min",
+        "15 min",
+        "30 min",
+        "5 min",
+        "Off"
+      ]
+    },
+    {
+      "control": "birdMode",
+      "labels": [
+        "High",
+        "Low",
+        "Medium",
+        "Off"
+      ]
+    },
+    {
+      "control": "doppler",
+      "labels": [
+        "Approaching",
+        "Normal",
+        "Off",
+        "On",
+        "Rain",
+        "Target"
+      ]
+    },
+    {
+      "control": "dopplerAutoTrack",
+      "labels": [
+        "Off",
+        "On"
+      ]
+    },
+    {
+      "control": "dopplerTrailsOnly",
+      "labels": [
+        "Off",
+        "On"
+      ]
+    },
+    {
+      "control": "echoFormat",
+      "labels": [
+        "IMO",
+        "Tile"
+      ]
+    },
+    {
+      "control": "interferenceRejection",
+      "labels": [
+        "High",
+        "Level 1",
+        "Level 2",
+        "Level 3",
+        "Level 4",
+        "Level 5",
+        "Low",
+        "Medium",
+        "Off",
+        "On"
+      ]
+    },
+    {
+      "control": "localInterferenceRejection",
+      "labels": [
+        "High",
+        "Low",
+        "Medium",
+        "Off"
+      ]
+    },
+    {
+      "control": "mainBangSuppression",
+      "labels": [
+        "Off",
+        "On"
+      ]
+    },
+    {
+      "control": "mode",
+      "labels": [
+        "Bird",
+        "Bird+",
+        "Buoy",
+        "Coastal",
+        "Custom",
+        "Harbor",
+        "Offshore",
+        "Weather"
+      ]
+    },
+    {
+      "control": "noiseRejection",
+      "labels": [
+        "High",
+        "Low",
+        "Medium",
+        "Off",
+        "On"
+      ]
+    },
+    {
+      "control": "power",
+      "labels": [
+        "Fault",
+        "Off",
+        "Preparing",
+        "Standby",
+        "Transmit"
+      ]
+    },
+    {
+      "control": "pulseWidth",
+      "labels": [
+        "Long",
+        "Short"
+      ]
+    },
+    {
+      "control": "rangeUnits",
+      "labels": [
+        "Metric",
+        "Mixed",
+        "Nautical"
+      ]
+    },
+    {
+      "control": "scanAverageMode",
+      "labels": [
+        "High",
+        "Low",
+        "Medium",
+        "Medium High",
+        "Off",
+        "Very High"
+      ]
+    },
+    {
+      "control": "scanSpeed",
+      "labels": [
+        "Auto",
+        "Fast",
+        "Medium",
+        "Medium Plus",
+        "Medium-High",
+        "Normal"
+      ]
+    },
+    {
+      "control": "seaState",
+      "labels": [
+        "Auto",
+        "Calm",
+        "Harbor",
+        "Manual",
+        "Moderate",
+        "Rough"
+      ]
+    },
+    {
+      "control": "spokeProcessing",
+      "labels": [
+        "Clean",
+        "Fill",
+        "Reduce",
+        "Smooth"
+      ]
+    },
+    {
+      "control": "targetBoost",
+      "labels": [
+        "High",
+        "Low",
+        "Off",
+        "On"
+      ]
+    },
+    {
+      "control": "targetExpansion",
+      "labels": [
+        "High",
+        "Low",
+        "Medium",
+        "Off",
+        "On"
+      ]
+    },
+    {
+      "control": "targetSeparation",
+      "labels": [
+        "High",
+        "Low",
+        "Medium",
+        "Off"
+      ]
+    },
+    {
+      "control": "targetTrails",
+      "labels": [
+        "1 min",
+        "10 min",
+        "15s",
+        "3 min",
+        "30s",
+        "5 min",
+        "Off"
+      ]
+    },
+    {
+      "control": "timedIdle",
+      "labels": [
+        "Off",
+        "On"
+      ]
+    },
+    {
+      "control": "trailsMotion",
+      "labels": [
+        "Relative",
+        "True"
+      ]
+    }
+  ]
+}

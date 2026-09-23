@@ -83,6 +83,16 @@ Integration tests replay captured pcap files through the full radar pipeline. Un
 
 To capture new pcap fixtures, see [docs/capturing-traffic.md](docs/capturing-traffic.md).
 
+`docs/ui-strings.json` lists the English text clients receive in the control
+schema — every control's name and description, and every enum label any brand
+or model can send — so clients can translate it. A test fails when it no longer
+matches the code; after changing a control name, description or enum label,
+regenerate it and commit the result:
+
+```sh
+UPDATE_UI_STRINGS=1 cargo test ui_strings
+```
+
 The hand-written GUI in `web/gui/` is embedded into the binary at compile time,
 so a module a browser cannot load still compiles and ships. Check it the way a
 browser would before pushing; CI runs the same check:

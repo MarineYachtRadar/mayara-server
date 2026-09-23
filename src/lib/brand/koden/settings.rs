@@ -59,6 +59,17 @@ pub(crate) fn new(
     SharedControls::new(radar_id, sk_client_tx, args, controls)
 }
 
+/// This brand's controls for every model it knows, for the UI strings catalog
+/// in [`crate::radar::ui_strings`].
+#[cfg(test)]
+pub(crate) fn controls_for_every_model(args: &Cli) -> Vec<SharedControls> {
+    vec![new(
+        "kod1234".to_string(),
+        tokio::sync::broadcast::Sender::new(1),
+        args,
+    )]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

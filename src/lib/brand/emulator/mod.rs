@@ -15,6 +15,9 @@ use crate::{Brand, Cli};
 mod command;
 mod report;
 mod settings;
+
+#[cfg(test)]
+pub(crate) use settings::controls_for_every_model;
 mod world;
 
 // Like HALO radar

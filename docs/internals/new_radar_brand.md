@@ -271,6 +271,16 @@ pub fn new(
 
 Control types: `new_numeric`, `new_list`, `new_sector`, `new_auto`, `new_string`. See `src/lib/radar/settings.rs` for the full builder API.
 
+Add a test-only `controls_for_every_model(args: &Cli) -> Vec<SharedControls>` that builds
+the controls of every model the brand knows (including those added once the model is known),
+re-export it from the brand's `mod.rs`, and add it to `every_control_set` in
+`src/lib/radar/ui_strings.rs`. Then regenerate `docs/ui-strings.json`, which clients use to
+translate control names and enum labels:
+
+```sh
+UPDATE_UI_STRINGS=1 cargo test ui_strings
+```
+
 ## Testing
 
 ### Generate a pcap fixture

@@ -23,6 +23,9 @@ mod protocol;
 mod report;
 mod settings;
 
+#[cfg(test)]
+pub(crate) use settings::controls_for_every_model;
+
 const NON_HD_PIXEL_VALUES: u8 = 16; // Old radars have one nibble
 const HD_PIXEL_VALUES_RAW: u16 = 256; // New radars have one byte pixels
 const HD_PIXEL_VALUES: u8 = (HD_PIXEL_VALUES_RAW / 2) as u8; // ... but we drop the last bit so we have space for other data
@@ -220,7 +223,7 @@ struct RaymarineBeacon56 {
     _field7: u32,         // 52
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, strum::EnumIter)]
 pub(crate) enum BaseModel {
     RD,
     Quantum,

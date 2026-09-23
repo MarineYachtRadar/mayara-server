@@ -22,6 +22,9 @@ mod range_table;
 mod report;
 mod settings;
 
+#[cfg(test)]
+pub(crate) use settings::controls_for_every_model;
+
 use capabilities::GarminCapabilities;
 use protocol::*;
 
@@ -55,7 +58,7 @@ const GARMIN_HD_RANGES_NAUTICAL: &[i32] = &[
 
 /// Supported Garmin radar types
 #[allow(clippy::upper_case_acronyms)] // HD / XHD are Garmin's published product-line names
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::EnumIter)]
 #[allow(dead_code)]
 pub(crate) enum GarminRadarType {
     /// Original HD radar: 720 spokes, 1-bit samples

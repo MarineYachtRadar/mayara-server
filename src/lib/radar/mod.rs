@@ -30,6 +30,8 @@ pub mod settings;
 pub mod spoke;
 pub mod target;
 pub mod trail;
+#[cfg(test)]
+pub(crate) mod ui_strings;
 pub(crate) mod units;
 
 use crate::brand::CommandSender;

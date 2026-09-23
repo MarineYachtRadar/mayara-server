@@ -683,6 +683,24 @@ fn get_ranges_by_model(model: &RadarModel) -> Vec<i32> {
     ranges
 }
 
+/// This brand's controls for every model it knows, for the UI strings catalog
+/// in [`crate::radar::ui_strings`].
+#[cfg(test)]
+pub(crate) fn controls_for_every_model(args: &Cli) -> Vec<SharedControls> {
+    use strum::IntoEnumIterator;
+
+    RadarModel::iter()
+        .map(|model| {
+            let mut info =
+                crate::radar::ui_strings::radar_info(crate::Brand::Furuno, args, |id, tx| {
+                    new(id, tx, args)
+                });
+            update_when_model_known(&mut info, model, "1.00");
+            info.controls
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

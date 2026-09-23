@@ -243,6 +243,25 @@ pub(crate) fn update_from_capabilities(
     log::debug!("update_from_capabilities: refined controls from TLV");
 }
 
+/// This brand's controls for every model it knows, for the UI strings catalog
+/// in [`crate::radar::ui_strings`].
+#[cfg(test)]
+pub(crate) fn controls_for_every_model(args: &Cli) -> Vec<SharedControls> {
+    use strum::IntoEnumIterator;
+
+    Model::iter()
+        .map(|model| {
+            let info =
+                crate::radar::ui_strings::radar_info(crate::Brand::Navico, args, |id, tx| {
+                    new(id, tx, args, None)
+                });
+            let mut controls = info.controls.clone();
+            update_when_model_known(&mut controls, model, &info);
+            controls
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
