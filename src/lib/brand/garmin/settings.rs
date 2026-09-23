@@ -184,6 +184,31 @@ pub(crate) fn new(
     SharedControls::new(radar_id, sk_client_tx, args, controls)
 }
 
+/// This brand's controls for every model it knows, for the UI strings catalog
+/// in [`crate::radar::ui_strings`].
+#[cfg(test)]
+pub(crate) fn controls_for_every_model(args: &Cli) -> Vec<SharedControls> {
+    use strum::IntoEnumIterator;
+
+    // Every capability bit set, so every control a capability gates appears
+    let every_capability = GarminCapabilities::parse(&[0xff; 48]).expect("a full 0x09B1 body");
+
+    GarminRadarType::iter()
+        .flat_map(|radar_type| {
+            [false, true].map(|is_range_b| {
+                new(
+                    "gar1234".to_string(),
+                    tokio::sync::broadcast::Sender::new(1),
+                    args,
+                    radar_type,
+                    &every_capability,
+                    is_range_b,
+                )
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

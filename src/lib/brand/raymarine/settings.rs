@@ -163,6 +163,32 @@ pub(crate) fn update_when_model_known(
     }
 }
 
+/// This brand's controls for every model it knows, for the UI strings catalog
+/// in [`crate::radar::ui_strings`].
+#[cfg(test)]
+pub(crate) fn controls_for_every_model(args: &Cli) -> Vec<SharedControls> {
+    use strum::IntoEnumIterator;
+
+    BaseModel::iter()
+        .map(|base_model| {
+            let info =
+                crate::radar::ui_strings::radar_info(crate::Brand::Raymarine, args, |id, tx| {
+                    new(id, tx, args, base_model)
+                });
+            let model = RaymarineModel {
+                model: base_model,
+                hd: false,
+                max_spoke_len: 512,
+                doppler: false,
+                name: "Test",
+            };
+            let mut controls = info.controls.clone();
+            update_when_model_known(&mut controls, &model, &info);
+            controls
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

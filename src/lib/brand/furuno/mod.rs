@@ -16,6 +16,9 @@ mod protocol;
 mod report;
 mod settings;
 
+#[cfg(test)]
+pub(crate) use settings::controls_for_every_model;
+
 const REPLAY_FIRMWARE_VERSION: &str = "00.00";
 
 /// What the NND replay container needs to recognise and synthesize a beacon

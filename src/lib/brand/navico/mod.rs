@@ -22,6 +22,9 @@ mod protocol;
 mod report;
 mod settings;
 
+#[cfg(test)]
+pub(crate) use settings::controls_for_every_model;
+
 use protocol::{
     BR24_DISCOVERY_ADDRESS, COMMAND_SUBTYPE, DISCOVERY_QUERY_PACKET, GEN3PLUS_DISCOVERY_ADDRESS,
     RADAR_SERVICE_TYPE, REPORT_SUBTYPE, SPOKE_DATA_SUBTYPE,
@@ -31,7 +34,7 @@ pub(super) use protocol::{
     SPOKE_PIXEL_LEN, SPOKES_PER_FRAME, SPOKES_PER_REVOLUTION, SPOKES_RAW,
 };
 
-#[derive(Copy, Clone, PartialEq, Debug)]
+#[derive(Copy, Clone, PartialEq, Debug, strum::EnumIter)]
 #[repr(u32)]
 pub(crate) enum Model {
     Unknown = 9,

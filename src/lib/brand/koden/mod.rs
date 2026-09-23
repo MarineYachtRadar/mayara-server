@@ -16,6 +16,9 @@ mod protocol;
 mod report;
 mod settings;
 
+#[cfg(test)]
+pub(crate) use settings::controls_for_every_model;
+
 use protocol::{
     BEACON_ADDRESS, CMD_MAC_ADDRESS, CONTROL_PREFIX, IMAGE_MARKER, IMG_MIN_SIZE, KEEPALIVE_PACKET,
     MAC_ADDRESS_REQUEST, PACKET_END, PIXEL_VALUES, RADAR_PORT, RESP_POWER, RESP_WARMUP, SPOKE_LEN,

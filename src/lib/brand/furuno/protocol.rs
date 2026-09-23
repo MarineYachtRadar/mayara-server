@@ -270,7 +270,7 @@ pub(crate) struct FurunoRadarModelReport {
 /// All known Furuno radar models.
 #[allow(clippy::upper_case_acronyms)]
 // Furuno's product line names (DRS, FAR, NXT, …) are themselves all-caps; keeping them as Furuno publishes them
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::EnumIter)]
 pub(crate) enum RadarModel {
     Unknown,
     FAR21x7,

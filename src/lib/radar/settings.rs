@@ -394,7 +394,7 @@ impl ControlId {
         }
     }
 
-    fn get_name(&self) -> &'static str {
+    pub(crate) fn get_name(&self) -> &'static str {
         match self {
             ControlId::AccentLight => "Accent light",
             ControlId::AntennaForward => "Antenna forward",
