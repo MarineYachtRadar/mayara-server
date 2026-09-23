@@ -177,7 +177,7 @@ mod tests {
     #[test]
     fn ui_strings_json_is_up_to_date() {
         let json = catalog_json();
-        if std::env::var_os(UPDATE_ENV).is_some() {
+        if matches!(std::env::var(UPDATE_ENV).as_deref(), Ok("1")) {
             std::fs::write(CATALOG_PATH, &json).expect("docs/ui-strings.json is writable");
             return;
         }
