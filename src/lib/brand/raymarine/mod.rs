@@ -294,6 +294,23 @@ impl RaymarineLocator {
         }
     }
 
+    /// Whether an unknown 56-byte identity subtype is worth a warning.
+    ///
+    /// True only the first time a subtype that names itself is seen: an
+    /// unnamed one is the network's other SeaTalkHS chatter, and a repeat
+    /// would warn once a second for as long as the device is powered. The
+    /// set of already-reported subtypes is keyed off the network, so it is
+    /// capped rather than left to grow with whatever arrives.
+    fn should_report_unknown_subtype(&mut self, subtype: u32, model_name: Option<&str>) -> bool {
+        match model_name {
+            Some(name) if !name.is_empty() => {
+                self.reported_unknown_subtypes.len() < MAX_REPORTED_UNKNOWN_SUBTYPES
+                    && self.reported_unknown_subtypes.insert(subtype)
+            }
+            _ => false,
+        }
+    }
+
     fn process_beacon_36_report(
         &mut self,
         report: &[u8],
@@ -571,30 +588,26 @@ impl RaymarineLocator {
                     protocol::beacon56::MFD => {
                         log::debug!("{}: MFD announcement (ignored)", from);
                     }
-                    // An unknown subtype that names itself is a device we
-                    // ought to support; say so once, loudly enough to act on.
-                    // Unnamed ones are the network's other SeaTalkHS chatter.
-                    _ => match c_string(&data.model_name).filter(|s| !s.is_empty()) {
-                        Some(model_name) => {
-                            if self.reported_unknown_subtypes.len() < MAX_REPORTED_UNKNOWN_SUBTYPES
-                                && self.reported_unknown_subtypes.insert(subtype)
-                            {
-                                log::warn!(
-                                    "{}: ignoring unknown 56-byte beacon subtype 0x{:02x} \
-                                     from {:?}; please report this at \
-                                     https://github.com/MarineYachtRadar/mayara-server/issues",
-                                    from,
-                                    subtype,
-                                    model_name,
-                                );
-                            }
+                    _ => {
+                        let model_name = c_string(&data.model_name);
+                        if self.should_report_unknown_subtype(subtype, model_name) {
+                            log::warn!(
+                                "{}: ignoring unknown 56-byte beacon subtype 0x{:02x} from \
+                                 {:?}; please report this at \
+                                 https://github.com/MarineYachtRadar/mayara-server/issues",
+                                from,
+                                subtype,
+                                model_name.unwrap_or_default(),
+                            );
+                        } else {
+                            log::debug!(
+                                "{}: unknown 56-byte beacon subtype 0x{:02x} from {:?}",
+                                from,
+                                subtype,
+                                model_name.unwrap_or_default(),
+                            );
                         }
-                        None => log::debug!(
-                            "{}: unknown 56-byte beacon subtype 0x{:02x}",
-                            from,
-                            subtype
-                        ),
-                    },
+                    }
                 }
             }
             Err(e) => {
@@ -1545,29 +1558,47 @@ mod tests {
     }
 
     #[test]
-    fn unknown_named_subtypes_are_warned_about_but_bounded() {
-        // An identity beacon we don't understand that still names itself is
-        // worth reporting once. The set that suppresses the repeats takes
-        // its keys straight off the network, so it must stay bounded.
+    fn unknown_subtype_warns_once_per_named_device_and_stops_at_the_cap() {
         let args = Cli::parse_from(["mayara-server"]);
         let mut locator = RaymarineLocator::new(args);
-        let src = Ipv4Addr::new(10, 0, 0, 1);
+
+        // A subtype that names itself is worth one warning...
+        assert!(locator.should_report_unknown_subtype(0xE001, Some("Mystery")));
+        // ...and only one, however long the device stays powered.
+        assert!(!locator.should_report_unknown_subtype(0xE001, Some("Mystery")));
+
+        // Unnamed subtypes never warn: they are the other SeaTalkHS chatter.
+        assert!(!locator.should_report_unknown_subtype(0xE002, None));
+        assert!(!locator.should_report_unknown_subtype(0xE003, Some("")));
+
+        // Fill the remaining budget, then stop — the keys come off the wire.
+        for subtype in 0..MAX_REPORTED_UNKNOWN_SUBTYPES as u32 - 1 {
+            assert!(
+                locator.should_report_unknown_subtype(0xF000 + subtype, Some("Mystery")),
+                "subtype {subtype} is within the cap and should warn"
+            );
+        }
+        assert!(
+            !locator.should_report_unknown_subtype(0xFFFF, Some("Mystery")),
+            "past the cap nothing more is recorded or warned about"
+        );
+    }
+
+    #[test]
+    fn unknown_subtype_does_not_register_a_radar() {
+        // Whatever we log, an identity beacon we don't understand must not
+        // put a radar in the map.
+        let args = Cli::parse_from(["mayara-server"]);
+        let mut locator = RaymarineLocator::new(args);
 
         let mut beacon = [0u8; protocol::beacon56::LEN];
         beacon[0..4].copy_from_slice(&protocol::beacon56::TYPE_IDENTITY.to_le_bytes());
+        beacon[4..8].copy_from_slice(&0xE001u32.to_le_bytes());
         beacon[8..12].copy_from_slice(&0x11223344u32.to_le_bytes());
         beacon[20..28].copy_from_slice(b"Mystery\0");
 
-        for subtype in 0xE000u32..0xE000 + (MAX_REPORTED_UNKNOWN_SUBTYPES as u32 * 3) {
-            beacon[4..8].copy_from_slice(&subtype.to_le_bytes());
-            locator.process_beacon_56_report(&beacon, &src).unwrap();
-        }
-
-        assert_eq!(
-            locator.reported_unknown_subtypes.len(),
-            MAX_REPORTED_UNKNOWN_SUBTYPES,
-            "the warned-about set must stop growing at the cap"
-        );
+        let src = Ipv4Addr::new(10, 0, 0, 1);
+        locator.process_beacon_56_report(&beacon, &src).unwrap();
         assert!(
             locator.ids.is_empty(),
             "an unknown subtype must not register a radar"
