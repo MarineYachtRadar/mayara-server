@@ -50,9 +50,9 @@ pub(crate) const DISCOVERY_ADDRESS_WIFI: &str = "232.1.1.1:5800";
 // not a radar identity and is ignored.
 //
 // A Quantum WiFi radar with a W3 wireless bridge sends both W3 beacons
-// (subtype 0x4d/0x29 with its own link_id) and direct Quantum beacons
-// (subtype 0x66/0x28 with the radar's link_id). The W3 beacons are
-// ignored; the direct beacons are authoritative.
+// (subtype 0x4d/0x29 with its own link_id) and Quantum beacons
+// (subtype 0x66 or 0x4c, paired with 0x28, under the radar's link_id). The
+// W3 beacons are ignored; the Quantum beacons are authoritative.
 // =============================================================================
 
 /// Subtypes in the 36-byte beacon (beacon_type = 0).
@@ -85,6 +85,13 @@ pub(crate) mod beacon56 {
 
     /// Quantum radar identity — model name e.g. "QuantumRadar".
     pub(crate) const QUANTUM: u32 = 0x66;
+    /// Quantum radar identity, second form — also model name "QuantumRadar",
+    /// also paired with a `beacon36::QUANTUM` address beacon. Wire-observed
+    /// from a Quantum radome on firmware v1.62 behind a W3 in
+    /// MarineYachtRadar/mayara-server#701. Every Quantum captured so far
+    /// reports part number E70498 (Q24D) and sends 0x66 instead, so this is
+    /// most likely the earlier Quantum generation's identity.
+    pub(crate) const QUANTUM_ALT: u32 = 0x4c;
     /// RD (magnetron) radar identity.
     pub(crate) const RD: u32 = 0x01;
     /// RD Ethernet radome identity — model name "Ethernet Dome".

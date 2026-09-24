@@ -1,6 +1,6 @@
 use anyhow::{Error, bail};
 use deku::DekuRead;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -29,6 +29,11 @@ pub(crate) use settings::controls_for_every_model;
 const NON_HD_PIXEL_VALUES: u8 = 16; // Old radars have one nibble
 const HD_PIXEL_VALUES_RAW: u16 = 256; // New radars have one byte pixels
 const HD_PIXEL_VALUES: u8 = (HD_PIXEL_VALUES_RAW / 2) as u8; // ... but we drop the last bit so we have space for other data
+
+/// Distinct unknown identity subtypes to warn about before falling silent.
+/// Real networks show a handful; the cap keeps a malformed or hostile peer
+/// from growing the set without bound.
+const MAX_REPORTED_UNKNOWN_SUBTYPES: usize = 16;
 
 const RAYMARINE_BEACON_ADDRESS: SocketAddr =
     SocketAddr::new(IpAddr::V4(Ipv4Addr::new(224, 0, 0, 1)), 5800);
@@ -274,6 +279,9 @@ struct RaymarineLocator {
     args: Cli,
     ids: HashMap<LinkId, RadarState>,
     external_seen: Arc<ExternalControllerWitness>,
+    /// Unknown identity subtypes already warned about. Beacons repeat about
+    /// once a second, so each is reported only the first time it is seen.
+    reported_unknown_subtypes: HashSet<u32>,
 }
 
 impl RaymarineLocator {
@@ -282,6 +290,7 @@ impl RaymarineLocator {
             args,
             ids: HashMap::new(),
             external_seen: Arc::new(ExternalControllerWitness::default()),
+            reported_unknown_subtypes: HashSet::new(),
         }
     }
 
@@ -473,7 +482,7 @@ impl RaymarineLocator {
                 let subtype = data.subtype;
 
                 match subtype {
-                    protocol::beacon56::QUANTUM => {
+                    protocol::beacon56::QUANTUM | protocol::beacon56::QUANTUM_ALT => {
                         let model = BaseModel::Quantum;
                         let model_name: Option<String> =
                             c_string(&data.model_name).map(String::from);
@@ -555,16 +564,37 @@ impl RaymarineLocator {
                         }
                     }
                     protocol::beacon56::W3 => {
-                        // W3 wireless bridge — the radar also sends a direct
-                        // Quantum beacon (0x66) with the correct addresses.
+                        // W3 wireless bridge — a Quantum identity beacon with
+                        // the correct addresses arrives separately.
                         log::debug!("{}: W3 bridge beacon (ignored, using direct Quantum)", from);
                     }
                     protocol::beacon56::MFD => {
                         log::debug!("{}: MFD announcement (ignored)", from);
                     }
-                    _ => {
-                        log::debug!("{}: unknown 56-byte beacon subtype 0x{:02x}", from, subtype);
-                    }
+                    // An unknown subtype that names itself is a device we
+                    // ought to support; say so once, loudly enough to act on.
+                    // Unnamed ones are the network's other SeaTalkHS chatter.
+                    _ => match c_string(&data.model_name).filter(|s| !s.is_empty()) {
+                        Some(model_name) => {
+                            if self.reported_unknown_subtypes.len() < MAX_REPORTED_UNKNOWN_SUBTYPES
+                                && self.reported_unknown_subtypes.insert(subtype)
+                            {
+                                log::warn!(
+                                    "{}: ignoring unknown 56-byte beacon subtype 0x{:02x} \
+                                     from {:?}; please report this at \
+                                     https://github.com/MarineYachtRadar/mayara-server/issues",
+                                    from,
+                                    subtype,
+                                    model_name,
+                                );
+                            }
+                        }
+                        None => log::debug!(
+                            "{}: unknown 56-byte beacon subtype 0x{:02x}",
+                            from,
+                            subtype
+                        ),
+                    },
                 }
             }
             Err(e) => {
@@ -825,7 +855,10 @@ mod tests {
 
     use clap::Parser;
 
-    use super::{BaseModel, RAYMARINE_BEACON_ADDRESS, RAYMARINE_QUANTUM_WIFI_ADDRESS, protocol};
+    use super::{
+        BaseModel, MAX_REPORTED_UNKNOWN_SUBTYPES, RAYMARINE_BEACON_ADDRESS,
+        RAYMARINE_QUANTUM_WIFI_ADDRESS, protocol,
+    };
     use crate::brand::LocatorId;
     use crate::locator::LocatorAddress;
     use crate::{Cli, brand::raymarine::RaymarineLocator, radar::SharedRadars};
@@ -1456,6 +1489,89 @@ mod tests {
             "unicast topology: report_addr collapses onto the radar's command address"
         );
         assert_eq!(info.spoke_data_addr, radar);
+    }
+
+    #[test]
+    fn quantum_identity_subtype_4c_is_discovered() {
+        // A Quantum radome behind a W3 announces its identity with subtype
+        // 0x4c rather than 0x66, paired with the usual 0x28 address beacon.
+        // The identity must register the link_id, or the address beacon is
+        // discarded for want of one and the radar is never found.
+        // Real beacons from MarineYachtRadar/mayara-server#701 (link_id
+        // 0xCB823937, "QuantumRadar", radar at 192.168.0.155 behind a W3 at
+        // 198.18.7.66).
+        let args = Cli::parse_from(["mayara-server"]);
+        let mut locator = RaymarineLocator::new(args);
+        let radars = &SharedRadars::new();
+        const SRC: Ipv4Addr = Ipv4Addr::new(198, 18, 7, 66);
+
+        // 56-byte identity beacon: subtype 0x4c, model "QuantumRadar". The
+        // bytes after the name are uninitialised sender memory, not data.
+        const BEACON_56: [u8; 56] = [
+            0x01, 0x00, 0x00, 0x00, 0x4C, 0x00, 0x00, 0x00, 0x37, 0x39, 0x82, 0xCB, 0xA2, 0x00,
+            0x00, 0x00, 0x9B, 0x00, 0xA8, 0xC0, 0x51, 0x75, 0x61, 0x6E, 0x74, 0x75, 0x6D, 0x52,
+            0x61, 0x64, 0x61, 0x72, 0x00, 0x00, 0x00, 0x00, 0xA5, 0xA5, 0xA5, 0xA5, 0xE4, 0x7F,
+            0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0xA5, 0xA5, 0xA5, 0xA5, 0x02, 0x00, 0x00, 0x00,
+        ];
+        // 36-byte address beacon: report=232.1.155.1:2574,
+        // command=198.18.7.66:2575 (the W3 forwards to the radar).
+        const BEACON_36: [u8; 36] = [
+            0x00, 0x00, 0x00, 0x00, 0x37, 0x39, 0x82, 0xCB, 0x28, 0x00, 0x00, 0x00, 0x03, 0x00,
+            0x64, 0x00, 0x06, 0x08, 0x10, 0x00, 0x01, 0x9B, 0x01, 0xE8, 0x0E, 0x0A, 0x0A, 0x00,
+            0x42, 0x07, 0x12, 0xC6, 0x0F, 0x0A, 0x00, 0x00,
+        ];
+
+        locator.process_beacon_56_report(&BEACON_56, &SRC).unwrap();
+        let (info, model) = locator
+            .process_beacon_36_report(&BEACON_36, &SRC, radars)
+            .unwrap()
+            .expect("radar should be created");
+
+        assert_eq!(model, BaseModel::Quantum);
+        assert_eq!(
+            info.report_addr,
+            SocketAddrV4::new(Ipv4Addr::new(232, 1, 155, 1), 2574)
+        );
+        assert_eq!(
+            info.send_command_addr,
+            SocketAddrV4::new(Ipv4Addr::new(198, 18, 7, 66), 2575)
+        );
+        let state = locator
+            .ids
+            .get(&0xCB823937)
+            .expect("0x4c identity beacon must register its link_id");
+        assert_eq!(state.model_name.as_deref(), Some("QuantumRadar"));
+        assert_eq!(state.model, BaseModel::Quantum);
+    }
+
+    #[test]
+    fn unknown_named_subtypes_are_warned_about_but_bounded() {
+        // An identity beacon we don't understand that still names itself is
+        // worth reporting once. The set that suppresses the repeats takes
+        // its keys straight off the network, so it must stay bounded.
+        let args = Cli::parse_from(["mayara-server"]);
+        let mut locator = RaymarineLocator::new(args);
+        let src = Ipv4Addr::new(10, 0, 0, 1);
+
+        let mut beacon = [0u8; protocol::beacon56::LEN];
+        beacon[0..4].copy_from_slice(&protocol::beacon56::TYPE_IDENTITY.to_le_bytes());
+        beacon[8..12].copy_from_slice(&0x11223344u32.to_le_bytes());
+        beacon[20..28].copy_from_slice(b"Mystery\0");
+
+        for subtype in 0xE000u32..0xE000 + (MAX_REPORTED_UNKNOWN_SUBTYPES as u32 * 3) {
+            beacon[4..8].copy_from_slice(&subtype.to_le_bytes());
+            locator.process_beacon_56_report(&beacon, &src).unwrap();
+        }
+
+        assert_eq!(
+            locator.reported_unknown_subtypes.len(),
+            MAX_REPORTED_UNKNOWN_SUBTYPES,
+            "the warned-about set must stop growing at the cap"
+        );
+        assert!(
+            locator.ids.is_empty(),
+            "an unknown subtype must not register a radar"
+        );
     }
 
     #[test]
