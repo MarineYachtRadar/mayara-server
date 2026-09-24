@@ -68,7 +68,7 @@ Before opening a PR:
 
 - Branch from latest `main`
 - Run `cargo test` - all tests must pass
-- Optionally, if `cr` (CodeRabbit CLI) is available, run `cr review --plain` against your branch to catch findings before pushing. This is good practice for non-trivial code changes but not required — CodeRabbit runs on every PR automatically via the GitHub App, so the findings arrive either way. Skip it for docs-only PRs, formatting fixes, or one-liners.
+- Optionally, if the CodeRabbit CLI is available, run `coderabbit review --committed --base origin/main` against your branch to catch findings before pushing. Compare against `origin/main`, not `main`: a stale local `main` silently folds other people's merged PRs into the review diff. This is good practice for non-trivial code changes but not required — CodeRabbit runs on every PR automatically via the GitHub App, so the findings arrive either way. Skip it for docs-only PRs, formatting fixes, or one-liners.
 - Rebase and clean up commit history (squash intermediate commits)
 - Self-review your changes
 - **NEVER change version numbers** - maintainers will update versions when publishing releases
