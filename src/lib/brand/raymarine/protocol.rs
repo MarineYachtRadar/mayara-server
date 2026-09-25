@@ -270,9 +270,16 @@ pub(crate) const HEARTBEAT_RD_5S: [u8; 36] = [
 pub(crate) const FEATURE_ANALOGUE: u32 = 1 << 0;
 pub(crate) const FEATURE_NGS: u32 = 1 << 1;
 pub(crate) const FEATURE_DIGITAL: u32 = 1 << 2;
-/// `IsDualRangeScanner`. This was long mistaken for a "is a Quantum" flag,
-/// which is why it reads clear on every Quantum: a Q24C and a Q24D are both
-/// single-range.
+/// `IsDualRangeScanner` (`CRadarProxy::IsDualRangeScanner`, which reads
+/// `byte[0] << 0x1b >> 0x1f`). Long mistaken for an "is a Quantum" flag, which
+/// is why that read clear on every Quantum.
+///
+/// Neither Quantum we have captured sets it. That is the radar's own word about
+/// this bit and nothing more: the Axiom's `CRadarFacade::IsDualRangeSupported`
+/// is a separate property (`_queryProperty(0x364)`), and
+/// `CLNetQuantumRadarSource::SetDualRange` has a real implementation, so the
+/// Quantum protocol does carry dual-range commands. Do not read a clear bit
+/// here as "this radar cannot do dual range".
 pub(crate) const FEATURE_DUAL_RANGE_SCANNER: u32 = 1 << 4;
 pub(crate) const FEATURE_48_RPM_SCANNER: u32 = 1 << 5;
 pub(crate) const FEATURE_SEAHAWK_SCANNER: u32 = 1 << 6;

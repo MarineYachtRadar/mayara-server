@@ -758,7 +758,7 @@ mod tests {
         let q24c = FeatureFlags { raw: 0x0000_1900 };
         assert!(q24c.is_quantum(), "a Q24C is a Quantum scanner");
         assert!(!q24c.has_doppler(), "a Q24C has no Doppler");
-        assert!(!q24c.is_dual_range_scanner());
+        assert!(!q24c.is_dual_range_scanner(), "no Quantum sets this bit");
         assert!(!q24c.is_cyclone());
         assert!(!q24c.has_marpa());
         assert!(!q24c.has_sector_blanking());
@@ -771,7 +771,9 @@ mod tests {
         assert!(q24d.has_marpa_beyond_12nm());
         assert!(q24d.has_sector_blanking());
         assert!(q24d.has_parameters_message());
-        assert!(!q24d.is_dual_range_scanner(), "a Q24D is single-range");
+        // The radar does not claim the bit. Whether the product supports dual
+        // range in some other sense is a separate question — see the constant.
+        assert!(!q24d.is_dual_range_scanner(), "no Quantum sets this bit");
         assert!(!q24d.is_cyclone());
         // The Doppler extras are Cyclone-only and must not read as present.
         assert!(!q24d.has_doppler_auto_acquire());
