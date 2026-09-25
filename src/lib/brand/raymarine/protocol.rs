@@ -262,19 +262,44 @@ pub(crate) const HEARTBEAT_RD_5S: [u8; 36] = [
 // Feature flags (from 0x280007 Features message)
 // =============================================================================
 
+// Bit numbers read out of the Axiom's own accessors — each is a
+// `ubfx rN, rN, #<bit>, #1` on the one u32 this message carries. See
+// research/raymarine/quantum-generation-detection.md for the addresses.
+// Bits 3, 7, 8, 15 and 26..31 have no accessor at all: bit 8 is set by every
+// Quantum of both generations and read by nothing.
 pub(crate) const FEATURE_ANALOGUE: u32 = 1 << 0;
+pub(crate) const FEATURE_NGS: u32 = 1 << 1;
 pub(crate) const FEATURE_DIGITAL: u32 = 1 << 2;
-pub(crate) const FEATURE_QUANTUM: u32 = 1 << 4;
+/// `IsDualRangeScanner` (`CRadarProxy::IsDualRangeScanner`, which reads
+/// `byte[0] << 0x1b >> 0x1f`). Long mistaken for an "is a Quantum" flag, which
+/// is why that read clear on every Quantum.
+///
+/// Neither Quantum we have captured sets it. That is the radar's own word about
+/// this bit and nothing more: the Axiom's `CRadarFacade::IsDualRangeSupported`
+/// is a separate property (`_queryProperty(0x364)`), and
+/// `CLNetQuantumRadarSource::SetDualRange` has a real implementation, so the
+/// Quantum protocol does carry dual-range commands. Do not read a clear bit
+/// here as "this radar cannot do dual range".
+pub(crate) const FEATURE_DUAL_RANGE_SCANNER: u32 = 1 << 4;
+pub(crate) const FEATURE_48_RPM_SCANNER: u32 = 1 << 5;
+pub(crate) const FEATURE_SEAHAWK_SCANNER: u32 = 1 << 6;
 pub(crate) const FEATURE_EDOME: u32 = 1 << 9;
 pub(crate) const FEATURE_BIRD_MODE: u32 = 1 << 10;
 pub(crate) const FEATURE_NO_DUAL_RANGE_RESTRICTIONS: u32 = 1 << 11;
+/// `IsQuantumScanner` — the real one.
+pub(crate) const FEATURE_QUANTUM: u32 = 1 << 12;
+pub(crate) const FEATURE_SECTOR_BLANKING: u32 = 1 << 13;
 pub(crate) const FEATURE_MARPA: u32 = 1 << 14;
 pub(crate) const FEATURE_DUAL_RANGE_MARPA: u32 = 1 << 16;
 pub(crate) const FEATURE_MARPA_BEYOND_12NM: u32 = 1 << 17;
 pub(crate) const FEATURE_AUTO_RAIN: u32 = 1 << 18;
 pub(crate) const FEATURE_DOPPLER: u32 = 1 << 19;
 pub(crate) const FEATURE_DOPPLER_AUTO_ACQUIRE: u32 = 1 << 20;
+pub(crate) const FEATURE_96NM_RANGE: u32 = 1 << 21;
+/// The radar sends the 0x280008 parameters report.
+pub(crate) const FEATURE_PARAMETERS_MESSAGE: u32 = 1 << 22;
 pub(crate) const FEATURE_CYCLONE: u32 = 1 << 23;
+pub(crate) const FEATURE_CLOSE_TARGET_EXPANSION: u32 = 1 << 24;
 pub(crate) const FEATURE_DOPPLER_BIRD_MODE: u32 = 1 << 25;
 
 // =============================================================================

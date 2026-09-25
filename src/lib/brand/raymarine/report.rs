@@ -149,6 +149,21 @@ impl FeatureFlags {
     pub(crate) fn is_quantum(&self) -> bool {
         self.has_flag(super::protocol::FEATURE_QUANTUM)
     }
+    pub(crate) fn is_dual_range_scanner(&self) -> bool {
+        self.has_flag(super::protocol::FEATURE_DUAL_RANGE_SCANNER)
+    }
+    pub(crate) fn has_sector_blanking(&self) -> bool {
+        self.has_flag(super::protocol::FEATURE_SECTOR_BLANKING)
+    }
+    pub(crate) fn has_marpa_beyond_12nm(&self) -> bool {
+        self.has_flag(super::protocol::FEATURE_MARPA_BEYOND_12NM)
+    }
+    pub(crate) fn has_96nm_range(&self) -> bool {
+        self.has_flag(super::protocol::FEATURE_96NM_RANGE)
+    }
+    pub(crate) fn has_parameters_message(&self) -> bool {
+        self.has_flag(super::protocol::FEATURE_PARAMETERS_MESSAGE)
+    }
     pub(crate) fn is_cyclone(&self) -> bool {
         self.has_flag(super::protocol::FEATURE_CYCLONE)
     }
@@ -682,15 +697,19 @@ impl RaymarineReportReceiver {
 
         if !self.features_seen {
             log::info!(
-                "{}: Features: quantum={} cyclone={} doppler={} bird_mode={} \
-                 marpa={} auto_rain={} (raw=0x{:08x})",
+                "{}: Features: quantum={} cyclone={} dual_range={} doppler={} \
+                 bird_mode={} marpa={} auto_rain={} sector_blanking={} \
+                 range_96nm={} (raw=0x{:08x})",
                 self.common.key,
                 features.is_quantum(),
                 features.is_cyclone(),
+                features.is_dual_range_scanner(),
                 features.has_doppler(),
                 features.has_bird_mode(),
                 features.has_marpa(),
                 features.has_auto_rain(),
+                features.has_sector_blanking(),
+                features.has_96nm_range(),
                 flags,
             );
 
@@ -723,6 +742,43 @@ impl RaymarineReportReceiver {
 mod tests {
     use super::{heartbeats_for_tick, should_reapply_transmit, transmit_should_defer};
     use crate::radar::Power;
+
+    // ----- feature bits (0x280007) -----
+
+    /// The two feature words we have seen on the wire must decode to what the
+    /// radars actually are. Bit 4 was long read as "is a Quantum", which made
+    /// `is_quantum()` false on every Quantum; it is `IsDualRangeScanner`, and
+    /// the real flag is bit 12. Bit numbers come from the Axiom's own
+    /// accessors — see research/raymarine/quantum-generation-detection.md.
+    #[test]
+    fn the_captured_feature_words_decode_to_their_radars() {
+        use super::FeatureFlags;
+
+        // Quantum Q24C (E70210), firmware v1.62 — MarineYachtRadar#701.
+        let q24c = FeatureFlags { raw: 0x0000_1900 };
+        assert!(q24c.is_quantum(), "a Q24C is a Quantum scanner");
+        assert!(!q24c.has_doppler(), "a Q24C has no Doppler");
+        assert!(!q24c.is_dual_range_scanner(), "no Quantum sets this bit");
+        assert!(!q24c.is_cyclone());
+        assert!(!q24c.has_marpa());
+        assert!(!q24c.has_sector_blanking());
+
+        // Quantum 2 Doppler Q24D (E70498) — pelagia captures.
+        let q24d = FeatureFlags { raw: 0x004a_7900 };
+        assert!(q24d.is_quantum(), "a Q24D is a Quantum scanner too");
+        assert!(q24d.has_doppler());
+        assert!(q24d.has_marpa());
+        assert!(q24d.has_marpa_beyond_12nm());
+        assert!(q24d.has_sector_blanking());
+        assert!(q24d.has_parameters_message());
+        // The radar does not claim the bit. Whether the product supports dual
+        // range in some other sense is a separate question — see the constant.
+        assert!(!q24d.is_dual_range_scanner(), "no Quantum sets this bit");
+        assert!(!q24d.is_cyclone());
+        // The Doppler extras are Cyclone-only and must not read as present.
+        assert!(!q24d.has_doppler_auto_acquire());
+        assert!(!q24d.has_doppler_bird_mode());
+    }
 
     // ----- heartbeat ticks (stand-down, issue #664) -----
 
