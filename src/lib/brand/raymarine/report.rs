@@ -874,6 +874,82 @@ mod tests {
         assert!(!q24d.has_doppler_bird_mode());
     }
 
+    // ----- a features report that arrives after the radar was published -----
+
+    /// Build a receiver without touching the network. `--replay` keeps the
+    /// constructor from creating a command sender, and so from opening sockets.
+    fn test_receiver(doppler: bool) -> super::RaymarineReportReceiver {
+        use crate::Cli;
+        use crate::brand::raymarine::{BaseModel, ExternalControllerWitness, settings};
+        use crate::radar::SharedRadars;
+        use clap::Parser;
+        use std::sync::Arc;
+
+        let args = Cli::parse_from(["mayara-server", "--replay"]);
+        let mut info =
+            crate::radar::ui_strings::radar_info(crate::Brand::Raymarine, &args, |id, tx| {
+                settings::new(id, tx, &args, BaseModel::Quantum)
+            });
+        info.doppler = doppler;
+        super::RaymarineReportReceiver::new(
+            &args,
+            info,
+            SharedRadars::new(),
+            BaseModel::Quantum,
+            Arc::new(ExternalControllerWitness::default()),
+        )
+    }
+
+    fn features_report(doppler: bool) -> [u8; 8] {
+        let flags: u32 = if doppler {
+            crate::brand::raymarine::protocol::FEATURE_DOPPLER
+        } else {
+            0
+        };
+        let mut data = [0u8; 8];
+        data[0..4].copy_from_slice(&0x0028_0007u32.to_le_bytes());
+        data[4..8].copy_from_slice(&flags.to_le_bytes());
+        data
+    }
+
+    /// Before the radar is published the radar's own word wins, table or no
+    /// table — the path every radar we have captured takes.
+    #[test]
+    fn a_features_report_before_publication_decides_the_capability() {
+        let mut receiver = test_receiver(/*doppler=*/ true);
+        assert!(receiver.common.info.ranges.is_empty(), "not published yet");
+
+        receiver.process_features(&features_report(false));
+
+        assert!(
+            !receiver.common.info.doppler,
+            "the radar says it has no Doppler and is believed over the part number"
+        );
+    }
+
+    /// After the radar is published the part number's answer is frozen, because
+    /// the control set was built from it and the two must not disagree. Only
+    /// reachable when the wait for the features report was given up on.
+    #[test]
+    fn a_features_report_after_publication_does_not_move_the_capability() {
+        use crate::radar::range::{Range, Ranges};
+
+        let mut receiver = test_receiver(/*doppler=*/ true);
+        // Publishing a radar means giving it ranges.
+        receiver
+            .common
+            .set_ranges(Ranges::new(vec![Range::new(1852, 0)]));
+        assert!(!receiver.common.info.ranges.is_empty(), "published");
+
+        receiver.process_features(&features_report(false));
+
+        assert!(
+            receiver.common.info.doppler,
+            "a late features report must not leave the capability disagreeing \
+             with the control set already built from the part number"
+        );
+    }
+
     // ----- holding a radar back until it says what it can do -----
 
     /// A radar is visible to clients once it has ranges, so a Quantum waits for

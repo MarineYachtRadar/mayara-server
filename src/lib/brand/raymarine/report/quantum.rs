@@ -861,12 +861,14 @@ mod tests {
         assert_eq!(doppler, vec![0xAA, 0xBB, 0x42]);
     }
 
-    /// The features report is the radar's own word and beats the part-number
-    /// table, whichever of the two arrives first — while the radar is still
-    /// being held back, which is every case a radar can actually reach. Once
-    /// the radar has been published the table's answer is frozen instead, so
-    /// that the capability and the control set cannot disagree; that path is in
-    /// `process_features`. See #709.
+    /// While the radar is still held back — the path every radar we have
+    /// captured takes — the features report is the radar's own word and beats
+    /// the part-number table, whichever of the two arrives first.
+    ///
+    /// Once the radar has been published the table's answer is frozen instead,
+    /// so that the capability and the control set cannot disagree. That happens
+    /// only when the wait for the features report was given up on, and it lives
+    /// in `process_features`, not here. See #709.
     #[test]
     fn the_features_report_outranks_the_part_number_table() {
         use super::effective_doppler;
