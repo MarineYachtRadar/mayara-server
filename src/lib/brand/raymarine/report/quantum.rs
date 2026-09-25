@@ -296,6 +296,20 @@ pub(super) fn process_status_report(receiver: &mut RaymarineReportReceiver, data
         .common
         .set_value(&ControlId::Power, status as i32 as f64);
 
+    // A radar is visible to clients as soon as it has ranges, and this is the
+    // report they come from, so stop here until the radar has said what it can
+    // do — no client should see a control set that is about to change.
+    //
+    // Everything above this line still happens: power state and a self-test
+    // fault must not be swallowed by the wait, and only a report that parsed
+    // may count towards giving up on the features report. Everything below it
+    // resolves the range index against the range list, which yields zero
+    // distance while that list is empty — and that zero is what add_spoke
+    // would store as a spoke's physical range.
+    if receiver.common.info.ranges.is_empty() && receiver.hold_for_features() {
+        return;
+    }
+
     if receiver.common.info.ranges.is_empty() {
         let mut ranges = Ranges::empty();
 
