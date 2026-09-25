@@ -48,16 +48,27 @@ const EXTERNAL_QUIET_WINDOW: Duration = Duration::from_secs(60);
 /// second.
 const MAX_STATUS_REPORTS_WITHOUT_FEATURES: u8 = 3;
 
+/// How long to wait for the features report regardless of how many status
+/// reports have arrived. Counting reports alone would wait indefinitely on a
+/// radar whose reports trickle in.
+const MAX_WAIT_FOR_FEATURES: Duration = Duration::from_secs(5);
+
 /// Whether a radar's ranges — and so the radar itself — should be withheld for
 /// now, waiting on the features report.
+///
+/// Only a Quantum waits at all, and only until either enough status reports or
+/// enough time has passed: no radar may become undiscoverable over a report we
+/// only assume it sends.
 fn should_hold_for_features(
     base_model: BaseModel,
     features_seen: bool,
     status_reports_without_features: u8,
+    waited: Duration,
 ) -> bool {
     base_model == BaseModel::Quantum
         && !features_seen
         && status_reports_without_features <= MAX_STATUS_REPORTS_WITHOUT_FEATURES
+        && waited < MAX_WAIT_FOR_FEATURES
 }
 
 /// The keep-alives one heartbeat tick sends: the 1 s heartbeat, and every
@@ -237,6 +248,7 @@ pub(crate) struct RaymarineReportReceiver {
     features: FeatureFlags,
     features_seen: bool,
     status_reports_without_features: u8,
+    first_status_without_features: Option<Instant>,
     /// True while the radar's last status report indicated a self-test fault
     /// (Quantum status byte 0x0A). Used to edge-trigger the Signal K alarm
     /// so it raises once on entry and clears once on exit.
@@ -346,6 +358,7 @@ impl RaymarineReportReceiver {
             features: FeatureFlags::default(),
             features_seen: false,
             status_reports_without_features: 0,
+            first_status_without_features: None,
             self_test_fault: false,
             self_test_results: None,
             pending_transmit: false,
@@ -765,17 +778,24 @@ impl RaymarineReportReceiver {
         self.status_reports_without_features =
             self.status_reports_without_features.saturating_add(1);
 
+        let waited = self
+            .first_status_without_features
+            .get_or_insert_with(Instant::now)
+            .elapsed();
+
         let hold = should_hold_for_features(
             self.base_model,
             self.features_seen,
             self.status_reports_without_features,
+            waited,
         );
         if !hold && !self.features_seen && self.base_model == BaseModel::Quantum {
             log::warn!(
-                "{}: no 0x280007 features report after {} status reports; \
+                "{}: no 0x280007 features report after {} status reports and {:?}; \
                  showing the radar with capabilities from its part number instead",
                 self.common.key,
-                MAX_STATUS_REPORTS_WITHOUT_FEATURES,
+                self.status_reports_without_features,
+                waited,
             );
         }
         hold
@@ -841,26 +861,36 @@ mod tests {
         use super::{MAX_STATUS_REPORTS_WITHOUT_FEATURES as MAX, should_hold_for_features};
         use crate::brand::raymarine::BaseModel;
 
+        use super::MAX_WAIT_FOR_FEATURES;
+        use std::time::Duration;
+        const SOON: Duration = Duration::ZERO;
+
         // A Quantum that has not reported yet is held back...
         for n in 1..=MAX {
             assert!(
-                should_hold_for_features(BaseModel::Quantum, false, n),
+                should_hold_for_features(BaseModel::Quantum, false, n, SOON),
                 "status report {n} of {MAX} should still wait"
             );
         }
         // ...but only so long: an unobserved variant must not become
         // undiscoverable over a report we only assume it sends.
         assert!(
-            !should_hold_for_features(BaseModel::Quantum, false, MAX + 1),
-            "past the limit the radar is shown anyway"
+            !should_hold_for_features(BaseModel::Quantum, false, MAX + 1, SOON),
+            "past the report limit the radar is shown anyway"
+        );
+        // Nor may a radar whose reports trickle in wait for ever, so the
+        // deadline releases it however few reports have arrived.
+        assert!(
+            !should_hold_for_features(BaseModel::Quantum, false, 1, MAX_WAIT_FOR_FEATURES),
+            "past the deadline the radar is shown however few reports came"
         );
 
         // Once the report is in there is nothing to wait for.
-        assert!(!should_hold_for_features(BaseModel::Quantum, true, 1));
+        assert!(!should_hold_for_features(BaseModel::Quantum, true, 1, SOON));
 
         // An RD has no features report at all and would wait for ever.
         for n in 1..=MAX + 1 {
-            assert!(!should_hold_for_features(BaseModel::RD, false, n));
+            assert!(!should_hold_for_features(BaseModel::RD, false, n, SOON));
         }
     }
 
