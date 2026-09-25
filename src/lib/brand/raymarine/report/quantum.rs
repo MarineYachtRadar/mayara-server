@@ -318,6 +318,17 @@ pub(super) fn process_status_report(receiver: &mut RaymarineReportReceiver, data
         let doppler = receiver.common.info.doppler;
         settings::offer_doppler_control(&mut receiver.common.info.controls, base_model, doppler);
 
+        // A 0x280030 Doppler status report can have arrived while the radar was
+        // held back, when there was no control for it to land on. Seed the
+        // control from what it said, so the radar does not appear with Doppler
+        // reading Off until the next one turns up.
+        if doppler {
+            let state = receiver.doppler;
+            receiver
+                .common
+                .set_value(&ControlId::Doppler, state as i32 as f64);
+        }
+
         let mut ranges = Ranges::empty();
 
         for (i, &range) in report.ranges.iter().enumerate() {
