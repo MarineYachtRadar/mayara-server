@@ -118,8 +118,6 @@ pub(crate) fn new(
     SharedControls::new(radar_id, sk_client_tx, args, controls)
 }
 
-/// Offer the Doppler control, if this radar has Doppler.
-///
 /// Doppler is optional hardware and the capability is unknown when `new()` runs
 /// at discovery, so the control cannot be registered up front: a Q24C reports
 /// features `0x00001900` with the Doppler bit clear and must not be offered a

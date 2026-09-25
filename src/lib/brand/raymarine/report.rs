@@ -748,7 +748,26 @@ impl RaymarineReportReceiver {
             // The radar's own word on Doppler beats the part-number table,
             // and process_info_report() honours that rather than overwriting
             // it afterwards (#709).
-            if features.has_doppler() != self.common.info.doppler {
+            //
+            // Unless the radar has already been published, which only happens
+            // when the wait for this very report was given up on. The control
+            // set was decided from the table at that point, and changing the
+            // capability now would leave the two disagreeing — a Doppler switch
+            // on a radar that says it has none, or the reverse. So the table's
+            // answer stands for the session and this report is noted, not
+            // applied.
+            if !self.common.info.ranges.is_empty()
+                && features.has_doppler() != self.common.info.doppler
+            {
+                log::warn!(
+                    "{}: features report arrived after the radar was published; \
+                     keeping doppler={} from the part number rather than {} from \
+                     the radar, so the capability and the controls agree",
+                    self.common.key,
+                    self.common.info.doppler,
+                    features.has_doppler(),
+                );
+            } else if features.has_doppler() != self.common.info.doppler {
                 self.common.info.set_doppler(features.has_doppler());
                 self.wire_to_legend = wire_to_legend(&self.common.info.get_legend());
                 log::info!(
