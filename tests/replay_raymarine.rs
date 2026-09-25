@@ -102,6 +102,17 @@ async fn replay_raymarine_quantum() {
                                 info.controls.get(&ControlId::Doppler).is_some(),
                                 "a Doppler-capable Quantum must offer the Doppler control"
                             );
+                            // In this capture the 0x280001 info report arrives
+                            // BEFORE the 0x280007 features report, so the
+                            // control is created from the part-number table and
+                            // the features report has to leave it alone (#709).
+                            // The Q24C fixture covers the reverse order.
+                            let legend = info.get_legend();
+                            assert!(
+                                legend.doppler_approaching.is_some()
+                                    && legend.doppler_receding.is_some(),
+                                "a Doppler radar needs its Doppler legend entries"
+                            );
                             assert_eq!(info.spokes_per_revolution, 250);
                             // Identity and serial come from different places
                             // and must not be confused. The key is the

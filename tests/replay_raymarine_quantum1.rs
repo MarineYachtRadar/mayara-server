@@ -104,6 +104,18 @@ async fn replay_raymarine_quantum1() {
                                 info.controls.get(&ControlId::Doppler).is_none(),
                                 "a radar without Doppler must not be offered the control"
                             );
+                            // In this capture the 0x280007 features report
+                            // arrives BEFORE the 0x280001 info report, so this
+                            // is the order in which the radar's own word has to
+                            // survive the part-number table (#709). The Q24D
+                            // fixture in replay_raymarine.rs covers the reverse
+                            // order, where the table lands first.
+                            let legend = info.get_legend();
+                            assert!(
+                                legend.doppler_approaching.is_none()
+                                    && legend.doppler_receding.is_none(),
+                                "a radar without Doppler needs no Doppler legend entries"
+                            );
                             assert_eq!(info.spokes_per_revolution, 250);
                             break;
                         }

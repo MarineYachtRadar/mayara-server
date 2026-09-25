@@ -118,6 +118,29 @@ pub(crate) fn new(
     SharedControls::new(radar_id, sk_client_tx, args, controls)
 }
 
+/// Offer the Doppler control, if this radar has Doppler.
+///
+/// Doppler is optional hardware and the capability is unknown when `new()` runs
+/// at discovery, so the control cannot be registered up front: a Q24C reports
+/// features `0x00001900` with the Doppler bit clear and must not be offered a
+/// switch it cannot honour.
+///
+/// Call this once, at the point where the radar stops being held back for its
+/// features report — by then the capability is settled and no client has seen
+/// the radar, so the control is only ever added and never has to be taken back.
+///
+/// Only a Quantum is ever offered one. No RD has Doppler, and
+/// [`super::command::rd`] could not encode the command if one did.
+pub(crate) fn offer_doppler_control(
+    controls: &mut SharedControls,
+    base_model: BaseModel,
+    doppler: bool,
+) {
+    if doppler && base_model == BaseModel::Quantum {
+        controls.add(new_list(ControlId::Doppler, &["Off", "On"]));
+    }
+}
+
 pub(crate) fn update_when_model_known(
     controls: &mut SharedControls,
     model: &RaymarineModel,
@@ -154,22 +177,6 @@ pub(crate) fn update_when_model_known(
 
     controls.add(new_list(ControlId::TargetExpansion, &["Off", "On"]));
 
-    // Doppler belongs only to the radars that have it. The capability is not
-    // known when `new()` runs at discovery — it arrives with the E-number in
-    // the 0x280001 info report, which is what picks `model` here. A Q24C
-    // reports features 0x00001900, Doppler bit clear, and must not be offered
-    // a switch it cannot honour.
-    //
-    // The model table is the right source despite `process_features()` reading
-    // the 0x280007 report first: `process_info_report()` calls
-    // `set_doppler(model.doppler)` straight after this, so the table's value is
-    // what `RadarInfo::doppler` ends up holding. Gating on it keeps the
-    // control's presence and the reported capability in step. See #709 for the
-    // contradiction that leaves behind.
-    if model.doppler {
-        controls.add(new_list(ControlId::Doppler, &["Off", "On"]));
-    }
-
     // Quantum accepts a full power-off (mode 3, wire-confirmed in issue #160)
     // in addition to the generic Standby/Transmit. Widen the Power control so
     // the Radar API exposes and accepts Off for these radars.
@@ -201,6 +208,7 @@ pub(crate) fn controls_for_every_model(args: &Cli) -> Vec<SharedControls> {
             };
             let mut controls = info.controls.clone();
             update_when_model_known(&mut controls, &model, &info);
+            offer_doppler_control(&mut controls, base_model, model.doppler);
             controls
         })
         .collect()
@@ -212,39 +220,35 @@ mod tests {
     use clap::Parser;
     use std::time::Duration;
 
+    fn controls_for(args: &Cli, base_model: BaseModel) -> SharedControls {
+        crate::radar::ui_strings::radar_info(crate::Brand::Raymarine, args, |id, tx| {
+            new(id, tx, args, base_model)
+        })
+        .controls
+    }
+
     /// A control must only exist for hardware that honours it. A Quantum
-    /// without Doppler (a Q24C, features 0x00001900) previously got a Doppler
-    /// switch anyway, and a PUT on it reached the wire. See #705.
+    /// without Doppler (a Q24C, features 0x00001900) once got a Doppler switch
+    /// anyway, and a PUT on it reached the wire. See #705.
     #[test]
     fn doppler_is_offered_only_to_radars_that_have_it() {
         let args = Cli::parse_from(["mayara-server"]);
 
-        // Doppler is gated on the capability, not the family, because that is
-        // what the model table records. No RD entry in the table sets it, so
-        // an RD is only exercised for the absence.
         for (base_model, doppler, expected) in [
             (BaseModel::Quantum, true, true),
             (BaseModel::Quantum, false, false),
+            // No RD has Doppler and rd::set_control could not encode it, so an
+            // RD is never offered one however the capability arrives.
+            (BaseModel::RD, true, false),
             (BaseModel::RD, false, false),
         ] {
-            let info =
-                crate::radar::ui_strings::radar_info(crate::Brand::Raymarine, &args, |id, tx| {
-                    new(id, tx, &args, base_model)
-                });
+            let mut controls = controls_for(&args, base_model);
             assert!(
-                info.controls.get(&ControlId::Doppler).is_none(),
+                controls.get(&ControlId::Doppler).is_none(),
                 "{base_model} must not offer Doppler before its capability is known"
             );
 
-            let model = RaymarineModel {
-                model: base_model,
-                hd: false,
-                max_spoke_len: 512,
-                doppler,
-                name: "Test",
-            };
-            let mut controls = info.controls.clone();
-            update_when_model_known(&mut controls, &model, &info);
+            offer_doppler_control(&mut controls, base_model, doppler);
 
             assert_eq!(
                 controls.get(&ControlId::Doppler).is_some(),

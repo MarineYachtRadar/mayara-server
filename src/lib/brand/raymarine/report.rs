@@ -745,8 +745,9 @@ impl RaymarineReportReceiver {
                 flags,
             );
 
-            // Update Doppler capability based on what the radar actually
-            // reports, overriding the hardcoded model table.
+            // The radar's own word on Doppler beats the part-number table,
+            // and process_info_report() honours that rather than overwriting
+            // it afterwards (#709).
             if features.has_doppler() != self.common.info.doppler {
                 self.common.info.set_doppler(features.has_doppler());
                 self.wire_to_legend = wire_to_legend(&self.common.info.get_legend());
@@ -756,6 +757,9 @@ impl RaymarineReportReceiver {
                     features.has_doppler(),
                 );
             }
+            // The control set is not touched here. It is decided once, where
+            // the radar stops being held back for this very report, so by then
+            // the capability is settled and nothing needs taking back.
 
             self.features = features;
             self.features_seen = true;
