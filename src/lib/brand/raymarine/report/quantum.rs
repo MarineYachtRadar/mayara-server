@@ -266,6 +266,19 @@ pub(super) fn process_status_report(receiver: &mut RaymarineReportReceiver, data
         return;
     }
 
+    // A radar is visible to clients as soon as it has ranges, and this is the
+    // report they come from. Hold the whole report back until the radar has
+    // said what it can do, so no client sees a control set about to change.
+    //
+    // The whole report, not just the ranges: the range index is resolved
+    // against the range list further down, and with no list that yields zero,
+    // which is what add_spoke would take as the spoke's physical range. The
+    // report repeats about once a second and carries all of this again, so
+    // waiting costs a report rather than anything else.
+    if receiver.common.info.ranges.is_empty() && receiver.hold_for_features() {
+        return;
+    }
+
     let report = match StatusReport::transmute(receiver, data) {
         Ok(r) => r,
         Err(_) => return,
@@ -296,10 +309,7 @@ pub(super) fn process_status_report(receiver: &mut RaymarineReportReceiver, data
         .common
         .set_value(&ControlId::Power, status as i32 as f64);
 
-    // Ranges make the radar visible, so withhold them until the radar has said
-    // what it can do — otherwise a client sees controls that are about to
-    // change. Everything else in this report is applied regardless.
-    if receiver.common.info.ranges.is_empty() && !receiver.hold_for_features() {
+    if receiver.common.info.ranges.is_empty() {
         let mut ranges = Ranges::empty();
 
         for (i, &range) in report.ranges.iter().enumerate() {
