@@ -105,12 +105,17 @@ async fn replay_raymarine_quantum() {
                             // In this capture the 0x280001 info report and the
                             // first 0x280002 status report both arrive before
                             // the 0x280007 features report, so that status
-                            // report is held back and the control cannot come
-                            // from the part-number table. A later status report,
-                            // after the features report, is what publishes the
-                            // radar and offers the control — from the radar's
-                            // own word (#709, #714). The Q24C fixture covers
-                            // the order where features arrive first.
+                            // report is held back and a later one publishes the
+                            // radar (#714). The Q24C fixture covers the order
+                            // where the features report arrives first.
+                            //
+                            // This radar's features value agrees with its part
+                            // number, so the replay cannot show which of the two
+                            // the capability came from — only that the ordering
+                            // works and the control and legend end up right.
+                            // Precedence itself is covered by
+                            // effective_doppler's tests and by the two
+                            // a_features_report_*_publication receiver tests.
                             let legend = info.get_legend();
                             assert!(
                                 legend.doppler_approaching.is_some()
