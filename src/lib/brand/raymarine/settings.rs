@@ -58,7 +58,6 @@ pub(crate) fn new(
                 &["Harbor", "Coastal", "Offshore", "Weather"],
             )
             .build(&mut controls);
-            new_list(ControlId::Doppler, &["Off", "On"]).build(&mut controls);
             new_list(ControlId::TargetExpansion, &["Off", "On"]).build(&mut controls);
             new_auto(ControlId::ColorGain, 0., 100., HAS_AUTO_NOT_ADJUSTABLE).build(&mut controls);
             new_list(ControlId::MainBangSuppression, &["Off", "On"]).build(&mut controls);
@@ -155,6 +154,22 @@ pub(crate) fn update_when_model_known(
 
     controls.add(new_list(ControlId::TargetExpansion, &["Off", "On"]));
 
+    // Doppler belongs only to the radars that have it. The capability is not
+    // known when `new()` runs at discovery — it arrives with the E-number in
+    // the 0x280001 info report, which is what picks `model` here. A Q24C
+    // reports features 0x00001900, Doppler bit clear, and must not be offered
+    // a switch it cannot honour.
+    //
+    // The model table is the right source despite `process_features()` reading
+    // the 0x280007 report first: `process_info_report()` calls
+    // `set_doppler(model.doppler)` straight after this, so the table's value is
+    // what `RadarInfo::doppler` ends up holding. Gating on it keeps the
+    // control's presence and the reported capability in step. See #709 for the
+    // contradiction that leaves behind.
+    if model.doppler {
+        controls.add(new_list(ControlId::Doppler, &["Off", "On"]));
+    }
+
     // Quantum accepts a full power-off (mode 3, wire-confirmed in issue #160)
     // in addition to the generic Standby/Transmit. Widen the Power control so
     // the Radar API exposes and accepts Off for these radars.
@@ -179,7 +194,9 @@ pub(crate) fn controls_for_every_model(args: &Cli) -> Vec<SharedControls> {
                 model: base_model,
                 hd: false,
                 max_spoke_len: 512,
-                doppler: false,
+                // The catalog is the union of every string a radar of this
+                // brand can show, so claim every optional capability.
+                doppler: true,
                 name: "Test",
             };
             let mut controls = info.controls.clone();
@@ -194,6 +211,49 @@ mod tests {
     use super::*;
     use clap::Parser;
     use std::time::Duration;
+
+    /// A control must only exist for hardware that honours it. A Quantum
+    /// without Doppler (a Q24C, features 0x00001900) previously got a Doppler
+    /// switch anyway, and a PUT on it reached the wire. See #705.
+    #[test]
+    fn doppler_is_offered_only_to_radars_that_have_it() {
+        let args = Cli::parse_from(["mayara-server"]);
+
+        // Doppler is gated on the capability, not the family, because that is
+        // what the model table records. No RD entry in the table sets it, so
+        // an RD is only exercised for the absence.
+        for (base_model, doppler, expected) in [
+            (BaseModel::Quantum, true, true),
+            (BaseModel::Quantum, false, false),
+            (BaseModel::RD, false, false),
+        ] {
+            let info =
+                crate::radar::ui_strings::radar_info(crate::Brand::Raymarine, &args, |id, tx| {
+                    new(id, tx, &args, base_model)
+                });
+            assert!(
+                info.controls.get(&ControlId::Doppler).is_none(),
+                "{base_model} must not offer Doppler before its capability is known"
+            );
+
+            let model = RaymarineModel {
+                model: base_model,
+                hd: false,
+                max_spoke_len: 512,
+                doppler,
+                name: "Test",
+            };
+            let mut controls = info.controls.clone();
+            update_when_model_known(&mut controls, &model, &info);
+
+            assert_eq!(
+                controls.get(&ControlId::Doppler).is_some(),
+                expected,
+                "{base_model} with doppler={doppler} should{} offer Doppler",
+                if expected { "" } else { " not" }
+            );
+        }
+    }
 
     /// Both Raymarine families are held up by the same heartbeat, so both
     /// offer the control, enabled at its default.

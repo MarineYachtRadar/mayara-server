@@ -5,6 +5,7 @@
 //! Verifies that replaying the fixture through the full pipeline
 //! detects the radar with the correct brand, model, and capabilities.
 
+use mayara::radar::settings::ControlId;
 use mayara::{Cli, replay};
 use std::path::Path;
 use std::time::Duration;
@@ -91,6 +92,16 @@ async fn replay_raymarine_quantum() {
                                 model
                             );
                             assert!(info.doppler, "Quantum should support Doppler");
+                            // A Q24D reports Doppler, so the control must be
+                            // offered. The absence case is unit-tested: the
+                            // part number decides the capability
+                            // (part_number_decides_doppler_capability) and the
+                            // capability decides the control
+                            // (doppler_is_offered_only_to_radars_that_have_it).
+                            assert!(
+                                info.controls.get(&ControlId::Doppler).is_some(),
+                                "a Doppler-capable Quantum must offer the Doppler control"
+                            );
                             assert_eq!(info.spokes_per_revolution, 250);
                             // Identity and serial come from different places
                             // and must not be confused. The key is the
