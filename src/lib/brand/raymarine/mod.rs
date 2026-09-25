@@ -499,7 +499,7 @@ impl RaymarineLocator {
                 let subtype = data.subtype;
 
                 match subtype {
-                    protocol::beacon56::QUANTUM | protocol::beacon56::QUANTUM_ALT => {
+                    s if protocol::beacon56::is_quantum_family(s) => {
                         let model = BaseModel::Quantum;
                         let model_name: Option<String> =
                             c_string(&data.model_name).map(String::from);
@@ -1284,6 +1284,42 @@ mod tests {
     /// Doppler, and `update_when_model_known` gates the Doppler control on it.
     /// A Q24C must resolve to `doppler: false` or that gate lets it through.
     /// See #705.
+    /// The 56-byte subtype is Raymarine's LNET_UNIT_TYPE_T. Every member of
+    /// the Quantum family speaks the Quantum protocol, so all of them must be
+    /// recognised as a radar — a Cyclone or a Q24W was previously discarded at
+    /// discovery exactly as the Q24C in #701 was.
+    #[test]
+    fn the_whole_quantum_family_is_recognised() {
+        use protocol::beacon56::is_quantum_family;
+
+        for (subtype, what) in [
+            (0x4cu32, "Quantum Radome E70210"),
+            (0x52, "Quantum WiFi E70344"),
+            (0x53, "Quantum Johnson Outdoors"),
+            (0x5f, "Quantum FLIR"),
+            (0x66, "Quantum 2 Doppler E70498"),
+            (0x7d, "first Cyclone"),
+            (0x80, "a Cyclone in the middle of the range"),
+            (0x86, "last Cyclone"),
+        ] {
+            assert!(is_quantum_family(subtype), "0x{subtype:02x} is a {what}");
+        }
+
+        for (subtype, what) in [
+            (
+                0x4du32,
+                "the W3 bridge, which carries a radar but is not one",
+            ),
+            (0x11, "an MFD"),
+            (0x0a, "a digital HD radome, which speaks the RD protocol"),
+            (0x0b, "a digital radome"),
+            (0x7c, "just below the Cyclone range"),
+            (0x87, "just above the Cyclone range"),
+        ] {
+            assert!(!is_quantum_family(subtype), "0x{subtype:02x} is {what}");
+        }
+    }
+
     #[test]
     fn part_number_decides_doppler_capability() {
         for (part, model_name, doppler) in [

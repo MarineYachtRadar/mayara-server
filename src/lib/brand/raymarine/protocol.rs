@@ -76,6 +76,12 @@ pub(crate) mod beacon36 {
 }
 
 /// Subtypes in the 56-byte beacon (beacon_type = 1).
+///
+/// This field is Raymarine's `UNITINFO::LNET_UNIT_TYPE_T`, a 152-entry enum
+/// with a parallel product-ID table, both extracted from the Axiom in
+/// `research/raymarine/quantum-generation-detection.md`. The Axiom's own
+/// `CLNetSourceList::IsRadar` accepts `0x09..0x0b` (digital radars),
+/// `0x4c`, `0x4d`, `0x52`, `0x66` and `0x7d..0x86`.
 pub(crate) mod beacon56 {
     /// beacon_type of the 56-byte identity beacon.
     pub(crate) const TYPE_IDENTITY: u32 = 1;
@@ -85,13 +91,30 @@ pub(crate) mod beacon56 {
 
     /// Quantum radar identity — model name e.g. "QuantumRadar".
     pub(crate) const QUANTUM: u32 = 0x66;
-    /// Quantum radar identity, second form — the Quantum 1's. Also model name
-    /// "QuantumRadar", also paired with a `beacon36::QUANTUM` address beacon.
-    /// Confirmed from `testdata/pcap/raymarine-quantum1.pcap.gz`, whose radar
-    /// reports part number E70210 (Q24C); every Quantum 2 captured reports
-    /// E70498 (Q24D) and sends 0x66 instead. First seen in
+    /// Quantum Radome — the Quantum 1 (E70210, Q24C). Model name
+    /// "QuantumRadar", paired with a `beacon36::QUANTUM` address beacon.
+    /// Confirmed from `testdata/pcap/raymarine-quantum1.pcap.gz`; first seen in
     /// MarineYachtRadar/mayara-server#701.
     pub(crate) const QUANTUM_ALT: u32 = 0x4c;
+    /// Quantum WiFi (E70344, Q24W).
+    pub(crate) const QUANTUM_WIFI: u32 = 0x52;
+    /// Quantum Johnson Outdoors (750013), an OEM rebadge.
+    pub(crate) const QUANTUM_JOHNSON: u32 = 0x53;
+    /// Quantum FLIR, an OEM rebadge.
+    pub(crate) const QUANTUM_FLIR: u32 = 0x5f;
+    /// Cyclone family (E70620..E70633): Cyclone, Pro and Ultra, with and
+    /// without camera, with and without KH.
+    pub(crate) const CYCLONE_FIRST: u32 = 0x7d;
+    pub(crate) const CYCLONE_LAST: u32 = 0x86;
+
+    /// Whether this identity subtype is a radar of the Quantum family, which
+    /// includes the Cyclones: one protocol, one command dialect.
+    pub(crate) fn is_quantum_family(subtype: u32) -> bool {
+        matches!(
+            subtype,
+            QUANTUM | QUANTUM_ALT | QUANTUM_WIFI | QUANTUM_JOHNSON | QUANTUM_FLIR
+        ) || (CYCLONE_FIRST..=CYCLONE_LAST).contains(&subtype)
+    }
     /// RD (magnetron) radar identity.
     pub(crate) const RD: u32 = 0x01;
     /// RD Ethernet radome identity — model name "Ethernet Dome".
