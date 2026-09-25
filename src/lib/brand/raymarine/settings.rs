@@ -159,6 +159,13 @@ pub(crate) fn update_when_model_known(
     // the 0x280001 info report, which is what picks `model` here. A Q24C
     // reports features 0x00001900, Doppler bit clear, and must not be offered
     // a switch it cannot honour.
+    //
+    // The model table is the right source despite `process_features()` reading
+    // the 0x280007 report first: `process_info_report()` calls
+    // `set_doppler(model.doppler)` straight after this, so the table's value is
+    // what `RadarInfo::doppler` ends up holding. Gating on it keeps the
+    // control's presence and the reported capability in step. See #709 for the
+    // contradiction that leaves behind.
     if model.doppler {
         controls.add(new_list(ControlId::Doppler, &["Off", "On"]));
     }
