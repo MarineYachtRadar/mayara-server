@@ -43,6 +43,23 @@ const WAKE_INTERVAL: Duration = Duration::from_secs(3);
 const OBSERVATION_WINDOW: Duration = Duration::from_secs(5);
 const EXTERNAL_QUIET_WINDOW: Duration = Duration::from_secs(60);
 
+/// How many Quantum status reports to let past while waiting for the 0x280007
+/// features report before showing the radar anyway. They arrive about once a
+/// second.
+const MAX_STATUS_REPORTS_WITHOUT_FEATURES: u8 = 3;
+
+/// Whether a radar's ranges — and so the radar itself — should be withheld for
+/// now, waiting on the features report.
+fn should_hold_for_features(
+    base_model: BaseModel,
+    features_seen: bool,
+    status_reports_without_features: u8,
+) -> bool {
+    base_model == BaseModel::Quantum
+        && !features_seen
+        && status_reports_without_features <= MAX_STATUS_REPORTS_WITHOUT_FEATURES
+}
+
 /// The keep-alives one heartbeat tick sends: the 1 s heartbeat, and every
 /// fifth tick the extended 5 s one. Nothing while the radar should stand
 /// down: the heartbeat is what holds the radar up for us, and the radar
@@ -219,6 +236,7 @@ pub(crate) struct RaymarineReportReceiver {
     reported_unknown: HashMap<u32, bool>,
     features: FeatureFlags,
     features_seen: bool,
+    status_reports_without_features: u8,
     /// True while the radar's last status report indicated a self-test fault
     /// (Quantum status byte 0x0A). Used to edge-trigger the Signal K alarm
     /// so it raises once on entry and clears once on exit.
@@ -327,6 +345,7 @@ impl RaymarineReportReceiver {
             reported_unknown: HashMap::new(),
             features: FeatureFlags::default(),
             features_seen: false,
+            status_reports_without_features: 0,
             self_test_fault: false,
             self_test_results: None,
             pending_transmit: false,
@@ -730,6 +749,38 @@ impl RaymarineReportReceiver {
         }
     }
 
+    /// Whether to keep this radar out of sight a little longer.
+    ///
+    /// A radar becomes visible to clients as soon as it has ranges, so setting
+    /// them before the 0x280007 features report has arrived shows a control set
+    /// that is about to change — a Q24D sends its first status report 18 ms
+    /// before its features. Holding back costs at most one status report, since
+    /// those repeat about once a second and carry the ranges every time.
+    ///
+    /// Two radars never wait. An RD has no features report at all and would
+    /// wait for ever. Nor does a Quantum that simply stays quiet: no radar may
+    /// become undiscoverable over a report we only assume it sends, which is
+    /// the failure both #701 and #713 were about.
+    fn hold_for_features(&mut self) -> bool {
+        self.status_reports_without_features =
+            self.status_reports_without_features.saturating_add(1);
+
+        let hold = should_hold_for_features(
+            self.base_model,
+            self.features_seen,
+            self.status_reports_without_features,
+        );
+        if !hold && !self.features_seen && self.base_model == BaseModel::Quantum {
+            log::warn!(
+                "{}: no 0x280007 features report after {} status reports; \
+                 showing the radar with capabilities from its part number instead",
+                self.common.key,
+                MAX_STATUS_REPORTS_WITHOUT_FEATURES,
+            );
+        }
+        hold
+    }
+
     fn set_ranges(&mut self, ranges: Ranges) {
         if let Some(command_sender) = &mut self.command_sender {
             command_sender.set_ranges(ranges.clone());
@@ -778,6 +829,39 @@ mod tests {
         // The Doppler extras are Cyclone-only and must not read as present.
         assert!(!q24d.has_doppler_auto_acquire());
         assert!(!q24d.has_doppler_bird_mode());
+    }
+
+    // ----- holding a radar back until it says what it can do -----
+
+    /// A radar is visible to clients once it has ranges, so a Quantum waits for
+    /// its features report before getting any — but never for ever, and an RD
+    /// never waits at all.
+    #[test]
+    fn only_a_quantum_waits_for_its_features_report_and_not_indefinitely() {
+        use super::{MAX_STATUS_REPORTS_WITHOUT_FEATURES as MAX, should_hold_for_features};
+        use crate::brand::raymarine::BaseModel;
+
+        // A Quantum that has not reported yet is held back...
+        for n in 1..=MAX {
+            assert!(
+                should_hold_for_features(BaseModel::Quantum, false, n),
+                "status report {n} of {MAX} should still wait"
+            );
+        }
+        // ...but only so long: an unobserved variant must not become
+        // undiscoverable over a report we only assume it sends.
+        assert!(
+            !should_hold_for_features(BaseModel::Quantum, false, MAX + 1),
+            "past the limit the radar is shown anyway"
+        );
+
+        // Once the report is in there is nothing to wait for.
+        assert!(!should_hold_for_features(BaseModel::Quantum, true, 1));
+
+        // An RD has no features report at all and would wait for ever.
+        for n in 1..=MAX + 1 {
+            assert!(!should_hold_for_features(BaseModel::RD, false, n));
+        }
     }
 
     // ----- heartbeat ticks (stand-down, issue #664) -----

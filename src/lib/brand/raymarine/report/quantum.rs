@@ -296,7 +296,10 @@ pub(super) fn process_status_report(receiver: &mut RaymarineReportReceiver, data
         .common
         .set_value(&ControlId::Power, status as i32 as f64);
 
-    if receiver.common.info.ranges.is_empty() {
+    // Ranges make the radar visible, so withhold them until the radar has said
+    // what it can do — otherwise a client sees controls that are about to
+    // change. Everything else in this report is applied regardless.
+    if receiver.common.info.ranges.is_empty() && !receiver.hold_for_features() {
         let mut ranges = Ranges::empty();
 
         for (i, &range) in report.ranges.iter().enumerate() {
