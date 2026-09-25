@@ -862,7 +862,11 @@ mod tests {
     }
 
     /// The features report is the radar's own word and beats the part-number
-    /// table, whichever of the two arrives first. See #709.
+    /// table, whichever of the two arrives first — while the radar is still
+    /// being held back, which is every case a radar can actually reach. Once
+    /// the radar has been published the table's answer is frozen instead, so
+    /// that the capability and the control set cannot disagree; that path is in
+    /// `process_features`. See #709.
     #[test]
     fn the_features_report_outranks_the_part_number_table() {
         use super::effective_doppler;

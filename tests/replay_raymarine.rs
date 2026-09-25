@@ -102,11 +102,15 @@ async fn replay_raymarine_quantum() {
                                 info.controls.get(&ControlId::Doppler).is_some(),
                                 "a Doppler-capable Quantum must offer the Doppler control"
                             );
-                            // In this capture the 0x280001 info report arrives
-                            // BEFORE the 0x280007 features report, so the
-                            // control is created from the part-number table and
-                            // the features report has to leave it alone (#709).
-                            // The Q24C fixture covers the reverse order.
+                            // In this capture the 0x280001 info report and the
+                            // first 0x280002 status report both arrive before
+                            // the 0x280007 features report, so that status
+                            // report is held back and the control cannot come
+                            // from the part-number table. A later status report,
+                            // after the features report, is what publishes the
+                            // radar and offers the control — from the radar's
+                            // own word (#709, #714). The Q24C fixture covers
+                            // the order where features arrive first.
                             let legend = info.get_legend();
                             assert!(
                                 legend.doppler_approaching.is_some()
