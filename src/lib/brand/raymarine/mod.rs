@@ -870,7 +870,7 @@ mod tests {
 
     use super::{
         BaseModel, MAX_REPORTED_UNKNOWN_SUBTYPES, RAYMARINE_BEACON_ADDRESS,
-        RAYMARINE_QUANTUM_WIFI_ADDRESS, protocol,
+        RAYMARINE_QUANTUM_WIFI_ADDRESS, RaymarineModel, protocol,
     };
     use crate::brand::LocatorId;
     use crate::locator::LocatorAddress;
@@ -1278,6 +1278,26 @@ mod tests {
             SocketAddrV4::new(Ipv4Addr::new(224, 106, 90, 66), 2572)
         );
         assert_eq!(info.spoke_data_addr, info.report_addr);
+    }
+
+    /// The part number is the only thing that says whether a radar has
+    /// Doppler, and `update_when_model_known` gates the Doppler control on it.
+    /// A Q24C must resolve to `doppler: false` or that gate lets it through.
+    /// See #705.
+    #[test]
+    fn part_number_decides_doppler_capability() {
+        for (part, model_name, doppler) in [
+            ("E70210", "Quantum Q24C", false),
+            ("E70344", "Quantum Q24W", false),
+            ("E70498", "Quantum Q24D", true),
+            ("E70620", "Cyclone", true),
+            ("E92142", "RD418HD", false),
+        ] {
+            let model = RaymarineModel::try_into(part)
+                .unwrap_or_else(|| panic!("{part} must be a known part number"));
+            assert_eq!(model.name, model_name, "{part} name");
+            assert_eq!(model.doppler, doppler, "{part} Doppler capability");
+        }
     }
 
     #[test]
