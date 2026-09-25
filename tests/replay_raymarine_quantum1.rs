@@ -8,6 +8,7 @@
 //! pipeline — beacon pair, link_id registration, model identification from the
 //! E70210 part number — works for this generation.
 
+use mayara::radar::settings::ControlId;
 use mayara::{Cli, replay};
 use std::path::Path;
 use std::time::Duration;
@@ -95,6 +96,13 @@ async fn replay_raymarine_quantum1() {
                             assert!(
                                 !info.doppler,
                                 "a Q24C has no Doppler; features were 0x00001900"
+                            );
+                            // ...so it must not be offered the control either.
+                            // The unit tests cover each half of this chain; the
+                            // radar proves the whole of it.
+                            assert!(
+                                info.controls.get(&ControlId::Doppler).is_none(),
+                                "a radar without Doppler must not be offered the control"
                             );
                             assert_eq!(info.spokes_per_revolution, 250);
                             break;
