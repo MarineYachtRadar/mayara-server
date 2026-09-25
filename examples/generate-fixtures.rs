@@ -38,6 +38,17 @@ fn main() {
         500,
     );
 
+    // Raymarine Quantum 1 (Q24C, E70210) behind a W3 wireless bridge: beacons
+    // (224.0.0.1:5800) + report data (232.1.155.1:2574). Capture from
+    // MarineYachtRadar/mayara-server#701, the radar that announces its identity
+    // with subtype 0x4c instead of 0x66. Doppler-less, 20 ranges, 1/32-64 nm.
+    generate_fixture(
+        &base.join("raymarine/Quantum1/bill/bill-q24c-session.pcap.gz"),
+        &fixture_dir.join("raymarine-quantum1.pcap.gz"),
+        &|p| p.dst_addr.port() == 5800 || p.dst_addr.port() == 2574,
+        500,
+    );
+
     // Raymarine RD418D digital radome: beacons (224.0.0.1:5800) + report/spoke
     // stream (226.77.83.98:2572). Captures from MarineYachtRadar/mayara-server#419,
     // merged onto a common timeline.

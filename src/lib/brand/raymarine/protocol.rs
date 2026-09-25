@@ -85,12 +85,12 @@ pub(crate) mod beacon56 {
 
     /// Quantum radar identity — model name e.g. "QuantumRadar".
     pub(crate) const QUANTUM: u32 = 0x66;
-    /// Quantum radar identity, second form — also model name "QuantumRadar",
-    /// also paired with a `beacon36::QUANTUM` address beacon. Wire-observed
-    /// from a Quantum radome on firmware v1.62 behind a W3 in
-    /// MarineYachtRadar/mayara-server#701. Every Quantum captured so far
-    /// reports part number E70498 (Q24D) and sends 0x66 instead, so this is
-    /// most likely the earlier Quantum generation's identity.
+    /// Quantum radar identity, second form — the Quantum 1's. Also model name
+    /// "QuantumRadar", also paired with a `beacon36::QUANTUM` address beacon.
+    /// Confirmed from `testdata/pcap/raymarine-quantum1.pcap.gz`, whose radar
+    /// reports part number E70210 (Q24C); every Quantum 2 captured reports
+    /// E70498 (Q24D) and sends 0x66 instead. First seen in
+    /// MarineYachtRadar/mayara-server#701.
     pub(crate) const QUANTUM_ALT: u32 = 0x4c;
     /// RD (magnetron) radar identity.
     pub(crate) const RD: u32 = 0x01;
