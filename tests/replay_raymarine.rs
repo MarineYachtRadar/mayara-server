@@ -116,6 +116,23 @@ async fn replay_raymarine_quantum() {
                             // Precedence itself is covered by
                             // effective_doppler's tests and by the two
                             // a_features_report_*_publication receiver tests.
+                            // This radar reports Doppler On (0x280030 = 0x03),
+                            // so the control must end up On.
+                            //
+                            // Note this does not isolate the seeding done at
+                            // registration: set_instant_timing() collapses the
+                            // fixture's sub-second gaps, so a later 0x280030
+                            // sets the control here whether or not the earlier
+                            // one was preserved. Verified by removing the
+                            // seeding and watching this still pass.
+                            assert_eq!(
+                                info.controls
+                                    .get(&ControlId::Doppler)
+                                    .and_then(|c| c.value())
+                                    .and_then(|v| v.as_f64()),
+                                Some(1.0),
+                                "a Doppler state reported during the hold must reach the control"
+                            );
                             let legend = info.get_legend();
                             assert!(
                                 legend.doppler_approaching.is_some()

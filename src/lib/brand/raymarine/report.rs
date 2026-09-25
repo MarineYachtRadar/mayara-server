@@ -934,19 +934,45 @@ mod tests {
     fn a_features_report_after_publication_does_not_move_the_capability() {
         use crate::radar::range::{Range, Ranges};
 
+        use crate::brand::raymarine::{BaseModel, settings};
+        use crate::radar::settings::ControlId;
+
         let mut receiver = test_receiver(/*doppler=*/ true);
-        // Publishing a radar means giving it ranges.
+        // Publishing a radar means offering its controls and giving it ranges,
+        // which is what process_status_report does at the release point.
+        settings::offer_doppler_control(
+            &mut receiver.common.info.controls,
+            BaseModel::Quantum,
+            true,
+        );
         receiver
             .common
             .set_ranges(Ranges::new(vec![Range::new(1852, 0)]));
         assert!(!receiver.common.info.ranges.is_empty(), "published");
+        assert!(
+            receiver
+                .common
+                .info
+                .controls
+                .get(&ControlId::Doppler)
+                .is_some()
+        );
 
         receiver.process_features(&features_report(false));
 
+        // The point of freezing: the two cannot end up disagreeing.
         assert!(
             receiver.common.info.doppler,
-            "a late features report must not leave the capability disagreeing \
-             with the control set already built from the part number"
+            "a late features report must not move the capability"
+        );
+        assert!(
+            receiver
+                .common
+                .info
+                .controls
+                .get(&ControlId::Doppler)
+                .is_some(),
+            "...nor leave the control set it was built from without its control"
         );
     }
 
