@@ -102,6 +102,43 @@ async fn replay_raymarine_quantum() {
                                 info.controls.get(&ControlId::Doppler).is_some(),
                                 "a Doppler-capable Quantum must offer the Doppler control"
                             );
+                            // In this capture the 0x280001 info report and the
+                            // first 0x280002 status report both arrive before
+                            // the 0x280007 features report, so that status
+                            // report is held back and a later one publishes the
+                            // radar (#714). The Q24C fixture covers the order
+                            // where the features report arrives first.
+                            //
+                            // This radar's features value agrees with its part
+                            // number, so the replay cannot show which of the two
+                            // the capability came from — only that the ordering
+                            // works and the control and legend end up right.
+                            // Precedence itself is covered by
+                            // effective_doppler's tests and by the two
+                            // a_features_report_*_publication receiver tests.
+                            // This radar reports Doppler On (0x280030 = 0x03),
+                            // so the control must end up On.
+                            //
+                            // Note this does not isolate the seeding done at
+                            // registration: set_instant_timing() collapses the
+                            // fixture's sub-second gaps, so a later 0x280030
+                            // sets the control here whether or not the earlier
+                            // one was preserved. Verified by removing the
+                            // seeding and watching this still pass.
+                            assert_eq!(
+                                info.controls
+                                    .get(&ControlId::Doppler)
+                                    .and_then(|c| c.value())
+                                    .and_then(|v| v.as_f64()),
+                                Some(1.0),
+                                "a Doppler state reported during the hold must reach the control"
+                            );
+                            let legend = info.get_legend();
+                            assert!(
+                                legend.doppler_approaching.is_some()
+                                    && legend.doppler_receding.is_some(),
+                                "a Doppler radar needs its Doppler legend entries"
+                            );
                             assert_eq!(info.spokes_per_revolution, 250);
                             // Identity and serial come from different places
                             // and must not be confused. The key is the

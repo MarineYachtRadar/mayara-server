@@ -311,6 +311,24 @@ pub(super) fn process_status_report(receiver: &mut RaymarineReportReceiver, data
     }
 
     if receiver.common.info.ranges.is_empty() {
+        // Past the hold, so the capability is settled and no client has seen
+        // this radar yet: the one moment at which the control set can be
+        // decided outright rather than corrected later (#709).
+        let base_model = receiver.base_model;
+        let doppler = receiver.common.info.doppler;
+        settings::offer_doppler_control(&mut receiver.common.info.controls, base_model, doppler);
+
+        // A 0x280030 Doppler status report can have arrived while the radar was
+        // held back, when there was no control for it to land on. Seed the
+        // control from what it said, so the radar does not appear with Doppler
+        // reading Off until the next one turns up.
+        if doppler {
+            let state = receiver.doppler;
+            receiver
+                .common
+                .set_value(&ControlId::Doppler, state as i32 as f64);
+        }
+
         let mut ranges = Ranges::empty();
 
         for (i, &range) in report.ranges.iter().enumerate() {
@@ -394,6 +412,17 @@ pub(super) fn process_status_report(receiver: &mut RaymarineReportReceiver, data
     );
 }
 
+/// Which source decides whether this radar has Doppler.
+///
+/// The radar's own 0x280007 features report wins — `process_features` has
+/// already applied it to `RadarInfo::doppler` by the time we get here. The
+/// part-number table only fills in when no features report has arrived, which
+/// is also the only reason the table is consulted at all. Before #709 the table
+/// was applied unconditionally and silently discarded the radar's own word.
+fn effective_doppler(features_seen: bool, reported: bool, from_table: bool) -> bool {
+    if features_seen { reported } else { from_table }
+}
+
 pub(super) fn process_info_report(receiver: &mut RaymarineReportReceiver, data: &[u8]) {
     if receiver.model.is_some() {
         return;
@@ -432,7 +461,12 @@ pub(super) fn process_info_report(receiver: &mut RaymarineReportReceiver, data: 
                 .common
                 .info
                 .set_pixel_values(hd_to_pixel_values(model.hd));
-            receiver.common.info.set_doppler(model.doppler);
+            let doppler = effective_doppler(
+                receiver.features_seen,
+                receiver.common.info.doppler,
+                model.doppler,
+            );
+            receiver.common.info.set_doppler(doppler);
             receiver.wire_to_legend = wire_to_legend(&receiver.common.info.get_legend());
             receiver.common.update();
 
@@ -836,5 +870,32 @@ mod tests {
             /*returns_per_line=*/ 32, &spoke, /*doppler=*/ 1, &lookup,
         );
         assert_eq!(doppler, vec![0xAA, 0xBB, 0x42]);
+    }
+
+    /// While the radar is still held back — the path every radar we have
+    /// captured takes — the features report is the radar's own word and beats
+    /// the part-number table, whichever of the two arrives first.
+    ///
+    /// Once the radar has been published the table's answer is frozen instead,
+    /// so that the capability and the control set cannot disagree. That happens
+    /// only when the wait for the features report was given up on, and it lives
+    /// in `process_features`, not here. See #709.
+    #[test]
+    fn the_features_report_outranks_the_part_number_table() {
+        use super::effective_doppler;
+
+        // Features report already in: it decides, even against the table.
+        assert!(
+            effective_doppler(true, true, false),
+            "a radar reporting Doppler keeps it though its part number says otherwise"
+        );
+        assert!(
+            !effective_doppler(true, false, true),
+            "a radar denying Doppler is believed though its part number claims it"
+        );
+
+        // No features report yet: the table is all there is.
+        assert!(effective_doppler(false, false, true));
+        assert!(!effective_doppler(false, true, false));
     }
 }
