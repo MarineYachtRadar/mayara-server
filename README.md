@@ -24,6 +24,7 @@ Besides Mayara's own GUI, these applications use it for radar support:
 - [**Freeboard-SK**](https://github.com/SignalK/freeboard-sk) — Signal K chart plotter with a radar overlay
 - [**Binnacle**](https://github.com/NearlCrews/signalk-binnacle) — WebGL chart plotter for Signal K with a radar overlay and controls
 - [**signalk-beluga-core**](https://github.com/matztam/signalk-beluga-core) — Signal K plugin that forwards Mayara's radar to the ORCA app
+- [**qtVlm**](https://www.meltemus.com/index.php/en/qtvlm-en) — navigation and weather routing application with a radar overlay
 
 ## Radar support
 
