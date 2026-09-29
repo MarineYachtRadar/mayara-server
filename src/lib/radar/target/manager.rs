@@ -1334,6 +1334,50 @@ mod tests {
         assert_eq!(status(&manager), TargetStatus::Lost);
     }
 
+    /// Reproduces ghost target 100000041 of #723: acquired at 1,933 m on
+    /// relative bearing 196 degrees, inside a 1,500-2,000 m guard zone, then
+    /// "promoted" five minutes later at 75 m on bearing 20 degrees — own-ship
+    /// clutter, 1.9 km from where the track was acquired. Capping the
+    /// coasting gate keeps the two apart, so the clutter echo never confirms
+    /// the track at all.
+    #[test]
+    fn a_clutter_echo_kilometres_away_cannot_confirm_a_guard_zone_track() {
+        let mut manager = make_test_manager(false);
+
+        // Range 4000 m over 512 pixels: 1 pixel is 7.8 m.
+        let ctx_at = |time: u64, spoke: u16| SpokeContext {
+            range: 4000,
+            ..make_context(time, spoke)
+        };
+        for i in 0..3 {
+            let mut blob = make_blob(1115, 247, 71.3); // 1,933 m at 196 degrees
+            blob.in_guard_zones = vec![1];
+            manager.process_blob(BlobMessage {
+                radar_key: "nav1".to_string(),
+                blob,
+                context: ctx_at(1_000 + i * 3_000, 1115),
+            });
+        }
+
+        let mut blob = make_blob(114, 10, 30.0); // 75 m at 20 degrees
+        blob.in_guard_zones = Vec::new();
+        manager.process_blob(BlobMessage {
+            radar_key: "nav1".to_string(),
+            blob,
+            context: ctx_at(301_000, 114),
+        });
+
+        let target_id = first_target_id(&manager, "nav1");
+        assert_eq!(
+            manager.per_radar_trackers["nav1"]
+                .get_target(target_id)
+                .unwrap()
+                .status,
+            TargetStatus::Acquiring,
+            "clutter 1.9 km away must not confirm the track"
+        );
+    }
+
     #[test]
     fn guard_zone_clears_once_the_zone_is_empty() {
         let (mut manager, rx) = make_test_manager_with_rx();

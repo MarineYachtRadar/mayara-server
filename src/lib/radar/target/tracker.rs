@@ -58,6 +58,16 @@ const MIN_MATCH_DISTANCE_M: f64 = 50.0;
 /// within max_speed * delta_time. We use 1.5x to account for prediction error.
 const MATCH_DISTANCE_SPEED_MULTIPLIER: f64 = 1.5;
 
+/// Upper bound (seconds) on the coasting time that sizes the match gate.
+///
+/// The gate has to grow while a target coasts, but growing it without
+/// limit turns an unseen track into a vacuum cleaner: at 50 kn a track
+/// that missed two minutes of sweeps would accept any echo within 4 km
+/// and silently jump onto a different vessel. Ten seconds is four
+/// revolutions of a typical 24 rpm antenna — past the point where a
+/// target is marked lost — and caps the gate at ~386 m at 50 kn.
+const MAX_MATCH_COAST_S: f64 = 10.0;
+
 /// Maximum COG difference (radians) for two close-by candidate targets
 /// to be treated as duplicates. Two real vessels close together (a tug
 /// and tow within 100 m, a row of moored boats) can sit inside the
@@ -675,8 +685,11 @@ impl TargetTracker {
             let uncertainty = target.get_uncertainty();
             let distance = calculate_distance(&predicted_pos, &candidate.position);
 
-            // Calculate time since last update
-            let delta_time_s = (candidate.time.saturating_sub(target.last_update)) as f64 / 1000.0;
+            // Calculate time since last update, capped so a long-coasting
+            // track cannot grow a kilometre-wide gate (see MAX_MATCH_COAST_S)
+            let delta_time_s = ((candidate.time.saturating_sub(target.last_update)) as f64
+                / 1000.0)
+                .min(MAX_MATCH_COAST_S);
 
             // Physics-based max distance: how far could the target have moved?
             // Use max_target_speed_ms from candidate (user-configured setting)
@@ -997,6 +1010,32 @@ mod tests {
         tracker.process_candidate(candidate2);
 
         // Should have two separate active targets (both in Acquiring status)
+        assert_eq!(tracker.active_count(), 2);
+    }
+
+    /// A candidate `range_m` away on true bearing `bearing_deg`, measured
+    /// from the radar at 52.0N 4.0E that `make_candidate` assumes.
+    fn make_candidate_at(range_m: f64, bearing_deg: f64, time: u64) -> TargetCandidate {
+        let bearing = bearing_deg.to_radians();
+        let lat = 52.0 + range_m * bearing.cos() / METERS_PER_DEGREE_LATITUDE;
+        let lon = 4.0 + range_m * bearing.sin() / meters_per_degree_longitude(&52.0);
+        make_candidate(lat, lon, time)
+    }
+
+    /// Reproduces the track that swapped vessels in #722: target 200000074
+    /// was last fixed on vessel 1 at 5,248 m / 221.3 degrees, then
+    /// reappeared on vessel 2 at 9,789 m / 228.5 degrees — 4.6 km away, at
+    /// an implied 38 m/s. The coasting time is taken from #723, where the
+    /// stalled revolution clock let single "revolutions" span 144 to 470 s.
+    #[test]
+    fn test_stale_track_does_not_swap_onto_a_distant_vessel() {
+        let mut tracker = TargetTracker::new_merged();
+        tracker.process_candidate(make_candidate_at(5_248.0, 221.3, 1_000));
+
+        // Sized on elapsed time alone the gate would be 25.7 m/s x 150 s x
+        // 1.5 = 5.8 km, wide enough to swallow the other vessel whole.
+        tracker.process_candidate(make_candidate_at(9_789.0, 228.5, 151_000));
+
         assert_eq!(tracker.active_count(), 2);
     }
 
