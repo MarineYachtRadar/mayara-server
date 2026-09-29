@@ -68,6 +68,9 @@ const MATCH_DISTANCE_SPEED_MULTIPLIER: f64 = 1.5;
 /// target is marked lost — and caps the gate at ~386 m at 50 kn.
 const MAX_MATCH_COAST_S: f64 = 10.0;
 
+/// [`MAX_MATCH_COAST_S`] in milliseconds, the unit target timestamps use.
+const MAX_MATCH_COAST_MS: u64 = (MAX_MATCH_COAST_S * 1000.0) as u64;
+
 /// Maximum COG difference (radians) for two close-by candidate targets
 /// to be treated as duplicates. Two real vessels close together (a tug
 /// and tow within 100 m, a row of moored boats) can sit inside the
@@ -681,15 +684,17 @@ impl TargetTracker {
         let mut best_match: Option<(u64, f64)> = None;
 
         for (id, target) in &self.active_targets {
-            let predicted_pos = target.predict_position(candidate.time);
+            // Stop coasting the association at MAX_MATCH_COAST_S: both the
+            // dead-reckoned position the gate is centred on and the gate's
+            // own radius. Capping only the radius would leave a mature
+            // track predicting kilometres down its old course, where it
+            // would happily adopt whatever vessel it landed on.
+            let match_time = candidate.time.min(target.last_update + MAX_MATCH_COAST_MS);
+            let predicted_pos = target.predict_position(match_time);
             let uncertainty = target.get_uncertainty();
             let distance = calculate_distance(&predicted_pos, &candidate.position);
 
-            // Calculate time since last update, capped so a long-coasting
-            // track cannot grow a kilometre-wide gate (see MAX_MATCH_COAST_S)
-            let delta_time_s = ((candidate.time.saturating_sub(target.last_update)) as f64
-                / 1000.0)
-                .min(MAX_MATCH_COAST_S);
+            let delta_time_s = (match_time.saturating_sub(target.last_update)) as f64 / 1000.0;
 
             // Physics-based max distance: how far could the target have moved?
             // Use max_target_speed_ms from candidate (user-configured setting)
@@ -788,7 +793,6 @@ impl TargetTracker {
         self.active_targets.get(&id)
     }
 
-    /// Get a specific active target by ID for modification
     pub(crate) fn get_target_mut(&mut self, id: u64) -> Option<&mut ActiveTarget> {
         self.active_targets.get_mut(&id)
     }
@@ -1040,6 +1044,34 @@ mod tests {
         // Sized on elapsed time alone the gate would be 25.7 m/s x 150 s x
         // 1.5 = 5.8 km, wide enough to swallow the other vessel whole.
         tracker.process_candidate(make_candidate_at(9_789.0, 228.5, 151_000));
+
+        assert_eq!(tracker.active_count(), 2);
+    }
+
+    /// A mature track coasting for minutes must not adopt a vessel sitting
+    /// exactly where its dead reckoning says it should be. Capping only the
+    /// gate radius is not enough: the prediction itself runs down the old
+    /// course, and the gate travels with it.
+    #[test]
+    fn test_stale_track_does_not_adopt_a_vessel_on_its_dead_reckoning() {
+        let mut tracker = TargetTracker::new_merged();
+
+        // Six revolutions heading due north at 10 m/s, so the filter has a
+        // converged course and speed to extrapolate from.
+        let step = 30.0 / METERS_PER_DEGREE_LATITUDE;
+        for i in 0..6u64 {
+            tracker.process_candidate(make_candidate(52.0 + i as f64 * step, 4.0, i * 3_000));
+        }
+        assert_eq!(tracker.active_count(), 1);
+
+        // 150 s later, another vessel 1.5 km further north — where the
+        // uncapped prediction would place the coasting track almost exactly.
+        let last_lat = 52.0 + 5.0 * step;
+        tracker.process_candidate(make_candidate(
+            last_lat + 1_500.0 / METERS_PER_DEGREE_LATITUDE,
+            4.0,
+            165_000,
+        ));
 
         assert_eq!(tracker.active_count(), 2);
     }
