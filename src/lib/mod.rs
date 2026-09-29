@@ -4,7 +4,7 @@ use clap::Parser;
 use locator::Locator;
 use miette::Result;
 use radar::SharedRadars;
-use radar::target::{BlobMessage, TrackerManager};
+use radar::target::{TrackerInput, TrackerManager};
 use serde::{Deserialize, Serialize, Serializer};
 use std::{
     collections::{HashMap, HashSet},
@@ -858,8 +858,8 @@ pub async fn start_session(
 
     // Initialize target tracker manager if ARPA mode is enabled
     if args.targets == TargetMode::Arpa {
-        let (blob_tx, blob_rx) = mpsc::channel::<BlobMessage>(512);
-        radars.set_blob_tx(blob_tx);
+        let (arpa_tx, arpa_rx) = mpsc::channel::<TrackerInput>(512);
+        radars.set_arpa_tx(arpa_tx);
 
         let sk_client_tx = radars.get_sk_client_tx();
         let (tracker_manager, command_tx) = TrackerManager::new(args.merge_targets, sk_client_tx);
@@ -872,7 +872,7 @@ pub async fn start_session(
                     _ = subsys.on_shutdown_requested() => {
                         log::debug!("TrackerManager shutdown requested");
                     },
-                    _ = tracker_manager.run(blob_rx) => {}
+                    _ = tracker_manager.run(arpa_rx) => {}
                 }
                 Ok::<(), miette::Report>(())
             },

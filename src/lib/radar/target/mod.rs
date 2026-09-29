@@ -11,7 +11,9 @@ mod motion;
 mod tracker;
 
 pub use blob::{BlobDetector, CompletedBlob, MAX_TARGET_SIZE_M, MIN_TARGET_SIZE_M};
-pub use manager::{BlobMessage, MarpaRequest, SpokeContext, TrackerCommand, TrackerManager};
+pub use manager::{
+    BlobMessage, MarpaRequest, SpokeContext, TrackerCommand, TrackerInput, TrackerManager,
+};
 pub use motion::{ImmMotionModel, MotionModel};
 pub use tracker::{
     ActiveTarget, CandidateSource, ProcessResult, TargetCandidate, TargetStatus, TargetTracker,

@@ -353,10 +353,6 @@ pub struct TargetTracker {
     id_base: u64,
     /// Maximum ID offset before wrap (RADAR_ID_MULTIPLIER - 1)
     max_id_offset: u64,
-    /// Spokes per revolution (for revolution detection)
-    spokes_per_revolution: u16,
-    /// Last spoke angle seen
-    last_angle: u16,
     /// Revolution counter
     revolution_count: u64,
     /// Statistics for current revolution
@@ -365,28 +361,24 @@ pub struct TargetTracker {
 
 impl TargetTracker {
     /// Create a new tracker for merged mode
-    pub fn new_merged(spokes_per_revolution: u16) -> Self {
+    pub fn new_merged() -> Self {
         TargetTracker {
             active_targets: HashMap::new(),
             next_id: 1,
             id_base: 0,
             max_id_offset: RADAR_ID_MULTIPLIER - 1,
-            spokes_per_revolution,
-            last_angle: 0,
             revolution_count: 0,
             stats: TrackerStats::default(),
         }
     }
 
     /// Create a new tracker for per-radar mode
-    pub fn new_per_radar(radar_index: usize, spokes_per_revolution: u16) -> Self {
+    pub fn new_per_radar(radar_index: usize) -> Self {
         TargetTracker {
             active_targets: HashMap::new(),
             next_id: 1,
             id_base: (radar_index as u64) * RADAR_ID_MULTIPLIER,
             max_id_offset: RADAR_ID_MULTIPLIER - 1,
-            spokes_per_revolution,
-            last_angle: 0,
             revolution_count: 0,
             stats: TrackerStats::default(),
         }
@@ -404,21 +396,13 @@ impl TargetTracker {
         id
     }
 
-    /// Check for revolution boundary and perform cleanup.
-    /// Returns `true` if a revolution just completed.
-    pub fn check_revolution(&mut self, angle: u16, time: u64) -> bool {
-        // Detect revolution boundary (angle wraps from high to low)
-        let is_boundary =
-            angle < self.last_angle && (self.last_angle - angle) > (self.spokes_per_revolution / 2);
-        if is_boundary {
-            self.on_revolution_complete(time);
-        }
-        self.last_angle = angle;
-        is_boundary
-    }
-
-    /// Handle revolution complete event
-    fn on_revolution_complete(&mut self, _time: u64) {
+    /// Advance the revolution clock and perform the per-revolution cleanup.
+    ///
+    /// Called once per antenna revolution from the spoke stream. The clock
+    /// must not be driven by blob arrivals: in open water a whole sweep can
+    /// pass without a single echo, and every revolution-based timeout —
+    /// lost, delete, deduplication — would stall with it.
+    pub fn complete_revolution(&mut self) {
         self.revolution_count += 1;
 
         // Count targets by status
@@ -862,7 +846,7 @@ mod tests {
 
     #[test]
     fn test_target_id_generation_merged() {
-        let mut tracker = TargetTracker::new_merged(2048);
+        let mut tracker = TargetTracker::new_merged();
         // Merged mode: id_base=0, so IDs are 1, 2, ...
         assert_eq!(tracker.next_target_id(), 1);
         assert_eq!(tracker.next_target_id(), 2);
@@ -870,7 +854,7 @@ mod tests {
 
     #[test]
     fn test_target_id_generation_per_radar() {
-        let mut tracker = TargetTracker::new_per_radar(1, 2048);
+        let mut tracker = TargetTracker::new_per_radar(1);
         // Per-radar mode: radar index 1 has id_base=RADAR_ID_MULTIPLIER
         assert_eq!(tracker.next_target_id(), RADAR_ID_MULTIPLIER + 1);
         assert_eq!(tracker.next_target_id(), RADAR_ID_MULTIPLIER + 2);
@@ -878,7 +862,7 @@ mod tests {
 
     #[test]
     fn test_target_id_wrap() {
-        let mut tracker = TargetTracker::new_merged(2048);
+        let mut tracker = TargetTracker::new_merged();
         tracker.next_id = RADAR_ID_MULTIPLIER - 1;
         // Merged mode: max_id_offset=RADAR_ID_MULTIPLIER-1, wraps to 1
         assert_eq!(tracker.next_target_id(), RADAR_ID_MULTIPLIER - 1);
@@ -921,7 +905,7 @@ mod tests {
 
     #[test]
     fn test_new_acquiring_target() {
-        let mut tracker = TargetTracker::new_merged(2048);
+        let mut tracker = TargetTracker::new_merged();
 
         let candidate = make_candidate(52.0, 4.0, 1000);
         let result = tracker.process_candidate(candidate);
@@ -936,7 +920,7 @@ mod tests {
 
     #[test]
     fn test_promote_to_tracking() {
-        let mut tracker = TargetTracker::new_merged(2048);
+        let mut tracker = TargetTracker::new_merged();
 
         // First 3 candidates build up the track but remain Acquiring
         for i in 0..3 {
@@ -958,7 +942,7 @@ mod tests {
 
     #[test]
     fn test_active_target_matching() {
-        let mut tracker = TargetTracker::new_merged(2048);
+        let mut tracker = TargetTracker::new_merged();
 
         // Create an active target via promotion
         let candidate1 = make_candidate(52.0, 4.0, 1000);
@@ -979,7 +963,7 @@ mod tests {
 
     #[test]
     fn test_acquiring_timeout() {
-        let mut tracker = TargetTracker::new_merged(2048);
+        let mut tracker = TargetTracker::new_merged();
 
         // Add a candidate - now creates an active target in Acquiring status
         let candidate = make_candidate(52.0, 4.0, 1000);
@@ -987,9 +971,8 @@ mod tests {
         assert_eq!(tracker.active_count(), 1);
 
         // Simulate 3 revolutions passing without updates (LOST_REVOLUTION_COUNT = 3)
-        for i in 0..3 {
-            tracker.check_revolution(2000, 2000 + i * 3000);
-            tracker.check_revolution(100, 3000 + i * 3000);
+        for _ in 0..3 {
+            tracker.complete_revolution();
         }
 
         // Check - acquiring targets should become lost after 3 revolutions
@@ -1002,24 +985,8 @@ mod tests {
     }
 
     #[test]
-    fn test_revolution_detection() {
-        let mut tracker = TargetTracker::new_merged(2048);
-
-        // Simulate spokes without wrap
-        tracker.check_revolution(100, 1000);
-        tracker.check_revolution(200, 1000);
-        tracker.check_revolution(300, 1000);
-        assert_eq!(tracker.revolution_count, 0);
-
-        // Wrap around (high to low = revolution complete)
-        tracker.check_revolution(2000, 1000);
-        tracker.check_revolution(100, 2000);
-        assert_eq!(tracker.revolution_count, 1);
-    }
-
-    #[test]
     fn test_no_match_too_far_apart() {
-        let mut tracker = TargetTracker::new_merged(2048);
+        let mut tracker = TargetTracker::new_merged();
 
         // First candidate - creates active target
         let candidate1 = make_candidate(52.0, 4.0, 1000);
@@ -1035,7 +1002,7 @@ mod tests {
 
     #[test]
     fn test_active_target_update() {
-        let mut tracker = TargetTracker::new_merged(2048);
+        let mut tracker = TargetTracker::new_merged();
 
         // Create active target via promotion
         tracker.process_candidate(make_candidate(52.0, 4.0, 0));
@@ -1065,7 +1032,7 @@ mod tests {
 
     #[test]
     fn test_target_lost_timeout() {
-        let mut tracker = TargetTracker::new_merged(2048);
+        let mut tracker = TargetTracker::new_merged();
 
         // 4 updates to reach Tracking (last update at 9000ms)
         for i in 0..4u64 {
@@ -1077,17 +1044,15 @@ mod tests {
         assert_eq!(target.status, TargetStatus::Tracking);
 
         // Simulate 2 revolutions without update - should still be Tracking
-        for i in 0..2 {
-            tracker.check_revolution(2000, 10_000 + i * 3000);
-            tracker.check_revolution(100, 11_000 + i * 3000);
+        for _ in 0..2 {
+            tracker.complete_revolution();
         }
         let (deleted, lost) = tracker.check_timeouts(16_000);
         assert!(deleted.is_empty());
         assert!(lost.is_empty());
 
         // One more revolution (total 3) - should become Lost
-        tracker.check_revolution(2000, 16_000);
-        tracker.check_revolution(100, 17_000);
+        tracker.complete_revolution();
         let (deleted, lost) = tracker.check_timeouts(18_000);
         assert!(deleted.is_empty());
         assert_eq!(lost.len(), 1);
@@ -1102,7 +1067,7 @@ mod tests {
 
     #[test]
     fn test_target_deleted_timeout() {
-        let mut tracker = TargetTracker::new_merged(2048);
+        let mut tracker = TargetTracker::new_merged();
 
         // 4 updates to reach Tracking (last update at 9000ms)
         for i in 0..4u64 {
@@ -1112,18 +1077,16 @@ mod tests {
         assert_eq!(tracker.active_count(), 1);
 
         // 3 revolutions → lost
-        for i in 0..3 {
-            tracker.check_revolution(2000, 10_000 + i * 3000);
-            tracker.check_revolution(100, 11_000 + i * 3000);
+        for _ in 0..3 {
+            tracker.complete_revolution();
         }
         let (deleted, lost) = tracker.check_timeouts(19_000);
         assert!(deleted.is_empty());
         assert_eq!(lost.len(), 1);
 
         // 4 more revolutions after lost → deleted (DELETE_REVOLUTION_COUNT = 4)
-        for i in 0..4 {
-            tracker.check_revolution(2000, 19_000 + i * 3000);
-            tracker.check_revolution(100, 20_000 + i * 3000);
+        for _ in 0..4 {
+            tracker.complete_revolution();
         }
         let (deleted, _) = tracker.check_timeouts(31_000);
         assert_eq!(deleted.len(), 1);
@@ -1132,7 +1095,7 @@ mod tests {
 
     #[test]
     fn test_target_recovers_from_lost() {
-        let mut tracker = TargetTracker::new_merged(2048);
+        let mut tracker = TargetTracker::new_merged();
 
         // MARPA target (counts as update 1) + 3 more updates to reach Tracking
         let candidate = make_candidate(52.0, 4.0, 0);
@@ -1148,9 +1111,8 @@ mod tests {
         let predicted = target.predict_position(21_000);
 
         // 3 revolutions without update → lost
-        for i in 0..3 {
-            tracker.check_revolution(2000, 10_000 + i * 3000);
-            tracker.check_revolution(100, 11_000 + i * 3000);
+        for _ in 0..3 {
+            tracker.complete_revolution();
         }
         let (_, lost) = tracker.check_timeouts(19_000);
         assert_eq!(lost.len(), 1);
@@ -1168,7 +1130,7 @@ mod tests {
 
     #[test]
     fn test_stationary_target_extended_timeout() {
-        let mut tracker = TargetTracker::new_merged(2048);
+        let mut tracker = TargetTracker::new_merged();
 
         // Create a stationary target (buoy) - same position for multiple updates
         // Need MIN_UPDATES_FOR_STATIONARY (5) updates at same position
@@ -1190,9 +1152,8 @@ mod tests {
 
         // Simulate 5 revolutions - normal target would be lost after 3
         // But stationary target has 10 revolution timeout, so should still be tracking
-        for i in 0..5 {
-            tracker.check_revolution(2000, 16_000 + i * 3000);
-            tracker.check_revolution(100, 17_000 + i * 3000);
+        for _ in 0..5 {
+            tracker.complete_revolution();
         }
         let (deleted, lost) = tracker.check_timeouts(35_000);
         assert!(deleted.is_empty());
@@ -1201,9 +1162,8 @@ mod tests {
         assert_eq!(target.status, TargetStatus::Tracking);
 
         // Simulate 5 more revolutions (total 10) - should be lost
-        for i in 0..5 {
-            tracker.check_revolution(2000, 32_000 + i * 3000);
-            tracker.check_revolution(100, 33_000 + i * 3000);
+        for _ in 0..5 {
+            tracker.complete_revolution();
         }
         let (deleted, lost) = tracker.check_timeouts(50_000);
         assert!(deleted.is_empty());
@@ -1212,9 +1172,8 @@ mod tests {
         assert_eq!(target.status, TargetStatus::Lost);
 
         // 10 more revolutions after lost → deleted (STATIONARY_DELETE_REVOLUTION_COUNT = 10)
-        for i in 0..10 {
-            tracker.check_revolution(2000, 48_000 + i * 3000);
-            tracker.check_revolution(100, 49_000 + i * 3000);
+        for _ in 0..10 {
+            tracker.complete_revolution();
         }
         let (deleted, _lost) = tracker.check_timeouts(78_000);
         assert_eq!(deleted.len(), 1);
@@ -1228,7 +1187,7 @@ mod tests {
         // With forced position override, the tracker should maintain track
         // through continuous turns by blending measured velocities.
 
-        let mut tracker = TargetTracker::new_merged(2048);
+        let mut tracker = TargetTracker::new_merged();
 
         // Circle parameters (matching emulator world.rs)
         let radius_m = 250.0;
@@ -1347,7 +1306,7 @@ mod tests {
         // for 2 full revolutions of the circle (not radar revolutions).
         // IMM should handle the constant turning better due to multiple motion models
 
-        let mut tracker = TargetTracker::new_merged(2048);
+        let mut tracker = TargetTracker::new_merged();
 
         // Circle parameters (matching emulator world.rs)
         let radius_m = 250.0;
@@ -1461,7 +1420,7 @@ mod tests {
         // This mimics real emulator behavior where guard zones may only cover
         // part of the circle.
 
-        let mut tracker = TargetTracker::new_merged(2048);
+        let mut tracker = TargetTracker::new_merged();
 
         // Circle parameters (matching emulator world.rs)
         let radius_m = 250.0;
@@ -1575,7 +1534,7 @@ mod tests {
         // MARPA targets go directly to active status and should be tracked
         // through continuous turns for 2 full circles.
 
-        let mut tracker = TargetTracker::new_merged(2048);
+        let mut tracker = TargetTracker::new_merged();
 
         // Circle parameters (matching emulator world.rs)
         let radius_m = 250.0;
@@ -1744,7 +1703,7 @@ mod tests {
         // After initial acquisition (revs 0-2), the target becomes established and then
         // the normal speed max_dist (58m) can't catch the 62m movements.
         {
-            let mut tracker = TargetTracker::new_merged(2048);
+            let mut tracker = TargetTracker::new_merged();
 
             let mut new_target_count = 0;
             let mut miss_after_established = 0;
@@ -1788,7 +1747,7 @@ mod tests {
         // Test 2: Medium speed setting - should TRACK fast targets continuously
         // Medium speed (40 kn) matches target speed (40 kn), so max_dist = 93m catches 62m moves
         {
-            let mut tracker = TargetTracker::new_merged(2048);
+            let mut tracker = TargetTracker::new_merged();
 
             let mut update_count = 0;
             let mut promoted_id: Option<u64> = None;
@@ -1841,7 +1800,7 @@ mod tests {
         // Test 3: Fast speed setting - should definitely TRACK fast targets continuously
         // Fast speed (50 kn) exceeds target speed (40 kn), so max_dist = 116m easily catches 62m moves
         {
-            let mut tracker = TargetTracker::new_merged(2048);
+            let mut tracker = TargetTracker::new_merged();
 
             let mut update_count = 0;
             let mut promoted_id: Option<u64> = None;
@@ -1908,7 +1867,7 @@ mod tests {
         // separation `sqrt(24² + 86²)` ≈ 89m, inside the merge ring.
         // Only the new motion-aware COG exemption keeps them distinct.
         // Removing the exemption causes this test to fail.
-        let mut tracker = TargetTracker::new_merged(2048);
+        let mut tracker = TargetTracker::new_merged();
         let max_speed_ms = 5.0;
         let radar = Some(GeoPosition::new(52.0, 4.0));
 
@@ -1963,8 +1922,7 @@ mod tests {
         );
 
         // Force a revolution-complete event to trigger the dedup pass.
-        tracker.check_revolution(2000, 12_000);
-        tracker.check_revolution(100, 13_000);
+        tracker.complete_revolution();
 
         // Both vessels must still be present.
         assert_eq!(
@@ -1982,7 +1940,7 @@ mod tests {
         // heading. Mature tracks are the ones a navigator is most
         // likely to rely on, so the lifetime turn-rejection guarantee
         // is what protects them from a false association.
-        let mut tracker = TargetTracker::new_merged(2048);
+        let mut tracker = TargetTracker::new_merged();
         let max_speed_ms = TEST_MAX_SPEED_MS;
 
         // 10 clean revolutions heading east at ~10 m/s — well past the

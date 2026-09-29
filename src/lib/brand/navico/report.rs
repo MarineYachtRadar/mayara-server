@@ -368,11 +368,11 @@ impl NavicoReportReceiver {
         };
 
         let control_update_rx = info.control_update_subscribe();
-        let blob_tx = radars.get_blob_tx();
+        let arpa_tx = radars.get_arpa_tx();
 
         let wire_to_legend = wire_to_legend(&info.get_legend());
 
-        let common = CommonRadar::new(args, key, info, radars, control_update_rx, replay, blob_tx);
+        let common = CommonRadar::new(args, key, info, radars, control_update_rx, replay, arpa_tx);
 
         let now = Instant::now();
         NavicoReportReceiver {

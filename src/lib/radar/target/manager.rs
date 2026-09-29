@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 use std::f64::consts::TAU;
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
 use tokio::sync::{broadcast, mpsc};
@@ -21,6 +21,11 @@ use crate::stream::{NotificationMethod, NotificationState, NotificationValue, Si
 /// the motion estimate is too green to be worth reporting, so a target
 /// that dies young is never seen by a client and never alarms.
 const MIN_BROADCAST_UPDATE_COUNT: u32 = 4;
+
+/// How long the radar driving the merged revolution clock may stay silent
+/// before another radar is allowed to take it over. Long enough that a
+/// slow antenna between sweeps is never mistaken for a departed radar.
+const MERGED_CLOCK_TAKEOVER: Duration = Duration::from_secs(30);
 
 /// Guard zones a radar carries, numbered 1..=GUARD_ZONE_COUNT on the wire.
 /// Zone 0 is reserved for manual MARPA acquisition and never alarms.
@@ -78,6 +83,19 @@ pub struct BlobMessage {
     pub context: SpokeContext,
 }
 
+/// What a radar feeds the tracker manager.
+pub enum TrackerInput {
+    /// A blob the detector completed on this radar.
+    Blob(BlobMessage),
+    /// The radar's antenna finished a revolution. Drives every
+    /// revolution-based timeout, so it is sent from the spoke stream and
+    /// arrives whether or not the sweep produced any echoes.
+    Revolution {
+        radar_key: String,
+        radar_position: Option<GeoPosition>,
+    },
+}
+
 /// MARPA (Manual Radar Plotting Aid) request from user click
 #[derive(Clone, Debug)]
 pub struct MarpaRequest {
@@ -126,6 +144,9 @@ pub struct TrackerManager {
     sk_client_tx: broadcast::Sender<SignalKDelta>,
     /// Command receiver for MARPA requests and control changes
     command_rx: mpsc::Receiver<TrackerCommand>,
+    /// Which radar drives the shared tracker's revolution clock in merged
+    /// mode, and when it last did. Unused when `merge_mode` is false.
+    merged_clock: Option<(String, Instant)>,
     /// Whether `notifications.radar.<key>.guardZone.<n>` currently stands
     /// raised, per (radar_key, [`guard_zone_index`]).
     ///
@@ -148,7 +169,7 @@ impl TrackerManager {
         let manager = TrackerManager {
             per_radar_trackers: HashMap::new(),
             shared_tracker: if merge_mode {
-                Some(TargetTracker::new_merged(2048))
+                Some(TargetTracker::new_merged())
             } else {
                 None
             },
@@ -157,6 +178,7 @@ impl TrackerManager {
             next_radar_index: 1,
             sk_client_tx,
             command_rx,
+            merged_clock: None,
             guard_zone_alarm: HashMap::new(),
         };
 
@@ -258,24 +280,19 @@ impl TrackerManager {
     }
 
     /// Get or create tracker for a radar
-    fn get_or_create_tracker(
-        &mut self,
-        radar_key: &str,
-        spokes_per_revolution: u16,
-    ) -> &mut TargetTracker {
+    fn get_or_create_tracker(&mut self, radar_key: &str) -> &mut TargetTracker {
         if self.merge_mode {
-            // Update spokes if needed
             if let Some(ref mut tracker) = self.shared_tracker {
                 return tracker;
             }
             // Should not happen, but create if missing
-            self.shared_tracker = Some(TargetTracker::new_merged(spokes_per_revolution));
+            self.shared_tracker = Some(TargetTracker::new_merged());
             self.shared_tracker.as_mut().unwrap()
         } else {
             // Per-radar mode
             if !self.per_radar_trackers.contains_key(radar_key) {
                 let index = self.get_radar_index(radar_key);
-                let tracker = TargetTracker::new_per_radar(index, spokes_per_revolution);
+                let tracker = TargetTracker::new_per_radar(index);
                 self.per_radar_trackers
                     .insert(radar_key.to_string(), tracker);
             }
@@ -334,10 +351,7 @@ impl TrackerManager {
         };
 
         // Get tracker and process
-        let tracker = self.get_or_create_tracker(&msg.radar_key, ctx.spokes_per_revolution);
-
-        // Check for revolution boundary — batch-broadcast all targets once per revolution
-        let revolution_completed = tracker.check_revolution(ctx.angle, ctx.time);
+        let tracker = self.get_or_create_tracker(&msg.radar_key);
 
         let result = tracker.process_candidate(candidate);
 
@@ -372,10 +386,40 @@ impl TrackerManager {
         if let Some((target_id, zone)) = promoted_in_zone {
             self.raise_guard_zone_alarm(&msg.radar_key, zone, target_id);
         }
+    }
 
-        // On revolution boundary, send a single batched delta with all tracking targets
-        if revolution_completed {
-            self.broadcast_all_targets(&msg.radar_key, radar_position.as_ref());
+    /// Advance a radar's revolution clock and ship the batched target update.
+    ///
+    /// Driven by the antenna rather than by blob arrivals, so the lost and
+    /// delete timeouts, deduplication and the per-revolution broadcast all
+    /// keep running through a sweep that produced no echoes at all.
+    pub fn process_revolution(&mut self, radar_key: &str, radar_position: Option<GeoPosition>) {
+        if self.merge_mode && !self.drives_merged_clock(radar_key) {
+            return;
+        }
+        self.get_or_create_tracker(radar_key).complete_revolution();
+        self.broadcast_all_targets(radar_key, radar_position.as_ref());
+    }
+
+    /// Whether `radar_key` may advance the shared tracker's clock.
+    ///
+    /// In merged mode every radar feeds one tracker, so only one of them
+    /// can drive its revolutions — a dual-range antenna reporting twice per
+    /// turn would otherwise halve every timeout. The first radar to report
+    /// takes the clock and keeps it until it falls silent.
+    fn drives_merged_clock(&mut self, radar_key: &str) -> bool {
+        let now = Instant::now();
+        match self.merged_clock {
+            Some((ref owner, ref mut last)) if owner == radar_key => {
+                *last = now;
+                true
+            }
+            Some((_, last)) if now.duration_since(last) < MERGED_CLOCK_TAKEOVER => false,
+            _ => {
+                log::debug!("Radar {} now drives the merged revolution clock", radar_key);
+                self.merged_clock = Some((radar_key.to_string(), now));
+                true
+            }
         }
     }
 
@@ -426,8 +470,7 @@ impl TrackerManager {
             source: CandidateSource::GuardZone(0),                     // 0 = manual/MARPA
         };
 
-        // Get tracker (use default 2048 spokes if not yet created)
-        let tracker = self.get_or_create_tracker(&request.radar_key, 2048);
+        let tracker = self.get_or_create_tracker(&request.radar_key);
 
         // MARPA targets go directly to active - user explicitly clicked on them
         let target_id = tracker.add_active_target(&candidate);
@@ -498,8 +541,8 @@ impl TrackerManager {
         deleted
     }
 
-    /// Run the tracker manager, receiving blobs and MARPA requests
-    pub async fn run(mut self, mut blob_rx: mpsc::Receiver<BlobMessage>) {
+    /// Run the tracker manager, receiving radar input and MARPA requests
+    pub async fn run(mut self, mut tracker_rx: mpsc::Receiver<TrackerInput>) {
         use std::time::{Duration, Instant};
 
         log::info!(
@@ -523,8 +566,13 @@ impl TrackerManager {
             }
 
             tokio::select! {
-                Some(msg) = blob_rx.recv() => {
-                    self.process_blob(msg);
+                Some(input) = tracker_rx.recv() => {
+                    match input {
+                        TrackerInput::Blob(msg) => self.process_blob(msg),
+                        TrackerInput::Revolution { radar_key, radar_position } => {
+                            self.process_revolution(&radar_key, radar_position);
+                        }
+                    }
                 }
                 Some(command) = self.command_rx.recv() => {
                     match command {
@@ -1041,7 +1089,7 @@ mod tests {
             source: CandidateSource::GuardZone(1),
         };
 
-        let mut tracker = super::super::tracker::TargetTracker::new_merged(2048);
+        let mut tracker = super::super::tracker::TargetTracker::new_merged();
 
         // Process 4 times to promote (requires 4 updates)
         tracker.process_candidate(candidate);
@@ -1220,6 +1268,72 @@ mod tests {
         );
     }
 
+    /// Reproduces the stalled clock of #723. Every echo in that capture sat
+    /// on one bearing, so the blob-driven wrap detector never fired: one
+    /// tracker counted a single revolution across 470 s, and a target was
+    /// still being reported lost "after 3 revolutions" 13 minutes on.
+    /// `feed_guard_zone_target` feeds one bearing, which is that case.
+    #[test]
+    fn revolution_clock_ages_targets_when_no_echo_ever_wraps() {
+        let mut manager = make_test_manager(false);
+        feed_guard_zone_target(&mut manager, "nav1", 0, 1, 4);
+        let target_id = first_target_id(&manager, "nav1");
+
+        // Time alone must not age the target: the timeouts are counted in
+        // antenna revolutions, and no revolution has been reported yet.
+        manager.check_all_timeouts();
+        assert_eq!(
+            manager.per_radar_trackers["nav1"]
+                .get_target(target_id)
+                .unwrap()
+                .status,
+            TargetStatus::Tracking
+        );
+
+        // Revolutions that produced no echo at all still have to be counted,
+        // or a lost target coasts for minutes (LOST_REVOLUTION_COUNT = 3).
+        for _ in 0..3 {
+            manager.process_revolution("nav1", None);
+        }
+        manager.check_all_timeouts();
+
+        assert_eq!(
+            manager.per_radar_trackers["nav1"]
+                .get_target(target_id)
+                .unwrap()
+                .status,
+            TargetStatus::Lost
+        );
+    }
+
+    #[test]
+    fn merged_clock_is_driven_by_one_radar_only() {
+        let mut manager = make_test_manager(true);
+        feed_guard_zone_target(&mut manager, "nav1", 0, 1, 4);
+        let target_id = first_target_id(&manager, "nav1");
+        let status = |m: &TrackerManager| {
+            m.shared_tracker
+                .as_ref()
+                .unwrap()
+                .get_target(target_id)
+                .unwrap()
+                .status
+        };
+
+        // A dual-range antenna reports a revolution per range. Counting both
+        // would reach LOST_REVOLUTION_COUNT in half the turns it should.
+        for _ in 0..2 {
+            manager.process_revolution("nav1", None);
+            manager.process_revolution("nav2", None);
+        }
+        manager.check_all_timeouts();
+        assert_eq!(status(&manager), TargetStatus::Tracking);
+
+        manager.process_revolution("nav1", None);
+        manager.check_all_timeouts();
+        assert_eq!(status(&manager), TargetStatus::Lost);
+    }
+
     #[test]
     fn guard_zone_clears_once_the_zone_is_empty() {
         let (mut manager, rx) = make_test_manager_with_rx();
@@ -1349,7 +1463,7 @@ mod tests {
 
         // Target starts ~400m north and closes due south at ~10 m/s for
         // 6 clean revolutions (the Kalman filter has fully converged).
-        let mut tracker = TargetTracker::new_merged(2048);
+        let mut tracker = TargetTracker::new_merged();
         let lat_step = 30.0 / super::super::METERS_PER_DEGREE_LATITUDE;
         let start_lat = 52.0 + 400.0 / super::super::METERS_PER_DEGREE_LATITUDE;
         for i in 0..6u64 {

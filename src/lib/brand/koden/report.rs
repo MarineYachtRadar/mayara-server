@@ -31,7 +31,7 @@ impl KodenReportReceiver {
         };
 
         let control_update_rx = info.control_update_subscribe();
-        let blob_tx = radars.get_blob_tx();
+        let arpa_tx = radars.get_arpa_tx();
 
         let mut common = CommonRadar::new(
             args,
@@ -40,7 +40,7 @@ impl KodenReportReceiver {
             radars,
             control_update_rx,
             args.is_replay(),
-            blob_tx,
+            arpa_tx,
         );
         // Coalesce ~1/32 of a revolution of spokes per broadcast so each
         // compression / WebSocket-framing cycle amortises across the

@@ -173,7 +173,7 @@ impl FurunoReportReceiver {
         let wire_to_legend = [initial_lut, initial_lut];
 
         let control_update_rx = info.control_update_subscribe();
-        let blob_tx = radars.get_blob_tx();
+        let arpa_tx = radars.get_arpa_tx();
 
         let mut common = CommonRadar::new(
             args,
@@ -182,7 +182,7 @@ impl FurunoReportReceiver {
             radars,
             control_update_rx,
             args.is_replay(),
-            blob_tx,
+            arpa_tx,
         );
         // Coalesce ~1/32 of a revolution of spokes per broadcast. Furuno's
         // per-UDP sweep_count is wire-driven (variable), so batching pulls
@@ -222,7 +222,7 @@ impl FurunoReportReceiver {
     pub(crate) fn set_range_b(&mut self, args: &Cli, radars: &SharedRadars, info_b: RadarInfo) {
         let key_b = info_b.key();
         let control_update_rx_b = info_b.control_update_subscribe();
-        let blob_tx_b = radars.get_blob_tx();
+        let arpa_tx_b = radars.get_arpa_tx();
 
         let mut common_b = CommonRadar::new(
             args,
@@ -231,7 +231,7 @@ impl FurunoReportReceiver {
             radars.clone(),
             control_update_rx_b,
             args.is_replay(),
-            blob_tx_b,
+            arpa_tx_b,
         );
         let target = common_b.info.spokes_per_revolution.div_ceil(32) as usize;
         common_b.set_spoke_batch_threshold(target);
