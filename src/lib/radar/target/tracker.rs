@@ -788,6 +788,11 @@ impl TargetTracker {
         self.active_targets.get(&id)
     }
 
+    /// Get a specific active target by ID for modification
+    pub(crate) fn get_target_mut(&mut self, id: u64) -> Option<&mut ActiveTarget> {
+        self.active_targets.get_mut(&id)
+    }
+
     /// Remove a target by ID (cancel tracking)
     /// Returns true if target was found and removed
     pub fn remove_target(&mut self, id: u64) -> bool {

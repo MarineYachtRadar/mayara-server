@@ -371,7 +371,18 @@ impl TrackerManager {
         if let ProcessResult::Promoted(target_id) = result
             && let Some(target) = tracker.get_target(target_id)
         {
-            promoted_in_zone = target.source_zone.map(|zone| (target_id, zone));
+            // A target acquired in a guard zone only alarms if the echo that
+            // confirmed it is still in that zone. A track that drifted out
+            // while it was collecting its updates is not an intrusion, and
+            // one that promotes elsewhere entirely was never the same
+            // object. Dropping `source_zone` rather than only skipping the
+            // alarm also keeps the zone from counting as occupied in
+            // `refresh_guard_zone_alarms`, which would pin another target's
+            // alarm up for the rest of this track's life.
+            promoted_in_zone = target
+                .source_zone
+                .filter(|zone| msg.blob.in_guard_zones.contains(zone))
+                .map(|zone| (target_id, zone));
             let target_api = active_target_to_api(target, radar_position.as_ref());
             let mut delta = SignalKDelta::new();
             delta.add_target_update(&msg.radar_key, target_id, Some(target_api));
@@ -385,6 +396,8 @@ impl TrackerManager {
         // clutter, not an intrusion.
         if let Some((target_id, zone)) = promoted_in_zone {
             self.raise_guard_zone_alarm(&msg.radar_key, zone, target_id);
+        } else if let ProcessResult::Promoted(target_id) = result {
+            self.clear_source_zone(&msg.radar_key, target_id);
         }
     }
 
@@ -420,6 +433,25 @@ impl TrackerManager {
                 self.merged_clock = Some((radar_key.to_string(), now));
                 true
             }
+        }
+    }
+
+    /// Forget which guard zone acquired a target, so neither it nor the
+    /// occupancy sweep can raise or hold that zone's alarm.
+    fn clear_source_zone(&mut self, radar_key: &str, target_id: u64) {
+        let tracker = if self.merge_mode {
+            self.shared_tracker.as_mut()
+        } else {
+            self.per_radar_trackers.get_mut(radar_key)
+        };
+        if let Some(target) = tracker.and_then(|t| t.get_target_mut(target_id))
+            && let Some(zone) = target.source_zone.take()
+        {
+            log::info!(
+                "Target {} promoted outside guard zone {}; not alarming",
+                target_id,
+                zone
+            );
         }
     }
 
@@ -1174,6 +1206,16 @@ mod tests {
         tracker.get_active_targets().next().unwrap().id
     }
 
+    /// The id of the most recently created target for `radar_key`.
+    fn last_target_id(manager: &TrackerManager, radar_key: &str) -> u64 {
+        let tracker = if manager.merge_mode {
+            manager.shared_tracker.as_ref().unwrap()
+        } else {
+            &manager.per_radar_trackers[radar_key]
+        };
+        tracker.get_active_targets().map(|t| t.id).max().unwrap()
+    }
+
     /// Reduce the emitted deltas to the `notifications.*` (path, state)
     /// pairs a Signal K client would see.
     fn notifications(deltas: &[SignalKDelta]) -> Vec<(String, String)> {
@@ -1268,6 +1310,69 @@ mod tests {
         );
     }
 
+    /// Feed one blob that matches the track `feed_guard_zone_target` built
+    /// but lies outside every guard zone, taking it to its 4th update and
+    /// so to promotion.
+    fn promote_outside_guard_zone(manager: &mut TrackerManager, radar_key: &str, spoke: u16) {
+        let mut blob = make_blob(spoke, 250, 30.0);
+        blob.in_guard_zones = Vec::new();
+        manager.process_blob(BlobMessage {
+            radar_key: radar_key.to_string(),
+            blob,
+            context: make_context(10_000, spoke),
+        });
+    }
+
+    #[test]
+    fn guard_zone_stays_silent_when_promotion_happens_outside_the_zone() {
+        let (mut manager, rx) = make_test_manager_with_rx();
+        // Three hits inside zone 1, then the confirming hit outside it: the
+        // track was never established as an intrusion.
+        feed_guard_zone_target(&mut manager, "nav1", 0, 1, 3);
+        promote_outside_guard_zone(&mut manager, "nav1", 0);
+
+        // The track really was promoted — it is the alarm that is withheld,
+        // not the confirmation.
+        let target_id = first_target_id(&manager, "nav1");
+        assert_eq!(
+            manager.per_radar_trackers["nav1"]
+                .get_target(target_id)
+                .unwrap()
+                .status,
+            TargetStatus::Tracking
+        );
+        assert!(notifications(&drain_sk_deltas(rx)).is_empty());
+    }
+
+    #[test]
+    fn guard_zone_promoted_outside_does_not_hold_the_alarm_up() {
+        let (mut manager, rx) = make_test_manager_with_rx();
+        feed_guard_zone_target(&mut manager, "nav1", 0, 1, 3);
+        promote_outside_guard_zone(&mut manager, "nav1", 0);
+
+        // A real intrusion on another bearing raises zone 1; deleting it has
+        // to clear the zone again. It cannot while the track promoted
+        // outside still counts as occupying it.
+        feed_guard_zone_target(&mut manager, "nav1", 1024, 1, 4);
+        let intruder = last_target_id(&manager, "nav1");
+        assert!(manager.delete_target("nav1", intruder));
+        manager.check_all_timeouts();
+
+        assert_eq!(
+            notifications(&drain_sk_deltas(rx)),
+            vec![
+                (
+                    "notifications.radar.nav1.guardZone.1".to_string(),
+                    "alert".to_string()
+                ),
+                (
+                    "notifications.radar.nav1.guardZone.1".to_string(),
+                    "normal".to_string()
+                ),
+            ]
+        );
+    }
+
     /// Reproduces the stalled clock of #723. Every echo in that capture sat
     /// on one bearing, so the blob-driven wrap detector never fired: one
     /// tracker counted a single revolution across 470 s, and a target was
@@ -1337,12 +1442,12 @@ mod tests {
     /// Reproduces ghost target 100000041 of #723: acquired at 1,933 m on
     /// relative bearing 196 degrees, inside a 1,500-2,000 m guard zone, then
     /// "promoted" five minutes later at 75 m on bearing 20 degrees — own-ship
-    /// clutter, 1.9 km from where the track was acquired. Capping the
-    /// coasting gate keeps the two apart, so the clutter echo never confirms
-    /// the track at all.
+    /// clutter, 1.9 km from where the track was acquired — and alarming the
+    /// zone it had long left. Capping the coasting gate keeps the two apart,
+    /// so the clutter echo never confirms the track at all.
     #[test]
     fn a_clutter_echo_kilometres_away_cannot_confirm_a_guard_zone_track() {
-        let mut manager = make_test_manager(false);
+        let (mut manager, rx) = make_test_manager_with_rx();
 
         // Range 4000 m over 512 pixels: 1 pixel is 7.8 m.
         let ctx_at = |time: u64, spoke: u16| SpokeContext {
@@ -1376,6 +1481,7 @@ mod tests {
             TargetStatus::Acquiring,
             "clutter 1.9 km away must not confirm the track"
         );
+        assert!(notifications(&drain_sk_deltas(rx)).is_empty());
     }
 
     #[test]
