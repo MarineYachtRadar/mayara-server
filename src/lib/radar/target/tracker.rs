@@ -4,7 +4,7 @@
 //! active (confirmed) and acquiring (potential) target lists.
 
 use std::collections::HashMap;
-use std::f64::consts::TAU;
+use std::f64::consts::{FRAC_PI_2, TAU};
 
 use super::motion::{ImmMotionModel, MotionModel};
 use super::{METERS_PER_DEGREE_LATITUDE, PositionCovariance, meters_per_degree_longitude};
@@ -57,6 +57,15 @@ const MIN_MATCH_DISTANCE_M: f64 = 50.0;
 /// If a target can move at max_speed for delta_time, it could be anywhere
 /// within max_speed * delta_time. We use 1.5x to account for prediction error.
 const MATCH_DISTANCE_SPEED_MULTIPLIER: f64 = 1.5;
+
+/// How many standard deviations of measurement error the match gate allows
+/// on each axis, on top of how far the target could have travelled.
+///
+/// Two covers about 95% of the scatter on one axis. Going wider buys very
+/// little — the tail is thin — while costing real discrimination between
+/// two vessels abeam of each other, which at long range are already close
+/// to a beam width apart and hard enough to tell apart.
+const GATE_SIGMAS: f64 = 2.0;
 
 /// Upper bound (seconds) on the coasting time that sizes the match gate.
 ///
@@ -318,10 +327,6 @@ impl ActiveTarget {
     /// Predict position at given time using motion model
     pub fn predict_position(&self, time: u64) -> GeoPosition {
         self.motion_model.predict(time)
-    }
-
-    fn get_uncertainty(&self) -> f64 {
-        self.motion_model.get_uncertainty()
     }
 
     /// Check if target is considered stationary (very low speed, enough updates)
@@ -682,10 +687,16 @@ impl TargetTracker {
         }
     }
 
-    /// Try to match candidate against active targets
-    /// Returns the ID of the closest matching target within threshold
+    /// Try to match candidate against active targets.
+    /// Returns the ID of the target the candidate fits best, if any.
     fn match_active_target(&self, candidate: &TargetCandidate) -> Option<u64> {
         let mut best_match: Option<(u64, f64)> = None;
+
+        // The gate is an ellipse aligned with the radar's line of sight, so
+        // resolve every offset along and across that line.
+        let sight = candidate
+            .radar_position
+            .map(|radar| calculate_bearing(&radar, &candidate.position));
 
         for (id, target) in &self.active_targets {
             // Stop coasting the association at MAX_MATCH_COAST_S: both the
@@ -695,52 +706,75 @@ impl TargetTracker {
             // would happily adopt whatever vessel it landed on.
             let match_time = candidate.time.min(target.last_update + MAX_MATCH_COAST_MS);
             let predicted_pos = target.predict_position(match_time);
-            let uncertainty = target.get_uncertainty();
-            let distance = calculate_distance(&predicted_pos, &candidate.position);
-
             let delta_time_s = (match_time.saturating_sub(target.last_update)) as f64 / 1000.0;
 
-            // Physics-based max distance: how far could the target have moved?
-            // Use max_target_speed_ms from candidate (user-configured setting)
-            // Multiply by 1.5 to account for prediction error when target maneuvers
-            let speed_based_dist =
+            // How far the target itself could have travelled since it was
+            // last seen. The 1.5 multiplier covers prediction error while it
+            // manoeuvres. This term is the same in every direction.
+            let travel =
                 candidate.max_target_speed_ms * delta_time_s * MATCH_DISTANCE_SPEED_MULTIPLIER;
 
-            // Physics-based max distance: how far could a target at max_target_speed
-            // have moved in delta_time? The 1.5 multiplier accounts for:
-            // - Prediction error when target is maneuvering
-            // - Measurement noise in position estimates
-            let max_dist = speed_based_dist.max(MIN_MATCH_DISTANCE_M);
+            let normalized = match sight {
+                Some(bearing) => {
+                    // ...plus how far the measurement itself could be out,
+                    // which is a different distance along the beam than
+                    // across it. Beyond a few hundred metres the cross-range
+                    // term dominates: at 5 km a beam width is around 450 m,
+                    // while the range is still good to a few metres. A
+                    // circle wide enough for the one is far too loose for
+                    // the other.
+                    let radial = travel
+                        + GATE_SIGMAS
+                            * candidate.position_covariance.variance_along(bearing).sqrt();
+                    let cross = travel
+                        + GATE_SIGMAS
+                            * candidate
+                                .position_covariance
+                                .variance_along(bearing + FRAC_PI_2)
+                                .sqrt();
+                    let (offset_radial, offset_cross) =
+                        resolve_offset(&predicted_pos, &candidate.position, bearing);
 
-            // Match threshold: physics-based max_dist determines how far a target
-            // could have moved at max_target_speed. This provides the primary constraint
-            // for matching - if a target is beyond max_dist, it's moving faster than
-            // the configured ArpaDetectMaxSpeed and shouldn't be matched.
-            //
-            // Note: Kalman uncertainty is NOT used to restrict matching because:
-            // 1. It can be artificially low in early tracking
-            // 2. Even converged, uncertainty reflects model fit, not physical limits
-            // Using min(uncertainty, max_dist) would incorrectly reject valid matches
-            // when the IMM model hasn't perfectly learned the target's motion.
-            let threshold = max_dist;
+                    ellipse_position(
+                        offset_radial,
+                        offset_cross,
+                        radial.max(MIN_MATCH_DISTANCE_M),
+                        cross.max(MIN_MATCH_DISTANCE_M),
+                    )
+                }
+                None => {
+                    // No radar position, so no line of sight to orient the
+                    // ellipse on. Fall back to a circle sized by the largest
+                    // axis of the measurement error.
+                    let sigma = candidate
+                        .position_covariance
+                        .nn
+                        .max(candidate.position_covariance.ee)
+                        .sqrt();
+                    let radius = (travel + GATE_SIGMAS * sigma).max(MIN_MATCH_DISTANCE_M);
+                    let distance = calculate_distance(&predicted_pos, &candidate.position);
+                    (distance / radius).powi(2)
+                }
+            };
 
             log::debug!(
-                "Match check: target {} predicted ({:.6}, {:.6}), candidate ({:.6}, {:.6}), distance={:.1}m, threshold={:.1}m (max={:.0}m), uncertainty={:.1}m",
+                "Match check: target {} predicted ({:.6}, {:.6}), candidate ({:.6}, {:.6}), distance={:.1}m, gate position={:.2} (1.0 = on the gate)",
                 id,
                 predicted_pos.lat(),
                 predicted_pos.lon(),
                 candidate.position.lat(),
                 candidate.position.lon(),
-                distance,
-                threshold,
-                max_dist,
-                uncertainty
+                calculate_distance(&predicted_pos, &candidate.position),
+                normalized
             );
 
-            if distance < threshold {
-                // Track only the closest match
-                if best_match.is_none_or(|(_, best_dist)| distance < best_dist) {
-                    best_match = Some((*id, distance));
+            if normalized < 1.0 {
+                // Keep whichever target the candidate fits best, measured in
+                // gate widths rather than metres: an echo one beam width off
+                // in bearing is a better fit than one the same distance out
+                // in range, where the radar is far more precise.
+                if best_match.is_none_or(|(_, best)| normalized < best) {
+                    best_match = Some((*id, normalized));
                 }
             }
         }
@@ -822,6 +856,21 @@ fn calculate_distance(p1: &GeoPosition, p2: &GeoPosition) -> f64 {
     let dlat = (p2.lat() - p1.lat()) * METERS_PER_DEGREE_LATITUDE;
     let dlon = (p2.lon() - p1.lon()) * meters_per_degree_longitude(&p1.lat());
     (dlat * dlat + dlon * dlon).sqrt()
+}
+
+/// Offset from `from` to `to`, resolved into metres along `bearing_rad`
+/// and metres across it (positive to the right of the bearing).
+fn resolve_offset(from: &GeoPosition, to: &GeoPosition, bearing_rad: f64) -> (f64, f64) {
+    let north = (to.lat() - from.lat()) * METERS_PER_DEGREE_LATITUDE;
+    let east = (to.lon() - from.lon()) * meters_per_degree_longitude(&from.lat());
+    let (sin, cos) = bearing_rad.sin_cos();
+    (north * cos + east * sin, east * cos - north * sin)
+}
+
+/// Where a point sits relative to an ellipse with the given semi-axes:
+/// below 1.0 is inside, 1.0 is on it.
+fn ellipse_position(along: f64, across: f64, semi_along: f64, semi_across: f64) -> f64 {
+    (along / semi_along).powi(2) + (across / semi_across).powi(2)
 }
 
 /// Calculate bearing from p1 to p2 in radians (0 = North)
@@ -1036,6 +1085,66 @@ mod tests {
         let lat = 52.0 + range_m * bearing.cos() / METERS_PER_DEGREE_LATITUDE;
         let lon = 4.0 + range_m * bearing.sin() / meters_per_degree_longitude(&52.0);
         make_candidate(lat, lon, time)
+    }
+
+    /// A candidate at `range_m` on `bearing_deg`, carrying the measurement
+    /// covariance a blob lit by a `beam_deg` beam really has: a few metres
+    /// along the beam, a fraction of the beam width across it.
+    fn make_beam_limited_candidate(
+        range_m: f64,
+        bearing_deg: f64,
+        time: u64,
+        beam_deg: f64,
+    ) -> TargetCandidate {
+        let cross = range_m * (beam_deg / 2.0).to_radians();
+        let mut candidate = make_candidate_at(range_m, bearing_deg, time);
+        candidate.position_covariance =
+            PositionCovariance::from_polar(bearing_deg.to_radians(), 10.0 * 10.0, cross * cross);
+        candidate
+    }
+
+    /// Reproduces the split in #722: vessel 1 sat 5 km off on a steady
+    /// course, but its blob centre wandered a degree or three in bearing
+    /// from sweep to sweep — 130 to 330 m — while the range barely moved.
+    /// A gate 96 m wide could not hold it, so the vessel acquired a new ID
+    /// nearly every sweep: eight in three and a half minutes.
+    #[test]
+    fn test_bearing_scatter_at_range_does_not_split_one_contact() {
+        let mut tracker = TargetTracker::new_merged();
+
+        for (i, offset) in [0.0, -1.5, 1.2, -0.9, 1.4].iter().enumerate() {
+            tracker.process_candidate(make_beam_limited_candidate(
+                5_000.0,
+                222.0 + offset,
+                i as u64 * 2_500,
+                5.0,
+            ));
+        }
+
+        assert_eq!(
+            tracker.active_count(),
+            1,
+            "one vessel must stay one track through normal bearing scatter"
+        );
+    }
+
+    /// The gate has to be an ellipse, not merely a wider circle. A radar
+    /// knows range far better than bearing, so an echo displaced along the
+    /// beam is a different object, while the same displacement across it is
+    /// the same object seen through a fat beam.
+    #[test]
+    fn test_gate_is_tight_along_the_beam_and_wide_across_it() {
+        // 2.9 degrees at 5 km is ~253 m of cross-range offset.
+        let mut across = TargetTracker::new_merged();
+        across.process_candidate(make_beam_limited_candidate(5_000.0, 222.0, 0, 5.0));
+        across.process_candidate(make_beam_limited_candidate(5_000.0, 224.9, 2_500, 5.0));
+        assert_eq!(across.active_count(), 1, "scatter across the beam matches");
+
+        // The same 253 m, but in range.
+        let mut along = TargetTracker::new_merged();
+        along.process_candidate(make_beam_limited_candidate(5_000.0, 222.0, 0, 5.0));
+        along.process_candidate(make_beam_limited_candidate(5_253.0, 222.0, 2_500, 5.0));
+        assert_eq!(along.active_count(), 2, "the same offset in range does not");
     }
 
     /// Reproduces the track that swapped vessels in #722: target 200000074
@@ -1751,25 +1860,26 @@ mod tests {
 
     #[test]
     fn test_fast_target_missed_with_normal_speed() {
-        // Test that 40-knot targets are eventually lost when using normal speed setting (25 knots)
+        // Test that 50-knot targets are eventually lost when using normal speed setting (25 knots)
         // but successfully tracked when using medium (40 knots) or fast (50 knots) settings.
         //
-        // The emulator has fast targets moving east at 40 knots (FAST_TARGET_SPEED_KNOTS).
-        // At 3-second radar revolution:
-        // - 40 kn target moves: 40 * 0.5144 * 3 = ~62m per revolution
-        // - Normal (25 kn) max_dist (established): 25 * 0.5144 * 3 * 1.5 = ~58m (misses 62m)
-        // - Medium (40 kn) max_dist: 40 * 0.5144 * 3 * 1.5 = ~93m (catches 62m)
-        // - Fast (50 kn) max_dist: 50 * 0.5144 * 3 * 1.5 = ~116m (catches 62m)
+        // A 50 kn target crossing at 300 m, with a 3-second revolution. The
+        // gate on each axis is how far the target could have travelled plus
+        // GATE_SIGMAS of measurement error; this close in the bearing error
+        // is at its floor, so the measurement term is only ~10 m.
+        // - 50 kn target moves: 50 * 0.5144 * 3 = ~77m per revolution
+        // - Normal (25 kn): 25 * 0.5144 * 3 * 1.5 + 10 = ~68m (misses 77m)
+        // - Medium (40 kn): 40 * 0.5144 * 3 * 1.5 + 10 = ~103m (catches 77m)
+        // - Fast (50 kn):   50 * 0.5144 * 3 * 1.5 + 10 = ~126m (catches 77m)
         //
-        // During early tracking (update_count <= 2), physics-based matching is used with 2x
-        // multiplier, so all speed settings can initially acquire the target. After the target
-        // reaches established tracking (update_count > 2), the normal speed max_dist becomes
-        // limiting and the target is lost.
+        // The first sighting always starts a track, whatever the setting,
+        // because there is nothing yet to match it against. Only from the
+        // second sweep on does the Normal gate start failing to reach.
 
         const NORMAL_SPEED_MS: f64 = 25.0 * KN_TO_MS; // ~12.9 m/s
         const MEDIUM_SPEED_MS: f64 = 40.0 * KN_TO_MS; // ~20.6 m/s
         const FAST_SPEED_MS: f64 = 50.0 * KN_TO_MS; // ~25.7 m/s
-        const TARGET_SPEED_MS: f64 = 40.0 * KN_TO_MS; // Fast boat speed
+        const TARGET_SPEED_MS: f64 = 50.0 * KN_TO_MS; // Faster than the Normal gate
 
         let revolution_ms = 3000u64;
         let num_revolutions = 15; // Need more revolutions to see misses after established tracking
@@ -1784,8 +1894,8 @@ mod tests {
         let lon_per_rev = distance_per_rev / meters_per_degree_longitude(&start_lat);
 
         // Test 1: Normal speed setting - should eventually MISS fast targets
-        // After initial acquisition (revs 0-2), the target becomes established and then
-        // the normal speed max_dist (58m) can't catch the 62m movements.
+        // Its ~68m gate cannot reach the target's 77m of travel per revolution,
+        // so each sweep starts a fresh track instead of continuing the old one.
         {
             let mut tracker = TargetTracker::new_merged();
 
@@ -1810,7 +1920,7 @@ mod tests {
                 }
             }
 
-            // With normal speed setting (25 kn), fast 40-knot targets should be missed
+            // With normal speed setting (25 kn), 50-knot targets should be missed
             // after they become established (update_count > 2). We expect misses to start
             // around revolution 3-4.
             assert!(
@@ -1829,7 +1939,7 @@ mod tests {
         }
 
         // Test 2: Medium speed setting - should TRACK fast targets continuously
-        // Medium speed (40 kn) matches target speed (40 kn), so max_dist = 93m catches 62m moves
+        // Its ~103m gate comfortably reaches the target's 77m per revolution.
         {
             let mut tracker = TargetTracker::new_merged();
 
@@ -1854,7 +1964,7 @@ mod tests {
                 }
             }
 
-            // With medium speed setting (40 kn), 40-knot targets should be tracked.
+            // With medium speed setting (40 kn), 50-knot targets should be tracked.
             assert!(
                 promoted_id.is_some(),
                 "Medium speed: Expected target to be promoted to tracking"
@@ -1882,7 +1992,7 @@ mod tests {
         }
 
         // Test 3: Fast speed setting - should definitely TRACK fast targets continuously
-        // Fast speed (50 kn) exceeds target speed (40 kn), so max_dist = 116m easily catches 62m moves
+        // Its ~126m gate leaves plenty of room over the target's 77m per revolution.
         {
             let mut tracker = TargetTracker::new_merged();
 
@@ -1907,7 +2017,7 @@ mod tests {
                 }
             }
 
-            // With fast speed setting (50 kn), 40-knot targets should definitely be tracked
+            // With fast speed setting (50 kn), 50-knot targets should definitely be tracked
             assert!(
                 promoted_id.is_some(),
                 "Fast speed: Expected target to be promoted to tracking"

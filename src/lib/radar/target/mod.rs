@@ -73,6 +73,16 @@ impl PositionCovariance {
         }
     }
 
+    /// Variance (m²) of this ellipse along `bearing_rad` (0 = north).
+    ///
+    /// Projecting onto the line of sight and onto its perpendicular
+    /// recovers the radial and cross-range errors the radar actually made,
+    /// whatever compass direction they ended up pointing.
+    pub fn variance_along(&self, bearing_rad: f64) -> f64 {
+        let (sin, cos) = bearing_rad.sin_cos();
+        self.nn * cos * cos + self.ee * sin * sin + 2.0 * self.ne * sin * cos
+    }
+
     /// Equal uncertainty in every direction, for measurements with no
     /// bearing of their own — a MARPA click, or a test fixture.
     pub const fn isotropic(variance: f64) -> Self {
