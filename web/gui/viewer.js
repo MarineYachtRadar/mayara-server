@@ -38,6 +38,7 @@ import { WebGPURenderer } from "./render_webgpu.js";
 import { WebGLRenderer } from "./render_webgl.js";
 import { PPI } from "./ppi.js";
 import { startTourIfFirstVisit } from "./tour.js";
+import "./app-dock.js";
 
 var webSocket;
 var headingSocket;

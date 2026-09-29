@@ -26,6 +26,7 @@ import {
   uploadRecording,
   detectMode
 } from "./api.js";
+import "./app-dock.js";
 
 // ============================================================================
 // State
