@@ -3,6 +3,7 @@
 // window.
 
 import { fetchRadars } from "./api.js";
+import "./app-dock.js";
 
 function fail(container, message) {
   container.setAttribute("role", "alert");

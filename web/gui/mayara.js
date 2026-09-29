@@ -12,6 +12,7 @@ import {
 } from "./api.js";
 import { radarCombinations, multiViewUrl } from "./radar-list.js";
 import { HELP_AFTER_MS, renderSearchHelp } from "./search-help.js";
+import "./app-dock.js";
 
 const { a, tr, td, div, p, strong, details, summary, code, br, span, button } =
   van.tags;
