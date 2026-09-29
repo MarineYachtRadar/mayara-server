@@ -17,6 +17,7 @@ const UNOWNED: u32 = 0;
 
 use crate::config::GuardZone;
 use crate::protos::RadarMessage::radar_message::Spoke;
+use crate::radar::{spoke_in_arc, zone_is_full_circle};
 
 /// Default minimum pixel intensity to be considered part of a blob (2/3 of max 15, strong return).
 /// This is overridden by legend.strong_return which varies per radar brand.
@@ -208,7 +209,7 @@ pub struct CompletedBlob {
 }
 
 /// Internal representation of a guard zone in spoke/pixel coordinates
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 struct GuardZoneInternal {
     /// Guard zone number (1 or 2)
     zone_id: u8,
@@ -216,6 +217,8 @@ struct GuardZoneInternal {
     start_spoke: u16,
     /// End angle in spokes
     end_spoke: u16,
+    /// Whether the zone covers every bearing
+    full_circle: bool,
     /// Inner distance in pixels
     start_pixel: usize,
     /// Outer distance in pixels
@@ -341,32 +344,28 @@ impl BlobDetector {
                     zone_id,
                     start_spoke,
                     end_spoke,
+                    full_circle: zone_is_full_circle(zone.start_angle, zone.end_angle),
                     start_pixel,
                     end_pixel,
                 });
             }
         }
 
-        // Only update and log if zones changed
-        let changed = new_zones.len() != self.guard_zones.len()
-            || new_zones
-                .iter()
-                .zip(self.guard_zones.iter())
-                .any(|(new, old)| {
-                    new.zone_id != old.zone_id
-                        || new.start_spoke != old.start_spoke
-                        || new.end_spoke != old.end_spoke
-                        || new.start_pixel != old.start_pixel
-                        || new.end_pixel != old.end_pixel
-                });
+        // Only update and log if zones changed. Compared whole rather than
+        // field by field: a zone can differ in a way its spoke and pixel
+        // bounds do not show — a narrow sector and a full ring both put
+        // their ends on the same spoke — and a comparison that lists fields
+        // silently stops covering the next one added.
+        let changed = new_zones != self.guard_zones;
 
         if changed {
             for gz in &new_zones {
                 log::debug!(
-                    "Guard zone {}: spokes {}-{}, pixels {}-{}",
+                    "Guard zone {}: spokes {}-{}{}, pixels {}-{}",
                     gz.zone_id,
                     gz.start_spoke,
                     gz.end_spoke,
+                    if gz.full_circle { " (full circle)" } else { "" },
                     gz.start_pixel,
                     gz.end_pixel
                 );
@@ -385,16 +384,7 @@ impl BlobDetector {
                 continue;
             }
 
-            // Check spoke (angle) is within range, handling wraparound
-            let in_angle = if gz.start_spoke <= gz.end_spoke {
-                // Normal case: start < end
-                spoke >= gz.start_spoke && spoke <= gz.end_spoke
-            } else {
-                // Wraparound case: zone spans 0
-                spoke >= gz.start_spoke || spoke <= gz.end_spoke
-            };
-
-            if in_angle {
+            if gz.full_circle || spoke_in_arc(spoke, gz.start_spoke, gz.end_spoke) {
                 zones.push(gz.zone_id);
             }
         }
@@ -989,6 +979,117 @@ mod tests {
             detector.pixel_index.len(),
             SPOKES as usize * 1024,
             "spatial index must be sized for the new spoke length"
+        );
+    }
+
+    /// A zone left at its default `0 -> 0` is drawn by the GUI as a
+    /// complete ring, and is the only way to ask for a distance band at
+    /// every bearing. The detector has to read it the same way, or the
+    /// operator gets a ring on the display that only acquires dead ahead.
+    #[test]
+    fn guard_zone_with_equal_angles_covers_the_full_circle() {
+        let mut detector = BlobDetector::new(2048, 10, None);
+        detector.current_range = 8000;
+        detector.current_spoke_len = 1000;
+        detector.set_guard_zone_1(Some(GuardZone {
+            start_angle: 0.0,
+            end_angle: 0.0,
+            start_distance: 5000.0,
+            end_distance: 6000.0,
+            enabled: true,
+        }));
+
+        // Pixel 700 of 1000 over 8 km is 5,600 m — inside the band.
+        for spoke in [0u16, 512, 1024, 1536, 2047] {
+            assert_eq!(
+                detector.check_guard_zones(spoke, 700),
+                vec![1],
+                "spoke {spoke} is inside the ring"
+            );
+        }
+
+        // The distance band still bounds it.
+        assert!(detector.check_guard_zones(1024, 100).is_empty());
+        assert!(detector.check_guard_zones(1024, 900).is_empty());
+    }
+
+    /// A full `0 -> 2pi` sweep converts to the same spoke at both ends, so
+    /// it has to be read as a ring too rather than collapsing to one spoke.
+    #[test]
+    fn guard_zone_spanning_a_whole_revolution_covers_the_full_circle() {
+        let mut detector = BlobDetector::new(2048, 10, None);
+        detector.current_range = 8000;
+        detector.current_spoke_len = 1000;
+        detector.set_guard_zone_1(Some(GuardZone {
+            start_angle: 0.0,
+            end_angle: TAU,
+            start_distance: 5000.0,
+            end_distance: 6000.0,
+            enabled: true,
+        }));
+
+        assert_eq!(detector.check_guard_zones(1024, 700), vec![1]);
+    }
+
+    /// A sector narrower than one spoke has both ends land on the same
+    /// spoke index. That must stay a sliver: it is a deliberate request for
+    /// one bearing, and turning it into a ring would guard the whole horizon
+    /// the operator never asked about.
+    #[test]
+    fn guard_zone_narrower_than_a_spoke_is_not_a_full_circle() {
+        let mut detector = BlobDetector::new(2048, 10, None);
+        detector.current_range = 8000;
+        detector.current_spoke_len = 1000;
+        // 0.002 rad is a tenth of a degree — under half a spoke at 2048.
+        detector.set_guard_zone_1(Some(GuardZone {
+            start_angle: 0.0,
+            end_angle: 0.002,
+            start_distance: 5000.0,
+            end_distance: 6000.0,
+            enabled: true,
+        }));
+
+        let zone = &detector.guard_zones[0];
+        assert_eq!(zone.start_spoke, zone.end_spoke, "both ends share a spoke");
+        assert!(!zone.full_circle, "but it is still a sliver, not a ring");
+
+        assert_eq!(detector.check_guard_zones(0, 700), vec![1]);
+        assert!(detector.check_guard_zones(1024, 700).is_empty());
+    }
+
+    /// Switching between a narrow sector and a full ring leaves every spoke
+    /// and pixel bound identical, so a change check that compares those
+    /// alone sees nothing and keeps the old zone. The operator then fixes
+    /// their settings and the display does not change.
+    #[test]
+    fn guard_zone_switching_between_sliver_and_ring_takes_effect() {
+        let band = |start: f64, end: f64| GuardZone {
+            start_angle: start,
+            end_angle: end,
+            start_distance: 5000.0,
+            end_distance: 6000.0,
+            enabled: true,
+        };
+        let mut detector = BlobDetector::new(2048, 10, None);
+        detector.current_range = 8000;
+        detector.current_spoke_len = 1000;
+
+        // Sliver first, then widened to a ring.
+        detector.set_guard_zone_1(Some(band(0.0, 0.002)));
+        assert!(detector.check_guard_zones(1024, 700).is_empty());
+
+        detector.set_guard_zone_1(Some(band(0.0, 0.0)));
+        assert_eq!(
+            detector.check_guard_zones(1024, 700),
+            vec![1],
+            "widening to a ring must take effect"
+        );
+
+        // And back the other way.
+        detector.set_guard_zone_1(Some(band(0.0, 0.002)));
+        assert!(
+            detector.check_guard_zones(1024, 700).is_empty(),
+            "narrowing back to a sliver must take effect too"
         );
     }
 

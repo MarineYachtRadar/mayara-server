@@ -70,6 +70,45 @@ pub const MS_TO_KN: f64 = 3600. / NM_F64;
 // A "native to radar" bearing, usually [0..2048] or [0..4096] or [0..8192]
 pub type SpokeBearing = u16;
 
+/// Angular slop, in radians, within which two zone angles are the same
+/// bearing. Matches `ppi.js`, so the ring the operator sees drawn and the
+/// zone the detector applies are decided by the same test.
+pub(crate) const ZONE_ANGLE_EPSILON: f64 = 0.001;
+
+/// Whether a zone running from `start_angle` to `end_angle` (radians)
+/// covers every bearing.
+///
+/// Ends that coincide mean the whole circle, not a zero-width sliver: a
+/// zone left at its default `0 -> 0` is drawn as a complete ring, and it is
+/// the only way to ask for a distance band at every bearing. A full
+/// `0 -> 2pi` sweep says the same thing the other way round.
+///
+/// This is decided on the angles rather than on the spokes they convert
+/// to, because a sector narrower than one spoke collapses to a single
+/// spoke index — and a deliberately narrow sector must stay narrow rather
+/// than silently becoming a ring.
+///
+/// A sweep that stops just short of complete is left as the sector it is,
+/// so the detector keeps agreeing with the arc the GUI draws. Quantising
+/// it to spokes already covers all but at most the final spoke, which is
+/// the gap the operator asked for.
+pub(crate) fn zone_is_full_circle(start_angle: f64, end_angle: f64) -> bool {
+    let span = (end_angle - start_angle).abs();
+    span < ZONE_ANGLE_EPSILON || span >= std::f64::consts::TAU
+}
+
+/// Whether `spoke` falls inside the arc running clockwise from `start` to
+/// `end`, both in spokes. A zone covering every bearing is recognised by
+/// [`zone_is_full_circle`] before it reaches here.
+pub(crate) fn spoke_in_arc(spoke: SpokeBearing, start: SpokeBearing, end: SpokeBearing) -> bool {
+    if start <= end {
+        spoke >= start && spoke <= end
+    } else {
+        // The arc spans 0.
+        spoke >= start || spoke <= end
+    }
+}
+
 pub const BYTE_LOOKUP_LENGTH: usize = (u8::MAX as usize) + 1;
 
 #[derive(Error, Debug)]
@@ -3104,5 +3143,32 @@ mod tests {
         assert!(Power::from_value(&serde_json::json!("faulty")).is_err());
         assert!(Power::from_value(&serde_json::json!(5)).is_err());
         assert!(Power::from_value(&serde_json::json!(-1)).is_err());
+    }
+
+    /// The full-circle shorthand is decided on a tolerance, so pin both
+    /// sides of it — and the complete sweep it also has to recognise.
+    #[test]
+    fn zone_is_full_circle_boundaries() {
+        use std::f64::consts::TAU;
+
+        // Coincident ends: the documented shorthand for every bearing.
+        assert!(zone_is_full_circle(0.0, 0.0));
+        assert!(zone_is_full_circle(1.5, 1.5));
+
+        // Just inside the tolerance is still the shorthand...
+        assert!(zone_is_full_circle(0.0, ZONE_ANGLE_EPSILON * 0.999));
+        // ...and just outside it is a deliberate, if very narrow, sector.
+        assert!(!zone_is_full_circle(0.0, ZONE_ANGLE_EPSILON));
+        assert!(!zone_is_full_circle(0.0, ZONE_ANGLE_EPSILON * 1.001));
+
+        // A complete sweep, in either direction.
+        assert!(zone_is_full_circle(0.0, TAU));
+        assert!(zone_is_full_circle(-TAU, 0.0));
+        assert!(zone_is_full_circle(TAU, 0.0));
+
+        // A sweep that stops short stays the sector the operator asked for,
+        // so the detector keeps agreeing with the arc the GUI draws.
+        assert!(!zone_is_full_circle(0.0, TAU - 0.0009));
+        assert!(!zone_is_full_circle(0.0, TAU / 2.0));
     }
 }
