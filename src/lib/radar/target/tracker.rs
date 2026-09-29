@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::f64::consts::TAU;
 
 use super::motion::{ImmMotionModel, MotionModel};
-use super::{METERS_PER_DEGREE_LATITUDE, meters_per_degree_longitude};
+use super::{METERS_PER_DEGREE_LATITUDE, PositionCovariance, meters_per_degree_longitude};
 use crate::radar::GeoPosition;
 
 /// Number of revolutions without update before a target is marked as lost
@@ -150,6 +150,8 @@ pub struct TargetCandidate {
     pub radar_position: Option<GeoPosition>,
     /// Maximum target speed in m/s (from ArpaDetectMaxSpeed)
     pub max_target_speed_ms: f64,
+    /// Uncertainty of `position`, in the local north/east frame
+    pub position_covariance: PositionCovariance,
     /// How this candidate was detected
     pub source: CandidateSource,
 }
@@ -194,14 +196,12 @@ pub struct ActiveTarget {
 
 impl ActiveTarget {
     fn new(id: u64, candidate: &TargetCandidate) -> Self {
-        Self::new_with_uncertainty(id, candidate, 20.0)
-    }
-
-    /// Create a new target with custom position uncertainty (for MARPA)
-    /// MARPA targets need larger uncertainty since user click position is approximate
-    fn new_with_uncertainty(id: u64, candidate: &TargetCandidate, position_variance: f64) -> Self {
         let mut motion_model: Box<dyn MotionModel> = Box::new(ImmMotionModel::new());
-        motion_model.init_with_uncertainty(candidate.position, candidate.time, position_variance);
+        motion_model.init(
+            candidate.position,
+            candidate.time,
+            candidate.position_covariance,
+        );
 
         // GuardZone(0) indicates manual/MARPA acquisition
         let is_manual = matches!(candidate.source, CandidateSource::GuardZone(0));
@@ -282,7 +282,11 @@ impl ActiveTarget {
         }
 
         // Update motion model and get estimated motion
-        let estimate = self.motion_model.update(candidate.position, candidate.time);
+        let estimate = self.motion_model.update(
+            candidate.position,
+            candidate.time,
+            candidate.position_covariance,
+        );
 
         self.sog = Some(estimate.sog);
         self.cog = Some(estimate.cog);
@@ -766,9 +770,7 @@ impl TargetTracker {
     /// Returns the new target ID
     pub fn add_active_target(&mut self, candidate: &TargetCandidate) -> u64 {
         let id = self.next_target_id();
-        // MARPA targets need larger initial uncertainty since user clicks are approximate
-        // Position variance of 1250 gives ~100m uncertainty (2 * sqrt(1250 + 1250))
-        let mut target = ActiveTarget::new_with_uncertainty(id, candidate, 1250.0);
+        let mut target = ActiveTarget::new(id, candidate);
         target.set_last_update_revolution(self.revolution_count);
 
         log::info!(
@@ -840,6 +842,10 @@ mod tests {
     use std::f64::consts::PI;
 
     use super::*;
+
+    /// Isotropic 5 m measurement noise, so these tests exercise tracking
+    /// logic rather than the range-dependent noise model.
+    const TEST_COV: PositionCovariance = PositionCovariance::isotropic(25.0);
     use crate::radar::KN_TO_MS;
 
     /// Default max speed for tests (50 knots)
@@ -862,6 +868,7 @@ mod tests {
             radar_key: "test".to_string(),
             radar_position: Some(GeoPosition::new(52.0, 4.0)),
             max_target_speed_ms: TEST_MAX_SPEED_MS,
+            position_covariance: TEST_COV,
             source,
         }
     }
@@ -1737,6 +1744,7 @@ mod tests {
             radar_key: "test".to_string(),
             radar_position: Some(GeoPosition::new(52.0, 4.0)),
             max_target_speed_ms: max_speed_ms,
+            position_covariance: TEST_COV,
             source: CandidateSource::GuardZone(1),
         }
     }
@@ -1960,6 +1968,7 @@ mod tests {
                 radar_key: "test".to_string(),
                 radar_position: radar,
                 max_target_speed_ms: max_speed_ms,
+                position_covariance: TEST_COV,
                 source: CandidateSource::GuardZone(1),
             });
         }
@@ -1975,6 +1984,7 @@ mod tests {
                 radar_key: "test".to_string(),
                 radar_position: radar,
                 max_target_speed_ms: max_speed_ms,
+                position_covariance: TEST_COV,
                 source: CandidateSource::GuardZone(1),
             });
         }
@@ -2032,6 +2042,7 @@ mod tests {
                 radar_key: "test".to_string(),
                 radar_position: Some(GeoPosition::new(52.0, 4.0)),
                 max_target_speed_ms: max_speed_ms,
+                position_covariance: TEST_COV,
                 source: CandidateSource::GuardZone(1),
             });
         }
@@ -2055,6 +2066,7 @@ mod tests {
             radar_key: "test".to_string(),
             radar_position: Some(GeoPosition::new(52.0, 4.0)),
             max_target_speed_ms: max_speed_ms,
+            position_covariance: TEST_COV,
             source: CandidateSource::GuardZone(1),
         };
         // The mature track rejects the bogus update; because the candidate

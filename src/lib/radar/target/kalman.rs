@@ -8,6 +8,7 @@
 
 use nalgebra::{SMatrix, SVector};
 
+use super::PositionCovariance;
 use super::{METERS_PER_DEGREE_LATITUDE, meters_per_degree_longitude};
 use crate::radar::GeoPosition;
 
@@ -22,6 +23,16 @@ type Vector2 = SVector<f64, 2>;
 /// Critical for performance: lower = straighter tracks, higher = allows curves.
 /// Value 0.015 allows for reasonable maneuvering targets.
 const PROCESS_NOISE: f64 = 0.015;
+
+/// The measurement noise R for one radar fix, in the filter's local frame.
+fn measurement_noise(covariance: PositionCovariance) -> Matrix2x2 {
+    let mut r = Matrix2x2::zeros();
+    r[(0, 0)] = covariance.nn;
+    r[(1, 1)] = covariance.ee;
+    r[(0, 1)] = covariance.ne;
+    r[(1, 0)] = covariance.ne;
+    r
+}
 
 /// 4-state Kalman filter: [lat, lon, dlat/dt, dlon/dt]
 ///
@@ -38,7 +49,6 @@ pub struct KalmanFilter {
     /// Process noise covariance matrix Q (2x2 for velocity noise)
     q: Matrix2x2,
     /// Measurement noise covariance matrix R (2x2 for position noise)
-    r: Matrix2x2,
     /// Last update time (millis since epoch)
     last_time: u64,
     /// Whether filter has been initialized
@@ -64,17 +74,10 @@ impl KalmanFilter {
         q[(0, 0)] = PROCESS_NOISE; // lat velocity noise (m/s)²
         q[(1, 1)] = PROCESS_NOISE; // lon velocity noise (m/s)²
 
-        // R - measurement noise (radar position accuracy)
-        // Higher values trust predictions more, lower values trust measurements more
-        let mut r = Matrix2x2::zeros();
-        r[(0, 0)] = 25.0; // lat measurement variance (m²) ~5m std dev
-        r[(1, 1)] = 25.0; // lon measurement variance (m²) ~5m std dev
-
         KalmanFilter {
             state: Vector4::zeros(),
             p,
             q,
-            r,
             last_time: 0,
             initialized: false,
             ref_lat: 0.0,
@@ -82,19 +85,10 @@ impl KalmanFilter {
         }
     }
 
-    /// Initialize filter with first measurement
-    pub fn init(&mut self, position: GeoPosition, time: u64) {
-        self.init_with_uncertainty(position, time, 20.0);
-    }
-
-    /// Initialize filter with custom position uncertainty (for MARPA targets)
-    /// position_variance should be in m² (e.g., 625 gives ~50m uncertainty)
-    pub fn init_with_uncertainty(
-        &mut self,
-        position: GeoPosition,
-        time: u64,
-        position_variance: f64,
-    ) {
+    /// Initialize filter with first measurement. The measurement's own
+    /// covariance seeds P, so a fix at 5 km starts as uncertain as it
+    /// really is rather than claiming metres of accuracy.
+    pub fn init(&mut self, position: GeoPosition, time: u64, covariance: PositionCovariance) {
         self.ref_lat = position.lat();
         self.ref_lon = position.lon();
         // Initial state is at origin (0,0) in local coordinates with zero velocity
@@ -102,8 +96,10 @@ impl KalmanFilter {
 
         // Reset P to initial uncertainty
         self.p = Matrix4x4::zeros();
-        self.p[(0, 0)] = position_variance;
-        self.p[(1, 1)] = position_variance;
+        self.p[(0, 0)] = covariance.nn;
+        self.p[(1, 1)] = covariance.ee;
+        self.p[(0, 1)] = covariance.ne;
+        self.p[(1, 0)] = covariance.ne;
         self.p[(2, 2)] = 4.0;
         self.p[(3, 3)] = 4.0;
 
@@ -186,9 +182,14 @@ impl KalmanFilter {
     }
 
     /// Update filter with new measurement, returns (sog_ms, cog_rad)
-    pub fn update(&mut self, position: GeoPosition, time: u64) -> (f64, f64) {
+    pub fn update(
+        &mut self,
+        position: GeoPosition,
+        time: u64,
+        covariance: PositionCovariance,
+    ) -> (f64, f64) {
         if !self.initialized {
-            self.init(position, time);
+            self.init(position, time, covariance);
             return (0.0, 0.0);
         }
 
@@ -217,7 +218,7 @@ impl KalmanFilter {
         let y = z - h * predicted_state;
 
         // Kalman gain: K = P * HT * (H * P * HT + R)^-1
-        let s = h * self.p * ht + self.r;
+        let s = h * self.p * ht + measurement_noise(covariance);
         let Some(s_inv) = s.try_inverse() else {
             // S is the innovation covariance H·P·Hᵀ + R. With positive-
             // definite P and R this should never be singular. If it is,
@@ -335,11 +336,14 @@ impl Default for KalmanFilter {
 mod tests {
     use super::*;
 
+    /// The isotropic 5 m noise these filter tests were written against.
+    const TEST_COV: PositionCovariance = PositionCovariance::isotropic(25.0);
+
     #[test]
     fn test_init_and_predict() {
         let mut kf = KalmanFilter::new();
         let pos = GeoPosition::new(52.0, 4.0);
-        kf.init(pos, 0);
+        kf.init(pos, 0, TEST_COV);
 
         // Predict at same time should return same position
         let pred = kf.predict(0);
@@ -353,13 +357,13 @@ mod tests {
 
         // First position
         let pos1 = GeoPosition::new(52.0, 4.0);
-        kf.init(pos1, 0);
+        kf.init(pos1, 0, TEST_COV);
 
         // Move north by ~111 meters (0.001 degrees lat) in 1 second
         // True speed would be ~111 m/s
         // With high measurement noise (R=25m²), filter will be conservative
         let pos2 = GeoPosition::new(52.001, 4.0);
-        let (sog1, _) = kf.update(pos2, 1000);
+        let (sog1, _) = kf.update(pos2, 1000, TEST_COV);
 
         // First update: Kalman filter is conservative due to high measurement noise (R=25m²)
         // With conservative settings, speed builds up gradually over multiple updates
@@ -371,7 +375,7 @@ mod tests {
 
         // Continue moving north at same rate
         let pos3 = GeoPosition::new(52.002, 4.0);
-        let (sog2, _) = kf.update(pos3, 2000);
+        let (sog2, _) = kf.update(pos3, 2000, TEST_COV);
 
         // Speed should increase as filter gains confidence
         assert!(
@@ -382,7 +386,7 @@ mod tests {
 
         // More updates to let filter converge
         let pos4 = GeoPosition::new(52.003, 4.0);
-        let (sog3, cog) = kf.update(pos4, 3000);
+        let (sog3, cog) = kf.update(pos4, 3000, TEST_COV);
 
         // Speed continues to increase toward true value
         assert!(
@@ -406,12 +410,12 @@ mod tests {
         // A target moving at 5 m/s (~10 knots) north
         // In 3 seconds, moves ~15 meters = ~0.000135 degrees
         let pos1 = GeoPosition::new(52.0, 4.0);
-        kf.init(pos1, 0);
+        kf.init(pos1, 0, TEST_COV);
 
         // Move at 5 m/s for 3 seconds
         let delta_deg = 15.0 / METERS_PER_DEGREE_LATITUDE;
         let pos2 = GeoPosition::new(52.0 + delta_deg, 4.0);
-        let (sog1, _) = kf.update(pos2, 3000);
+        let (sog1, _) = kf.update(pos2, 3000, TEST_COV);
 
         // Filter should show some speed
         assert!(
@@ -426,7 +430,7 @@ mod tests {
         let mut kf = KalmanFilter::new();
 
         let pos = GeoPosition::new(52.0, 4.0);
-        kf.init(pos, 0);
+        kf.init(pos, 0, TEST_COV);
 
         let initial_uncertainty = kf.get_uncertainty();
 
@@ -435,7 +439,7 @@ mod tests {
             let t = i * 3000;
             let delta = (i as f64) * 0.0001;
             let pos = GeoPosition::new(52.0 + delta, 4.0);
-            kf.update(pos, t);
+            kf.update(pos, t, TEST_COV);
         }
 
         let final_uncertainty = kf.get_uncertainty();
@@ -456,22 +460,24 @@ mod tests {
         //   * keep the filter state at the prediction (no Kalman gain
         //     applied against a fabricated identity inverse),
         //   * advance last_time so subsequent updates still see fresh dt.
-        // Force singularity by zeroing both P and R; then S is the 2×2
-        // zero matrix, which nalgebra rejects deterministically.
         let mut kf = KalmanFilter::new();
-        kf.init(GeoPosition::new(52.0, 4.0), 0);
+        kf.init(GeoPosition::new(52.0, 4.0), 0, TEST_COV);
 
         // Drive the filter through one clean update so it has a non-
         // zero state to predict from.
-        kf.update(GeoPosition::new(52.001, 4.0), 1_000);
+        kf.update(GeoPosition::new(52.001, 4.0), 1_000, TEST_COV);
 
-        // Zero out P and R so S = H·P·Hᵀ + R is the zero matrix and
-        // try_inverse() returns None.
+        // Zero P and hand in a zero measurement covariance, so
+        // S = H·P·Hᵀ + R is the zero matrix, which nalgebra rejects
+        // deterministically.
         kf.p.fill(0.0);
-        kf.r.fill(0.0);
 
         let predicted = kf.predict(4_000);
-        let _ = kf.update(GeoPosition::new(52.5, 4.5), 4_000);
+        let _ = kf.update(
+            GeoPosition::new(52.5, 4.5),
+            4_000,
+            PositionCovariance::isotropic(0.0),
+        );
 
         assert_eq!(kf.last_time, 4_000, "last_time must still advance");
         let after = kf.get_position();
