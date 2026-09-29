@@ -6,12 +6,15 @@
 use std::f64::consts::TAU;
 
 use crate::config::{ExclusionRect, ExclusionZone};
+use crate::radar::{spoke_in_arc, zone_is_full_circle};
 
 /// Internal representation of a sector exclusion zone in spoke/pixel coordinates
 #[derive(Debug, Clone)]
 pub struct ExclusionZoneInternal {
     pub start_spoke: u16,
     pub end_spoke: u16,
+    /// Whether the zone covers every bearing
+    pub full_circle: bool,
     pub start_pixel: usize,
     pub end_pixel: usize,
 }
@@ -101,15 +104,7 @@ impl ExclusionMask {
         // Build the mask for all sector zones
         for zone in zones {
             for spoke in 0..spokes {
-                // Check spoke (angle) is within range, handling wraparound
-                let in_angle = if zone.start_spoke <= zone.end_spoke {
-                    spoke >= zone.start_spoke && spoke <= zone.end_spoke
-                } else {
-                    // Wraparound case: zone spans 0
-                    spoke >= zone.start_spoke || spoke <= zone.end_spoke
-                };
-
-                if !in_angle {
+                if !zone.full_circle && !spoke_in_arc(spoke, zone.start_spoke, zone.end_spoke) {
                     continue;
                 }
 
@@ -263,6 +258,7 @@ pub fn zone_to_internal(
     ExclusionZoneInternal {
         start_spoke,
         end_spoke,
+        full_circle: zone_is_full_circle(zone.start_angle, zone.end_angle),
         start_pixel,
         end_pixel,
     }
@@ -297,6 +293,7 @@ mod tests {
         let zones = vec![ExclusionZoneInternal {
             start_spoke: 10,
             end_spoke: 20,
+            full_circle: false,
             start_pixel: 100,
             end_pixel: 200,
         }];
@@ -319,12 +316,57 @@ mod tests {
         assert!(mask.is_excluded(15, 200)); // end pixel
     }
 
+    /// The GUI draws an exclusion sector whose ends coincide as a complete
+    /// ring, exactly as it does a guard zone, so the mask has to blank the
+    /// whole annulus rather than a single spoke.
+    #[test]
+    fn test_exclusion_mask_equal_angles_covers_the_full_circle() {
+        let zones = vec![ExclusionZoneInternal {
+            start_spoke: 0,
+            end_spoke: 0,
+            full_circle: true,
+            start_pixel: 100,
+            end_pixel: 200,
+        }];
+        let mask = ExclusionMask::new(&zones, &[], 360, 512, 1000);
+
+        for spoke in [0u16, 90, 180, 270, 359] {
+            assert!(mask.is_excluded(spoke, 150), "spoke {spoke} is in the ring");
+        }
+
+        // The distance band still bounds it.
+        assert!(!mask.is_excluded(180, 50));
+        assert!(!mask.is_excluded(180, 250));
+    }
+
+    /// A sector narrower than one spoke collapses to a single spoke index,
+    /// and must stay a sliver rather than blanking the whole annulus.
+    #[test]
+    fn test_exclusion_zone_narrower_than_a_spoke_is_not_a_full_circle() {
+        let zone = ExclusionZone {
+            start_angle: 0.0,
+            end_angle: 0.002,
+            start_distance: 100.0,
+            end_distance: 200.0,
+            enabled: true,
+        };
+        let internal = zone_to_internal(&zone, 2048, 1000, 512);
+
+        assert_eq!(internal.start_spoke, internal.end_spoke);
+        assert!(!internal.full_circle);
+
+        let mask = ExclusionMask::new(&[internal], &[], 2048, 512, 1000);
+        assert!(mask.is_excluded(0, 80));
+        assert!(!mask.is_excluded(1024, 80));
+    }
+
     #[test]
     fn test_exclusion_mask_wraparound() {
         // Zone that wraps around 0
         let zones = vec![ExclusionZoneInternal {
             start_spoke: 350,
             end_spoke: 10,
+            full_circle: false,
             start_pixel: 100,
             end_pixel: 200,
         }];
