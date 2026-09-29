@@ -195,6 +195,11 @@ pub struct CompletedBlob {
     pub all_pixels: Vec<(u16, usize)>,
     pub center_spoke: u16,
     pub center_pixel: usize,
+    /// Width of the blob in spokes, wrap-aware. Sets how well the centroid's
+    /// bearing is known, which at range dominates its position uncertainty.
+    pub spoke_extent: u16,
+    /// Depth of the blob in pixels, i.e. along the radial axis.
+    pub pixel_extent: usize,
     pub size_meters: f64,
     /// Which guard zones contain this blob's center (1 and/or 2), empty if none
     pub in_guard_zones: Vec<u8>,
@@ -682,6 +687,8 @@ impl BlobDetector {
                     all_pixels,
                     center_spoke,
                     center_pixel,
+                    spoke_extent: spoke_arc.extent,
+                    pixel_extent: blob.max_pixel - blob.min_pixel + 1,
                     size_meters: size,
                     in_guard_zones,
                     has_doppler_approaching: blob.has_doppler_approaching,

@@ -13,7 +13,9 @@ use super::blob::CompletedBlob;
 use super::tracker::{
     CandidateSource, ProcessResult, TargetCandidate, TargetStatus, TargetTracker,
 };
-use super::{ArpaTargetApi, TargetDangerApi, TargetMotionApi, TargetPositionApi};
+use super::{
+    ArpaTargetApi, PositionCovariance, TargetDangerApi, TargetMotionApi, TargetPositionApi,
+};
 use crate::radar::{GeoPosition, KN_TO_MS};
 use crate::stream::{NotificationMethod, NotificationState, NotificationValue, SignalKDelta};
 
@@ -26,6 +28,11 @@ const MIN_BROADCAST_UPDATE_COUNT: u32 = 4;
 /// before another radar is allowed to take it over. Long enough that a
 /// slow antenna between sweeps is never mistaken for a departed radar.
 const MERGED_CLOCK_TAKEOVER: Duration = Duration::from_secs(30);
+
+/// Position variance (m²) of a manually acquired target. 1250 m² in each
+/// axis is a ~100 m uncertainty, which is about how well a user can place a
+/// click on a PPI.
+const MARPA_CLICK_VARIANCE: f64 = 1250.0;
 
 /// Guard zones a radar carries, numbered 1..=GUARD_ZONE_COUNT on the wire.
 /// Zone 0 is reserved for manual MARPA acquisition and never alarms.
@@ -347,6 +354,7 @@ impl TrackerManager {
             radar_key: msg.radar_key.clone(),
             radar_position,
             max_target_speed_ms: ctx.max_target_speed_ms,
+            position_covariance: blob_to_covariance(&msg.blob, ctx),
             source,
         };
 
@@ -499,7 +507,10 @@ impl TrackerManager {
             radar_key: request.radar_key.clone(),
             radar_position: request.radar_position,
             max_target_speed_ms: SpokeContext::max_speed_from_mode(2), // Fast mode for MARPA
-            source: CandidateSource::GuardZone(0),                     // 0 = manual/MARPA
+            // A click is only as accurate as the user's aim, and carries no
+            // bearing of its own, so it starts as a circle.
+            position_covariance: PositionCovariance::isotropic(MARPA_CLICK_VARIANCE),
+            source: CandidateSource::GuardZone(0), // 0 = manual/MARPA
         };
 
         let tracker = self.get_or_create_tracker(&request.radar_key);
@@ -781,14 +792,11 @@ impl TrackerManager {
     }
 }
 
-/// Convert blob center to geographic position
-fn blob_to_position(blob: &CompletedBlob, ctx: &SpokeContext) -> Option<GeoPosition> {
-    let radar_lat = ctx.lat?;
-    let radar_lon = ctx.lon?;
+/// True bearing (radians, 0 = north) and range (meters) of a blob's centre
+/// as seen from the radar. `None` when the spoke carried no heading.
+fn blob_to_polar(blob: &CompletedBlob, ctx: &SpokeContext) -> Option<(f64, f64)> {
     // Get true bearing of the current spoke (requires heading info)
     let spoke_true_bearing = ctx.bearing?;
-
-    let radar_pos = GeoPosition::new(radar_lat, radar_lon);
 
     // blob.center_spoke is head-relative (like ctx.angle)
     // ctx.bearing is true bearing, ctx.angle is head-relative
@@ -808,7 +816,60 @@ fn blob_to_position(blob: &CompletedBlob, ctx: &SpokeContext) -> Option<GeoPosit
         0.0
     };
 
+    Some((bearing_rad, distance_m))
+}
+
+/// Convert blob center to geographic position
+fn blob_to_position(blob: &CompletedBlob, ctx: &SpokeContext) -> Option<GeoPosition> {
+    let radar_pos = GeoPosition::new(ctx.lat?, ctx.lon?);
+    let (bearing_rad, distance_m) = blob_to_polar(blob, ctx)?;
+
     Some(radar_pos.position_from_bearing(bearing_rad, distance_m))
+}
+
+/// How much of a blob's own extent to take as the 1-sigma error of its
+/// centre. A beam-smeared point target wanders by a fair fraction of the
+/// beam width from sweep to sweep — the reported capture showed 1.5-3
+/// degrees against a beam of about 5 — and a physically large target has a
+/// correspondingly less certain centre. Half the extent covers both.
+const CENTROID_SIGMA_FRACTION: f64 = 0.5;
+
+/// Floor on either axis of the measurement error (meters). Keeps a
+/// single-pixel blob close in from claiming an implausibly exact position.
+const MIN_MEASUREMENT_SIGMA_M: f64 = 5.0;
+
+/// Floor on the bearing error (radians) regardless of how narrow the blob
+/// is. The detector thresholds the echo, so a weak target can be reported
+/// over fewer spokes than the beam actually illuminates, and its extent
+/// would then understate how well its bearing is really known. One degree
+/// is below the horizontal beam width of any marine radar — open arrays
+/// are around 1-2 degrees and radomes 4-6 — so it errs towards trusting
+/// the measurement rather than away from it.
+const MIN_BEARING_SIGMA_RAD: f64 = std::f64::consts::PI / 180.0;
+
+/// Measurement covariance of a blob's centre, in the local north/east frame.
+///
+/// The radial error comes from the blob's depth in pixels; the cross-range
+/// error is its angular width times the range, which is what dominates
+/// beyond a few hundred meters.
+fn blob_to_covariance(blob: &CompletedBlob, ctx: &SpokeContext) -> PositionCovariance {
+    let Some((bearing_rad, distance_m)) = blob_to_polar(blob, ctx) else {
+        return PositionCovariance::isotropic(MIN_MEASUREMENT_SIGMA_M.powi(2));
+    };
+
+    let meters_per_pixel = if ctx.spoke_len > 0 {
+        ctx.range as f64 / ctx.spoke_len as f64
+    } else {
+        0.0
+    };
+    let radial_sigma = (blob.pixel_extent as f64 * meters_per_pixel * CENTROID_SIGMA_FRACTION)
+        .max(MIN_MEASUREMENT_SIGMA_M);
+
+    let angular_extent = blob.spoke_extent as f64 / ctx.spokes_per_revolution as f64 * TAU;
+    let bearing_sigma = (angular_extent * CENTROID_SIGMA_FRACTION).max(MIN_BEARING_SIGMA_RAD);
+    let cross_sigma = (distance_m * bearing_sigma).max(MIN_MEASUREMENT_SIGMA_M);
+
+    PositionCovariance::from_polar(bearing_rad, radial_sigma.powi(2), cross_sigma.powi(2))
 }
 
 /// Convert active target to API format
@@ -928,6 +989,10 @@ fn compute_danger(
 mod tests {
     use super::*;
 
+    /// Isotropic 5 m measurement noise, so these tests exercise tracking
+    /// logic rather than the range-dependent noise model.
+    const TEST_COV: PositionCovariance = PositionCovariance::isotropic(25.0);
+
     fn make_test_manager(merge_mode: bool) -> TrackerManager {
         let (sk_tx, _rx) = broadcast::channel(16);
         let (manager, _command_tx) = TrackerManager::new(merge_mode, sk_tx);
@@ -940,6 +1005,8 @@ mod tests {
             all_pixels: vec![(center_spoke, center_pixel)],
             center_spoke,
             center_pixel,
+            spoke_extent: 1,
+            pixel_extent: 1,
             size_meters,
             in_guard_zones: vec![1], // Default to guard zone 1 for tests
             has_doppler_approaching: false,
@@ -1047,6 +1114,47 @@ mod tests {
     }
 
     #[test]
+    fn blob_covariance_is_elongated_across_the_beam_at_range() {
+        // One spoke wide, one pixel deep, at 4 km over 512 pixels.
+        let blob = make_blob(0, 500, 30.0);
+        let ctx = SpokeContext {
+            range: 4000,
+            ..make_context(1000, 0)
+        };
+
+        let cov = blob_to_covariance(&blob, &ctx);
+
+        // Dead ahead (north), so the cross-range error lands on the east
+        // axis and the radial error on the north axis.
+        assert!(
+            cov.ee > cov.nn * 10.0,
+            "cross-range error must dominate at range: nn={:.0} ee={:.0}",
+            cov.nn,
+            cov.ee
+        );
+
+        // A blob as wide as a real beam is less certain still.
+        let mut wide = make_blob(0, 500, 30.0);
+        wide.spoke_extent = 28; // ~4.9 degrees at 2048 spokes
+        assert!(blob_to_covariance(&wide, &ctx).ee > cov.ee);
+    }
+
+    #[test]
+    fn blob_covariance_is_near_circular_close_in() {
+        // The same blob at 100 m: one spoke subtends well under a metre, so
+        // the floor applies on both axes and the ellipse collapses to a circle.
+        let blob = make_blob(0, 13, 30.0);
+        let ctx = SpokeContext {
+            range: 100,
+            ..make_context(1000, 0)
+        };
+
+        let cov = blob_to_covariance(&blob, &ctx);
+
+        assert!((cov.nn - cov.ee).abs() < 1.0, "nn={} ee={}", cov.nn, cov.ee);
+    }
+
+    #[test]
     fn test_blob_to_position_missing_bearing() {
         let blob = make_blob(1024, 256, 30.0);
         let mut ctx = make_context(1000, 0);
@@ -1118,6 +1226,7 @@ mod tests {
             radar_key: "test".to_string(),
             radar_position: Some(radar_pos),
             max_target_speed_ms: max_speed,
+            position_covariance: TEST_COV,
             source: CandidateSource::GuardZone(1),
         };
 
@@ -1133,6 +1242,7 @@ mod tests {
                 radar_key: "test".to_string(),
                 radar_position: Some(radar_pos),
                 max_target_speed_ms: max_speed,
+                position_covariance: TEST_COV,
                 source: CandidateSource::GuardZone(1),
             };
             tracker.process_candidate(c);
@@ -1624,6 +1734,7 @@ mod tests {
                 radar_key: "test".to_string(),
                 radar_position: Some(radar_pos),
                 max_target_speed_ms: max_speed,
+                position_covariance: TEST_COV,
                 source: CandidateSource::GuardZone(1),
             });
         }
@@ -1639,6 +1750,7 @@ mod tests {
             radar_key: "test".to_string(),
             radar_position: Some(radar_pos),
             max_target_speed_ms: max_speed,
+            position_covariance: TEST_COV,
             source: CandidateSource::GuardZone(1),
         });
 

@@ -39,6 +39,52 @@ pub fn meters_per_degree_longitude(lat: &f64) -> f64 {
 }
 
 // ============================================================================
+// Measurement uncertainty
+// ============================================================================
+
+/// Uncertainty of a measured position, as a covariance in the local
+/// north/east frame the motion models work in (m²).
+///
+/// A radar's position error is not a circle. Along the beam the blob centre
+/// is known to about a pixel; across it the centre is only known to a
+/// fraction of the beam width, which at 5 km is well over a hundred metres.
+/// Carrying the two axes separately lets the Kalman filter stop chasing
+/// bearing jitter as if it were motion, and lets the tracker gate on the
+/// ellipse the radar actually measures.
+#[derive(Clone, Copy, Debug)]
+pub struct PositionCovariance {
+    /// North variance (m²)
+    pub nn: f64,
+    /// East variance (m²)
+    pub ee: f64,
+    /// North/east covariance (m²); non-zero off the cardinal bearings
+    pub ne: f64,
+}
+
+impl PositionCovariance {
+    /// Rotate a radial/cross-range variance pair on `bearing_rad` (0 = north)
+    /// into the local north/east frame.
+    pub fn from_polar(bearing_rad: f64, radial_var: f64, cross_var: f64) -> Self {
+        let (sin, cos) = bearing_rad.sin_cos();
+        Self {
+            nn: radial_var * cos * cos + cross_var * sin * sin,
+            ee: radial_var * sin * sin + cross_var * cos * cos,
+            ne: (radial_var - cross_var) * sin * cos,
+        }
+    }
+
+    /// Equal uncertainty in every direction, for measurements with no
+    /// bearing of their own — a MARPA click, or a test fixture.
+    pub const fn isotropic(variance: f64) -> Self {
+        Self {
+            nn: variance,
+            ee: variance,
+            ne: 0.0,
+        }
+    }
+}
+
+// ============================================================================
 // Signal K API Types for Target Streaming
 // ============================================================================
 

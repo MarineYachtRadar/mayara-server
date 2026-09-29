@@ -6,6 +6,7 @@
 
 use std::f64::consts::TAU;
 
+use super::PositionCovariance;
 use super::kalman::{KalmanFilter, Matrix4x4, Vector4};
 use crate::radar::GeoPosition;
 
@@ -20,15 +21,17 @@ pub struct MotionEstimate {
 
 /// Trait for motion estimation strategies
 pub trait MotionModel: Send {
-    /// Initialize the model with a first measurement
-    fn init(&mut self, position: GeoPosition, time: u64);
+    /// Initialize the model with a first measurement and its covariance
+    fn init(&mut self, position: GeoPosition, time: u64, covariance: PositionCovariance);
 
-    /// Initialize with custom position uncertainty
-    fn init_with_uncertainty(&mut self, position: GeoPosition, time: u64, position_variance: f64);
-
-    /// Update the model with a new measurement
+    /// Update the model with a new measurement and its covariance.
     /// Returns the estimated SOG and COG
-    fn update(&mut self, position: GeoPosition, time: u64) -> MotionEstimate;
+    fn update(
+        &mut self,
+        position: GeoPosition,
+        time: u64,
+        covariance: PositionCovariance,
+    ) -> MotionEstimate;
 
     /// Predict position at a future time
     fn predict(&self, time: u64) -> GeoPosition;
@@ -142,8 +145,8 @@ impl ImmMotionModel {
     /// Then `model_probs[j] = c_bar[j]` is the predicted weight for j.
     ///
     /// Requires all three filters to be in the same local-metre frame.
-    /// That's automatic here because `init_with_uncertainty` sets the
-    /// same ref_lat/ref_lon on all three from the same first measurement.
+    /// That's automatic here because `init` sets the same ref_lat/ref_lon
+    /// on all three from the same first measurement.
     fn mix_states(&mut self) {
         let mut c_bar = [0.0; 3];
         for (j, c) in c_bar.iter_mut().enumerate() {
@@ -275,17 +278,10 @@ impl Default for ImmMotionModel {
 }
 
 impl MotionModel for ImmMotionModel {
-    fn init(&mut self, position: GeoPosition, time: u64) {
-        self.init_with_uncertainty(position, time, 20.0);
-    }
-
-    fn init_with_uncertainty(&mut self, position: GeoPosition, time: u64, position_variance: f64) {
-        self.cv_filter
-            .init_with_uncertainty(position, time, position_variance);
-        self.ca_filter
-            .init_with_uncertainty(position, time, position_variance);
-        self.ct_filter
-            .init_with_uncertainty(position, time, position_variance);
+    fn init(&mut self, position: GeoPosition, time: u64, covariance: PositionCovariance) {
+        self.cv_filter.init(position, time, covariance);
+        self.ca_filter.init(position, time, covariance);
+        self.ct_filter.init(position, time, covariance);
 
         self.last_position = position;
         self.last_time = time;
@@ -296,9 +292,14 @@ impl MotionModel for ImmMotionModel {
         self.initialized = true;
     }
 
-    fn update(&mut self, position: GeoPosition, time: u64) -> MotionEstimate {
+    fn update(
+        &mut self,
+        position: GeoPosition,
+        time: u64,
+        covariance: PositionCovariance,
+    ) -> MotionEstimate {
         if !self.initialized {
-            self.init(position, time);
+            self.init(position, time, covariance);
             return MotionEstimate { sog: 0.0, cog: 0.0 };
         }
 
@@ -323,9 +324,9 @@ impl MotionModel for ImmMotionModel {
         let ct_pred = self.ct_filter.predict(time);
 
         // Update each filter
-        self.cv_filter.update(position, time);
-        self.ca_filter.update(position, time);
-        self.ct_filter.update(position, time);
+        self.cv_filter.update(position, time, covariance);
+        self.ca_filter.update(position, time, covariance);
+        self.ct_filter.update(position, time, covariance);
 
         // Step 3: Mode probability update
         let cv_unc = self.cv_filter.get_uncertainty();
@@ -427,6 +428,92 @@ mod tests {
     use std::f64::consts::PI;
 
     use super::*;
+
+    /// The isotropic 5 m noise these filter tests were written against.
+    const TEST_COV: PositionCovariance = PositionCovariance::isotropic(25.0);
+
+    /// One sweep's worth of jitter for a target 5 km away whose blob centre
+    /// wanders 1.5 degrees in bearing: 131 m across the beam, no change in
+    /// range. This is the scatter the reported capture showed at 5-6 km.
+    fn jittered_track(covariance: PositionCovariance) -> MotionEstimate {
+        use super::super::{METERS_PER_DEGREE_LATITUDE, meters_per_degree_longitude};
+
+        let base_lat = 52.0 + 5_000.0 / METERS_PER_DEGREE_LATITUDE;
+        let jitter = 131.0 / meters_per_degree_longitude(&52.0);
+
+        let mut model = ImmMotionModel::new();
+        model.init(GeoPosition::new(base_lat, 4.0), 0, covariance);
+        let mut estimate = MotionEstimate { sog: 0.0, cog: 0.0 };
+        for i in 1..12u64 {
+            let side = if i % 2 == 0 { jitter } else { -jitter };
+            estimate = model.update(
+                GeoPosition::new(base_lat, 4.0 + side),
+                i * 3_000,
+                covariance,
+            );
+        }
+        estimate
+    }
+
+    #[test]
+    fn bearing_jitter_at_range_is_not_read_as_speed() {
+        // Told the truth about its cross-range error, the filter attributes
+        // the wander to the measurement and leaves the target near rest.
+        let honest = PositionCovariance::from_polar(0.0, 10.0 * 10.0, 131.0 * 131.0);
+        let sog = jittered_track(honest).sog;
+
+        assert!(
+            sog < 1.0,
+            "a stationary target must not appear to move: {sog:.2} m/s"
+        );
+    }
+
+    #[test]
+    fn isotropic_noise_turns_bearing_jitter_into_speed() {
+        // The same input with a fixed 5 m error in every direction — what
+        // the filter used to be told at every range — is read as motion.
+        // This is where the reported 2-11 m/s estimates for a 3.4 m/s
+        // vessel came from, and why duplicate tracks never agreed on a
+        // course well enough to be merged.
+        let naive = jittered_track(PositionCovariance::isotropic(25.0)).sog;
+        let honest = jittered_track(PositionCovariance::from_polar(
+            0.0,
+            10.0 * 10.0,
+            131.0 * 131.0,
+        ))
+        .sog;
+
+        // ~10 m/s against ~0.05 m/s: the same order as the 2-11 m/s the
+        // report saw for a vessel making 3.4 m/s.
+        assert!(
+            naive > 5.0,
+            "isotropic noise reads the jitter as motion: {naive:.2} m/s"
+        );
+        assert!(
+            honest < naive / 10.0,
+            "an honest covariance should barely move: \
+             naive={naive:.2} m/s honest={honest:.2} m/s"
+        );
+    }
+
+    #[test]
+    fn from_polar_puts_the_cross_range_error_across_the_beam() {
+        // Due north: the cross-range axis is east/west.
+        let north = PositionCovariance::from_polar(0.0, 4.0, 400.0);
+        assert!((north.nn - 4.0).abs() < 1e-9);
+        assert!((north.ee - 400.0).abs() < 1e-9);
+        assert!(north.ne.abs() < 1e-9);
+
+        // Due east: the two axes swap.
+        let east = PositionCovariance::from_polar(TAU / 4.0, 4.0, 400.0);
+        assert!((east.nn - 400.0).abs() < 1e-9);
+        assert!((east.ee - 4.0).abs() < 1e-9);
+        assert!(east.ne.abs() < 1e-9);
+
+        // Off a cardinal bearing the ellipse is tilted, so the axes correlate.
+        let ne = PositionCovariance::from_polar(TAU / 8.0, 4.0, 400.0);
+        assert!(ne.ne.abs() > 1.0);
+    }
     use crate::radar::KN_TO_MS;
 
     #[test]
@@ -435,13 +522,21 @@ mod tests {
 
         // Initialize at origin
         let pos0 = GeoPosition::new(52.0, 4.0);
-        model.init(pos0, 0);
+        model.init(pos0, 0, TEST_COV);
 
         // Move north at ~10 m/s - do multiple updates to let IMM converge
         let delta_lat = 30.0 / super::super::METERS_PER_DEGREE_LATITUDE;
-        let _ = model.update(GeoPosition::new(52.0 + delta_lat, 4.0), 3000);
-        let _ = model.update(GeoPosition::new(52.0 + 2.0 * delta_lat, 4.0), 6000);
-        let estimate = model.update(GeoPosition::new(52.0 + 3.0 * delta_lat, 4.0), 9000);
+        let _ = model.update(GeoPosition::new(52.0 + delta_lat, 4.0), 3000, TEST_COV);
+        let _ = model.update(
+            GeoPosition::new(52.0 + 2.0 * delta_lat, 4.0),
+            6000,
+            TEST_COV,
+        );
+        let estimate = model.update(
+            GeoPosition::new(52.0 + 3.0 * delta_lat, 4.0),
+            9000,
+            TEST_COV,
+        );
 
         // Should have reasonable speed estimate after convergence
         assert!(
@@ -464,17 +559,17 @@ mod tests {
 
         // Initialize
         let pos0 = GeoPosition::new(52.0, 4.0);
-        model.init(pos0, 0);
+        model.init(pos0, 0, TEST_COV);
 
         // Move east for first update
         let delta_lon = 30.0 / super::super::meters_per_degree_longitude(&52.0);
         let pos1 = GeoPosition::new(52.0, 4.0 + delta_lon);
-        model.update(pos1, 3000);
+        model.update(pos1, 3000, TEST_COV);
 
         // Now turn north
         let delta_lat = 30.0 / super::super::METERS_PER_DEGREE_LATITUDE;
         let pos2 = GeoPosition::new(52.0 + delta_lat, 4.0 + delta_lon);
-        model.update(pos2, 6000);
+        model.update(pos2, 6000, TEST_COV);
 
         // CT model should have increased probability after turn
         // (may not dominate immediately, but should increase)
@@ -524,7 +619,7 @@ mod tests {
 
         // Initialize at angle=0 (south of center)
         let pos0 = position_at_angle(0.0);
-        model.init(pos0, 0);
+        model.init(pos0, 0, TEST_COV);
 
         // Track prediction errors
         let mut max_prediction_error = 0.0f64;
@@ -546,7 +641,7 @@ mod tests {
             prediction_count += 1;
 
             // Update with actual position
-            model.update(actual_pos, time);
+            model.update(actual_pos, time, TEST_COV);
         }
 
         let avg_prediction_error = total_prediction_error / prediction_count as f64;
@@ -591,12 +686,16 @@ mod tests {
     fn imm_mixing_keeps_filter_states_consistent() {
         let mut model = ImmMotionModel::new();
         let start = GeoPosition::new(52.0, 4.0);
-        model.init(start, 0);
+        model.init(start, 0, TEST_COV);
 
         // 20 clean updates moving north at ~10 m/s.
         let delta_lat = 30.0 / super::super::METERS_PER_DEGREE_LATITUDE;
         for i in 1..=20u64 {
-            model.update(GeoPosition::new(52.0 + delta_lat * i as f64, 4.0), i * 3000);
+            model.update(
+                GeoPosition::new(52.0 + delta_lat * i as f64, 4.0),
+                i * 3000,
+                TEST_COV,
+            );
         }
 
         // All three filters should predict the same future position to
@@ -629,11 +728,15 @@ mod tests {
     #[test]
     fn imm_update_is_idempotent_on_stale_or_duplicate_timestamps() {
         let mut model = ImmMotionModel::new();
-        model.init(GeoPosition::new(52.0, 4.0), 0);
+        model.init(GeoPosition::new(52.0, 4.0), 0, TEST_COV);
 
         let lat_step = 30.0 / super::super::METERS_PER_DEGREE_LATITUDE;
         for i in 1..=5u64 {
-            model.update(GeoPosition::new(52.0 + lat_step * i as f64, 4.0), i * 3000);
+            model.update(
+                GeoPosition::new(52.0 + lat_step * i as f64, 4.0),
+                i * 3000,
+                TEST_COV,
+            );
         }
 
         let baseline_motion = model.get_motion();
@@ -643,7 +746,7 @@ mod tests {
         let baseline_ct = model.ct_filter.state_and_covariance();
 
         // Same timestamp as last update — must be a no-op.
-        let returned = model.update(GeoPosition::new(53.0, 5.0), 5 * 3000);
+        let returned = model.update(GeoPosition::new(53.0, 5.0), 5 * 3000, TEST_COV);
         assert!((returned.sog - baseline_motion.sog).abs() < 1e-12);
         assert!((returned.cog - baseline_motion.cog).abs() < 1e-12);
         assert_eq!(model.model_probs, baseline_probs);
@@ -652,7 +755,7 @@ mod tests {
         assert_eq!(model.ct_filter.state_and_covariance().0, baseline_ct.0);
 
         // Strictly older timestamp — also a no-op.
-        let returned = model.update(GeoPosition::new(54.0, 6.0), 2 * 3000);
+        let returned = model.update(GeoPosition::new(54.0, 6.0), 2 * 3000, TEST_COV);
         assert!((returned.sog - baseline_motion.sog).abs() < 1e-12);
         assert_eq!(model.model_probs, baseline_probs);
         assert_eq!(model.cv_filter.state_and_covariance().0, baseline_cv.0);
