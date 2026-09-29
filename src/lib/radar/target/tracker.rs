@@ -484,6 +484,12 @@ impl TargetTracker {
             if self.active_targets[&a].update_count >= 4 {
                 continue;
             }
+            // A manually acquired target looks exactly like the clutter this
+            // pass exists to clear up — one update, no course yet — but the
+            // user pointed at it deliberately. It is not ours to discard.
+            if self.active_targets[&a].is_manual {
+                continue;
+            }
             for (j, &b) in ids.iter().enumerate() {
                 if i == j {
                     continue;
@@ -531,7 +537,9 @@ impl TargetTracker {
                     (a, b)
                 };
                 // discard must be young — skip if the merge would remove an established target
-                if self.active_targets[&discard].update_count >= 4 {
+                if self.active_targets[&discard].update_count >= 4
+                    || self.active_targets[&discard].is_manual
+                {
                     continue;
                 }
                 log::info!(
@@ -1101,6 +1109,38 @@ mod tests {
         candidate.position_covariance =
             PositionCovariance::from_polar(bearing_deg.to_radians(), 10.0 * 10.0, cross * cross);
         candidate
+    }
+
+    /// A target the user acquired by hand starts with a single update and
+    /// no course, which is exactly what deduplication is built to clear up.
+    /// Landing it near an existing track used to delete it on the next
+    /// revolution, without telling anyone.
+    #[test]
+    fn test_manually_acquired_target_is_not_merged_away() {
+        let mut tracker = TargetTracker::new_merged();
+
+        // An established automatic track 500 m north of the radar.
+        let north = 500.0 / METERS_PER_DEGREE_LATITUDE;
+        for i in 0..6u64 {
+            tracker.process_candidate(make_candidate(52.0 + north, 4.0, i * 2_500));
+        }
+
+        // The user clicks 80 m beyond it, inside the merge ring.
+        let click = make_candidate_with_source(
+            52.0 + north + 80.0 / METERS_PER_DEGREE_LATITUDE,
+            4.0,
+            15_000,
+            CandidateSource::GuardZone(0),
+        );
+        let id = tracker.add_active_target(&click);
+        assert_eq!(tracker.active_count(), 2);
+
+        tracker.complete_revolution();
+
+        assert!(
+            tracker.get_target(id).is_some(),
+            "a target the user acquired must survive deduplication"
+        );
     }
 
     /// Reproduces the split in #722: vessel 1 sat 5 km off on a steady
