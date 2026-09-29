@@ -41,7 +41,7 @@ use crate::radar::settings::{
     ControlDestination, ControlError, ControlId, ControlUpdate, ControlValue, SharedControls,
 };
 use crate::radar::spoke::{GenericSpoke, to_protobuf_spoke};
-use crate::radar::target::{BlobDetector, BlobMessage, SpokeContext, TrackerCommand};
+use crate::radar::target::{BlobDetector, BlobMessage, SpokeContext, TrackerCommand, TrackerInput};
 use crate::radar::trail::TrailBuffer;
 use crate::stream::SignalKDelta;
 use crate::{Brand, Cli, TargetMode};
@@ -938,7 +938,7 @@ impl SharedRadars {
                 info: HashMap::new(),
                 persistent_data: Persistence::new(),
                 sk_client_tx,
-                blob_tx: None,
+                arpa_tx: None,
                 tracker_command_tx: None,
             })),
         }
@@ -1321,14 +1321,14 @@ impl SharedRadars {
         self.radars.read().unwrap().sk_client_tx.clone()
     }
 
-    /// Get the blob message sender for target tracking
-    pub fn get_blob_tx(&self) -> Option<mpsc::Sender<BlobMessage>> {
-        self.radars.read().unwrap().blob_tx.clone()
+    /// Get the sender that feeds blobs and revolution ticks to the tracker
+    pub fn get_arpa_tx(&self) -> Option<mpsc::Sender<TrackerInput>> {
+        self.radars.read().unwrap().arpa_tx.clone()
     }
 
-    /// Set the blob message sender for target tracking
-    pub fn set_blob_tx(&self, blob_tx: mpsc::Sender<BlobMessage>) {
-        self.radars.write().unwrap().blob_tx = Some(blob_tx);
+    /// Set the sender that feeds blobs and revolution ticks to the tracker
+    pub fn set_arpa_tx(&self, arpa_tx: mpsc::Sender<TrackerInput>) {
+        self.radars.write().unwrap().arpa_tx = Some(arpa_tx);
     }
 
     /// Get the tracker command sender for MARPA requests and control changes
@@ -1373,7 +1373,7 @@ struct Radars {
     pub info: HashMap<String, RadarInfo>,
     pub persistent_data: Persistence,
     sk_client_tx: tokio::sync::broadcast::Sender<SignalKDelta>,
-    blob_tx: Option<mpsc::Sender<BlobMessage>>,
+    arpa_tx: Option<mpsc::Sender<TrackerInput>>,
     tracker_command_tx: Option<mpsc::Sender<TrackerCommand>>,
 }
 
@@ -1736,7 +1736,7 @@ pub(crate) struct CommonRadar {
     // Common state so we can process spokes
     trails: TrailBuffer,
     blob_detector: Option<BlobDetector>,
-    blob_tx: Option<mpsc::Sender<BlobMessage>>,
+    arpa_tx: Option<mpsc::Sender<TrackerInput>>,
     spoke_message: Option<RadarMessage>,
     spoke_time: u64,
     prev_angle: SpokeBearing,
@@ -1774,7 +1774,7 @@ impl CommonRadar {
         radars: SharedRadars,
         control_update_rx: broadcast::Receiver<ControlUpdate>,
         replay: bool,
-        blob_tx: Option<mpsc::Sender<BlobMessage>>,
+        arpa_tx: Option<mpsc::Sender<TrackerInput>>,
     ) -> Self {
         let trails = TrailBuffer::new(&info);
         let spoke_message = None;
@@ -1824,7 +1824,7 @@ impl CommonRadar {
             replay,
             trails,
             blob_detector,
-            blob_tx,
+            arpa_tx,
             spoke_message,
             spoke_time: 0,
             prev_angle: 0,
@@ -2216,6 +2216,28 @@ impl CommonRadar {
                 .unwrap();
             self.spoke_count = 0;
             self.max_spoke_length = 0;
+
+            // The tracker's revolution clock has to follow the antenna. Its
+            // lost, delete and deduplication timeouts are all counted in
+            // revolutions, and in open water a whole sweep can pass without
+            // a single echo to carry the count forward.
+            if self.blob_detector.is_some()
+                && let Some(ref arpa_tx) = self.arpa_tx
+            {
+                let (lat, lon) = crate::navdata::get_position();
+                let tick = TrackerInput::Revolution {
+                    radar_key: self.key.clone(),
+                    radar_position: match (lat, lon) {
+                        (Some(lat), Some(lon)) => Some(GeoPosition::new(lat, lon)),
+                        _ => None,
+                    },
+                };
+                // A dropped blob costs one echo; a dropped tick slows the
+                // clock itself, so say so rather than losing it silently.
+                if arpa_tx.try_send(tick).is_err() {
+                    log::warn!("{}: tracker busy, revolution not counted", self.key);
+                }
+            }
         }
         if range_changed || rev_wrapped {
             self.flush_spoke_message();
@@ -2281,7 +2303,7 @@ impl CommonRadar {
                 let completed_blobs = detector.process_spoke(&spoke);
 
                 if !completed_blobs.is_empty()
-                    && let Some(ref blob_tx) = self.blob_tx
+                    && let Some(ref arpa_tx) = self.arpa_tx
                 {
                     let max_speed_mode = self.info.controls.arpa_detect_max_speed();
                     let max_target_speed_ms = SpokeContext::max_speed_from_mode(max_speed_mode);
@@ -2304,7 +2326,7 @@ impl CommonRadar {
                             blob: blob.clone(),
                             context: ctx,
                         };
-                        let _ = blob_tx.try_send(msg);
+                        let _ = arpa_tx.try_send(TrackerInput::Blob(msg));
                     }
                 }
             }

@@ -58,8 +58,8 @@ impl EmulatorReportReceiver {
         // either from persistence or as a default for ARPA testing
 
         let control_update_rx = info.control_update_subscribe();
-        let blob_tx = radars.get_blob_tx();
-        let common = CommonRadar::new(args, key, info, radars, control_update_rx, false, blob_tx);
+        let arpa_tx = radars.get_arpa_tx();
+        let common = CommonRadar::new(args, key, info, radars, control_update_rx, false, arpa_tx);
 
         // Create the world simulation
         let world = EmulatorWorld::new(initial_pos);

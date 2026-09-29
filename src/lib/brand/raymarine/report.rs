@@ -322,12 +322,12 @@ impl RaymarineReportReceiver {
         };
 
         let control_update_rx = info.control_update_subscribe();
-        let blob_tx = radars.get_blob_tx();
+        let arpa_tx = radars.get_arpa_tx();
 
         let wire_to_legend = wire_to_legend(&info.get_legend());
 
         let mut common =
-            CommonRadar::new(args, key, info, radars, control_update_rx, replay, blob_tx);
+            CommonRadar::new(args, key, info, radars, control_update_rx, replay, arpa_tx);
 
         // Coalesce roughly 1/32 of a revolution of spokes into each
         // broadcast — Quantum (250 spokes/rev) → batches of 8, RD/HD
