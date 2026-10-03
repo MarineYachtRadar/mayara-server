@@ -635,16 +635,16 @@ pub(super) fn process_fixed_report(receiver: &mut RaymarineReportReceiver, data:
 
         receiver
             .common
-            .set_wire_range(&ControlId::Gain, report.gain_min, report.gain_max);
+            .map_wire_range(&ControlId::Gain, report.gain_min, report.gain_max);
         receiver
             .common
-            .set_wire_range(&ControlId::Sea, report.sea_min, report.sea_max);
+            .map_wire_range(&ControlId::Sea, report.sea_min, report.sea_max);
         receiver
             .common
-            .set_wire_range(&ControlId::Rain, report.rain_min, report.rain_max);
+            .map_wire_range(&ControlId::Rain, report.rain_min, report.rain_max);
         receiver
             .common
-            .set_wire_range(&ControlId::Ftc, report.ftc_min, report.ftc_max);
+            .map_wire_range(&ControlId::Ftc, report.ftc_min, report.ftc_max);
     }
 }
 
