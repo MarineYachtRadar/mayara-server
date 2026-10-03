@@ -169,9 +169,7 @@ pub(crate) fn update_when_model_known(
         controls.set_user_name(user_name);
     }
 
-    controls.add(
-        new_auto(ControlId::Sea, 0., 100., HAS_AUTO_NOT_ADJUSTABLE).wire_scale_factor(255., false),
-    );
+    controls.add(new_auto(ControlId::Sea, 0., 100., HAS_AUTO_NOT_ADJUSTABLE));
 
     controls.add(new_list(ControlId::TargetExpansion, &["Off", "On"]));
 
@@ -217,6 +215,7 @@ mod tests {
     use super::*;
     use clap::Parser;
     use std::time::Duration;
+    use strum::IntoEnumIterator;
 
     fn controls_for(args: &Cli, base_model: BaseModel) -> SharedControls {
         crate::radar::ui_strings::radar_info(crate::Brand::Raymarine, args, |id, tx| {
@@ -255,6 +254,21 @@ mod tests {
                 if expected { "" } else { " not" }
             );
         }
+    }
+
+    /// A Quantum's sea is 0..100 on the wire both ways, so a report of 50 must
+    /// read 50. It was divided by 255, so every sea level read as 0.
+    #[test]
+    fn quantum_sea_reads_as_reported() {
+        let args = Cli::parse_from(["mayara-server"]);
+        let (_, quantum) = BaseModel::iter()
+            .zip(controls_for_every_model(&args))
+            .find(|(base_model, _)| *base_model == BaseModel::Quantum)
+            .unwrap();
+
+        quantum.set_value_auto(&ControlId::Sea, false, 50.).unwrap();
+
+        assert_eq!(quantum.get(&ControlId::Sea).unwrap().value, Some(50.));
     }
 
     /// Both Raymarine families are held up by the same heartbeat, so both
