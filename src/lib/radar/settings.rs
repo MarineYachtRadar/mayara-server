@@ -1476,6 +1476,31 @@ impl SharedControls {
         }
     }
 
+    /// Map the raw range a radar advertises for a control onto the control's
+    /// own `min_value..max_value`, for reports and commands alike.
+    pub(crate) fn map_wire_range(
+        &self,
+        control_id: &ControlId,
+        wire_min: f64,
+        wire_max: f64,
+    ) -> Result<(), ControlError> {
+        let mut locked = self.controls.write().unwrap();
+        match locked.controls.get_mut(control_id) {
+            Some(control) => control.map_wire_range(wire_min, wire_max),
+            None => Err(ControlError::NotSupported(*control_id)),
+        }
+    }
+
+    /// The raw value to send the radar for `value`, when the radar has
+    /// advertised a wire range for the control.
+    pub(crate) fn wire_value(&self, control_id: &ControlId, value: f64) -> Option<f64> {
+        let locked = self.controls.read().unwrap();
+        locked
+            .controls
+            .get(control_id)
+            .and_then(|control| control.wire_value(value))
+    }
+
     /// Add `value` to a control's set of valid values if it is not already
     /// present, keeping the list sorted. Used to widen a control beyond the
     /// generic default for a brand that supports the extra value — e.g. the
@@ -3276,6 +3301,11 @@ impl Control {
             self.item
         );
 
+        if let Some(wire_range) = self.item.wire_range {
+            value = self.value_in_wire_range(wire_range, value);
+            auto_value = auto_value.map(|v| self.value_in_wire_range(wire_range, v));
+        }
+
         if let Some(wire_offset) = self.item.wire_offset
             && wire_offset > 0.0
         {
@@ -3682,6 +3712,61 @@ impl Control {
         Ok(None)
     }
 
+    fn map_wire_range(&mut self, wire_min: f64, wire_max: f64) -> Result<(), ControlError> {
+        if self.item.min_value.is_none() || self.item.max_value.is_none() {
+            return Err(ControlError::Invalid(
+                self.item.control_id,
+                "wire range on a control without min and max".to_string(),
+            ));
+        }
+        // An empty range cannot be mapped; keep the conversion already in place.
+        if wire_max <= wire_min {
+            log::warn!(
+                "{}: ignoring empty wire range {}..{}",
+                self.item.control_id,
+                wire_min,
+                wire_max
+            );
+            return Ok(());
+        }
+        if self.item.wire_range != Some((wire_min, wire_max)) {
+            log::debug!(
+                "{}: wire range {}..{}",
+                self.item.control_id,
+                wire_min,
+                wire_max
+            );
+            self.item.wire_range = Some((wire_min, wire_max));
+            self.item.wire_offset = None;
+            self.item.wire_scale_factor = None;
+        }
+        Ok(())
+    }
+
+    /// A raw value outside the advertised range is pinned to its nearest end:
+    /// it is still the radar's own reading, and refusing it would also drop
+    /// the auto or enabled state that arrives alongside it.
+    fn value_in_wire_range(&self, (wire_min, wire_max): (f64, f64), raw: f64) -> f64 {
+        let (min, max) = self.control_range();
+        let fraction = (raw.clamp(wire_min, wire_max) - wire_min) / (wire_max - wire_min);
+        min + fraction * (max - min)
+    }
+
+    fn wire_value(&self, value: f64) -> Option<f64> {
+        let (wire_min, wire_max) = self.item.wire_range?;
+        let (min, max) = self.control_range();
+        let fraction = (value.clamp(min, max) - min) / (max - min);
+        Some(wire_min + fraction * (wire_max - wire_min))
+    }
+
+    /// Only called once `map_wire_range` has checked both bounds are present.
+    fn control_range(&self) -> (f64, f64) {
+        (
+            self.item.min_value.unwrap_or_default(),
+            self.item.max_value.unwrap_or_default(),
+        )
+    }
+
     /// Look up the wire value (index) for an enum value by its string value or label
     /// Returns None if no match found or if not an enum control
     #[allow(dead_code)]
@@ -3779,6 +3864,11 @@ pub struct ControlDefinition {
     wire_scale_factor: Option<f64>,
     #[serde(skip)]
     wire_offset: Option<f64>,
+    /// The raw `(min, max)` the radar itself advertises for this control,
+    /// mapped linearly onto `min_value..max_value`. Takes the place of
+    /// `wire_offset` and `wire_scale_factor` once set.
+    #[serde(skip)]
+    wire_range: Option<(f64, f64)>,
     #[serde(skip)]
     pub(crate) wire_units: Option<Units>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3846,6 +3936,7 @@ impl ControlDefinition {
             step_value,
             wire_scale_factor,
             wire_offset,
+            wire_range: None,
             units,
             wire_units,
             descriptions,
@@ -4903,5 +4994,92 @@ mod test {
         controls.set_auto_standby(0);
         assert_eq!(controls.auto_standby_index(), None);
         assert_eq!(controls.auto_standby(), None);
+    }
+
+    /// An RD radar advertises its own raw range for each level in its fixed
+    /// report. The values below are from an E120-attached RD capture
+    /// (`research/raymarine/captures/E120_classic`): gain 42..222, sea
+    /// 119..190, with the status report showing gain 132 and sea 141.
+    fn controls_with_rd_levels() -> SharedControls {
+        let args = Cli::parse_from(["my_program"]);
+        let tx = tokio::sync::broadcast::Sender::new(10);
+        let mut controls = SharedControls::new("ray1234".to_string(), tx, &args, HashMap::new());
+        let auto = || AutomaticValue {
+            has_auto: true,
+            has_auto_adjustable: false,
+            auto_adjust_min_value: None,
+            auto_adjust_max_value: None,
+        };
+        controls.add(new_auto(ControlId::Gain, 0., 100., auto()));
+        controls.add(new_auto(ControlId::Sea, 0., 100., auto()).wire_scale_factor(255., false));
+        controls
+            .map_wire_range(&ControlId::Gain, 42., 222.)
+            .unwrap();
+        controls
+            .map_wire_range(&ControlId::Sea, 119., 190.)
+            .unwrap();
+        controls
+    }
+
+    /// The advertised range maps onto 0..100, as radar_pi maps it, not onto
+    /// 0..1. Regression for #729, where every level showed as 0 or 1.
+    #[test]
+    fn wire_range_maps_onto_the_control_range() {
+        let controls = controls_with_rd_levels();
+
+        controls
+            .set_value_auto(&ControlId::Gain, false, 132.)
+            .unwrap();
+        assert_eq!(controls.get(&ControlId::Gain).unwrap().value, Some(50.));
+
+        // The range replaces the generic 0..255 scale the control started with.
+        controls
+            .set_value_auto(&ControlId::Sea, false, 141.)
+            .unwrap();
+        assert_eq!(controls.get(&ControlId::Sea).unwrap().value, Some(31.));
+    }
+
+    /// A raw value below the advertised minimum used to be refused, and the
+    /// auto flag beside it with it, so the GUI never showed what the radar was
+    /// doing. Regression for #729.
+    #[test]
+    fn wire_value_outside_the_range_is_pinned_to_its_end() {
+        let controls = controls_with_rd_levels();
+
+        controls.set_value_auto(&ControlId::Gain, true, 0.).unwrap();
+        let gain = controls.get(&ControlId::Gain).unwrap();
+        assert_eq!(gain.value, Some(0.));
+        assert_eq!(gain.auto, Some(true));
+
+        controls
+            .set_value_auto(&ControlId::Gain, false, 255.)
+            .unwrap();
+        assert_eq!(controls.get(&ControlId::Gain).unwrap().value, Some(100.));
+    }
+
+    #[test]
+    fn wire_value_is_the_inverse_of_the_range_mapping() {
+        let controls = controls_with_rd_levels();
+
+        assert_eq!(controls.wire_value(&ControlId::Gain, 0.), Some(42.));
+        assert_eq!(controls.wire_value(&ControlId::Gain, 50.), Some(132.));
+        assert_eq!(controls.wire_value(&ControlId::Gain, 100.), Some(222.));
+    }
+
+    #[test]
+    fn control_without_a_wire_range_has_no_wire_value() {
+        let controls = controls_with_auto_control();
+
+        assert_eq!(controls.wire_value(&ControlId::TransmitChannel, 2.), None);
+    }
+
+    /// An empty range cannot be mapped, so the control keeps the mapping it
+    /// already has.
+    #[test]
+    fn empty_wire_range_is_ignored() {
+        let controls = controls_with_rd_levels();
+        controls.map_wire_range(&ControlId::Sea, 0., 0.).unwrap();
+
+        assert_eq!(controls.wire_value(&ControlId::Sea, 50.), Some(154.5));
     }
 }

@@ -2483,33 +2483,14 @@ impl CommonRadar {
         };
     }
 
-    pub(crate) fn set_wire_range(&mut self, control_id: &ControlId, min: u8, max: u8) {
-        match self
+    pub(crate) fn map_wire_range(&mut self, control_id: &ControlId, min: u8, max: u8) {
+        if let Err(e) = self
             .info
             .controls
-            .set_wire_range(control_id, min as f64, max as f64)
+            .map_wire_range(control_id, min as f64, max as f64)
         {
-            Err(e) => {
-                log::error!("{}: {}", self.key, e);
-            }
-            Ok(Some(())) => {
-                if log::log_enabled!(log::Level::Debug) {
-                    let control = self.info.controls.get(control_id).unwrap();
-                    log::trace!(
-                        "{}: Control '{}' new wire min {} max {} value {:?} auto {:?} auto_value {:?} enabled {:?} ",
-                        self.key,
-                        control_id,
-                        min,
-                        max,
-                        control.value,
-                        control.auto,
-                        control.auto_value,
-                        control.enabled,
-                    );
-                }
-            }
-            Ok(None) => {}
-        };
+            log::error!("{}: {}", self.key, e);
+        }
     }
 
     pub(crate) fn set_value_with_many_auto(

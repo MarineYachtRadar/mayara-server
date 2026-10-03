@@ -50,11 +50,20 @@ fn on_off_command(cmd: &mut Vec<u8>, lead: &[u8], on_off: u8) {
     }));
 }
 
+/// Gain, sea, rain and FTC are sent in the raw range the radar advertises in
+/// its fixed report; until that report has arrived, scale onto 0..255.
+fn level_byte(controls: &SharedControls, control_id: &ControlId, value: f64) -> u8 {
+    controls
+        .wire_value(control_id, value)
+        .map(|wire| wire.round() as u8)
+        .unwrap_or_else(|| Command::scale_100_to_byte(value))
+}
+
 pub async fn set_control(
     command: &mut Command,
     cv: &ControlValue,
     value: f64,
-    _controls: &SharedControls, // Not used now, but useful if controls depend on other controls
+    controls: &SharedControls,
 ) -> Result<(), RadarError> {
     let deci_value = (value * 10.0) as i32;
     let auto: u8 = if cv.auto.unwrap_or(false) { 1 } else { 0 };
@@ -106,7 +115,7 @@ pub async fn set_control(
             if auto == 0 {
                 command.send(&cmd).await?;
                 cmd.clear();
-                standard_command(&mut cmd, &[0x01, 0x83], v);
+                standard_command(&mut cmd, &[0x01, 0x83], level_byte(controls, &cv.id, value));
             }
         }
         ControlId::Sea => {
@@ -114,7 +123,7 @@ pub async fn set_control(
             if auto == 0 {
                 command.send(&cmd).await?;
                 cmd.clear();
-                standard_command(&mut cmd, &[0x02, 0x83], v);
+                standard_command(&mut cmd, &[0x02, 0x83], level_byte(controls, &cv.id, value));
             }
         }
         ControlId::Rain => {
@@ -122,7 +131,7 @@ pub async fn set_control(
             if auto == 0 {
                 command.send(&cmd).await?;
                 cmd.clear();
-                standard_command(&mut cmd, &[0x03, 0x83], v);
+                standard_command(&mut cmd, &[0x03, 0x83], level_byte(controls, &cv.id, value));
             }
         }
         ControlId::Ftc => {
@@ -131,7 +140,7 @@ pub async fn set_control(
             if on_off == 1 {
                 command.send(&cmd).await?;
                 cmd.clear();
-                standard_command(&mut cmd, &[0x04, 0x83], v);
+                standard_command(&mut cmd, &[0x04, 0x83], level_byte(controls, &cv.id, value));
             }
         }
         ControlId::MainBangSuppression => {
