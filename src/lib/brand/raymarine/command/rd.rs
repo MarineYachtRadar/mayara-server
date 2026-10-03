@@ -173,8 +173,43 @@ pub async fn set_control(
 
 #[cfg(test)]
 mod tests {
-    use super::{RdOnOffCommand, RdValueCommand, on_off_command, standard_command};
+    use clap::Parser;
+
+    use super::{RdOnOffCommand, RdValueCommand, level_byte, on_off_command, standard_command};
+    use crate::Cli;
+    use crate::brand::raymarine::BaseModel;
+    use crate::brand::raymarine::settings;
+    use crate::radar::settings::{ControlId, SharedControls};
     use crate::util::encode;
+
+    fn rd_controls() -> SharedControls {
+        let args = Cli::parse_from(["mayara-server"]);
+        let tx = tokio::sync::broadcast::Sender::new(1);
+        settings::new("ray1234".to_string(), tx, &args, BaseModel::RD)
+    }
+
+    /// The level sent for gain, sea, rain and FTC sits in the range the radar
+    /// advertised (gain 42..222 on a captured RD), so mid-scale is 132, not
+    /// the 128 a plain 0..255 scaling gives. Regression for #729.
+    #[test]
+    fn level_is_sent_in_the_radar_advertised_range() {
+        let controls = rd_controls();
+        controls
+            .map_wire_range(&ControlId::Gain, 42., 222.)
+            .unwrap();
+
+        assert_eq!(level_byte(&controls, &ControlId::Gain, 0.), 42);
+        assert_eq!(level_byte(&controls, &ControlId::Gain, 50.), 132);
+        assert_eq!(level_byte(&controls, &ControlId::Gain, 100.), 222);
+    }
+
+    /// Until the fixed report has advertised a range, levels scale onto 0..255.
+    #[test]
+    fn level_without_an_advertised_range_scales_onto_a_byte() {
+        let controls = rd_controls();
+
+        assert_eq!(level_byte(&controls, &ControlId::Gain, 50.), 128);
+    }
 
     /// Nothing pinned the RD command frames before. Both are 24 bytes and
     /// differ only in where their payload sits, which is exactly the kind of
