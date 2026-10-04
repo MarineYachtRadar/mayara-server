@@ -971,7 +971,7 @@ impl FurunoReportReceiver {
             }
             CommandId::HeadingAdjust => {
                 // Response format: $N81,{tenths of a degree, 0..3599},0
-                let tenths = first_number(&numbers, "HeadingAdjust")?;
+                let tenths = first_field(&strings, "HeadingAdjust")?;
                 for common in self.both_ranges() {
                     common.set_value(&ControlId::BearingAlignment, tenths);
                 }
@@ -2215,6 +2215,19 @@ fn first_number(numbers: &[f64], command: &str) -> Result<f64, Error> {
     }
 }
 
+/// The first argument of a report, refusing one that is not a number. The
+/// parsed `numbers` read such a field as 0, which for a setting like the
+/// alignment is a value of its own rather than an absence.
+fn first_field(strings: &[&str], command: &str) -> Result<f64, Error> {
+    let Some(field) = strings.first() else {
+        bail!("Insufficient (0) arguments for {} command", command);
+    };
+    field
+        .trim()
+        .parse()
+        .with_context(|| format!("{} report has {:?} for a number", command, field))
+}
+
 /// The model and firmware version out of a `$N96` module list, whose first
 /// entry reads `<part number>-<version>`. A reply carrying no entries, or a
 /// first entry in another shape, names no model.
@@ -2319,6 +2332,21 @@ mod tests {
 
         assert_alignment(&receiver.common, -5.0, "Range A");
         assert_alignment(receiver.common_b.as_ref().unwrap(), -5.0, "Range B");
+    }
+
+    /// A report whose alignment is missing or not a number is refused rather
+    /// than read as 0, which would turn the picture back to the bow.
+    #[tokio::test]
+    async fn a_malformed_alignment_is_refused() {
+        let mut receiver = dual_range_receiver();
+        receiver.process_report("$N81,70,0").unwrap();
+
+        for report in ["$N81", "$N81,,0", "$N81,x,0"] {
+            assert!(receiver.process_report(report).is_err(), "{report}");
+        }
+
+        assert_alignment(&receiver.common, 7.0, "Range A");
+        assert_alignment(receiver.common_b.as_ref().unwrap(), 7.0, "Range B");
     }
 
     /// The alignment one range shows, in degrees.
