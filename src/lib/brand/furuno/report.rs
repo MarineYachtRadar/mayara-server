@@ -985,7 +985,7 @@ impl FurunoReportReceiver {
                 // Auto names no channel, and the channels start at 1, so a
                 // value-bearing call would offer 0 and be refused. The antenna
                 // has one transmitter, so both ranges show its channel.
-                let channel = first_number(&numbers, "TxChannel")?;
+                let channel = first_field(&strings, "TxChannel")?;
                 for common in self.both_ranges() {
                     if channel == TX_CHANNEL_AUTO as f64 {
                         let _ = common
@@ -2407,6 +2407,26 @@ mod tests {
 
         receiver.process_report("$NEC,0").unwrap();
         assert_eq!(channel(&receiver), (Some(2.), Some(true)));
+    }
+
+    /// A report whose channel is missing or not a number is refused rather
+    /// than read as 0, which would turn Auto on.
+    #[tokio::test]
+    async fn a_malformed_transmit_channel_is_refused() {
+        let mut receiver = nxt_receiver();
+        receiver.process_report("$NEC,2").unwrap();
+
+        for report in ["$NEC", "$NEC,", "$NEC,x"] {
+            assert!(receiver.process_report(report).is_err(), "{report}");
+        }
+
+        let control = receiver
+            .common
+            .info
+            .controls
+            .get(&ControlId::TransmitChannel)
+            .unwrap();
+        assert_eq!((control.value, control.auto), (Some(2.), Some(false)));
     }
 
     /// The antenna has one transmitter, so a dual-range radar shows its
