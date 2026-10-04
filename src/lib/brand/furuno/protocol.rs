@@ -486,6 +486,8 @@ pub(crate) enum CommandId {
 
     /// `0x80` — Attenuation.
     Att = 0x80,
+    /// `0x81` — Heading alignment in tenths of a degree, `$S81,<tenths>,0`.
+    HeadingAdjust = 0x81,
     /// `0x83` — Main bang suppression.
     MainBangSize = 0x83,
     /// `0x84` — Antenna height.
@@ -836,6 +838,14 @@ pub(crate) const GUARD_MODE_OFF: i32 = 0;
 
 /// Guard mode value: fan (sector) zone.
 pub(crate) const GUARD_MODE_FAN: i32 = 1;
+
+// =============================================================================
+// Installation constants
+// =============================================================================
+
+/// A full turn in the tenths of a degree `$S81` counts in. The radar takes
+/// 0..3599 and refuses a negative number.
+pub(crate) const HEADING_ADJUST_FULL_TURN: i32 = 3600;
 
 #[cfg(test)]
 mod tests {

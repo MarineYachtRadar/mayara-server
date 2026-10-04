@@ -5,8 +5,8 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 use std::f64::consts::TAU;
 
 use super::protocol::{
-    CommandId, CommandMode, GUARD_MODE_FAN, GUARD_MODE_OFF, SPOKES, WIRE_UNIT_KM, WIRE_UNIT_NM,
-    meters_to_wire_index_for_unit, wire_unit_for_meters,
+    CommandId, CommandMode, GUARD_MODE_FAN, GUARD_MODE_OFF, HEADING_ADJUST_FULL_TURN, SPOKES,
+    WIRE_UNIT_KM, WIRE_UNIT_NM, meters_to_wire_index_for_unit, wire_unit_for_meters,
 };
 use crate::brand::CommandSender;
 use crate::radar::range::Ranges;
@@ -222,6 +222,10 @@ impl Command {
         if self.controls.contains_key(&ControlId::MainBangSuppression) {
             self.send(CommandMode::Request, CommandId::MainBangSize, &[0, 0])
                 .await?; // $R83,0,0
+        }
+        if self.controls.contains_key(&ControlId::BearingAlignment) {
+            self.send(CommandMode::Request, CommandId::HeadingAdjust, &[])
+                .await?; // $R81
         }
 
         self.send(CommandMode::Request, CommandId::BlindSector, &[])
@@ -472,6 +476,15 @@ impl CommandSender for Command {
                 cmd.push(value);
                 cmd.push(0);
                 CommandId::AntennaHeight
+            }
+            ControlId::BearingAlignment => {
+                // Format: $S81,{tenths of a degree},0
+                // The radar takes 0..3599, so a negative alignment goes out
+                // as the same bearing counted the other way round.
+                let tenths = (cv.as_f64()? * 10.).round() as i32;
+                cmd.push(tenths.rem_euclid(HEADING_ADJUST_FULL_TURN));
+                cmd.push(0);
+                CommandId::HeadingAdjust
             }
             ControlId::MainBangSuppression => {
                 // Format: $S83,{value_255},0
@@ -1063,6 +1076,37 @@ mod tests {
         assert_eq!(wire.first(), "$S77,0,-180,180,200,60");
     }
 
+    // ----- Installation -----
+
+    /// The alignment goes out in tenths of a degree, and the radar takes only
+    /// 0..3599: a negative alignment is the same bearing counted the other
+    /// way round.
+    #[tokio::test]
+    async fn bearing_alignment_goes_out_as_tenths_of_a_degree_within_one_turn() {
+        let cases = [
+            (json!(7), "$S81,70,0"),
+            (json!(12.3), "$S81,123,0"),
+            (json!(0), "$S81,0,0"),
+            (json!(-5), "$S81,3550,0"),
+            (json!(-0.1), "$S81,3599,0"),
+            (json!(180), "$S81,1800,0"),
+            (json!(-180), "$S81,1800,0"),
+        ];
+
+        for (value, expected) in cases {
+            let (mut command, info, wire) = nxt();
+
+            set(
+                &mut command,
+                &info,
+                cv(ControlId::BearingAlignment, value.clone()),
+            )
+            .await;
+
+            assert_eq!(wire.first(), expected, "{value}");
+        }
+    }
+
     // ----- Signal processing -----
 
     /// Main bang suppression is a percentage to the user and a byte to the
@@ -1307,6 +1351,7 @@ mod tests {
                 "$R75",     // tune
                 "$R89",     // scan speed
                 "$R83,0,0", // main bang size
+                "$R81",     // bearing alignment
                 "$R77",     // no-transmit sectors
                 "$RE8",     // anti-jamming
                 "$R85",     // near STC curve

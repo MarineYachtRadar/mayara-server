@@ -617,6 +617,12 @@ impl FurunoReportReceiver {
         &mut self.common
     }
 
+    /// Both ranges of a dual-range radar, or the only one: for a setting of
+    /// the antenna, which the two share.
+    fn both_ranges(&mut self) -> impl Iterator<Item = &mut CommonRadar> {
+        std::iter::once(&mut self.common).chain(self.common_b.as_mut())
+    }
+
     /// True only when every active range is idle. We must keep decoding
     /// frames as long as ANY range still has subscribers or is transmitting,
     /// because spokes for Range A and Range B share the same UDP socket and
@@ -962,6 +968,13 @@ impl FurunoReportReceiver {
                 let percent = (numbers[0] as i32 * 100) / 255;
                 self.common
                     .set_value(&ControlId::MainBangSuppression, percent as f64);
+            }
+            CommandId::HeadingAdjust => {
+                // Response format: $N81,{tenths of a degree, 0..3599},0
+                let tenths = first_number(&numbers, "HeadingAdjust")?;
+                for common in self.both_ranges() {
+                    common.set_value(&ControlId::BearingAlignment, tenths);
+                }
             }
 
             // NXT-specific features
@@ -2215,6 +2228,113 @@ fn model_and_version<'a>(values: &[&'a str]) -> Option<(RadarModel, &'a str)> {
 mod tests {
     use super::*;
     use crate::radar::Legend;
+    use clap::Parser;
+    use std::net::{Ipv4Addr, SocketAddrV4};
+
+    /// An NXT's radar info with its model known; `dual` names its range.
+    fn nxt_info(radars: &SharedRadars, args: &Cli, dual: Option<&str>) -> RadarInfo {
+        let addr = SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 2), 10000);
+        let mut info = RadarInfo::new(
+            radars,
+            args,
+            crate::Brand::Furuno,
+            Some("TEST0001"),
+            None,
+            dual,
+            PIXEL_VALUES,
+            SPOKES,
+            SPOKE_LEN,
+            addr,
+            Ipv4Addr::new(10, 0, 0, 1),
+            addr,
+            addr,
+            addr,
+            |id, tx| settings::new(id, tx, args),
+            true,
+            true,
+        );
+        info.controls.set_user_name(info.key());
+        settings::update_when_model_known(&mut info, RadarModel::DRS4DNXT, "1.00");
+        info
+    }
+
+    /// An NXT receiver with its model known, as the report loop holds it.
+    fn nxt_receiver() -> FurunoReportReceiver {
+        let radars = SharedRadars::new();
+        let args = Cli::parse_from(["mayara-server"]);
+        let info = nxt_info(&radars, &args, None);
+        FurunoReportReceiver::new(&args, radars, info)
+    }
+
+    /// The same with Range B alongside, as a dual-range NXT runs.
+    fn dual_range_receiver() -> FurunoReportReceiver {
+        let radars = SharedRadars::new();
+        let args = Cli::parse_from(["mayara-server"]);
+        let info = nxt_info(&radars, &args, Some("A"));
+        let info_b = nxt_info(&radars, &args, Some("B"));
+        let mut receiver = FurunoReportReceiver::new(&args, radars.clone(), info);
+        receiver.set_range_b(&args, &radars, info_b);
+        receiver
+    }
+
+    /// The alignment comes back in tenths of a degree, 0 to 3599, and one past
+    /// half a turn is the bearing left of the bow. A DRS4D-NXT reported
+    /// `$N81,70,0` and `$N81,3550,0` for 7.0 and -5.0 degrees.
+    #[tokio::test]
+    async fn a_reported_alignment_reads_in_degrees_either_side_of_the_bow() {
+        for (report, expected) in [
+            ("$N81,70,0", 7.0),
+            ("$N81,3550,0", -5.0),
+            ("$N81,1800,0", 180.0),
+        ] {
+            let mut receiver = nxt_receiver();
+
+            receiver.process_report(report).unwrap();
+
+            assert_alignment(&receiver.common, expected, report);
+        }
+    }
+
+    /// The radar echoes a negative number it was sent, as its 16-bit two's
+    /// complement, before it reports the alignment it kept: a DRS4D-NXT sent
+    /// `$S81,-50,0` replied `$N81,65486,0` and then `$N81,70,0`. The echo is
+    /// beyond a turn, so it is not taken for an alignment.
+    #[tokio::test]
+    async fn the_echo_of_a_refused_alignment_is_not_taken_for_one() {
+        let mut receiver = nxt_receiver();
+
+        receiver.process_report("$N81,70,0").unwrap();
+        receiver.process_report("$N81,65486,0").unwrap();
+
+        assert_alignment(&receiver.common, 7.0, "after the echo");
+    }
+
+    /// The alignment is the antenna's, so a dual-range radar shows it on both
+    /// ranges.
+    #[tokio::test]
+    async fn a_reported_alignment_shows_on_both_ranges() {
+        let mut receiver = dual_range_receiver();
+
+        receiver.process_report("$N81,3550,0").unwrap();
+
+        assert_alignment(&receiver.common, -5.0, "Range A");
+        assert_alignment(receiver.common_b.as_ref().unwrap(), -5.0, "Range B");
+    }
+
+    /// The alignment one range shows, in degrees.
+    fn alignment(common: &CommonRadar) -> Option<f64> {
+        common
+            .info
+            .controls
+            .get(&ControlId::BearingAlignment)
+            .and_then(|c| c.value)
+            .map(f64::to_degrees)
+    }
+
+    fn assert_alignment(common: &CommonRadar, expected: f64, when: &str) {
+        let degrees = alignment(common).expect("an alignment");
+        assert!((degrees - expected).abs() < 1e-6, "{when}: {degrees}");
+    }
 
     /// A report that should carry a number but does not must be refused, not
     /// indexed. `$N8E` and `$N8F` arrive bare, and mayara solicits them.
