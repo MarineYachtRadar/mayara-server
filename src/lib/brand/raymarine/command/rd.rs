@@ -1,5 +1,6 @@
 use deku::DekuWrite;
 
+use crate::radar::range::Ranges;
 use crate::radar::settings::{ControlId, ControlValue, SharedControls};
 use crate::radar::{Power, RadarError};
 use crate::util::encode;
@@ -65,12 +66,28 @@ pub async fn set_control(
     value: f64,
     controls: &SharedControls,
 ) -> Result<(), RadarError> {
+    for cmd in control_frames(&command.info.ranges, cv, value, controls)? {
+        log::info!("{}: Send command {:02X?}", command.info.key(), cmd);
+        command.send(&cmd).await?;
+    }
+
+    Ok(())
+}
+
+/// The datagrams that set `cv` on an RD radar, in the order they must be sent.
+fn control_frames(
+    ranges: &Ranges,
+    cv: &ControlValue,
+    value: f64,
+    controls: &SharedControls,
+) -> Result<Vec<Vec<u8>>, RadarError> {
     let deci_value = (value * 10.0) as i32;
     let auto: u8 = if cv.auto.unwrap_or(false) { 1 } else { 0 };
-    let _enabled: u8 = if cv.enabled.unwrap_or(false) { 1 } else { 0 };
+    let enabled: u8 = if cv.enabled.unwrap_or(false) { 1 } else { 0 };
     let v = Command::scale_100_to_byte(value); // todo! use transform values
 
-    let mut cmd = Vec::with_capacity(6);
+    let mut frames = Vec::with_capacity(2);
+    let mut cmd = Vec::with_capacity(24);
 
     match cv.id {
         ControlId::Power => {
@@ -83,7 +100,6 @@ pub async fn set_control(
 
         ControlId::Range => {
             let value = value as i32;
-            let ranges = &command.info.ranges;
             let index = if value < ranges.len() as i32 {
                 value as u8
             } else {
@@ -113,38 +129,41 @@ pub async fn set_control(
         ControlId::Gain => {
             on_off_command(&mut cmd, &[0x01, 0x83], auto);
             if auto == 0 {
-                command.send(&cmd).await?;
-                cmd.clear();
+                frames.push(std::mem::take(&mut cmd));
                 standard_command(&mut cmd, &[0x01, 0x83], level_byte(controls, &cv.id, value));
             }
         }
         ControlId::Sea => {
             on_off_command(&mut cmd, &[0x02, 0x83], auto);
             if auto == 0 {
-                command.send(&cmd).await?;
-                cmd.clear();
+                frames.push(std::mem::take(&mut cmd));
                 standard_command(&mut cmd, &[0x02, 0x83], level_byte(controls, &cv.id, value));
             }
         }
         ControlId::Rain => {
-            on_off_command(&mut cmd, &[0x03, 0x83], auto);
-            if auto == 0 {
-                command.send(&cmd).await?;
-                cmd.clear();
+            on_off_command(&mut cmd, &[0x03, 0x83], enabled);
+            if enabled == 1 {
+                frames.push(std::mem::take(&mut cmd));
                 standard_command(&mut cmd, &[0x03, 0x83], level_byte(controls, &cv.id, value));
             }
         }
         ControlId::Ftc => {
-            let on_off = 1 - auto; // Ftc is really an on/off switch, so invert auto
-            on_off_command(&mut cmd, &[0x04, 0x83], on_off);
-            if on_off == 1 {
-                command.send(&cmd).await?;
-                cmd.clear();
+            on_off_command(&mut cmd, &[0x04, 0x83], enabled);
+            if enabled == 1 {
+                frames.push(std::mem::take(&mut cmd));
                 standard_command(&mut cmd, &[0x04, 0x83], level_byte(controls, &cv.id, value));
             }
         }
         ControlId::MainBangSuppression => {
-            standard_command(&mut cmd, &[0x01, 0x82], value as u8);
+            on_off_command(&mut cmd, &[0x01, 0x82], value as u8);
+        }
+        ControlId::TargetExpansion => {
+            let level = value as u8;
+            cmd.extend_from_slice(&[
+                0x06, 0x83, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00,
+                level, // Target expansion at offset 8: 0 - off, 1 - low, 2 - high
+                0x00, 0x00, 0x00,
+            ]);
         }
         ControlId::DisplayTiming => {
             cmd.extend_from_slice(&[
@@ -154,9 +173,10 @@ pub async fn set_control(
             ]);
         }
         ControlId::InterferenceRejection => {
+            let level = value as u8;
             cmd.extend_from_slice(&[
                 0x07, 0x83, 0x01, 0x00,
-                v, // Interference rejection at offset 4, 0 - off, 1 - normal, 2 - high
+                level, // Interference rejection level at offset 4, 0 - off
                 0x00, 0x00, 0x00,
             ]);
         }
@@ -165,21 +185,26 @@ pub async fn set_control(
         _ => return Err(RadarError::CannotSetControlId(cv.id)),
     };
 
-    log::info!("{}: Send command {:02X?}", command.info.key(), cmd);
-    command.send(&cmd).await?;
+    frames.push(cmd);
 
-    Ok(())
+    Ok(frames)
 }
 
 #[cfg(test)]
 mod tests {
     use clap::Parser;
 
-    use super::{RdOnOffCommand, RdValueCommand, level_byte, on_off_command, standard_command};
+    use serde_json::json;
+
+    use super::{
+        RdOnOffCommand, RdValueCommand, control_frames, level_byte, on_off_command,
+        standard_command,
+    };
     use crate::Cli;
     use crate::brand::raymarine::BaseModel;
     use crate::brand::raymarine::settings;
-    use crate::radar::settings::{ControlId, SharedControls};
+    use crate::radar::range::Ranges;
+    use crate::radar::settings::{ControlId, ControlValue, SharedControls};
     use crate::util::encode;
 
     fn rd_controls() -> SharedControls {
@@ -235,5 +260,96 @@ mod tests {
     fn rd_command_structs_are_both_24_bytes() {
         assert_eq!(encode(&RdValueCommand::default()).len(), 24);
         assert_eq!(encode(&RdOnOffCommand::default()).len(), 24);
+    }
+
+    fn frames(cv: ControlValue) -> Vec<Vec<u8>> {
+        let value = cv.as_f64().unwrap_or(0.);
+        control_frames(&Ranges::empty(), &cv, value, &rd_controls())
+            .expect("the RD has a command for this control")
+    }
+
+    fn with_auto(id: ControlId, auto: bool) -> ControlValue {
+        let mut cv = ControlValue::new(id, json!(50));
+        cv.auto = Some(auto);
+        cv
+    }
+
+    fn with_enabled(id: ControlId, enabled: bool) -> ControlValue {
+        let mut cv = ControlValue::new(id, json!(50));
+        cv.enabled = Some(enabled);
+        cv
+    }
+
+    /// The auto flag sits at offset 16, behind a 1 at offset 8. Auto sends
+    /// that frame alone; manual follows it with the level.
+    #[test]
+    fn gain_auto_sends_only_the_auto_flag() {
+        let auto = frames(with_auto(ControlId::Gain, true));
+        assert_eq!(auto.len(), 1);
+        assert_eq!(auto[0][0..2], [0x01, 0x83]);
+        assert_eq!(auto[0][8], 0x01);
+        assert_eq!(auto[0][16], 0x01);
+
+        let manual = frames(with_auto(ControlId::Gain, false));
+        assert_eq!(manual.len(), 2);
+        assert_eq!(manual[0][16], 0x00);
+        assert_eq!(manual[1][20], 128);
+    }
+
+    /// Rain and FTC switch on and off with `enabled`, not `auto`: a GUI
+    /// enable never carries auto, so keying on it sent rain "off" and FTC
+    /// "on" whatever was asked. Regression for #729.
+    #[test]
+    fn rain_and_ftc_switch_on_enabled() {
+        for (id, lead) in [(ControlId::Rain, 0x03), (ControlId::Ftc, 0x04)] {
+            let on = frames(with_enabled(id, true));
+            assert_eq!(on.len(), 2, "{id:?} on sends the flag, then the level");
+            assert_eq!(on[0][0..2], [lead, 0x83]);
+            assert_eq!(on[0][16], 0x01, "{id:?} on");
+            assert_eq!(on[1][20], 128);
+
+            let off = frames(with_enabled(id, false));
+            assert_eq!(off.len(), 1, "{id:?} off sends only the flag");
+            assert_eq!(off[0][16], 0x00, "{id:?} off");
+        }
+    }
+
+    /// Wire-observed on an RD418D: a frame with the flag at offset 20 was
+    /// ignored. RMRadar_pi's layout puts it at 16 behind a 1 at offset 8.
+    #[test]
+    fn main_bang_suppression_flag_sits_where_the_radar_reads_it() {
+        let frames = frames(ControlValue::new(ControlId::MainBangSuppression, json!(0)));
+        assert_eq!(
+            frames,
+            [vec![
+                0x01, 0x82, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            ]]
+        );
+    }
+
+    #[test]
+    fn target_expansion_has_a_command() {
+        let frames = frames(ControlValue::new(ControlId::TargetExpansion, json!(1)));
+        assert_eq!(
+            frames,
+            [vec![
+                0x06, 0x83, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+            ]]
+        );
+    }
+
+    /// The level is the list index, not scaled onto 0..255: level 1 used to
+    /// go out as 3, and levels above that as values the radar rejects.
+    #[test]
+    fn interference_rejection_sends_the_level_itself() {
+        let frames = frames(ControlValue::new(
+            ControlId::InterferenceRejection,
+            json!(2),
+        ));
+        assert_eq!(
+            frames,
+            [vec![0x07, 0x83, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00]]
+        );
     }
 }
