@@ -133,6 +133,14 @@ impl Command {
     }
 }
 
+/// An auto toggle arrives without a value; the level stays what it was.
+fn requested_value(cv: &ControlValue, controls: &SharedControls) -> Result<f64, RadarError> {
+    match cv.as_f64() {
+        Ok(value) => Ok(value),
+        Err(e) => controls.get(&cv.id).and_then(|c| c.value).ok_or(e),
+    }
+}
+
 #[async_trait]
 impl CommandSender for Command {
     async fn set_control(
@@ -140,7 +148,7 @@ impl CommandSender for Command {
         cv: &ControlValue,
         controls: &SharedControls,
     ) -> Result<(), RadarError> {
-        let value = cv.as_f64()?;
+        let value = requested_value(cv, controls)?;
 
         match self.model {
             BaseModel::RD => rd::set_control(self, cv, value, controls).await,
@@ -153,7 +161,30 @@ impl CommandSender for Command {
 mod tests {
     use std::net::{Ipv4Addr, SocketAddrV4};
 
+    use clap::Parser;
+    use serde_json::json;
+
+    use super::requested_value;
+    use crate::Cli;
+    use crate::brand::raymarine::{BaseModel, settings};
     use crate::network::create_connected_send;
+    use crate::radar::settings::{ControlId, ControlValue};
+
+    /// The GUI's auto toggle sends `{auto: true}` and no value. Rejecting that
+    /// meant auto gain and sea never reached the radar (#729).
+    #[test]
+    fn auto_toggle_without_a_value_keeps_the_current_level() {
+        let args = Cli::parse_from(["mayara-server"]);
+        let tx = tokio::sync::broadcast::Sender::new(1);
+        let controls = settings::new("ray1234".to_string(), tx, &args, BaseModel::RD);
+        controls.set_value(&ControlId::Gain, json!(40)).unwrap();
+
+        let mut cv = ControlValue::new(ControlId::Gain, json!(0));
+        cv.value = None;
+        cv.auto = Some(true);
+
+        assert_eq!(requested_value(&cv, &controls).unwrap(), 40.);
+    }
 
     // The command socket (start_socket) relays through an Axiom to a WiFi
     // radar, so it must carry TTL > 1 or the relay drops it (issue #160).
