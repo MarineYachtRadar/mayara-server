@@ -14,9 +14,10 @@ use tokio_graceful_shutdown::SubsystemHandle;
 use super::command::Command;
 use super::protocol::{
     CommandId, DATA_BROADCAST_ADDRESS, ECHO_FLOOR, ENCODING_1_REPEAT_DEFAULT,
-    ENCODING_3_REPEAT_DEFAULT, FurunoImoFrameHeader, FurunoTileFrameHeader, PIXEL_VALUES,
-    RadarModel, SPOKE_ALIGNMENT_MASK, SPOKE_ANGLE_HIGH_MASK, SPOKE_LEN, SPOKES, TILE_MAGIC,
-    TILE_REPEAT_DEFAULT, TILE_SCALE, WIRE_UNIT_KM, WIRE_UNIT_NM, wire_index_to_meters_for_unit,
+    ENCODING_3_REPEAT_DEFAULT, FurunoImoFrameHeader, FurunoTileFrameHeader,
+    HEADING_ADJUST_FULL_TURN, PIXEL_VALUES, RadarModel, SPOKE_ALIGNMENT_MASK,
+    SPOKE_ANGLE_HIGH_MASK, SPOKE_LEN, SPOKES, TILE_MAGIC, TILE_REPEAT_DEFAULT, TILE_SCALE,
+    WIRE_UNIT_KM, WIRE_UNIT_NM, wire_index_to_meters_for_unit,
 };
 use super::settings;
 use crate::Cli;
@@ -972,6 +973,9 @@ impl FurunoReportReceiver {
             CommandId::HeadingAdjust => {
                 // Response format: $N81,{tenths of a degree, 0..3599},0
                 let tenths = first_field(&strings, "HeadingAdjust")?;
+                if !(0.0..HEADING_ADJUST_FULL_TURN as f64).contains(&tenths) {
+                    bail!("HeadingAdjust report {} is not within one turn", tenths);
+                }
                 for common in self.both_ranges() {
                     common.set_value(&ControlId::BearingAlignment, tenths);
                 }
@@ -2317,7 +2321,7 @@ mod tests {
         let mut receiver = nxt_receiver();
 
         receiver.process_report("$N81,70,0").unwrap();
-        receiver.process_report("$N81,65486,0").unwrap();
+        assert!(receiver.process_report("$N81,65486,0").is_err());
 
         assert_alignment(&receiver.common, 7.0, "after the echo");
     }
@@ -2334,14 +2338,15 @@ mod tests {
         assert_alignment(receiver.common_b.as_ref().unwrap(), -5.0, "Range B");
     }
 
-    /// A report whose alignment is missing or not a number is refused rather
-    /// than read as 0, which would turn the picture back to the bow.
+    /// A report whose alignment is missing, not a number or outside the
+    /// 0..3599 the radar reports in is refused rather than taken for an
+    /// alignment: read as 0, it would turn the picture back to the bow.
     #[tokio::test]
     async fn a_malformed_alignment_is_refused() {
         let mut receiver = dual_range_receiver();
         receiver.process_report("$N81,70,0").unwrap();
 
-        for report in ["$N81", "$N81,,0", "$N81,x,0"] {
+        for report in ["$N81", "$N81,,0", "$N81,x,0", "$N81,-100,0", "$N81,3600,0"] {
             assert!(receiver.process_report(report).is_err(), "{report}");
         }
 
