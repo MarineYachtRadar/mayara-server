@@ -12,7 +12,7 @@ use crate::{
     stream::SignalKDelta,
 };
 
-use super::protocol::RadarModel;
+use super::protocol::{RadarModel, TX_CHANNEL_MAX};
 
 pub(crate) fn new(
     radar_id: String,
@@ -69,6 +69,7 @@ struct Capabilities {
     interference_rejection_levels: u8, // 0=none, 2=off/on, 4=off/low/med/high
     tune: bool,
     antenna_height: bool,
+    tx_channel: bool,
     watchman: bool,
     pulse_width: bool,
 }
@@ -95,6 +96,7 @@ fn capabilities(model: &RadarModel) -> Capabilities {
             interference_rejection_levels: 2,
             tune: true,
             antenna_height: true,
+            tx_channel: true,
             watchman: true,
             pulse_width: false, // solid-state, no selectable pulse
         },
@@ -115,6 +117,7 @@ fn capabilities(model: &RadarModel) -> Capabilities {
             interference_rejection_levels: 0,
             tune: true,
             antenna_height: false,
+            tx_channel: false,
             watchman: false,
             pulse_width: true,
         },
@@ -135,6 +138,7 @@ fn capabilities(model: &RadarModel) -> Capabilities {
             interference_rejection_levels: 2,
             tune: true,
             antenna_height: false,
+            tx_channel: false,
             watchman: false,
             pulse_width: true,
         },
@@ -155,6 +159,7 @@ fn capabilities(model: &RadarModel) -> Capabilities {
             interference_rejection_levels: 0,
             tune: true,
             antenna_height: false,
+            tx_channel: false,
             watchman: false,
             pulse_width: false, // DRS4W firmware disables pulse width
         },
@@ -175,6 +180,7 @@ fn capabilities(model: &RadarModel) -> Capabilities {
             interference_rejection_levels: 4,
             tune: true,
             antenna_height: false,
+            tx_channel: false,
             watchman: false,
             pulse_width: true,
         },
@@ -195,6 +201,7 @@ fn capabilities(model: &RadarModel) -> Capabilities {
             interference_rejection_levels: 4,
             tune: true,
             antenna_height: false,
+            tx_channel: false,
             watchman: false,
             pulse_width: true,
         },
@@ -215,6 +222,7 @@ fn capabilities(model: &RadarModel) -> Capabilities {
             interference_rejection_levels: 0,
             tune: true,
             antenna_height: false,
+            tx_channel: false,
             watchman: false,
             pulse_width: false,
         },
@@ -359,6 +367,14 @@ pub(crate) fn update_when_model_known(info: &mut RadarInfo, model: RadarModel, v
             .wire_offset(-1.)
             .wire_units(Units::Degrees),
     );
+    if cap.tx_channel {
+        info.controls.add(new_auto(
+            ControlId::TransmitChannel,
+            1.,
+            TX_CHANNEL_MAX as f64,
+            HAS_AUTO_NOT_ADJUSTABLE,
+        ));
+    }
 
     // Interference rejection (model-dependent levels)
     match cap.interference_rejection_levels {
@@ -783,6 +799,22 @@ mod tests {
                 controls.contains_key(&ControlId::BearingAlignment),
                 "{:?}",
                 controls.model_name()
+            );
+        }
+    }
+
+    /// Only the solid-state NXT lets the user pick the channel it transmits
+    /// on.
+    #[test]
+    fn only_the_nxt_has_a_transmit_channel() {
+        use strum::IntoEnumIterator;
+        let args = Cli::parse_from(["mayara-server"]);
+
+        for (model, controls) in RadarModel::iter().zip(controls_for_every_model(&args)) {
+            assert_eq!(
+                controls.contains_key(&ControlId::TransmitChannel),
+                model.is_nxt(),
+                "{model}"
             );
         }
     }

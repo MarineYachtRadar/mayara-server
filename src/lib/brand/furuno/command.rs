@@ -6,7 +6,8 @@ use std::f64::consts::TAU;
 
 use super::protocol::{
     CommandId, CommandMode, GUARD_MODE_FAN, GUARD_MODE_OFF, HEADING_ADJUST_FULL_TURN, SPOKES,
-    WIRE_UNIT_KM, WIRE_UNIT_NM, meters_to_wire_index_for_unit, wire_unit_for_meters,
+    TX_CHANNEL_AUTO, TX_CHANNEL_MAX, WIRE_UNIT_KM, WIRE_UNIT_NM, meters_to_wire_index_for_unit,
+    wire_unit_for_meters,
 };
 use crate::brand::CommandSender;
 use crate::radar::range::Ranges;
@@ -226,6 +227,10 @@ impl Command {
         if self.controls.contains_key(&ControlId::BearingAlignment) {
             self.send(CommandMode::Request, CommandId::HeadingAdjust, &[])
                 .await?; // $R81
+        }
+        if self.controls.contains_key(&ControlId::TransmitChannel) {
+            self.send(CommandMode::Request, CommandId::TxChannel, &[])
+                .await?; // $REC
         }
 
         self.send(CommandMode::Request, CommandId::BlindSector, &[])
@@ -485,6 +490,15 @@ impl CommandSender for Command {
                 cmd.push(tenths.rem_euclid(HEADING_ADJUST_FULL_TURN));
                 cmd.push(0);
                 CommandId::HeadingAdjust
+            }
+            ControlId::TransmitChannel => {
+                // Format: $SEC,{channel}: 0 = Auto, 1-3 = that channel
+                cmd.push(if auto == 1 {
+                    TX_CHANNEL_AUTO
+                } else {
+                    value.clamp(1, TX_CHANNEL_MAX)
+                });
+                CommandId::TxChannel
             }
             ControlId::MainBangSuppression => {
                 // Format: $S83,{value_255},0
@@ -1107,6 +1121,33 @@ mod tests {
         }
     }
 
+    /// Auto is channel 0 to the radar. A channel the user picks, 1 to 3, goes
+    /// out as itself, also when the same request turns auto off.
+    #[tokio::test]
+    async fn transmit_channel_sends_auto_as_channel_zero() {
+        let (mut command, info, wire) = nxt();
+        let mut auto = cv(ControlId::TransmitChannel, json!(2));
+        auto.auto = Some(true);
+        let mut manual = cv(ControlId::TransmitChannel, json!(2));
+        manual.auto = Some(false);
+
+        set(
+            &mut command,
+            &info,
+            cv(ControlId::TransmitChannel, json!(3)),
+        )
+        .await;
+        set(&mut command, &info, auto).await;
+        set(&mut command, &info, manual).await;
+
+        let sent: Vec<String> = wire
+            .sentences()
+            .into_iter()
+            .filter(|s| s.starts_with("$SEC"))
+            .collect();
+        assert_eq!(sent, ["$SEC,3", "$SEC,0", "$SEC,2"]);
+    }
+
     // ----- Signal processing -----
 
     /// Main bang suppression is a percentage to the user and a byte to the
@@ -1352,6 +1393,7 @@ mod tests {
                 "$R89",     // scan speed
                 "$R83,0,0", // main bang size
                 "$R81",     // bearing alignment
+                "$REC",     // transmit channel
                 "$R77",     // no-transmit sectors
                 "$RE8",     // anti-jamming
                 "$R85",     // near STC curve
@@ -1366,8 +1408,9 @@ mod tests {
         );
     }
 
-    /// A radar without the NXT signal processing is not asked about it: a
-    /// query for a control it does not have draws an error reply.
+    /// A radar without the NXT signal processing or transmit channel is not
+    /// asked about them: a query for a control it does not have draws an
+    /// error reply.
     #[tokio::test]
     async fn a_radar_is_not_asked_about_controls_it_does_not_have() {
         let (mut command, _info, wire) = radar(RadarModel::DRS4DL);
@@ -1375,7 +1418,7 @@ mod tests {
         command.send_report_requests().await.unwrap();
 
         let sentences = wire.sentences();
-        for absent in ["$REE", "$RED", "$REF", "$R67,0,3", "$R67,0,0"] {
+        for absent in ["$REE", "$RED", "$REF", "$R67,0,3", "$R67,0,0", "$REC"] {
             assert!(
                 !sentences.contains(&absent.to_string()),
                 "{absent} went out anyway: {sentences:?}"

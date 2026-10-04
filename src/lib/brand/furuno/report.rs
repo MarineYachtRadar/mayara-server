@@ -17,7 +17,7 @@ use super::protocol::{
     ENCODING_3_REPEAT_DEFAULT, FurunoImoFrameHeader, FurunoTileFrameHeader,
     HEADING_ADJUST_FULL_TURN, PIXEL_VALUES, RadarModel, SPOKE_ALIGNMENT_MASK,
     SPOKE_ANGLE_HIGH_MASK, SPOKE_LEN, SPOKES, TILE_MAGIC, TILE_REPEAT_DEFAULT, TILE_SCALE,
-    WIRE_UNIT_KM, WIRE_UNIT_NM, wire_index_to_meters_for_unit,
+    TX_CHANNEL_AUTO, WIRE_UNIT_KM, WIRE_UNIT_NM, wire_index_to_meters_for_unit,
 };
 use super::settings;
 use crate::Cli;
@@ -978,6 +978,23 @@ impl FurunoReportReceiver {
                 }
                 for common in self.both_ranges() {
                     common.set_value(&ControlId::BearingAlignment, tenths);
+                }
+            }
+            CommandId::TxChannel => {
+                // Response format: $NEC,{channel}: 0 = Auto, 1-3 = that channel
+                // Auto names no channel, and the channels start at 1, so a
+                // value-bearing call would offer 0 and be refused. The antenna
+                // has one transmitter, so both ranges show its channel.
+                let channel = first_number(&numbers, "TxChannel")?;
+                for common in self.both_ranges() {
+                    if channel == TX_CHANNEL_AUTO as f64 {
+                        let _ = common
+                            .info
+                            .controls
+                            .set_auto_state(&ControlId::TransmitChannel, true);
+                    } else {
+                        common.set_value_auto(&ControlId::TransmitChannel, channel, 0);
+                    }
                 }
             }
 
@@ -2367,6 +2384,48 @@ mod tests {
     fn assert_alignment(common: &CommonRadar, expected: f64, when: &str) {
         let degrees = alignment(common).expect("an alignment");
         assert!((degrees - expected).abs() < 1e-6, "{when}: {degrees}");
+    }
+
+    /// Channel 0 is the radar choosing for itself, which is auto rather than
+    /// a channel; the channels it can be given are 1 to 3. A DRS4D-NXT
+    /// reported `$NEC,0` on Auto and `$NEC,2` on channel 2.
+    #[tokio::test]
+    async fn a_reported_transmit_channel_of_zero_is_auto() {
+        let mut receiver = nxt_receiver();
+        let channel = |receiver: &FurunoReportReceiver| {
+            let control = receiver
+                .common
+                .info
+                .controls
+                .get(&ControlId::TransmitChannel)
+                .unwrap();
+            (control.value, control.auto)
+        };
+
+        receiver.process_report("$NEC,2").unwrap();
+        assert_eq!(channel(&receiver), (Some(2.), Some(false)));
+
+        receiver.process_report("$NEC,0").unwrap();
+        assert_eq!(channel(&receiver), (Some(2.), Some(true)));
+    }
+
+    /// The antenna has one transmitter, so a dual-range radar shows its
+    /// channel on both ranges.
+    #[tokio::test]
+    async fn a_reported_transmit_channel_shows_on_both_ranges() {
+        let mut receiver = dual_range_receiver();
+
+        receiver.process_report("$NEC,3").unwrap();
+        receiver.process_report("$NEC,0").unwrap();
+
+        for common in [&receiver.common, receiver.common_b.as_ref().unwrap()] {
+            let control = common
+                .info
+                .controls
+                .get(&ControlId::TransmitChannel)
+                .unwrap();
+            assert_eq!((control.value, control.auto), (Some(3.), Some(true)));
+        }
     }
 
     /// A report that should carry a number but does not must be refused, not
