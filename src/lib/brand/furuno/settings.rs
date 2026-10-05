@@ -352,6 +352,13 @@ pub(crate) fn update_when_model_known(info: &mut RadarInfo, model: RadarModel, v
         info.controls
             .add(new_numeric(ControlId::AntennaHeight, 0., 30.).wire_units(Units::Meters));
     }
+    // The radar turns its own spokes by the alignment, so every model takes it.
+    info.controls.add(
+        new_numeric(ControlId::BearingAlignment, -180., 180.)
+            .wire_scale_factor(10., true)
+            .wire_offset(-1.)
+            .wire_units(Units::Degrees),
+    );
 
     // Interference rejection (model-dependent levels)
     match cap.interference_rejection_levels {
@@ -764,6 +771,20 @@ mod tests {
 
         let sector = &controls[&ControlId::NoTransmitSector1];
         assert_eq!(sector.value.unwrap().to_degrees().round(), -180.);
+    }
+
+    /// Every Furuno radar is told its alignment.
+    #[test]
+    fn every_model_has_a_bearing_alignment() {
+        let args = Cli::parse_from(["mayara-server"]);
+
+        for controls in controls_for_every_model(&args) {
+            assert!(
+                controls.contains_key(&ControlId::BearingAlignment),
+                "{:?}",
+                controls.model_name()
+            );
+        }
     }
 
     /// The receiver sends a Standby for a transmit that was ours while
