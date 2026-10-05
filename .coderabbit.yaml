@@ -41,9 +41,10 @@ reviews:
     - '!testdata/**/*.pcap'
     - '!**/*.min.js'
     - '!**/*.min.css'
-    # CHANGELOG.md keeps the history up to 3.13.2 and is not edited any
-    # more: the notes of later releases are on GitHub Releases, written by
-    # release-please from the PR titles.
+    # CHANGELOG.md is written by release-please in its release PR, from
+    # the commit types; a contributor edit is wrong. Excluding it from
+    # review stops CR from flagging phantom CHANGELOG.md edits on PRs that
+    # don't touch it.
     - '!CHANGELOG.md'
 
   high_level_summary_instructions: |
@@ -68,24 +69,25 @@ reviews:
         updates, and dependency bumps belong in separate PRs. If a
         single change would produce two distinct CHANGELOG lines, it
         should be two PRs. CI does a squash merge, so the PR title
-        becomes the commit on main and the PR's line in the release
-        notes.
+        becomes the commit on main and feeds release-please for the
+        CHANGELOG entry.
 
         ## Conventional commit PR title
         The PR title must follow Angular conventional commit format:
         `<type>(<scope>): <subject>`. Accepted types: feat, fix, docs,
-        style, refactor, test, chore, perf, ci, build, revert. Subject:
-        imperative mood ("add" not "added"), no trailing period, under
-        70 characters. Scope is typically a brand (`furuno`, `navico`,
+        style, refactor, test, chore, perf, ci. Subject: imperative
+        mood ("add" not "added"), no trailing period, under 70
+        characters. Scope is typically a brand (`furuno`, `navico`,
         …), a subsystem (`gui`, `arpa`, `signalk`, …), or `web`.
 
-        ## CHANGELOG.md must not be edited
-        CHANGELOG.md keeps the history up to 3.13.2. Each later
-        release's notes list the titles of the PRs it carries, so the
-        only way to change them is the PR title. Flag any PR that
-        modifies CHANGELOG.md.
+        ## CHANGELOG.md must not be edited manually
+        CHANGELOG.md is written by release-please, which adds each
+        release's entry in its release PR from the conventional commit
+        types. The only valid way to change the changelog is to change
+        the commit / PR title. Flag any PR that modifies CHANGELOG.md
+        directly.
 
-        ## Version numbers belong to release-please
+        ## Version numbers are maintainer-managed
         Flag any non-`chore(release):` PR that changes the `version`
         field in `Cargo.toml`. release-please bumps it in its own
         release PR, never bundled with a feature or fix.
@@ -361,15 +363,14 @@ reviews:
     - path: '.github/workflows/**'
       instructions: |
         ## Releases via release-please
-        `release-please.yml` keeps the `chore(release):` PR open,
-        and merging it tags the release, creates the GitHub Release
-        with notes from the PR titles (sorted by the labels
-        `label-by-title.yml` sets, per `.github/release.yml`), and
-        dispatches `release.yml` on the tag to build the binaries,
-        attach them and publish the Docker image. Flag PRs that change
-        these workflows' triggers, the gate in `release-please.yml`,
-        or `release-please-config.json` without explicit rationale.
-        Don't add manual tag-pushing side-doors.
+        `release-please.yml` keeps the `chore(release):` PR open, with
+        the version bump and the CHANGELOG.md entry. Merging it tags
+        the release, creates the GitHub Release with that entry as its
+        notes, and dispatches `release.yml` on the tag to build the
+        binaries, attach them and publish the Docker image. Flag PRs
+        that change these workflows' triggers or
+        `release-please-config.json` without explicit rationale. Don't
+        add manual tag-pushing side-doors.
 
     - path: 'Cargo.toml'
       instructions: |

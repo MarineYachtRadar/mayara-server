@@ -21,7 +21,7 @@ Build instructions for each platform are in [`BUILDING.md`](BUILDING.md). Runtim
 | [`BUILDING.md`](BUILDING.md) | Toolchain, cross-compile, platform-specific build notes |
 | [`USAGE.md`](USAGE.md) | Runtime CLI flags and examples |
 | [`README.md`](README.md) | Project overview, Docker, supported radars |
-| This document | Branching, CI pipeline, CodeRabbit review, release notes, release flow |
+| This document | Branching, CI pipeline, CodeRabbit review, CHANGELOG generation, release flow |
 
 Read `AGENTS.md` before opening your first PR. The rules there are enforced — both by maintainers and by any AI tools used during authoring.
 
@@ -70,7 +70,7 @@ Per [`AGENTS.md`](AGENTS.md#pull-request-guidelines) — this is the minimum:
 
 ### PR title and description
 
-The **PR title** must be a conventional commit (see [Commit conventions](#commit-conventions) below). With squash merge, the PR title becomes the commit message on `main` and the PR's line in the release notes. Treat it as the release note users will read.
+The **PR title** must be a conventional commit (see [Commit conventions](#commit-conventions) below). With squash merge, the PR title becomes the commit message on `main` and directly feeds the changelog. Treat it as the changelog entry that users will read.
 
 The **PR description** should be succinct: motivation and approach. Do not pad it with a mechanical listing of what changed — the diff shows that. If you include a `## Tested` section with checkboxes, every box must be ticked before review (unticked boxes mean unfinished work). Do not include speculative test plans.
 
@@ -92,40 +92,45 @@ Mayara Server uses **Angular-style conventional commits**:
 - **Scope**: radar brand or subsystem (`furuno`, `navico`, `signalk`, `stream`, `navdata`, etc.)
 - **One logical change per commit**, one logical change per PR
 
-### Types that feed the release notes
+### Types that feed the changelog
 
-Pull requests are squash-merged, so the PR title becomes the commit on `main`, and a release's notes on GitHub Releases list the titles of the pull requests it carries, each with its author and a link. `.github/workflows/label-by-title.yml` labels each pull request from its title, and `.github/release.yml` sorts the notes by those labels:
+`release-please-config.json` maps commit types into changelog sections. The practical effect:
 
-| Type | Release notes |
-|---|---|
-| any type with `!`, or a `BREAKING CHANGE:` line in the description | **Breaking changes** |
-| `feat`, `perf` | **Features** |
-| `fix`, `revert` | **Fixes** |
-| `build(deps)` | **Dependencies** |
-| `docs`, other `build` | **Other** |
-| `ci`, `test`, `chore`, `refactor`, `style`, `build(deps-dev)` | — left out |
+| Type | Changelog group | Notes |
+|---|---|---|
+| `feat` | **Added** | User-visible new feature |
+| `fix` | **Fixed** | Bug fix |
+| `refactor` | **Changed** | Internal rework with user-visible effect |
+| `perf` | **Changed** | Performance improvement |
+| `docs` | **Changed** | Documentation (note: goes in changelog) |
+| `style` | — | Skipped from changelog |
+| `test` | — | Skipped from changelog |
+| `chore` | — | Skipped from changelog |
+| `ci` | — | Skipped from changelog |
 
-The type also sets the next version: `feat` is a minor release, a breaking change a major one, and anything else that is released a patch.
+Only the types that appear in the changelog start a release, and the type also sets its version: `feat` is a minor release, a `!` after the type or a `BREAKING CHANGE:` footer a major one, anything else a patch.
 
-The full list of accepted types (per [`AGENTS.md`](AGENTS.md#git-commit-conventions)) is `feat | fix | docs | style | refactor | test | chore | perf | ci | build | revert`; dependabot opens its bumps as `build(deps)` and `build(deps-dev)`.
+The full list of accepted types (per [`AGENTS.md`](AGENTS.md#git-commit-conventions)) is `feat | fix | docs | style | refactor | test | chore | perf | ci`.
 
-## CHANGELOG.md is history — do not edit
+## CHANGELOG is auto-generated — do not edit
 
-[`CHANGELOG.md`](CHANGELOG.md) keeps the history up to 3.13.2; the notes of every release since are on [GitHub Releases](https://github.com/MarineYachtRadar/mayara-server/releases). The only way to change what a release's notes say about your change is the **PR title** — that's why conventional commits matter.
+[`CHANGELOG.md`](CHANGELOG.md) is written by [release-please](https://github.com/googleapis/release-please): its release PR adds the release's entry, built from the commit types merged since the last release, and the same entry becomes the release's notes on GitHub Releases.
 
-## Version numbers are release-please's
+**Never edit `CHANGELOG.md` manually.** If your PR touches it, a maintainer will ask you to remove the hunk. The only way to change what appears in the changelog is to change your **PR title**, which squash merge turns into the commit — that's why conventional commits matter.
+
+## Version numbers are maintainer-managed
 
 **Never change the version in `Cargo.toml`** in a contribution PR. release-please bumps it in its release PR. If you believe a release is warranted, say so in your PR description and let a maintainer handle it.
 
 ## Release flow (maintainer reference)
 
-1. Every merge to `main` that users get — `feat`, `fix`, `perf`, `revert`, a breaking change, a `build(deps)` bump — updates the one open release PR, `chore(release): X.Y.Z`, which bumps `Cargo.toml` and `Cargo.lock`. Its description is the release notes. `.github/workflows/release-please.yml` maintains it.
-2. Merging that PR is the release: release-please tags `vX.Y.Z`, creates the GitHub Release with those notes, and dispatches `release.yml` on the tag.
+1. Every merge to `main` with a type the changelog shows — `feat`, `fix`, `refactor`, `perf`, `docs` — updates the one open release PR, `chore(release): X.Y.Z`, which bumps `Cargo.toml` and `Cargo.lock` and adds the release's entry to `CHANGELOG.md`. `.github/workflows/release-please.yml` maintains it.
+2. Merging that PR is the release: release-please tags `vX.Y.Z`, creates the GitHub Release with that entry as its notes, and dispatches `release.yml` on the tag.
 3. `release.yml` cross-builds Linux (x86_64, arm64 and mipsel musl), macOS universal and Windows binaries, attaches them to the release, and runs `docker.yml`, which pushes `ghcr.io/marineyachtradar/mayara-server:latest` and `:vX.Y.Z` for `linux/amd64` and `linux/arm64`.
 
 To name the next version yourself, put a `Release-As: X.Y.Z` footer in a commit merged to `main`. To build a release's binaries and image again, run `gh workflow run release.yml --ref vX.Y.Z`. To refresh the open release PR after changing the release configuration, run the `release-please` workflow by hand.
 
-Contributors do not need to do anything for a release beyond writing good conventional PR titles.
+Contributors do not need to do anything for a release beyond writing good conventional commits.
 
 ## Reporting bugs
 
