@@ -1,40 +1,97 @@
 # Releases, without anyone editing version numbers by hand.
 #
-# On every push to main, release-please keeps one pull request open,
-# "chore(release): <version>", that bumps the version in Cargo.toml and
-# Cargo.lock and adds the release's entry to CHANGELOG.md. The version and
-# the entry follow the Conventional Commit subjects merged since the last
-# release (PR titles, since PRs are squash-merged): a `!` or a BREAKING
-# CHANGE footer is a major release, feat a minor one, fix, refactor, perf
-# and docs a patch. Only those types, the ones release-please-config.json
-# shows in the changelog, and breaking changes start a release; a merge of
-# only ci, test or chore changes leaves things as they are. Merging that
-# pull request IS the release: the next run tags it, creates the GitHub
-# Release with the same entry as its notes, and dispatches release.yml on
-# the tag, which builds the binaries, attaches them to the release and
-# publishes the Docker image. Nothing is released until a maintainer merges
-# the release PR.
+# On a push to main that carries a change users get (the gate below),
+# release-please keeps one pull request open, "chore(release): <version>",
+# that bumps the version in Cargo.toml and Cargo.lock and adds the release
+# notes to CHANGELOG.md. The version follows the Conventional Commit
+# subjects merged since the last release (PR titles, since PRs are
+# squash-merged): feat is a minor, fix a patch, `!` or a BREAKING CHANGE
+# footer a major. The notes are the ones GitHub generates for those pull
+# requests, each with its author and a link to it, sorted by the labels
+# label-by-title.yml sets (.github/release.yml); they are also the release
+# PR's description. Merging that pull request IS the release: the next run
+# tags it, creates the GitHub Release with those notes, and dispatches
+# release.yml on the tag, which builds the binaries, attaches them to the
+# release and publishes the Docker image. Nothing is released until a
+# maintainer merges the release PR.
 name: release-please
 
 on:
   push:
     branches: [main]
-  # Rewrites the open release PR against the current configuration, or tags
-  # a merged release PR a failed run left untagged.
+  # The gate runs release-please only for a push that carries a change users
+  # get, so an open release PR is not refreshed by a docs or ci merge -- and a
+  # change to the release configuration is exactly such a merge. A manual run
+  # is what rewrites the open release PR against the current configuration.
   workflow_dispatch:
 
 permissions: {}
 
 jobs:
+  # GitHub's release notes are never empty -- they always end in a "Full
+  # Changelog" link -- so release-please, which skips a release only when its
+  # notes are empty, would propose one after every merge, a docs or ci change
+  # included. Only a push carrying a change users get goes on to it: feat,
+  # fix, perf or revert, a breaking change whatever its type, a runtime
+  # dependency bump (dependabot scopes those `deps`, dev ones `deps-dev`), a
+  # `Release-As:` footer because it names the release to cut, and the merge
+  # of the release PR itself (pull-request-title-pattern in
+  # release-please-config.json), which is what creates the tag. The subject
+  # is each message's first line. The payload holds at most 2048 commits, so
+  # a push that fills it may hide more and is let through.
+  gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      releasable: ${{ steps.check.outputs.releasable }}
+    steps:
+      # A manual run carries no commits of its own, so it judges every commit
+      # since the last release instead: it goes on when there is a release PR
+      # to refresh or a merged one still to tag, and stops when only docs or
+      # ci changes are unreleased. With no tag for the manifest's version --
+      # a merged release PR whose tag was never created -- it goes on.
+      - uses: actions/checkout@v7
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: check
+        env:
+          DISPATCHED: ${{ github.event_name == 'workflow_dispatch' }}
+          MESSAGES: ${{ toJSON(github.event.commits.*.message) }}
+          RELEASABLE: '^((feat|fix|perf|revert)(\([^)]*\))?!?: |[a-z]+(\([^)]*\))?!: |build\(deps\): |Revert |chore\(release\): v?[0-9])'
+        run: |
+          if [ "$DISPATCHED" = true ]; then
+            last="v$(jq -er '."."' .release-please-manifest.json)"
+            if ! git rev-parse -q --verify "refs/tags/$last" > /dev/null; then
+              echo "releasable=true" >> "$GITHUB_OUTPUT"
+              echo "No tag $last; release-please not gated."
+              exit 0
+            fi
+            MESSAGES=$(git log -z --format=%B "$last..HEAD" | jq -Rs 'split("\u0000") | map(select(. != ""))')
+            echo "Judging the $(jq length <<< "$MESSAGES") commits since $last."
+          fi
+          if jq -e --arg re "$RELEASABLE" '(length >= 2048) or ([.[] | (split("\n")[0] | test($re)) or test("\nBREAKING[- ]CHANGE: ") or test("\nRelease-As: "; "i")] | any)' <<< "$MESSAGES" > /dev/null; then
+            echo "releasable=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "releasable=false" >> "$GITHUB_OUTPUT"
+            echo "No releasable commit; release-please not run."
+          fi
+
   release-please:
+    needs: gate
+    if: needs.gate.outputs.releasable == 'true'
     # One release-please at a time: two runs, a push and a manual run say,
     # could both find the merged release PR untagged and both try to create
     # its release. Never cancelled in progress, since a run may be creating
     # the tag. A queued run that a newer one replaces loses nothing, because
     # every run tags whatever merged release PR is still untagged and builds
-    # the open one from the whole range.
+    # the open one from the whole range. A run the gate stopped gets a group
+    # of its own, so it can never displace a queued run that has work to do.
     concurrency:
-      group: release-please
+      group: ${{ needs.gate.outputs.releasable == 'true' && 'release-please' || format('release-please-{0}', github.run_id) }}
       cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 10
