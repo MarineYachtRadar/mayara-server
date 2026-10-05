@@ -16,6 +16,11 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+# Read-only unless a job needs more: the release job attaches the binaries,
+# and docker.yml pushes the image.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -26,14 +31,13 @@ jobs:
   guard:
     name: Check the ref is a released tag
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     steps:
     - name: Refuse anything but a version tag
-      if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
       run: |
-        echo "::error::Dispatch release.yml on a version tag (--ref vX.Y.Z), not $GITHUB_REF."
-        exit 1
+        if [[ ! "$GITHUB_REF" =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+          echo "::error::Dispatch release.yml on a version tag (--ref vX.Y.Z), not $GITHUB_REF."
+          exit 1
+        fi
 
     - name: Refuse a tag without a GitHub Release
       env:

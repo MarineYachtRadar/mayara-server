@@ -21,7 +21,7 @@ Build instructions for each platform are in [`BUILDING.md`](BUILDING.md). Runtim
 | [`BUILDING.md`](BUILDING.md) | Toolchain, cross-compile, platform-specific build notes |
 | [`USAGE.md`](USAGE.md) | Runtime CLI flags and examples |
 | [`README.md`](README.md) | Project overview, Docker, supported radars |
-| This document | Branching, CI pipeline, CodeRabbit review, CHANGELOG generation, release flow |
+| This document | Branching, CI pipeline, CodeRabbit review, release notes, release flow |
 
 Read `AGENTS.md` before opening your first PR. The rules there are enforced — both by maintainers and by any AI tools used during authoring.
 
