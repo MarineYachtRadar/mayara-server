@@ -51,11 +51,11 @@ Do not add error handling, fallbacks, or validation for scenarios that cannot ha
 
 ## Git Commit Conventions
 
-Use conventional format: `<type>(<scope>): <subject>` where type = feat|fix|docs|style|refactor|test|chore|perf|ci. Subject: 50 chars max, imperative mood ("add" not "added"), no period. For small changes: one-line commit only. For complex changes: add body explaining what/why (72-char lines) and reference issues.
+Use conventional format: `<type>(<scope>): <subject>` where type = feat|fix|docs|style|refactor|test|chore|perf|ci|build|revert. Subject: 50 chars max, imperative mood ("add" not "added"), no period. For small changes: one-line commit only. For complex changes: add body explaining what/why (72-char lines) and reference issues.
 
 Keep commits small and atomic - one logical change per commit. Split unrelated changes into separate commits. The commit history tells a story; each commit should be a meaningful, self-contained step.
 
-**DO NOT** edit CHANGELOG.md — `release.sh` regenerates it from conventional commits with git-cliff when a release is cut, and any hand edit is overwritten there. It changes only at release time, so `main` carries no entry for merges made since the last one.
+**DO NOT** edit CHANGELOG.md — it keeps the history up to 3.13.2. Releases since are cut by release-please (`.github/workflows/release-please.yml`), and their notes on GitHub Releases list the titles of the PRs they carry.
 **MANDATORY:** Never amend commits that have already been pushed to GitHub. Only amend local, unpushed commits.
 **MANDATORY:** Always rebase and clean up commit history before creating a PR or pushing changes. Amend fixes and corrections to the relevant existing commit instead of creating chains of "fix typo" or "oops" commits. The final history should contain only intentional, complete commits - no work-in-progress artifacts.
 **MANDATORY:** Run `cargo fmt` and `cargo clippy --no-deps --all-targets -- -D warnings` before every commit that touches Rust code. Every commit pushed to `main` must be `cargo fmt --check` clean and `cargo clippy` warning-free — CI enforces both and will fail the build otherwise.
@@ -71,9 +71,9 @@ Before opening a PR:
 - Optionally, if the CodeRabbit CLI is available, run `coderabbit review --committed --base origin/main` against your branch to catch findings before pushing. Compare against `origin/main`, not `main`: a stale local `main` silently folds other people's merged PRs into the review diff. This is good practice for non-trivial code changes but not required — CodeRabbit runs on every PR automatically via the GitHub App, so the findings arrive either way. Skip it for docs-only PRs, formatting fixes, or one-liners.
 - Rebase and clean up commit history (squash intermediate commits)
 - Self-review your changes
-- **NEVER change version numbers** - maintainers will update versions when publishing releases
+- **NEVER change version numbers** - release-please bumps the version in its release PR, and a maintainer releases by merging it
 
-PR titles are used to auto-generate the changelog and release notes. They **must** follow the same conventional commit format as commits: `<type>(<scope>): <subject>` (e.g., `feat(furuno): add guard zone support`). With squash merge, the PR title becomes the commit message on `main`, so it directly becomes the changelog entry. Make them **descriptive, informative, and easy to understand**. Ask yourself: "If someone only read the title, would they understand what this PR does?"
+PR titles are the release notes: a release on GitHub Releases lists the titles of the PRs it carries, and their types set its version (`feat` makes a minor release, a breaking change a major one, any other released change a patch). They **must** follow the same conventional commit format as commits: `<type>(<scope>): <subject>` (e.g., `feat(furuno): add guard zone support`). With squash merge, the PR title becomes the commit message on `main`. Make them **descriptive, informative, and easy to understand**. Ask yourself: "If someone only read the title, would they understand what this PR does?"
 
 PR descriptions must be **succinct and straight to the point**. Explain the motivation (why) and summarize the solution approach (how), but not the mechanics (what) - the diff shows what changed. Do not pad descriptions with unnecessary detail, verbose explanations, or self-congratulatory comments. If there are breaking changes, mention them explicitly. If a PR description includes a test plan with checkboxes, **all items must be checked** before the PR is ready for review - remove or complete any unchecked items.
 
@@ -81,7 +81,7 @@ PR descriptions must be **succinct and straight to the point**. Explain the moti
 
 When referencing issues, use `closes`, `fixes`, or `resolves` followed by the issue number (e.g., "closes #18", "fixes #21 and resolves #23").
 
-**MANDATORY:** One logical change per PR. Refactoring and behavior changes belong in separate PRs. If changes would result in multiple changelog entries, they should be separate PRs. Even if you have made multiple changes together locally, split them into separate PRs.
+**MANDATORY:** One logical change per PR. Refactoring and behavior changes belong in separate PRs. If changes would result in multiple release-note lines, they should be separate PRs. Even if you have made multiple changes together locally, split them into separate PRs.
 
 **AI tools must proactively enforce PR scope.** If a user requests changes unrelated to the current PR topic, do not silently include them. Instead, suggest creating a separate PR for the unrelated work. Similarly, when rebasing or cleaning up commit history, if you detect commits that address different topics, suggest splitting them into separate PRs before proceeding.
 

@@ -1,0 +1,35 @@
+# Categories for the release notes GitHub generates from the pull requests
+# merged since the previous tag, each listed by its author with a link to it.
+# release-please asks GitHub for these notes (changelog-type: github in
+# release-please-config.json) for both its release PR and the GitHub Release.
+#
+# A pull request lands in the first category it matches, so a breaking change
+# is listed once, under Breaking, and the catch-all is last.
+# workflows/label-by-title.yml sets the label from the title's Conventional
+# Commit type, and this file and that workflow name the same labels. A label
+# set by hand places a pull request the same way until its title or
+# description is edited; an unlabelled one still appears, under Other.
+changelog:
+  exclude:
+    labels:
+      - skip-changelog
+      # release-please's own release PR, merged right before each tag, which
+      # would otherwise list itself.
+      - 'autorelease: pending'
+      - 'autorelease: tagged'
+  categories:
+    - title: ⚠ Breaking changes
+      labels:
+        - breaking-change
+    - title: 🚀 Features
+      labels:
+        - enhancement
+    - title: 🐛 Fixes
+      labels:
+        - bug
+    - title: 📦 Dependencies
+      labels:
+        - dependencies
+    - title: Other
+      labels:
+        - '*'

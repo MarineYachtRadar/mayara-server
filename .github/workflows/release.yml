@@ -1,16 +1,52 @@
 name: Release
 
+# Builds a release's binaries, attaches them to its GitHub Release and
+# publishes its Docker image. release-please.yml creates the tag and the
+# release, with its notes, when its release PR is merged, and then dispatches
+# this workflow on the tag: a tag pushed with GITHUB_TOKEN starts no workflow
+# by itself. Dispatching it by hand on a tag (`gh workflow run release.yml
+# --ref vX.Y.Z`) builds that release again and replaces its binaries.
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_dispatch:
+
+# One build of a tag at a time, so a run started by hand cannot upload the
+# binaries of a release that another run is uploading. Never cancelled, since
+# a run may be uploading.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # The binaries and image are named after github.ref_name, and the binaries
+  # go to that tag's GitHub Release, so anything but a released version tag
+  # is refused before the builds start.
+  guard:
+    name: Check the ref is a released tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+    - name: Refuse anything but a version tag
+      if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+      run: |
+        echo "::error::Dispatch release.yml on a version tag (--ref vX.Y.Z), not $GITHUB_REF."
+        exit 1
+
+    - name: Refuse a tag without a GitHub Release
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null; then
+          echo "::error::$GITHUB_REF_NAME has no GitHub Release to attach the binaries to; release-please creates it when its release PR is merged."
+          exit 1
+        fi
+
   build-linux:
     name: Build ${{ matrix.target }}
+    needs: guard
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -69,6 +105,7 @@ jobs:
 
   build-macos:
     name: Build macOS Universal
+    needs: guard
     runs-on: macos-latest
     steps:
     - name: Checkout
@@ -106,6 +143,7 @@ jobs:
 
   build-windows:
     name: Build Windows
+    needs: guard
     runs-on: windows-latest
     steps:
     - name: Checkout
@@ -126,20 +164,15 @@ jobs:
         path: mayara-server-${{ github.ref_name }}-x86_64-pc-windows.zip
 
   release:
-    name: Create Release
+    name: Attach binaries
     needs: [build-linux, build-macos, build-windows]
     runs-on: ubuntu-latest
     permissions:
-      # Creating the release needs write; the changelog is no longer written
-      # from here, so no pull-request permission is required.
+      # release-please has created the release, with its notes; this only
+      # attaches the binaries to it.
       contents: write
 
     steps:
-    - name: Checkout
-      uses: actions/checkout@v7
-      with:
-        fetch-depth: 0
-
     - name: Download all artifacts
       uses: actions/download-artifact@v8
       with:
@@ -148,24 +181,16 @@ jobs:
     - name: List artifacts
       run: find artifacts -type f
 
-    - name: Generate release notes
-      uses: orhun/git-cliff-action@v4
-      with:
-        config: cliff.toml
-        args: --latest --strip header --tag ${{ github.ref_name }}
+    # --clobber so a release built again replaces its binaries.
+    - name: Attach to the release
       env:
-        OUTPUT: CHANGES.md
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Create Release
-      uses: softprops/action-gh-release@v3
-      with:
-        body_path: CHANGES.md
-        files: |
-          artifacts/mayara-server-x86_64-unknown-linux-musl/*.tar.gz
-          artifacts/mayara-server-aarch64-unknown-linux-musl/*.tar.gz
-          artifacts/mayara-server-mipsel-unknown-linux-musl/*.tar.gz
-          artifacts/mayara-server-macos/*.tar.gz
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber \
+          artifacts/mayara-server-x86_64-unknown-linux-musl/*.tar.gz \
+          artifacts/mayara-server-aarch64-unknown-linux-musl/*.tar.gz \
+          artifacts/mayara-server-mipsel-unknown-linux-musl/*.tar.gz \
+          artifacts/mayara-server-macos/*.tar.gz \
           artifacts/mayara-server-windows/*.zip
 
   docker:
