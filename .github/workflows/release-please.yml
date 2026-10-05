@@ -4,15 +4,16 @@
 # "chore(release): <version>", that bumps the version in Cargo.toml and
 # Cargo.lock and adds the release's entry to CHANGELOG.md. The version and
 # the entry follow the Conventional Commit subjects merged since the last
-# release (PR titles, since PRs are squash-merged): feat is a minor release,
-# a `!` or a BREAKING CHANGE footer a major one, anything else a patch.
-# Only the types release-please-config.json shows in the changelog (feat,
-# fix, refactor, perf, docs) start a release; a merge of only ci, test or
-# chore changes leaves things as they are. Merging that pull request IS the
-# release: the next run tags it, creates the GitHub Release with the same
-# entry as its notes, and dispatches release.yml on the tag, which builds
-# the binaries, attaches them to the release and publishes the Docker image.
-# Nothing is released until a maintainer merges the release PR.
+# release (PR titles, since PRs are squash-merged): a `!` or a BREAKING
+# CHANGE footer is a major release, feat a minor one, fix, refactor, perf
+# and docs a patch. Only those types, the ones release-please-config.json
+# shows in the changelog, and breaking changes start a release; a merge of
+# only ci, test or chore changes leaves things as they are. Merging that
+# pull request IS the release: the next run tags it, creates the GitHub
+# Release with the same entry as its notes, and dispatches release.yml on
+# the tag, which builds the binaries, attaches them to the release and
+# publishes the Docker image. Nothing is released until a maintainer merges
+# the release PR.
 name: release-please
 
 on:

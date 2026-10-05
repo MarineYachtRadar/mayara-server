@@ -108,7 +108,7 @@ Mayara Server uses **Angular-style conventional commits**:
 | `chore` | — | Skipped from changelog |
 | `ci` | — | Skipped from changelog |
 
-Only the types that appear in the changelog start a release, and the type also sets its version: `feat` is a minor release, a `!` after the type or a `BREAKING CHANGE:` footer a major one, anything else a patch.
+Only the types that appear in the changelog start a release, and so does a breaking change — a `!` after the type or a `BREAKING CHANGE:` footer — whatever its type. The type also sets the version: a breaking change is a major release, `feat` a minor one, `fix`, `refactor`, `perf` and `docs` a patch.
 
 The full list of accepted types (per [`AGENTS.md`](AGENTS.md#git-commit-conventions)) is `feat | fix | docs | style | refactor | test | chore | perf | ci`.
 

@@ -8,13 +8,7 @@
     { "type": "fix", "section": "Fixed" },
     { "type": "refactor", "section": "Changed" },
     { "type": "perf", "section": "Changed" },
-    { "type": "docs", "section": "Changed" },
-    { "type": "revert", "section": "Reverted", "hidden": true },
-    { "type": "style", "section": "Style", "hidden": true },
-    { "type": "test", "section": "Tests", "hidden": true },
-    { "type": "build", "section": "Build", "hidden": true },
-    { "type": "chore", "section": "Chores", "hidden": true },
-    { "type": "ci", "section": "CI", "hidden": true }
+    { "type": "docs", "section": "Changed" }
   ],
   "packages": {
     ".": {}
