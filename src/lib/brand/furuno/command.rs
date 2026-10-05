@@ -224,6 +224,10 @@ impl Command {
             self.send(CommandMode::Request, CommandId::MainBangSize, &[0, 0])
                 .await?; // $R83,0,0
         }
+        if self.controls.contains_key(&ControlId::AntennaHeight) {
+            self.send(CommandMode::Request, CommandId::AntennaHeight, &[0, 0, 0])
+                .await?; // $R84,0,0,0
+        }
         if self.controls.contains_key(&ControlId::BearingAlignment) {
             self.send(CommandMode::Request, CommandId::HeadingAdjust, &[])
                 .await?; // $R81
@@ -1380,37 +1384,38 @@ mod tests {
         assert_eq!(
             wire.sentences(),
             [
-                "$RE3",     // alive check
-                "$R96",     // modules
-                "$R8E,0",   // operating hours
-                "$R8F,0",   // transmit hours
-                "$R69",     // power status
-                "$R62",     // range
-                "$R63",     // gain
-                "$R64",     // sea
-                "$R65",     // rain
-                "$R75",     // tune
-                "$R89",     // scan speed
-                "$R83,0,0", // main bang size
-                "$R81",     // bearing alignment
-                "$REC",     // transmit channel
-                "$R77",     // no-transmit sectors
-                "$RE8",     // anti-jamming
-                "$R85",     // near STC curve
-                "$R86",     // middle STC curve
-                "$R87",     // far STC curve
-                "$R67,0,3", // noise reduction
-                "$R67,0,0", // interference rejection
-                "$REE",     // target separation
-                "$RED",     // bird mode
-                "$REF",     // target analyzer
+                "$RE3",       // alive check
+                "$R96",       // modules
+                "$R8E,0",     // operating hours
+                "$R8F,0",     // transmit hours
+                "$R69",       // power status
+                "$R62",       // range
+                "$R63",       // gain
+                "$R64",       // sea
+                "$R65",       // rain
+                "$R75",       // tune
+                "$R89",       // scan speed
+                "$R83,0,0",   // main bang size
+                "$R84,0,0,0", // antenna height
+                "$R81",       // bearing alignment
+                "$REC",       // transmit channel
+                "$R77",       // no-transmit sectors
+                "$RE8",       // anti-jamming
+                "$R85",       // near STC curve
+                "$R86",       // middle STC curve
+                "$R87",       // far STC curve
+                "$R67,0,3",   // noise reduction
+                "$R67,0,0",   // interference rejection
+                "$REE",       // target separation
+                "$RED",       // bird mode
+                "$REF",       // target analyzer
             ]
         );
     }
 
-    /// A radar without the NXT signal processing or transmit channel is not
-    /// asked about them: a query for a control it does not have draws an
-    /// error reply.
+    /// A radar without the NXT signal processing, transmit channel or antenna
+    /// height is not asked about them: a query for a control it does not have
+    /// draws an error reply.
     #[tokio::test]
     async fn a_radar_is_not_asked_about_controls_it_does_not_have() {
         let (mut command, _info, wire) = radar(RadarModel::DRS4DL);
@@ -1418,7 +1423,15 @@ mod tests {
         command.send_report_requests().await.unwrap();
 
         let sentences = wire.sentences();
-        for absent in ["$REE", "$RED", "$REF", "$R67,0,3", "$R67,0,0", "$REC"] {
+        for absent in [
+            "$REE",
+            "$RED",
+            "$REF",
+            "$R67,0,3",
+            "$R67,0,0",
+            "$REC",
+            "$R84,0,0,0",
+        ] {
             assert!(
                 !sentences.contains(&absent.to_string()),
                 "{absent} went out anyway: {sentences:?}"
