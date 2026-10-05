@@ -26,7 +26,8 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    # build(deps) for a runtime bump, build(deps-dev) for a dev one: the
+    # release-please gate releases on the former only.
     commit-message:
-      prefix: "chore"
-      prefix-development: "chore"
+      prefix: "build"
       include: "scope"
