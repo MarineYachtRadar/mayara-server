@@ -970,6 +970,13 @@ impl FurunoReportReceiver {
                 self.common
                     .set_value(&ControlId::MainBangSuppression, percent as f64);
             }
+            CommandId::AntennaHeight => {
+                // Response format: $N84,0,{meters},0
+                let meters = field(&strings, 1, "AntennaHeight")?;
+                for common in self.both_ranges() {
+                    common.set_value(&ControlId::AntennaHeight, meters);
+                }
+            }
             CommandId::HeadingAdjust => {
                 // Response format: $N81,{tenths of a degree, 0..3599},0
                 let tenths = first_field(&strings, "HeadingAdjust")?;
@@ -2236,12 +2243,21 @@ fn first_number(numbers: &[f64], command: &str) -> Result<f64, Error> {
     }
 }
 
-/// The first argument of a report, refusing one that is not a number. The
-/// parsed `numbers` read such a field as 0, which for a setting like the
-/// alignment is a value of its own rather than an absence.
+/// The first argument of a report, refusing one that is not a number.
 fn first_field(strings: &[&str], command: &str) -> Result<f64, Error> {
-    let Some(field) = strings.first() else {
-        bail!("Insufficient (0) arguments for {} command", command);
+    field(strings, 0, command)
+}
+
+/// Argument `index` of a report, refusing one that is missing or not a
+/// number. The parsed `numbers` read such a field as 0, which for a setting
+/// like the alignment is a value of its own rather than an absence.
+fn field(strings: &[&str], index: usize, command: &str) -> Result<f64, Error> {
+    let Some(field) = strings.get(index) else {
+        bail!(
+            "Insufficient ({}) arguments for {} command",
+            strings.len(),
+            command
+        );
     };
     field
         .trim()
@@ -2369,6 +2385,42 @@ mod tests {
 
         assert_alignment(&receiver.common, 7.0, "Range A");
         assert_alignment(receiver.common_b.as_ref().unwrap(), 7.0, "Range B");
+    }
+
+    /// The antenna height is the second field, in meters, and the antenna's,
+    /// so a dual-range radar shows it on both ranges. A DRS4D-NXT reported
+    /// `$N84,0,10,0` for 10 m.
+    #[tokio::test]
+    async fn a_reported_antenna_height_shows_on_both_ranges() {
+        let mut receiver = dual_range_receiver();
+
+        receiver.process_report("$N84,0,10,0").unwrap();
+
+        for common in [&receiver.common, receiver.common_b.as_ref().unwrap()] {
+            assert_eq!(antenna_height(common), Some(10.));
+        }
+    }
+
+    /// A report whose height is missing or not a number is refused rather
+    /// than read as 0.
+    #[tokio::test]
+    async fn a_malformed_antenna_height_is_refused() {
+        let mut receiver = nxt_receiver();
+        receiver.process_report("$N84,0,10,0").unwrap();
+
+        for report in ["$N84", "$N84,0", "$N84,0,,0", "$N84,0,x,0"] {
+            assert!(receiver.process_report(report).is_err(), "{report}");
+        }
+
+        assert_eq!(antenna_height(&receiver.common), Some(10.));
+    }
+
+    fn antenna_height(common: &CommonRadar) -> Option<f64> {
+        common
+            .info
+            .controls
+            .get(&ControlId::AntennaHeight)
+            .and_then(|c| c.value)
     }
 
     /// The alignment one range shows, in degrees.
