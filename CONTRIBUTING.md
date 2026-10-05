@@ -94,7 +94,7 @@ Mayara Server uses **Angular-style conventional commits**:
 
 ### Types that feed the changelog
 
-`cliff.toml` maps commit types into changelog groups. The practical effect:
+`release-please-config.json` maps commit types into changelog sections. The practical effect:
 
 | Type | Changelog group | Notes |
 |---|---|---|
@@ -108,29 +108,27 @@ Mayara Server uses **Angular-style conventional commits**:
 | `chore` | — | Skipped from changelog |
 | `ci` | — | Skipped from changelog |
 
-A handful of special cases are also skipped by `cliff.toml`: `chore(release)`, `chore(deps)`, `docs(changelog): update CHANGELOG`, and any commit matching `address.*CR.*findings` or `address.*CodeRabbit` — so the conventional way to name a fixup commit that addresses CodeRabbit feedback is `fix(furuno): address CodeRabbit findings`, and it will not appear in the changelog.
+Only the types that appear in the changelog start a release, and so does a breaking change — a `!` after the type or a `BREAKING CHANGE:` footer — whatever its type. The type also sets the version: a breaking change is a major release, `feat` a minor one, `fix`, `refactor`, `perf` and `docs` a patch.
 
 The full list of accepted types (per [`AGENTS.md`](AGENTS.md#git-commit-conventions)) is `feat | fix | docs | style | refactor | test | chore | perf | ci`.
 
 ## CHANGELOG is auto-generated — do not edit
 
-[`CHANGELOG.md`](CHANGELOG.md) is regenerated from commit history by [git-cliff](https://git-cliff.org/) via two workflows:
+[`CHANGELOG.md`](CHANGELOG.md) is written by [release-please](https://github.com/googleapis/release-please): its release PR adds the release's entry, built from the commit types merged since the last release, and the same entry becomes the release's notes on GitHub Releases.
 
-- `.github/workflows/changelog.yml` — runs on every push to `main`, generates the current changelog, opens a `docs(changelog): update CHANGELOG.md` PR, and auto-merges it.
-- `.github/workflows/release.yml` — runs on every `v*` tag push, generates release notes from the range since the previous tag, creates a GitHub Release, and opens an auto-merged changelog PR for the tagged version.
-
-**Never edit `CHANGELOG.md` manually.** If your PR touches it, a maintainer will ask you to remove the hunk. The only way to change what appears in the changelog is to change your **commit message** — that's why conventional commits matter. Historical entries before the git-cliff migration live in [`CHANGELOG.manual.md`](CHANGELOG.manual.md) and are appended to every generated changelog.
+**Never edit `CHANGELOG.md` manually.** If your PR touches it, a maintainer will ask you to remove the hunk. The only way to change what appears in the changelog is to change your **PR title**, which squash merge turns into the commit — that's why conventional commits matter.
 
 ## Version numbers are maintainer-managed
 
-**Never change the version in `Cargo.toml`** in a contribution PR. Version bumps happen in release-preparation commits controlled by maintainers. If you believe a release is warranted, say so in your PR description and let a maintainer handle it.
+**Never change the version in `Cargo.toml`** in a contribution PR. release-please bumps it in its release PR. If you believe a release is warranted, say so in your PR description and let a maintainer handle it.
 
 ## Release flow (maintainer reference)
 
-1. A maintainer bumps the version in `Cargo.toml`, commits as `chore(release): vX.Y.Z`, pushes to `main`.
-2. Maintainer tags that commit with `git tag vX.Y.Z && git push --tags`.
-3. `release.yml` runs: cross-builds Linux (x86_64 + arm64 musl) and Windows binaries, generates release notes from commits since the previous non-skipped tag, creates a GitHub Release, uploads binaries, and opens an auto-merged `docs(changelog): update CHANGELOG.md for vX.Y.Z` PR.
-4. `docker.yml` runs (triggered by `release.yml`), builds and pushes `ghcr.io/marineyachtradar/mayara-server:latest` and `:vX.Y.Z` for `linux/amd64` and `linux/arm64`.
+1. Every merge to `main` with a type the changelog shows — `feat`, `fix`, `refactor`, `perf`, `docs` — updates the one open release PR, `chore(release): X.Y.Z`, which bumps `Cargo.toml` and `Cargo.lock` and adds the release's entry to `CHANGELOG.md`. `.github/workflows/release-please.yml` maintains it.
+2. Merging that PR is the release: release-please tags `vX.Y.Z`, creates the GitHub Release with that entry as its notes, and dispatches `release.yml` on the tag.
+3. `release.yml` cross-builds Linux (x86_64, arm64 and mipsel musl), macOS universal and Windows binaries, attaches them to the release, and runs `docker.yml`, which pushes `ghcr.io/marineyachtradar/mayara-server:latest` and `:vX.Y.Z` for `linux/amd64` and `linux/arm64`.
+
+To name the next version yourself, put a `Release-As: X.Y.Z` footer in a commit merged to `main`. To build a release's binaries and image again, run `gh workflow run release.yml --ref vX.Y.Z`. To refresh the open release PR after changing the release configuration, run the `release-please` workflow by hand.
 
 Contributors do not need to do anything for a release beyond writing good conventional commits.
 

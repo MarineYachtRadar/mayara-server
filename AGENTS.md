@@ -55,7 +55,7 @@ Use conventional format: `<type>(<scope>): <subject>` where type = feat|fix|docs
 
 Keep commits small and atomic - one logical change per commit. Split unrelated changes into separate commits. The commit history tells a story; each commit should be a meaningful, self-contained step.
 
-**DO NOT** edit CHANGELOG.md — `release.sh` regenerates it from conventional commits with git-cliff when a release is cut, and any hand edit is overwritten there. It changes only at release time, so `main` carries no entry for merges made since the last one.
+**DO NOT** edit CHANGELOG.md — release-please adds each release's entry in its release PR, from the conventional commit types (`feat` under Added, `fix` under Fixed, `refactor`, `perf` and `docs` under Changed), and the same entry is the release's notes on GitHub Releases. It changes only at release time, so `main` carries no entry for merges made since the last one.
 **MANDATORY:** Never amend commits that have already been pushed to GitHub. Only amend local, unpushed commits.
 **MANDATORY:** Always rebase and clean up commit history before creating a PR or pushing changes. Amend fixes and corrections to the relevant existing commit instead of creating chains of "fix typo" or "oops" commits. The final history should contain only intentional, complete commits - no work-in-progress artifacts.
 **MANDATORY:** Run `cargo fmt` and `cargo clippy --no-deps --all-targets -- -D warnings` before every commit that touches Rust code. Every commit pushed to `main` must be `cargo fmt --check` clean and `cargo clippy` warning-free — CI enforces both and will fail the build otherwise.
@@ -71,9 +71,9 @@ Before opening a PR:
 - Optionally, if the CodeRabbit CLI is available, run `coderabbit review --committed --base origin/main` against your branch to catch findings before pushing. Compare against `origin/main`, not `main`: a stale local `main` silently folds other people's merged PRs into the review diff. This is good practice for non-trivial code changes but not required — CodeRabbit runs on every PR automatically via the GitHub App, so the findings arrive either way. Skip it for docs-only PRs, formatting fixes, or one-liners.
 - Rebase and clean up commit history (squash intermediate commits)
 - Self-review your changes
-- **NEVER change version numbers** - maintainers will update versions when publishing releases
+- **NEVER change version numbers** - release-please bumps the version in its release PR, and a maintainer releases by merging it
 
-PR titles are used to auto-generate the changelog and release notes. They **must** follow the same conventional commit format as commits: `<type>(<scope>): <subject>` (e.g., `feat(furuno): add guard zone support`). With squash merge, the PR title becomes the commit message on `main`, so it directly becomes the changelog entry. Make them **descriptive, informative, and easy to understand**. Ask yourself: "If someone only read the title, would they understand what this PR does?"
+PR titles are used to auto-generate the changelog and release notes. They **must** follow the same conventional commit format as commits: `<type>(<scope>): <subject>` (e.g., `feat(furuno): add guard zone support`). With squash merge, the PR title becomes the commit message on `main`, so it directly becomes the changelog entry, and its type sets the next version: a breaking change is a major release, `feat` a minor one, `fix`, `refactor`, `perf` and `docs` a patch. Make them **descriptive, informative, and easy to understand**. Ask yourself: "If someone only read the title, would they understand what this PR does?"
 
 PR descriptions must be **succinct and straight to the point**. Explain the motivation (why) and summarize the solution approach (how), but not the mechanics (what) - the diff shows what changed. Do not pad descriptions with unnecessary detail, verbose explanations, or self-congratulatory comments. If there are breaking changes, mention them explicitly. If a PR description includes a test plan with checkboxes, **all items must be checked** before the PR is ready for review - remove or complete any unchecked items.
 

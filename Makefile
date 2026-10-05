@@ -11,7 +11,7 @@
 #   make demo     - Rebuild the docker demo image
 #   make clean    - Clean build artifacts
 
-.PHONY: all release debug docs run clean test fixtures docker demo changelog
+.PHONY: all release debug docs run clean test fixtures docker demo
 
 # Default: build release with embedded docs
 all: release
@@ -70,11 +70,6 @@ docker:
 # Docker demo
 demo:
 	./demo/build.sh
-
-# Generate changelog (requires git-cliff: cargo install git-cliff)
-changelog:
-	git-cliff --output CHANGELOG.md
-	cat CHANGELOG.manual.md >> CHANGELOG.md
 
 # Clean build artifacts
 clean:
