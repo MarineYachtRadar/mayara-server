@@ -552,6 +552,9 @@ pub(crate) enum CommandId {
     JammingAble = 0xE8,
     /// `0xEA` — ATF settings (NXT, 6 params).
     ATFSettings = 0xEA,
+    /// `0xEC` — Transmit channel of a solid-state radar: 0 = Auto, 1-3 = that
+    /// channel.
+    TxChannel = 0xEC,
     /// `0xED` — Bird mode (NXT: 0 = Off, 1 = Low, 2 = Med, 3 = High).
     BirdMode = 0xED,
     /// `0xEE` — Target Separation / RezBoost (beam sharpening).
@@ -846,6 +849,12 @@ pub(crate) const GUARD_MODE_FAN: i32 = 1;
 /// A full turn in the tenths of a degree `$S81` counts in. The radar takes
 /// 0..3599 and refuses a negative number.
 pub(crate) const HEADING_ADJUST_FULL_TURN: i32 = 3600;
+
+/// The `$SEC` channel that leaves the choice to the radar.
+pub(crate) const TX_CHANNEL_AUTO: i32 = 0;
+
+/// The highest channel `$SEC` selects; the channels start at 1.
+pub(crate) const TX_CHANNEL_MAX: i32 = 3;
 
 #[cfg(test)]
 mod tests {
