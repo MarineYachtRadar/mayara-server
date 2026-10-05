@@ -43,7 +43,7 @@ pub(crate) fn new(
     new_auto(ControlId::Gain, 0., 100., HAS_AUTO_NOT_ADJUSTABLE).build(&mut controls);
     new_list(
         ControlId::InterferenceRejection,
-        &["Off", "Level 1", "Level 2", "Level 3", "Level 4", "Level 5"],
+        interference_rejection_levels(model),
     )
     .build(&mut controls);
 
@@ -183,6 +183,15 @@ pub(crate) fn update_when_model_known(
 
 /// This brand's controls for every model it knows, for the UI strings catalog
 /// in [`crate::radar::ui_strings`].
+/// A Quantum takes levels 0..5 (its firmware bounds the byte below 6); an
+/// RD418D was wire-observed ignoring anything above 3 (#729).
+fn interference_rejection_levels(model: BaseModel) -> &'static [&'static str] {
+    match model {
+        BaseModel::Quantum => &["Off", "Level 1", "Level 2", "Level 3", "Level 4", "Level 5"],
+        BaseModel::RD => &["Off", "Level 1", "Level 2", "Level 3"],
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn controls_for_every_model(args: &Cli) -> Vec<SharedControls> {
     use strum::IntoEnumIterator;
@@ -280,6 +289,19 @@ mod tests {
             let tx = tokio::sync::broadcast::Sender::new(1);
             let controls = new("ray1234".to_string(), tx, &args, model);
             assert_eq!(controls.auto_standby(), Some(Duration::from_secs(60)));
+        }
+    }
+
+    /// An RD418D ignores interference rejection above level 3, so it must
+    /// not be offered levels 4 and 5 that silently snap back (#729).
+    #[test]
+    fn interference_rejection_offers_only_levels_the_radar_accepts() {
+        let args = Cli::parse_from(["mayara-server"]);
+
+        for (base_model, max) in [(BaseModel::RD, 3.), (BaseModel::Quantum, 5.)] {
+            let controls = controls_for(&args, base_model);
+            let ir = controls.get(&ControlId::InterferenceRejection).unwrap();
+            assert_eq!(ir.item().max_value, Some(max), "{base_model}");
         }
     }
 }
