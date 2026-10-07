@@ -140,19 +140,18 @@ impl OnwaReportReceiver {
         }
         self.prev_angle = Some(spoke.angle);
 
-        let heading = crate::navdata::get_heading_true().map(|h| {
-            let normalized = h.rem_euclid(std::f64::consts::TAU);
-            ((normalized * SPOKES as f64 / std::f64::consts::TAU) as u16).min(SPOKES as u16 - 1)
-        });
         let pixels = spoke.samples.iter().map(|p| p >> 1).collect();
 
+        // The radar knows no heading; the spoke takes the navigation heading.
         self.common.new_spoke_message();
         self.common
-            .add_spoke(range as u32, spoke.angle, heading, pixels);
+            .add_spoke(range as u32, spoke.angle, None, pixels);
         self.common.send_spoke_message();
     }
 
     fn process_state(&mut self, data: &[u8]) {
+        // The radar is alive while it reports, transmitting or not.
+        self.common.info.mark_input();
         if let Some(state) = parse_state(data) {
             self.apply_state(&state);
         } else if let Some(gains) = parse_gains(data) {
