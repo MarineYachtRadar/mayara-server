@@ -161,6 +161,6 @@ Place the full capture in the sibling `radar-recordings` repository checkout and
 
 ## Reference
 
-- `src/lib/brand/navico/protocol.rs`, `src/lib/brand/furuno/protocol.rs`, `src/lib/brand/garmin/protocol.rs`, `src/lib/brand/koden/protocol.rs`, `src/lib/brand/raymarine/protocol.rs` — authoritative multicast addresses, ports, and packet layouts.
+- `src/lib/brand/navico/protocol.rs`, `src/lib/brand/furuno/protocol.rs`, `src/lib/brand/garmin/protocol.rs`, `src/lib/brand/koden/protocol.rs`, `src/lib/brand/onwa/protocol.rs`, `src/lib/brand/raymarine/protocol.rs` — authoritative multicast addresses, ports, and packet layouts.
 - [internals/new_radar_brand.md](internals/new_radar_brand.md) — downstream fixture workflow and replay test pattern.
 - [Wireshark documentation](https://www.wireshark.org/docs/) and [tcpdump manual](https://www.tcpdump.org/manpages/tcpdump.1.html) — capture tool references.

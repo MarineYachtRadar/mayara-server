@@ -67,6 +67,13 @@ const NETWORK_REQUIREMENTS = {
       "same subnet as the radar, typically 192.168.0.x.",
     setup: ["Ensure UDP port 10001 is not blocked"],
   },
+  onwa: {
+    ipRange: "223.168.1.x",
+    description:
+      "ONWA radars broadcast their picture but take commands by unicast at " +
+      "223.168.1.168, so the host needs an address in 223.168.1.x.",
+    setup: ["Ensure UDP ports 3823, 7203 and 7204 are not blocked"],
+  },
 };
 
 // Brands whose network help is a single paragraph plus a link to the full
@@ -76,6 +83,7 @@ const OTHER_BRANDS = [
   ["raymarine", "Raymarine"],
   ["garmin", "Garmin"],
   ["koden", "Koden"],
+  ["onwa", "ONWA"],
 ];
 
 const brandName = (brand) => brand[0].toUpperCase() + brand.slice(1);

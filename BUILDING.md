@@ -105,6 +105,7 @@ Available features:
 - `furuno` - Furuno radar support (DRS, FAR series)
 - `garmin` - Garmin radar support (HD, xHD, xHD2, xHD3, Fantom, Fantom Pro)
 - `koden` - Koden radar support (MDS-xxR series)
+- `onwa` - ONWA radar support (KRA-5001)
 - `raymarine` - Raymarine radar support (Quantum, RD, HD, Magnum, Cyclone)
 - `emulator` - Built-in radar emulator (useful for testing without hardware)
 - `pcap-replay` - PCAP capture replay support (pulls in `flate2`)

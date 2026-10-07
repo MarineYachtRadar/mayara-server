@@ -392,6 +392,7 @@ pub enum Brand {
     Garmin,
     Koden,
     Navico,
+    Onwa,
     Raymarine,
     Emulator,
     Playback,
@@ -404,6 +405,7 @@ impl Brand {
             Self::Garmin => "gar",
             Self::Koden => "kod",
             Self::Navico => "nav",
+            Self::Onwa => "onw",
             Self::Raymarine => "ray",
             Self::Emulator => "emu",
             Self::Playback => "play",
@@ -419,6 +421,7 @@ impl Brand {
             Self::Furuno => cfg!(feature = "furuno"),
             Self::Garmin => cfg!(feature = "garmin"),
             Self::Koden => cfg!(feature = "koden"),
+            Self::Onwa => cfg!(feature = "onwa"),
             Self::Raymarine => cfg!(feature = "raymarine"),
             Self::Emulator => cfg!(feature = "emulator"),
             Self::Playback => true,
@@ -433,6 +436,7 @@ impl Brand {
             Self::Furuno,
             Self::Garmin,
             Self::Koden,
+            Self::Onwa,
             Self::Raymarine,
         ]
         .into_iter()
@@ -449,6 +453,7 @@ impl Brand {
             Self::Garmin,
             Self::Koden,
             Self::Navico,
+            Self::Onwa,
             Self::Raymarine,
             Self::Emulator,
             Self::Playback,
@@ -465,6 +470,7 @@ impl From<&str> for Brand {
             "garmin" => Brand::Garmin,
             "koden" => Brand::Koden,
             "navico" => Brand::Navico,
+            "onwa" => Brand::Onwa,
             "raymarine" => Brand::Raymarine,
             "emulator" => Brand::Emulator,
             "playback" => Brand::Playback,
@@ -483,6 +489,7 @@ impl Serialize for Brand {
             Self::Garmin => serializer.serialize_str("Garmin"),
             Self::Koden => serializer.serialize_str("Koden"),
             Self::Navico => serializer.serialize_str("Navico"),
+            Self::Onwa => serializer.serialize_str("ONWA"),
             Self::Raymarine => serializer.serialize_str("Raymarine"),
             Self::Emulator => serializer.serialize_str("Emulator"),
             Self::Playback => serializer.serialize_str("Playback"),
@@ -497,6 +504,7 @@ impl std::fmt::Display for Brand {
             Self::Garmin => write!(f, "Garmin"),
             Self::Koden => write!(f, "Koden"),
             Self::Navico => write!(f, "Navico"),
+            Self::Onwa => write!(f, "ONWA"),
             Self::Raymarine => write!(f, "Raymarine"),
             Self::Emulator => write!(f, "Emulator"),
             Self::Playback => write!(f, "Playback"),
@@ -595,6 +603,7 @@ pub enum Expectation {
     Furuno,
     Garmin,
     Koden,
+    Onwa,
     RaymarineRd,
     RaymarineQuantumMfd,
     RaymarineQuantumStandalone,
@@ -640,6 +649,9 @@ impl Expectation {
             // An RD self-assigns 10.<three bytes of its MAC> and will never
             // answer a host outside that /8.
             Self::RaymarineRd => Some((Ipv4Addr::new(10, 0, 0, 0), 8, "10.x.x.x")),
+            // An ONWA radar sits at a fixed 223.168.1.x address and takes its
+            // commands by unicast.
+            Self::Onwa => Some((Ipv4Addr::new(223, 168, 1, 0), 24, "223.168.1.x")),
             // The network an Axiom insists on, and hands out DHCP leases from.
             Self::RaymarineQuantumMfd => {
                 Some((Ipv4Addr::new(198, 18, 0, 0), 21, "198.18.0.x - 198.18.7.x"))
@@ -660,6 +672,7 @@ impl Expectation {
             Self::Furuno => Brand::Furuno,
             Self::Garmin => Brand::Garmin,
             Self::Koden => Brand::Koden,
+            Self::Onwa => Brand::Onwa,
             Self::RaymarineRd | Self::RaymarineQuantumMfd | Self::RaymarineQuantumStandalone => {
                 Brand::Raymarine
             }

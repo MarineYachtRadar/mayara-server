@@ -99,6 +99,8 @@ fn compiled_features() -> Vec<&'static str> {
     features.push("garmin");
     #[cfg(feature = "koden")]
     features.push("koden");
+    #[cfg(feature = "onwa")]
+    features.push("onwa");
     #[cfg(feature = "raymarine")]
     features.push("raymarine");
     #[cfg(feature = "emulator")]

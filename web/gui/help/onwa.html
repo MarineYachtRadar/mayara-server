@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <title>ONWA Setup — Mayara</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link type="text/css" rel="stylesheet" href="help.css?v=2" />
+  </head>
+  <body>
+    <div class="myr_help">
+      <div class="myr_nav"><a href="index.html">&larr; Setup guides</a></div>
+
+      <h1>ONWA radar setup</h1>
+      <p class="myr_lead">
+        The ONWA KRA-5001 radar, as used with the K-ASTRAL chartplotters.
+        Mayara runs alongside the chartplotter.
+      </p>
+
+      <h2>What you need</h2>
+      <ul class="myr_needs">
+        <li>The radar wired to the same Ethernet switch as the Mayara machine</li>
+        <li>An address for the Mayara machine in <code>223.168.1.x</code></li>
+        <li>UDP ports 3823, 7203 and 7204 open on the host firewall</li>
+      </ul>
+
+      <h2>Network requirements</h2>
+      <p>
+        The radar sits at a fixed address, <code>223.168.1.168</code>, with the
+        chartplotter at <code>223.168.1.128</code>. It sends its picture and
+        status as broadcasts, which Mayara hears on any address, but it takes
+        its commands by unicast, so the Mayara machine needs an address of its
+        own in <code>223.168.1.x</code>. Pick one nothing else uses, for
+        example <code>223.168.1.200</code> with netmask
+        <code>255.255.255.0</code>.
+      </p>
+      <p>
+        On Linux: <code>ip addr add 223.168.1.200/24 dev eth0</code>.
+        On macOS: <code>sudo ifconfig en0 alias 223.168.1.200 255.255.255.0</code>.
+      </p>
+
+      <div class="myr_box myr_box_bad">
+        <span class="myr_box_title">WiFi will not work for the radar</span>
+        <p>
+          The picture arrives as UDP broadcast, about 4 MB/s, which WiFi handles
+          exactly like multicast: base rate, no retransmissions, heavy airtime
+          cost. Wire the radar to Mayara and view Mayara over WiFi.
+          <a href="networking.html#wifi">The full explanation.</a>
+        </p>
+      </div>
+
+      <h3>Traffic</h3>
+      <div class="myr_scroll_x">
+        <table>
+          <thead>
+            <tr><th>Purpose</th><th>Address</th><th>Notes</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Commands</td>
+              <td><code>223.168.1.168:3367</code></td>
+              <td>Unicast, from Mayara or the chartplotter</td>
+            </tr>
+            <tr>
+              <td>Status and discovery</td>
+              <td><code>255.255.255.255:3823</code></td>
+              <td>Every setting, once a second</td>
+            </tr>
+            <tr>
+              <td>Radar picture</td>
+              <td><code>255.255.255.255:7203</code></td>
+              <td>One spoke per packet</td>
+            </tr>
+            <tr>
+              <td>Command replies</td>
+              <td><code>255.255.255.255:7204</code></td>
+              <td>Echo of every command, versions</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>Controls</h2>
+      <p>
+        The chartplotter and Mayara control the same radar, so a change made on
+        either shows up on both.
+      </p>
+      <ul>
+        <li><strong>Power</strong> — standby or transmit</li>
+        <li><strong>Range</strong> — 1/8 nm to 36 nm, the chartplotter's range steps</li>
+        <li><strong>Gain</strong>, <strong>Sea clutter</strong>, <strong>Rain clutter</strong> — 0–100%</li>
+        <li><strong>Interference rejection</strong> — off, low, medium, high</li>
+        <li><strong>Target expansion</strong> — the chartplotter's <em>echo stretch</em>: off, low, high</li>
+        <li><strong>Noise rejection</strong> — off or on</li>
+        <li><strong>Display timing</strong> — the chartplotter's <em>sweep timing</em>, 0–100</li>
+        <li><strong>No-transmit sector</strong> — the chartplotter's <em>dead sector</em></li>
+      </ul>
+      <p>
+        Manual tuning is not offered: the K-ASTRAL sends the same value whatever
+        the tune sliders are set to, so the radar's tuning range is not known.
+        The radar tunes itself whenever it starts transmitting.
+      </p>
+
+      <h2>Troubleshooting</h2>
+
+      <h3>Radar not detected</h3>
+      <ul>
+        <li>Confirm the Mayara machine has an address in <code>223.168.1.x</code>.</li>
+        <li>Confirm nothing is blocking UDP port 3823.</li>
+        <li>Limit detection to ONWA to cut down the noise: <code>mayara-server --brand onwa</code></li>
+      </ul>
+
+      <h3>No spokes displayed</h3>
+      <p>
+        The radar has to be transmitting. After power-on it needs a minute to
+        warm up before it can.
+      </p>
+
+      <div class="myr_footer">
+        <a href="index.html">Setup guides</a> &middot;
+        <a href="networking.html">Radar networking</a> &middot;
+        <a href="https://github.com/MarineYachtRadar/mayara-server/blob/main/docs/capturing-traffic.md">Capturing radar traffic</a>
+      </div>
+    </div>
+  </body>
+</html>

@@ -135,6 +135,7 @@ fn build_catalog(control_sets: &[SharedControls]) -> Catalog {
     feature = "garmin",
     feature = "koden",
     feature = "navico",
+    feature = "onwa",
     feature = "raymarine"
 ))]
 mod tests {
@@ -154,6 +155,7 @@ mod tests {
             crate::brand::garmin::controls_for_every_model(args),
             crate::brand::koden::controls_for_every_model(args),
             crate::brand::navico::controls_for_every_model(args),
+            crate::brand::onwa::controls_for_every_model(args),
             crate::brand::raymarine::controls_for_every_model(args),
         ]
         .concat()

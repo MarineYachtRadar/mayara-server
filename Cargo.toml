@@ -21,6 +21,7 @@ navico = []
 furuno = []
 garmin = []
 koden = []
+onwa = []
 raymarine = []
 emulator = []
 pcap-replay = []
@@ -29,7 +30,7 @@ pcap-replay = []
 # that does not deliberately claim it is a local build.
 official-build = []
 # default = ["navico", "furuno", "raymarine"]
-default = ["navico", "furuno", "garmin", "koden", "raymarine", "emulator"]
+default = ["navico", "furuno", "garmin", "koden", "onwa", "raymarine", "emulator"]
 
 [dependencies]
 anyhow = "1.0.102"

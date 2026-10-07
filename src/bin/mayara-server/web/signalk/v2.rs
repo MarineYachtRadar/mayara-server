@@ -479,7 +479,7 @@ async fn get_status(State(state): State<Web>) -> Response {
 
 #[derive(Deserialize, ToSchema)]
 struct ExpectationParam {
-    /// `navico`, `furuno`, `garmin`, `koden`, `raymarine-rd`,
+    /// `navico`, `furuno`, `garmin`, `koden`, `onwa`, `raymarine-rd`,
     /// `raymarine-quantum-mfd` or `raymarine-quantum-standalone`.
     #[schema(example = "raymarine-rd")]
     expectation: String,

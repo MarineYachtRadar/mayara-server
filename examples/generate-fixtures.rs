@@ -170,6 +170,16 @@ fn main() {
         2000,
     );
 
+    // ONWA KRA-5001: the radar's broadcasts only. Its 1000-byte spokes count
+    // as small packets, so the cap is sized for two seconds — long enough to
+    // carry a state report and a firmware reply, both sent once a second.
+    generate_fixture(
+        &base.join("onwa/kra5001/k-astral8-transmit.pcap.gz"),
+        &fixture_dir.join("onwa-kra5001.pcap.gz"),
+        &|p| matches!(p.dst_addr.port(), 3823 | 7203 | 7204),
+        8000,
+    );
+
     println!("Fixtures generated in {}", fixture_dir.display());
 }
 

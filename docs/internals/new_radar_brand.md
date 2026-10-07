@@ -66,7 +66,7 @@ Also update the `From<String>`, `Serialize`, and `Display` implementations in th
 [features]
 yourbrand = []
 # Add to default if the brand should be compiled by default:
-default = ["navico", "furuno", "garmin", "koden", "raymarine", "yourbrand", "emulator"]
+default = ["navico", "furuno", "garmin", "koden", "onwa", "raymarine", "yourbrand", "emulator"]
 ```
 
 ### 3. Create the module and register it
@@ -399,4 +399,5 @@ Your `LocatorAddress` registration specifies:
 | Furuno | `fur` | Furuno | Subnet broadcast | DRS4D-NXT |
 | Garmin | `gar` | Garmin, GarminCdm | CDM heartbeat | HD, xHD |
 | Koden | `kod` | Koden | Subnet broadcast | RADARpc |
+| ONWA | `onw` | Onwa | Limited broadcast | KRA-5001 |
 | Raymarine | `ray` | Raymarine | Multicast beacon | RD, Quantum |
