@@ -180,8 +180,18 @@ fn bind_to_broadcast(
     let _ = socket.set_broadcast(true);
     let _ = nic_addr; // Not used on Linux
 
-    socket.bind(&socket2::SockAddr::from(*addr))?;
-    log::trace!("Binding broadcast socket to {}", *addr);
+    // macOS and the BSDs refuse to bind 255.255.255.255; the wildcard
+    // address receives limited broadcasts everywhere. Each interface gets its
+    // own socket on that one port, which those systems only allow, and only
+    // deliver the broadcast to all of, with SO_REUSEPORT.
+    let bind_addr = if addr.ip().is_broadcast() {
+        socket.set_reuse_port(true)?;
+        SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, addr.port())
+    } else {
+        *addr
+    };
+    socket.bind(&socket2::SockAddr::from(bind_addr))?;
+    log::trace!("Binding broadcast socket to {}", bind_addr);
     Ok(())
 }
 

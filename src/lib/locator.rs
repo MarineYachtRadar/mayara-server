@@ -421,7 +421,11 @@ impl Locator {
                                         if let SocketAddr::V4(listen_addr) =
                                             radar_listen_address.address
                                         {
+                                            // A limited broadcast never leaves the
+                                            // link it was sent on, so it belongs to
+                                            // every interface's subnet.
                                             if !listen_addr.ip().is_multicast()
+                                                && !listen_addr.ip().is_broadcast()
                                                 && !network::match_ipv4(
                                                     &nic_ip,
                                                     listen_addr.ip(),
