@@ -68,6 +68,16 @@ impl CommandSender for Command {
         match cv.id {
             ControlId::Power => {
                 let transmit = cv.as_i32()? == Power::Transmit as u32 as i32;
+                // The K-ASTRAL refuses to transmit until its countdown ends,
+                // and so does Mayara; whether the radar would refuse is
+                // untested.
+                let warming_up = controls
+                    .get(&ControlId::Power)
+                    .and_then(|c| c.value)
+                    .is_some_and(|p| p as u32 == Power::Preparing as u32);
+                if transmit && warming_up {
+                    return Err(RadarError::WarmingUp);
+                }
                 self.send_all(&power_commands(transmit)).await
             }
             ControlId::Range => {

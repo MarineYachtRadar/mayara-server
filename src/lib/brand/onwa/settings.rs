@@ -24,6 +24,12 @@ pub(crate) fn new(
         .read_only(true)
         .build(&mut controls);
 
+    // Counted by Mayara: the radar does not report its warm-up
+    new_numeric(ControlId::WarmupTime, 0., 255.)
+        .has_enabled()
+        .read_only(true)
+        .build(&mut controls);
+
     new_numeric(ControlId::Gain, 0., 100.).build(&mut controls);
     new_numeric(ControlId::Sea, 0., 100.).build(&mut controls);
     new_numeric(ControlId::Rain, 0., 100.).build(&mut controls);

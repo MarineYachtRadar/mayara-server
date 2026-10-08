@@ -15,12 +15,56 @@ use crate::replay::RadarSocket;
 /// The chartplotter polls the radar once a second.
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(1);
 
+/// The radar never says when it is warm. The K-ASTRAL counts down this long
+/// from the moment it starts talking to the radar, however long the radar
+/// has been on, so Mayara does the same.
+const WARMUP: Duration = Duration::from_secs(100);
+
 pub(crate) struct OnwaReportReceiver {
     common: CommonRadar,
     command_sender: Option<Command>,
     /// From the latest state report or range echo; spokes do not say.
     range_index: Option<u8>,
     prev_angle: Option<u16>,
+    warmup: Warmup,
+}
+
+/// Mayara's own warm-up countdown, since the radar reports none.
+#[derive(Default)]
+struct Warmup {
+    /// When the warm-up ends; `None` once the radar is known to be warm.
+    warm_at: Option<Instant>,
+    /// Whether a state report has arrived, so first contact counts once.
+    seen: bool,
+}
+
+impl Warmup {
+    /// Every state report: the first starts the countdown unless the radar
+    /// is already transmitting, and a transmitting radar ends it. Returns
+    /// the time left.
+    fn on_report(&mut self, transmitting: bool, now: Instant) -> Duration {
+        if !self.seen {
+            self.seen = true;
+            if !transmitting {
+                self.restart(now);
+            }
+        }
+        if transmitting {
+            self.warm_at = None;
+        }
+        let remaining = self
+            .warm_at
+            .map_or(Duration::ZERO, |t| t.saturating_duration_since(now));
+        if remaining.is_zero() {
+            self.warm_at = None;
+        }
+        remaining
+    }
+
+    /// The radar has just powered up.
+    fn restart(&mut self, now: Instant) {
+        self.warm_at = Some(now + WARMUP);
+    }
 }
 
 impl OnwaReportReceiver {
@@ -54,6 +98,7 @@ impl OnwaReportReceiver {
             command_sender,
             range_index: None,
             prev_angle: None,
+            warmup: Warmup::default(),
         }
     }
 
@@ -164,8 +209,16 @@ impl OnwaReportReceiver {
 
     fn apply_state(&mut self, state: &State) {
         self.set_range(state.range_index);
+        let remaining = self.warmup.on_report(state.transmit, Instant::now());
+        self.common.set_value_enabled(
+            &ControlId::WarmupTime,
+            remaining.as_secs() as f64,
+            (!remaining.is_zero()) as u8,
+        );
         let power = if state.transmit {
             Power::Transmit
+        } else if !remaining.is_zero() {
+            Power::Preparing
         } else {
             Power::Standby
         };
@@ -215,6 +268,10 @@ impl OnwaReportReceiver {
                     self.set_range(index);
                 }
             }
+            "RDREST" => {
+                log::info!("{}: radar powered up, warming up", self.common.key);
+                self.warmup.restart(Instant::now());
+            }
             "ANTFV" => {
                 let controls = &self.common.info.controls;
                 if let Some(model) = model_from_firmware(args) {
@@ -224,5 +281,57 @@ impl OnwaReportReceiver {
             }
             _ => log::trace!("{}: reply {} {}", self.common.key, name, args),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn first_contact_in_standby_counts_down() {
+        let t0 = Instant::now();
+        let mut w = Warmup::default();
+        assert_eq!(w.on_report(false, t0), WARMUP);
+        assert_eq!(
+            w.on_report(false, t0 + Duration::from_secs(40)),
+            Duration::from_secs(60)
+        );
+        assert_eq!(w.on_report(false, t0 + WARMUP), Duration::ZERO);
+    }
+
+    #[test]
+    fn a_transmitting_radar_is_warm() {
+        let t0 = Instant::now();
+        let mut w = Warmup::default();
+        assert_eq!(w.on_report(true, t0), Duration::ZERO);
+        assert_eq!(
+            w.on_report(false, t0),
+            Duration::ZERO,
+            "no countdown later either"
+        );
+
+        let mut w = Warmup::default();
+        w.on_report(false, t0);
+        assert_eq!(
+            w.on_report(true, t0 + Duration::from_secs(10)),
+            Duration::ZERO,
+            "transmitting ends the countdown"
+        );
+        assert_eq!(
+            w.on_report(false, t0 + Duration::from_secs(11)),
+            Duration::ZERO
+        );
+    }
+
+    #[test]
+    fn a_reboot_restarts_the_countdown() {
+        let t0 = Instant::now();
+        let mut w = Warmup::default();
+        w.on_report(false, t0);
+        let later = t0 + Duration::from_secs(300);
+        assert_eq!(w.on_report(false, later), Duration::ZERO);
+        w.restart(later);
+        assert_eq!(w.on_report(false, later), WARMUP);
     }
 }

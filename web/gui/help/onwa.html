@@ -13,7 +13,7 @@
       <h1>ONWA radar setup</h1>
       <p class="myr_lead">
         The ONWA KRA-5001 radar, as used with the K-ASTRAL chartplotters.
-        Mayara runs alongside the chartplotter.
+        Mayara can run the radar on its own or alongside the chartplotter.
       </p>
 
       <h2>What you need</h2>
@@ -111,8 +111,17 @@
 
       <h3>No spokes displayed</h3>
       <p>
-        The radar has to be transmitting. After power-on it needs a minute to
-        warm up before it can.
+        The radar has to be transmitting. It does not report its own warm-up,
+        so Mayara does what the chartplotter does: when it first finds the
+        radar in standby, or the radar has just been switched on, it shows
+        <em>Preparing</em> and counts down 100 seconds before it allows
+        transmit.
+      </p>
+      <p>
+        The radar only keeps transmitting while something polls it every
+        second; Mayara and the chartplotter both do. If Mayara stops and the
+        chartplotter is off, the radar returns to standby within about ten
+        seconds.
       </p>
 
       <div class="myr_footer">
