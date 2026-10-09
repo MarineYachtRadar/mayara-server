@@ -165,8 +165,8 @@ pub(crate) fn power_commands(transmit: bool) -> [Vec<u8>; 2] {
 /// new range followed by a pulse, which steps from the old pulse through 0
 /// to the new one.
 pub(crate) fn range_commands(old_index: u8, new_index: u8) -> [Vec<u8>; 3] {
-    let old = PULSES[(old_index as usize).min(PULSES.len() - 1)];
-    let new = PULSES[(new_index as usize).min(PULSES.len() - 1)];
+    let old = PULSES[old_index as usize];
+    let new = PULSES[new_index as usize];
     [old, 0, new].map(|pulse| {
         let mut packet = command("TXRNG", &new_index.to_string());
         packet.extend(command("PSELN", &pulse.to_string()));

@@ -72,7 +72,7 @@ const NETWORK_REQUIREMENTS = {
     description:
       "ONWA radars broadcast their picture but take commands by unicast at " +
       "223.168.1.168, so the host needs an address in 223.168.1.x.",
-    setup: ["Ensure UDP ports 3823, 7203 and 7204 are not blocked"],
+    setup: ["Ensure UDP ports 3823, 3828, 7203 and 7204 are not blocked"],
   },
 };
 
