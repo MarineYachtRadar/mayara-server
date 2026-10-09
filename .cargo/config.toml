@@ -1,0 +1,4 @@
+# Link the C runtime statically on Windows so mayara-server.exe runs on a
+# clean install without the Visual C++ Redistributable (VCRUNTIME140.dll).
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
