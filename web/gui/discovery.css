@@ -2,6 +2,12 @@
    Discovery Screen Styles
    ============================================ */
 
+/* base.css pins the page for the full-screen radar viewer; the discovery
+   page is a document and grows with its help text. */
+html, body {
+  overflow: auto;
+}
+
 .myr_discovery_container {
   max-width: 900px;
   margin: 0 auto;
