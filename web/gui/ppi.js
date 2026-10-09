@@ -851,7 +851,7 @@ class PPI {
     // angle/bearing stay in the radar's reported units even after the
     // reduce processor shrinks the buffer, so use the reported count here.
     const angleUnits = this.reportedSpokesPerRevolution || this.spokesPerRevolution;
-    if (spoke.bearing !== undefined && spoke.angle !== undefined) {
+    if (spoke.bearing != null && spoke.angle != null) {
       const heading = (spoke.bearing + angleUnits - spoke.angle) % angleUnits;
       const headingRad = (heading * 2 * Math.PI) / angleUnits;
       const sin = Math.sin(headingRad);
@@ -971,7 +971,7 @@ class PPI {
     // scales spoke.angle.
     let writeAngle = null;
     if (this.headingMode === "northUp") {
-      if (spoke.bearing !== undefined) {
+      if (spoke.bearing != null) {
         writeAngle = spoke.bearing % angleUnits;
       } else {
         const headingRad = this.#displayHeadingRad();

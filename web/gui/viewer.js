@@ -1869,11 +1869,11 @@ function radarLoaded(r) {
         // Heading is derived from spoke.bearing - spoke.angle (in spokes units)
         if (
           lastSpoke &&
-          lastSpoke.lat !== undefined &&
-          lastSpoke.lon !== undefined
+          lastSpoke.lat != null &&
+          lastSpoke.lon != null
         ) {
           let heading = null;
-          if (lastSpoke.bearing !== undefined) {
+          if (lastSpoke.bearing != null) {
             // Convert from spokes to degrees: (bearing - angle) * 360 / spokesPerRevolution
             heading =
               ((lastSpoke.bearing - lastSpoke.angle) * 360) /
