@@ -5,6 +5,48 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 3.14.0 (2026-10-09)
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### 🚀 Features
+* feat(i18n): publish ui-strings.json for client translations by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/702
+* feat(raymarine): hold a Quantum back until it reports its capabilities by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/714
+* feat(gui): forward taps to App Dock when framed by @dirkwa in https://github.com/MarineYachtRadar/mayara-server/pull/721
+* feat(furuno): add bearing alignment by @dirkwa in https://github.com/MarineYachtRadar/mayara-server/pull/736
+* feat(furuno): add transmit channel selection by @dirkwa in https://github.com/MarineYachtRadar/mayara-server/pull/737
+* feat(onwa): add ONWA KRA-1009 radar support by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/746
+### 🐛 Fixes
+* fix(raymarine): discover Quantum announcing identity subtype 0x4c by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/703
+* fix(raymarine): offer the Doppler control only to radars that have it by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/707
+* fix(raymarine): correct the feature bit mask by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/712
+* fix(raymarine): recognise the whole Quantum family at discovery by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/713
+* fix(raymarine): let the radar's features report decide Doppler capability by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/711
+* fix(arpa): drive the tracker revolution clock from the antenna by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/724
+* fix(arpa): size measurement noise from range and beam width by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/725
+* fix(arpa): gate target associations on an ellipse, not a circle by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/726
+* fix(arpa): treat a guard zone with equal angles as the full circle by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/728
+* fix(arpa): never merge away a manually acquired target by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/727
+* fix(raymarine): scale RD gain, sea, rain and FTC to the radar's range by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/733
+* fix(raymarine): make RD auto, rain, FTC, MBS, IR and target expansion work by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/735
+* fix(furuno): show the radar's antenna height by @dirkwa in https://github.com/MarineYachtRadar/mayara-server/pull/738
+* fix(raymarine): show Quantum sea clutter at its real level by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/734
+* fix(raymarine): offer only interference rejection levels an RD accepts by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/741
+* fix(network): hear 255.255.255.255 broadcasts on every interface by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/744
+* fix(gui): stop a rotating heading and frozen north-up without compass by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/747
+### 📦 Dependencies
+* chore(deps): bump mdns-sd from 0.21.3 to 0.21.4 in the cargo-minor-patch group by @dependabot[bot] in https://github.com/MarineYachtRadar/mayara-server/pull/717
+* chore(deps): bump utoipa from 5.5.0 to 6.0.0 by @dependabot[bot] in https://github.com/MarineYachtRadar/mayara-server/pull/718
+* chore(deps): bump the cargo-minor-patch group with 6 updates by @dependabot[bot] in https://github.com/MarineYachtRadar/mayara-server/pull/731
+* chore(deps): bump utoipa-swagger-ui from 9.0.2 to 10.0.1 by @dependabot[bot] in https://github.com/MarineYachtRadar/mayara-server/pull/732
+### Other
+* docs: correct the CodeRabbit CLI invocation in AGENTS.md by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/704
+* docs: add qtVlm to the clients list by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/719
+
+
+**Full Changelog**: https://github.com/MarineYachtRadar/mayara-server/compare/v3.13.2...v3.14.0
+
 ## [3.13.2] - 2026-09-22
 
 ### Fixed
