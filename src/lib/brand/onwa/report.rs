@@ -67,6 +67,12 @@ impl Warmup {
     }
 }
 
+/// Whole seconds left, rounded up so the countdown reads 100 to 1 and never
+/// shows 0 while still warming up.
+fn countdown_seconds(remaining: Duration) -> f64 {
+    remaining.as_secs_f64().ceil()
+}
+
 impl OnwaReportReceiver {
     pub(crate) fn new(args: &Cli, radars: SharedRadars, info: RadarInfo) -> Self {
         let key = info.key();
@@ -222,7 +228,7 @@ impl OnwaReportReceiver {
         let remaining = self.warmup.on_report(state.transmit, Instant::now());
         self.common.set_value_enabled(
             &ControlId::WarmupTime,
-            remaining.as_secs() as f64,
+            countdown_seconds(remaining),
             (!remaining.is_zero()) as u8,
         );
         let power = if state.transmit {
@@ -332,6 +338,14 @@ mod tests {
             w.on_report(false, t0 + Duration::from_secs(11)),
             Duration::ZERO
         );
+    }
+
+    #[test]
+    fn countdown_never_shows_zero_while_warming_up() {
+        assert_eq!(countdown_seconds(WARMUP), 100.0);
+        assert_eq!(countdown_seconds(Duration::from_millis(99_400)), 100.0);
+        assert_eq!(countdown_seconds(Duration::from_millis(500)), 1.0);
+        assert_eq!(countdown_seconds(Duration::ZERO), 0.0);
     }
 
     #[test]
