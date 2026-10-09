@@ -174,8 +174,8 @@ fn main() {
     // as small packets, so the cap is sized for two seconds — long enough to
     // carry a state report and a firmware reply, both sent once a second.
     generate_fixture(
-        &base.join("onwa/kra5001/k-astral8-transmit.pcap.gz"),
-        &fixture_dir.join("onwa-kra5001.pcap.gz"),
+        &base.join("onwa/kra1009/k-astral8-transmit.pcap.gz"),
+        &fixture_dir.join("onwa-kra1009.pcap.gz"),
         &|p| matches!(p.dst_addr.port(), 3823 | 7203 | 7204),
         8000,
     );

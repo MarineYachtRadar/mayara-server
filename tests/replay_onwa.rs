@@ -53,11 +53,11 @@ fn test_args() -> Cli {
 }
 
 #[tokio::test]
-async fn replay_onwa_kra5001() {
+async fn replay_onwa_kra1009() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("testdata")
         .join("pcap")
-        .join("onwa-kra5001.pcap.gz");
+        .join("onwa-kra1009.pcap.gz");
     if !fixture.exists() {
         panic!(
             "Fixture not found: {}. Run: cargo run --features pcap-replay --example generate-fixtures",
