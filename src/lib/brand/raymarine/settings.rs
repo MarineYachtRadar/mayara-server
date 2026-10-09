@@ -181,8 +181,6 @@ pub(crate) fn update_when_model_known(
     }
 }
 
-/// This brand's controls for every model it knows, for the UI strings catalog
-/// in [`crate::radar::ui_strings`].
 /// A Quantum takes levels 0..5 (its firmware bounds the byte below 6); an
 /// RD418D was wire-observed ignoring anything above 3 (#729).
 fn interference_rejection_levels(model: BaseModel) -> &'static [&'static str] {
@@ -192,6 +190,8 @@ fn interference_rejection_levels(model: BaseModel) -> &'static [&'static str] {
     }
 }
 
+/// This brand's controls for every model it knows, for the UI strings catalog
+/// in [`crate::radar::ui_strings`].
 #[cfg(test)]
 pub(crate) fn controls_for_every_model(args: &Cli) -> Vec<SharedControls> {
     use strum::IntoEnumIterator;
