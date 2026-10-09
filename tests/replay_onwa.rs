@@ -1,12 +1,13 @@
 #![cfg(feature = "pcap-replay")]
 
-//! Integration test: replay the ONWA KRA-5001 pcap fixture.
+//! Integration test: replay the ONWA KRA-1009 pcap fixture.
 //!
 //! Verifies that replaying the fixture through the full pipeline detects the
-//! radar by its MAC, names the model from its firmware, and decodes spokes.
+//! radar by its MAC, reads its firmware version, and decodes spokes.
 
 mod common;
 
+use mayara::radar::settings::ControlId;
 use mayara::{Cli, replay};
 use std::path::Path;
 use std::time::Duration;
@@ -77,12 +78,15 @@ async fn replay_onwa_kra5001() {
                 let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
                 loop {
                     if let Some(info) = radars.get_keys().first().and_then(|k| radars.get_by_key(k))
-                        && info.controls.model_name().is_some()
+                        && let Some(firmware) = info
+                            .controls
+                            .get(&ControlId::FirmwareVersion)
+                            .and_then(|c| c.description)
                     {
                         assert_eq!(info.brand, mayara::Brand::Onwa);
                         // Keyed on the MAC in the radar's state report.
                         assert_eq!(info.hardware_id.as_deref(), Some("00306c000029"));
-                        assert_eq!(info.controls.model_name().as_deref(), Some("KRA-5001"));
+                        assert_eq!(firmware, "KR5001.ES.2K.V1.00.190623");
                         let spokes = common::collect_spokes(
                             &info,
                             info.spokes_per_revolution as usize,

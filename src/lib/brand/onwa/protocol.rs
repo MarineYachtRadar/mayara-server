@@ -1,6 +1,7 @@
-//! ONWA radar protocol (KRA-5001 with the K-ASTRAL chartplotters) — wire format.
+//! ONWA radar protocol (KRA-1009 with the K-ASTRAL chartplotters) — wire format.
 //!
-//! Reverse engineered from captures of a K-ASTRAL 8 controlling a KRA-5001.
+//! Reverse engineered from captures of a K-ASTRAL 8 controlling a KRA-1009,
+//! which the K-ASTRAL lists as radar type KRA-5001.
 //!
 //! ## Transport
 //!
@@ -13,6 +14,7 @@
 //!   (`$RDACK,<command>`) and answering queries
 //! - [`STATE_PORT`]: binary `#ACMD,$RDANT,` and `#ACMD,$GAINS,` state
 //!   reports, about once a second
+//! - [`DEVICE_PORT`]: `$ONWA,DEV,RD,SPU,<model>,...` once a minute
 //!
 //! ## Commands
 //!
@@ -31,6 +33,7 @@ pub(crate) const COMMAND_PORT: u16 = 3367;
 pub(crate) const SPOKE_PORT: u16 = 7203;
 pub(crate) const REPLY_PORT: u16 = 7204;
 pub(crate) const STATE_PORT: u16 = 3823;
+pub(crate) const DEVICE_PORT: u16 = 3828;
 
 /// The state reports carry the radar's own address and MAC, so they double
 /// as the discovery beacon.
@@ -39,6 +42,7 @@ pub(crate) const BEACON_ADDRESS: SocketAddr =
 pub(crate) const SPOKE_ADDRESS: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::BROADCAST, SPOKE_PORT);
 pub(crate) const REPLY_ADDRESS: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::BROADCAST, REPLY_PORT);
 pub(crate) const STATE_ADDRESS: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::BROADCAST, STATE_PORT);
+pub(crate) const DEVICE_ADDRESS: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::BROADCAST, DEVICE_PORT);
 
 // =============================================================================
 // Spokes
@@ -305,21 +309,25 @@ pub(crate) fn acked_range(args: &str) -> Option<u8> {
     args.strip_prefix("$TXRNG,")?.parse().ok()
 }
 
-/// The firmware names the model: `KR5001.ES.2K.V1.00.190623` is a KRA-5001.
-pub(crate) fn model_from_firmware(firmware: &str) -> Option<String> {
-    let digits: String = firmware
-        .strip_prefix("KR")?
-        .chars()
-        .take_while(char::is_ascii_digit)
-        .collect();
-    (!digits.is_empty()).then(|| format!("KRA-{}", digits))
+const DEVICE_PREFIX: &[u8] = b"$ONWA,DEV,RD,SPU,";
+
+/// The model from the radar's `$ONWA,DEV` announcement. The firmware string
+/// (`KR5001...`) names the product line, not the model on the radar's label.
+pub(crate) fn parse_device_model(data: &[u8]) -> Option<&str> {
+    let rest = std::str::from_utf8(
+        data.strip_prefix(DEVICE_PREFIX)?
+            .split(|&b| b == b',')
+            .next()?,
+    )
+    .ok()?;
+    (!rest.is_empty()).then_some(rest)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// A `$RDANT` report as captured from a KRA-5001 at 0.75 nm, transmitting,
+    /// A `$RDANT` report as captured from a KRA-1009 at 0.75 nm, transmitting,
     /// dead sector 45°–180.8° switched on.
     fn rdant() -> Vec<u8> {
         let mut p = RDANT_PREFIX.to_vec();
@@ -440,11 +448,17 @@ mod tests {
     }
 
     #[test]
-    fn model_is_named_by_the_firmware() {
+    fn model_comes_from_the_device_announcement() {
         assert_eq!(
-            model_from_firmware("KR5001.ES.2K.V1.00.190623").as_deref(),
-            Some("KRA-5001")
+            parse_device_model(
+                b"$ONWA,DEV,RD,SPU,KRA-1009,3.2,V6.8 2022-08-29-N-1009-WS1506030-2048-BP,223.168.1.128,*6F\r\n\0\0"
+            ),
+            Some("KRA-1009")
         );
-        assert_eq!(model_from_firmware("V6.8 2022-08-29"), None);
+        assert_eq!(parse_device_model(b"$ONWA,DEV,RD,SPU,,3.2*"), None);
+        assert_eq!(
+            parse_device_model(b"#ACMD,$ANTFV,KR5001.ES.2K.V1.00.190623"),
+            None
+        );
     }
 }

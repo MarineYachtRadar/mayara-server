@@ -1,6 +1,6 @@
 # ONWA Radar Setup
 
-The ONWA KRA-5001 radar, as used with the K-ASTRAL chartplotters.
+The ONWA KRA-1009 radar, as used with the K-ASTRAL chartplotters, which list it as radar type KRA-5001.
 
 ## Network Requirements
 

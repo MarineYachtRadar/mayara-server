@@ -170,7 +170,7 @@ fn main() {
         2000,
     );
 
-    // ONWA KRA-5001: the radar's broadcasts only. Its 1000-byte spokes count
+    // ONWA KRA-1009: the radar's broadcasts only. Its 1000-byte spokes count
     // as small packets, so the cap is sized for two seconds — long enough to
     // carry a state report and a firmware reply, both sent once a second.
     generate_fixture(

@@ -29,7 +29,7 @@ export const EXPECTATIONS = [
   ["raymarine-quantum-mfd", "Raymarine", "Raymarine Quantum, on a network with an MFD"],
   ["raymarine-quantum-standalone", "Raymarine", "Raymarine Quantum, on its own (no MFD)"],
   ["koden", "Koden", "Koden"],
-  ["onwa", "ONWA", "ONWA KRA-5001 (K-ASTRAL)"],
+  ["onwa", "ONWA", "ONWA KRA-1009 (K-ASTRAL)"],
 ];
 
 const PROMPT = ["", "", "Select the radar you are expecting…"];

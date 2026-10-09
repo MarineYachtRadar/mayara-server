@@ -12,7 +12,8 @@
 
       <h1>ONWA radar setup</h1>
       <p class="myr_lead">
-        The ONWA KRA-5001 radar, as used with the K-ASTRAL chartplotters.
+        The ONWA KRA-1009 radar, as used with the K-ASTRAL chartplotters,
+        which list it as radar type KRA-5001.
         Mayara can run the radar on its own or alongside the chartplotter.
       </p>
 
@@ -20,7 +21,7 @@
       <ul class="myr_needs">
         <li>The radar wired to the same Ethernet switch as the Mayara machine</li>
         <li>An address for the Mayara machine in <code>223.168.1.x</code></li>
-        <li>UDP ports 3823, 7203 and 7204 open on the host firewall</li>
+        <li>UDP ports 3823, 3828, 7203 and 7204 open on the host firewall</li>
       </ul>
 
       <h2>Network requirements</h2>
@@ -74,6 +75,11 @@
               <td>Command replies</td>
               <td><code>255.255.255.255:7204</code></td>
               <td>Echo of every command, versions</td>
+            </tr>
+            <tr>
+              <td>Model name</td>
+              <td><code>255.255.255.255:3828</code></td>
+              <td>Once a minute</td>
             </tr>
           </tbody>
         </table>

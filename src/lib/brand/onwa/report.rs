@@ -122,10 +122,12 @@ impl OnwaReportReceiver {
         let mut spokes = self.listen(&SPOKE_ADDRESS).map_err(RadarError::Io)?;
         let mut states = self.listen(&STATE_ADDRESS).map_err(RadarError::Io)?;
         let mut replies = self.listen(&REPLY_ADDRESS).map_err(RadarError::Io)?;
+        let mut devices = self.listen(&DEVICE_ADDRESS).map_err(RadarError::Io)?;
 
         let mut spoke_buf = Vec::with_capacity(2048);
         let mut state_buf = Vec::with_capacity(2048);
         let mut reply_buf = Vec::with_capacity(2048);
+        let mut device_buf = Vec::with_capacity(2048);
         let mut next_keepalive = Instant::now();
 
         loop {
@@ -155,6 +157,14 @@ impl OnwaReportReceiver {
                     r.map_err(RadarError::Io)?;
                     self.process_reply(&reply_buf);
                     reply_buf.clear();
+                }
+
+                r = devices.recv_buf_from(&mut device_buf) => {
+                    r.map_err(RadarError::Io)?;
+                    if let Some(model) = parse_device_model(&device_buf) {
+                        let _ = self.common.info.controls.set_string(&ControlId::ModelName, model.to_string());
+                    }
+                    device_buf.clear();
                 }
 
                 r = self.common.control_update_rx.recv() => {
@@ -273,11 +283,11 @@ impl OnwaReportReceiver {
                 self.warmup.restart(Instant::now());
             }
             "ANTFV" => {
-                let controls = &self.common.info.controls;
-                if let Some(model) = model_from_firmware(args) {
-                    let _ = controls.set_string(&ControlId::ModelName, model);
-                }
-                let _ = controls.set_string(&ControlId::FirmwareVersion, args.to_string());
+                let _ = self
+                    .common
+                    .info
+                    .controls
+                    .set_string(&ControlId::FirmwareVersion, args.to_string());
             }
             _ => log::trace!("{}: reply {} {}", self.common.key, name, args),
         }

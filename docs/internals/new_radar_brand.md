@@ -399,5 +399,5 @@ Your `LocatorAddress` registration specifies:
 | Furuno | `fur` | Furuno | Subnet broadcast | DRS4D-NXT |
 | Garmin | `gar` | Garmin, GarminCdm | CDM heartbeat | HD, xHD |
 | Koden | `kod` | Koden | Subnet broadcast | RADARpc |
-| ONWA | `onw` | Onwa | Limited broadcast | KRA-5001 |
+| ONWA | `onw` | Onwa | Limited broadcast | KRA-1009 |
 | Raymarine | `ray` | Raymarine | Multicast beacon | RD, Quantum |
