@@ -72,6 +72,7 @@ fn validate_navigation_address(value: &str) -> Result<String, String> {
 }
 
 #[derive(Parser, Clone, Debug)]
+#[command(name = "mayara-server", version)]
 pub struct Cli {
     #[clap(flatten)]
     pub verbose: clap_verbosity_flag::Verbosity<clap_verbosity_flag::InfoLevel>,
