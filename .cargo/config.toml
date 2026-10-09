@@ -1,0 +1,8 @@
+# Link the C runtime statically on Windows so mayara-server.exe runs on a
+# clean install without the Visual C++ Redistributable (VCRUNTIME140.dll).
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+# cmake-rs reads this per-target toolchain file; see msvc-static-crt.cmake.
+[env]
+CMAKE_TOOLCHAIN_FILE_x86_64_pc_windows_msvc = { value = ".cargo/msvc-static-crt.cmake", relative = true }
