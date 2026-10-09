@@ -640,7 +640,7 @@ impl RaymarineLocator {
             let send_addr = info.send_command_addr;
             let nic_addr = info.nic_addr;
             let navdata_name = format!("{}-navdata", report_name);
-            subsys.start(SubsystemBuilder::new(
+            let navdata = subsys.start(SubsystemBuilder::new(
                 navdata_name,
                 async move |s: &mut SubsystemHandle| match crate::network::create_connected_send(
                     &send_addr, &nic_addr,
@@ -652,6 +652,7 @@ impl RaymarineLocator {
                     }
                 },
             ));
+            radars.track_task(&report_name, navdata);
 
             let report_receiver = report::RaymarineReportReceiver::new(
                 &self.args,
@@ -661,10 +662,13 @@ impl RaymarineLocator {
                 self.external_seen.clone(),
             );
 
-            subsys.start(SubsystemBuilder::new(
-                report_name,
-                async move |s: &mut SubsystemHandle| report_receiver.run(s).await,
-            ));
+            radars.track_task(
+                &report_name,
+                subsys.start(SubsystemBuilder::new(
+                    &report_name,
+                    async move |s: &mut SubsystemHandle| report_receiver.run(s).await,
+                )),
+            );
         }
     }
 }

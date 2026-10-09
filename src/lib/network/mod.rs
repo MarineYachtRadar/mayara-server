@@ -1,4 +1,5 @@
 use socket2::{Domain, Protocol, Type};
+use std::collections::HashSet;
 use std::fmt;
 use std::net::SocketAddrV4;
 use std::sync::atomic::AtomicBool;
@@ -361,6 +362,23 @@ pub(crate) fn can_reach(nic_addr: &Ipv4Addr, dst: &SocketAddrV4) -> Option<bool>
     let (chosen, _) = interface_for(local.ip())?;
 
     Some(chosen == ifname)
+}
+
+/// Every IPv4 address this host has, or `None` when the interfaces cannot be
+/// read.
+pub(crate) fn host_ipv4_addresses() -> Option<HashSet<Ipv4Addr>> {
+    use network_interface::{NetworkInterface, NetworkInterfaceConfig};
+
+    let addresses = NetworkInterface::show()
+        .ok()?
+        .into_iter()
+        .flat_map(|itf| itf.addr)
+        .filter_map(|addr| match addr.ip() {
+            IpAddr::V4(ip) => Some(ip),
+            IpAddr::V6(_) => None,
+        })
+        .collect();
+    Some(addresses)
 }
 
 /// Find the name and netmask of the interface carrying `nic_addr`.

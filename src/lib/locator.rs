@@ -170,6 +170,8 @@ impl Locator {
             .await;
 
         loop {
+            self.forget_radars_without_address();
+
             let mut set = JoinSet::new();
             let cancellation_token = cancellation_token.clone();
 
@@ -283,6 +285,13 @@ impl Locator {
                                             radars.request_transmit_all();
                                         }
 
+                                        // An address can vanish without the change
+                                        // being signalled; searching resumes only
+                                        // from the top of the loop.
+                                        if self.forget_radars_without_address() {
+                                            break;
+                                        }
+
                                         // Respawn this task
                                         set.spawn(async move {
                                             sleep(Duration::from_secs(20)).await;
@@ -302,6 +311,29 @@ impl Locator {
                 };
             }
         }
+    }
+
+    /// Forget the radars found via an interface address this host no longer
+    /// has, so that discovery looks for them again. True when any was
+    /// forgotten.
+    fn forget_radars_without_address(&self) -> bool {
+        // A replay's interface is made up, so it is never on the host.
+        if self.args.is_replay() {
+            return false;
+        }
+        let Some(addresses) = network::host_ipv4_addresses() else {
+            return false;
+        };
+        let lost = self
+            .radars
+            .remove_radars_without_address(|addr| addresses.contains(addr));
+        for key in &lost {
+            log::warn!(
+                "{}: this host lost the address the radar was found on; searching for it again",
+                key
+            );
+        }
+        !lost.is_empty()
     }
 
     async fn reply_with_interface_state(

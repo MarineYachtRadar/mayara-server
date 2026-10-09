@@ -422,17 +422,21 @@ impl NavicoLocator {
                 }
             }
 
-            let report_name = info.key() + " reports";
+            let key = info.key();
+            let report_name = key.clone() + " reports";
 
             info.start_forwarding_radar_messages_to_stdout(subsys);
 
             let report_receiver =
                 report::NavicoReportReceiver::new(&self.args, info, radars.clone());
 
-            subsys.start(SubsystemBuilder::new(
-                report_name,
-                async move |s: &mut SubsystemHandle| report_receiver.run(s).await,
-            ));
+            radars.track_task(
+                &key,
+                subsys.start(SubsystemBuilder::new(
+                    report_name,
+                    async move |s: &mut SubsystemHandle| report_receiver.run(s).await,
+                )),
+            );
         }
     }
 }

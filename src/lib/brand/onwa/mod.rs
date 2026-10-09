@@ -97,10 +97,13 @@ impl OnwaLocator {
             info.start_forwarding_radar_messages_to_stdout(subsys);
 
             let receiver = report::OnwaReportReceiver::new(&self.args, radars.clone(), info);
-            subsys.start(SubsystemBuilder::new(
-                report_name,
-                async move |s: &mut SubsystemHandle| receiver.run(s).await,
-            ));
+            radars.track_task(
+                &report_name,
+                subsys.start(SubsystemBuilder::new(
+                    &report_name,
+                    async move |s: &mut SubsystemHandle| receiver.run(s).await,
+                )),
+            );
         }
     }
 }

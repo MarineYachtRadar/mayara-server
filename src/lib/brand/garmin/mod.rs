@@ -210,10 +210,13 @@ impl GarminLocator {
                 report_receiver.set_range_b(&self.args, ib, radars.clone());
             }
 
-            subsys.start(SubsystemBuilder::new(
-                report_name,
-                async move |s: &mut SubsystemHandle| report_receiver.run(s).await,
-            ));
+            radars.track_task(
+                &report_name,
+                subsys.start(SubsystemBuilder::new(
+                    &report_name,
+                    async move |s: &mut SubsystemHandle| report_receiver.run(s).await,
+                )),
+            );
         }
     }
 
@@ -278,10 +281,7 @@ impl GarminLocator {
         // Already-registered radars are driven by their own report receiver
         // subsystem; the locator just ignores their packets so we don't
         // double-process anything.
-        if matches!(
-            self.state.lock().unwrap().radars.get(from),
-            Some(RadarState::Registered)
-        ) {
+        if self.is_registered(from, radars) {
             return Ok(());
         }
 
@@ -530,6 +530,24 @@ impl GarminLocator {
             }
         }
         self.try_register_pending(from, nic_addr, radars, subsys);
+    }
+
+    /// Whether the radar at `from` is registered and still known to mayara.
+    /// A radar mayara has since forgotten (the host lost the address it was
+    /// found on) loses its registration here, so it is registered anew.
+    fn is_registered(&self, from: &SocketAddrV4, radars: &SharedRadars) -> bool {
+        let registered = matches!(
+            self.state.lock().unwrap().radars.get(from),
+            Some(RadarState::Registered)
+        );
+        if !registered {
+            return false;
+        }
+        if radars.is_radar_active_by_addr(&Brand::Garmin, from) {
+            return true;
+        }
+        self.state.lock().unwrap().radars.remove(from);
+        false
     }
 
     /// If the pending entry for this IP has both capabilities and a
@@ -803,6 +821,69 @@ pub(super) fn new(args: &Cli, addresses: &mut Vec<LocatorAddress>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
+
+    const RADAR: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::new(172, 16, 2, 0), REPORT_PORT);
+
+    /// A locator that registered the radar at [`RADAR`] earlier on.
+    fn locator_with_registered_radar(args: &Cli) -> GarminLocator {
+        let locator = GarminLocator::new(args.clone(), Arc::new(AtomicU8::new(0)));
+        locator
+            .state
+            .lock()
+            .unwrap()
+            .radars
+            .insert(RADAR, RadarState::Registered);
+        locator
+    }
+
+    fn garmin_radar_at(radars: &SharedRadars, args: &Cli, addr: SocketAddrV4) -> RadarInfo {
+        let caps = GarminCapabilities::for_legacy_hd();
+        RadarInfo::new(
+            radars,
+            args,
+            Brand::Garmin,
+            None,
+            Some("0fd4c900"),
+            None,
+            GarminRadarType::HD.pixel_values(),
+            GarminRadarType::HD.spokes_per_revolution(),
+            GarminRadarType::HD.max_spoke_len(),
+            addr,
+            Ipv4Addr::new(172, 16, 3, 150),
+            addr,
+            addr,
+            addr,
+            |id, tx| settings::new(id, tx, args, GarminRadarType::HD, &caps, false),
+            false,
+            false,
+        )
+    }
+
+    #[test]
+    fn a_registered_radar_still_known_stays_registered() {
+        let args = Cli::parse_from(["mayara-server"]);
+        let radars = SharedRadars::new();
+        radars.add(garmin_radar_at(&radars, &args, RADAR)).unwrap();
+        let locator = locator_with_registered_radar(&args);
+
+        assert!(locator.is_registered(&RADAR, &radars));
+    }
+
+    /// Once the host loses the address a radar was found on, mayara forgets
+    /// it; the locator must then let the radar register again.
+    #[test]
+    fn a_forgotten_radar_is_registered_anew() {
+        let args = Cli::parse_from(["mayara-server"]);
+        let radars = SharedRadars::new();
+        let locator = locator_with_registered_radar(&args);
+
+        assert!(!locator.is_registered(&RADAR, &radars));
+        assert!(
+            !locator.state.lock().unwrap().radars.contains_key(&RADAR),
+            "the stale registration must be dropped"
+        );
+    }
 
     #[test]
     fn detect_radar_type_recognizes_hd_packets() {
