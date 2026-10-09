@@ -238,7 +238,7 @@ export async function fetchServerStatus() {
  * Ask whether this host's network can carry the kind of radar the user says
  * they are waiting for.
  *
- * @param {string} expectation - `navico`, `furuno`, `garmin`, `koden`,
+ * @param {string} expectation - `navico`, `furuno`, `garmin`, `koden`, `onwa`,
  *   `raymarine-rd`, `raymarine-quantum-mfd`, `raymarine-quantum-standalone`.
  * @returns {Promise<{met: boolean, requirement: string, finding: string, remedy?: string}|null>}
  */

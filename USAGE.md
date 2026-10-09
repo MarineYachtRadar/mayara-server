@@ -57,7 +57,7 @@ Command Line Options
 
 | Option                | Description                                                                            |
 | --------------------- | -------------------------------------------------------------------------------------- |
-| `-b, --brand <BRAND>` | Limit to a specific radar brand: `furuno`, `garmin`, `koden`, `navico`, `raymarine`, `emulator`, `playback` |
+| `-b, --brand <BRAND>` | Limit to a specific radar brand: `furuno`, `garmin`, `koden`, `navico`, `onwa`, `raymarine`, `emulator`, `playback` |
 | `--multiple-radar`    | Keep searching for additional radars after finding one                                 |
 | `--emulator`          | Use built-in radar emulator instead of real radar discovery                            |
 

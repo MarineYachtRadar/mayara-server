@@ -33,6 +33,7 @@ Fully supported and tested with real hardware:
 - [**Navico**](docs/navico-setup.md) — BR24, 3G, 4G, HALO 20, HALO 20+, HALO 24, HALO 2000–6000
 - [**Raymarine**](docs/raymarine-setup.md) — Quantum, RD series, HD radomes
 - [**Furuno**](docs/furuno-setup.md) — DRS-NXT series (DRS4D-NXT, DRS6A-NXT, DRS12A-NXT, DRS25A-NXT) including dual range, DRS4W WiFi ("1st Watch"), FAR-2xx7 series
+- [**ONWA**](docs/onwa-setup.md) — KRA-1009, as used with K-ASTRAL chartplotters
 
 Implemented but awaiting real-hardware validation:
 

@@ -16,6 +16,8 @@ pub(crate) mod garmin;
 pub(crate) mod koden;
 #[cfg(feature = "navico")]
 pub(crate) mod navico;
+#[cfg(feature = "onwa")]
+pub(crate) mod onwa;
 #[cfg(feature = "raymarine")]
 pub(crate) mod raymarine;
 
@@ -32,6 +34,7 @@ pub(crate) enum LocatorId {
     Garmin,
     GarminCdm,
     Koden,
+    Onwa,
     Raymarine,
 }
 
@@ -72,6 +75,11 @@ pub(crate) fn create_brand_listeners(
     if args.brand.unwrap_or(Brand::Koden) == Brand::Koden {
         koden::new(args, listen_addresses);
         brands.insert(Brand::Koden);
+    }
+    #[cfg(feature = "onwa")]
+    if args.brand.unwrap_or(Brand::Onwa) == Brand::Onwa {
+        onwa::new(args, listen_addresses);
+        brands.insert(Brand::Onwa);
     }
 }
 

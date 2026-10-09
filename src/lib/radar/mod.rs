@@ -164,6 +164,8 @@ pub enum RadarError {
     LoginFailed,
     #[error("Invalid port number")]
     InvalidPort,
+    #[error("The radar is still warming up")]
+    WarmingUp,
     #[error("Not connected")]
     NotConnected,
     #[cfg(windows)]
