@@ -142,8 +142,13 @@ impl OnwaReportReceiver {
 
                 _ = sleep_until(next_keepalive), if self.command_sender.is_some() => {
                     next_keepalive = Instant::now() + KEEPALIVE_INTERVAL;
-                    if let Some(cmd) = self.command_sender.as_mut() {
-                        cmd.send_keepalive().await?;
+                    // A failed send already drops the command socket for a
+                    // fresh one next time; restarting the loop would only
+                    // stop the radar's picture and reports in the meantime.
+                    if let Some(cmd) = self.command_sender.as_mut()
+                        && let Err(e) = cmd.send_keepalive().await
+                    {
+                        log::warn!("{}: keepalive failed: {}", self.common.key, e);
                     }
                 }
 
