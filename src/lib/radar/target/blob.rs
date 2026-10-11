@@ -37,6 +37,13 @@ const MIN_TARGET_PIXELS: usize = 25;
 /// pixels); oversized blobs are discarded outright.
 const MAX_BLOB_PIXELS: usize = 100_000;
 
+/// Widest gap, in degrees, between two consecutive spokes across which an
+/// echo is still joined into one blob. Radars that send only some angle
+/// indices leave gaps of a degree or so between spokes. Kept below the
+/// horizontal beam width of small-craft radars (about 4-5 degrees), so two
+/// echoes the radar itself can separate are never merged.
+const MAX_SPOKE_GAP_DEGREES: f64 = 3.0;
+
 /// Minimum ship size in meters
 pub const MIN_TARGET_SIZE_M: f64 = 5.0;
 
@@ -261,6 +268,11 @@ pub struct BlobDetector {
     spoke_arc_scratch: Vec<u16>,
     current_range: u32,
     current_spoke_len: usize,
+    /// Angle of the spoke processed before the current one. Not every radar
+    /// sends a spoke for every angle index: a Furuno reports angles on an
+    /// 8192 scale but sends only a fraction of them, so the spoke before
+    /// `n` is often `n - 8` or `n - 14`, not `n - 1`.
+    prev_spoke: Option<u16>,
     /// Cached guard zone configs for refresh on range change
     guard_zone_1: Option<GuardZone>,
     guard_zone_2: Option<GuardZone>,
@@ -294,6 +306,7 @@ impl BlobDetector {
             spoke_arc_scratch: Vec::new(),
             current_range: 0,
             current_spoke_len: 0,
+            prev_spoke: None,
             guard_zone_1: None,
             guard_zone_2: None,
             guard_zones: Vec::new(),
@@ -443,16 +456,33 @@ impl BlobDetector {
             .collect()
     }
 
-    /// Fill `out` with the distinct blob ids whose pixels are 8-neighbors of
-    /// (spoke, pixel_idx). Cleared on entry so callers can hand in a scratch
-    /// buffer with retained capacity.
-    fn adjacent_blob_ids_into(&self, spoke: u16, pixel_idx: usize, out: &mut Vec<u32>) {
-        out.clear();
-        let prev_spoke = if spoke == 0 {
-            self.spokes_per_revolution - 1
-        } else {
-            spoke - 1
+    /// The spoke whose pixels a pixel on `spoke` can touch on its
+    /// counter-clockwise side: the spoke processed just before it, when that
+    /// one is close enough to be the same echo, otherwise `spoke - 1`.
+    fn preceding_spoke(&self, spoke: u16) -> u16 {
+        let n = self.spokes_per_revolution as u32;
+        let max_gap = (n as f64 * MAX_SPOKE_GAP_DEGREES / 360.0).max(1.0) as u32;
+        let preceding = match self.prev_spoke {
+            Some(prev) if (1..=max_gap).contains(&((spoke as u32 + n - prev as u32) % n)) => {
+                prev as u32
+            }
+            _ => (spoke as u32 + n - 1) % n,
         };
+        preceding as u16
+    }
+
+    /// Fill `out` with the distinct blob ids whose pixels are 8-neighbors of
+    /// (spoke, pixel_idx), taking `prev_spoke` as the spoke on its
+    /// counter-clockwise side. Cleared on entry so callers can hand in a
+    /// scratch buffer with retained capacity.
+    fn adjacent_blob_ids_into(
+        &self,
+        prev_spoke: u16,
+        spoke: u16,
+        pixel_idx: usize,
+        out: &mut Vec<u32>,
+    ) {
+        out.clear();
         let next_spoke = (spoke + 1) % self.spokes_per_revolution;
 
         for &s in &[prev_spoke, spoke, next_spoke] {
@@ -538,6 +568,8 @@ impl BlobDetector {
         // Use spoke.angle (head-relative) for guard zone checks since guard zones
         // are defined relative to boat heading, not true north
         let spoke_angle = spoke.angle as u16 % self.spokes_per_revolution;
+        let prev_spoke = self.preceding_spoke(spoke_angle);
+        self.prev_spoke = Some(spoke_angle);
 
         // Take scratch buffers out of self so they can be mutated freely
         // alongside `&mut self` calls in the pixel and completion loops.
@@ -562,7 +594,7 @@ impl BlobDetector {
                 intensity,
             };
 
-            self.adjacent_blob_ids_into(pixel.spoke, pixel.pixel, &mut adjacent_ids);
+            self.adjacent_blob_ids_into(prev_spoke, pixel.spoke, pixel.pixel, &mut adjacent_ids);
 
             let target_id = match adjacent_ids.len() {
                 0 => {
@@ -631,11 +663,6 @@ impl BlobDetector {
         }
 
         // Check for completed blobs (not extended on this spoke nor the previous one)
-        let prev_spoke = if spoke_angle == 0 {
-            self.spokes_per_revolution - 1
-        } else {
-            spoke_angle - 1
-        };
         completed_ids.clear();
         completed_ids.extend(self.active_blobs.iter().filter_map(|(&id, blob)| {
             if blob.last_spoke_with_addition != spoke_angle
@@ -847,6 +874,49 @@ mod tests {
         spoke.range = TEST_RANGE_M;
         spoke.data = data;
         spoke
+    }
+
+    /// A Furuno sends spokes on an 8192-step angle scale but only about one
+    /// in every ten or so angle indices. An echo spread over several such
+    /// spokes is still one echo and must come out as one blob, not as one
+    /// thin radial sliver per spoke, each too small to count as a target.
+    #[test]
+    fn echo_across_sparse_spokes_is_one_blob() {
+        const SPOKES: u16 = 8192;
+        const STEP: u16 = 14;
+        let mut detector = BlobDetector::new(SPOKES, 10, None);
+        let echo: Vec<usize> = (300..310).collect();
+
+        let mut completed = Vec::new();
+        for angle in (1000..1200).step_by(STEP as usize) {
+            let strong: &[usize] = if (1056..1140).contains(&angle) {
+                &echo
+            } else {
+                &[]
+            };
+            completed.extend(detector.process_spoke(&spoke_with(angle, 512, strong)));
+        }
+
+        assert_eq!(completed.len(), 1, "one echo, one blob");
+        assert_eq!(completed[0].all_pixels.len(), 60);
+    }
+
+    /// Spokes a whole revolution apart, or far enough apart that the radar
+    /// would show two echoes, must not be joined just because no spoke came
+    /// in between.
+    #[test]
+    fn echoes_across_a_wide_spoke_gap_stay_apart() {
+        const SPOKES: u16 = 8192;
+        let mut detector = BlobDetector::new(SPOKES, 10, None);
+        let echo: Vec<usize> = (300..330).collect();
+
+        let mut completed = Vec::new();
+        for angle in [1000u16, 2000, 3000] {
+            let strong: &[usize] = if angle < 3000 { &echo } else { &[] };
+            completed.extend(detector.process_spoke(&spoke_with(angle, 512, strong)));
+        }
+
+        assert_eq!(completed.len(), 2);
     }
 
     #[test]
