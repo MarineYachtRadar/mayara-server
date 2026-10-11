@@ -340,7 +340,6 @@ function end() {
   // The tour opens the controls panel to explain it; leave the viewer the way
   // it was found.
   setControls(false);
-  markTourSeen();
 }
 
 // Start the tour if this browser has not seen it yet. `?tour=1` forces it.
@@ -356,6 +355,9 @@ export function startTourIfFirstVisit() {
   steps = STEPS.filter((step) => !step.target || document.querySelector(step.target));
   if (steps.length === 0) return;
 
+  // Recorded on showing, not on finishing: closing the tab, navigating away
+  // or reloading mid-tour must not bring it back on the next visit.
+  markTourSeen();
   stepIndex = 0;
   elements = buildOverlay();
   document.addEventListener("keydown", onKeyDown, true);
