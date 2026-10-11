@@ -94,7 +94,7 @@ pub(crate) const ZONE_ANGLE_EPSILON: f64 = 0.001;
 /// the gap the operator asked for.
 pub(crate) fn zone_is_full_circle(start_angle: f64, end_angle: f64) -> bool {
     let span = (end_angle - start_angle).abs();
-    span < ZONE_ANGLE_EPSILON || span >= std::f64::consts::TAU
+    !(ZONE_ANGLE_EPSILON..std::f64::consts::TAU).contains(&span)
 }
 
 /// Whether `spoke` falls inside the arc running clockwise from `start` to
