@@ -3,11 +3,13 @@
 //! Integration test: replay a Garmin Fantom Pro running in dual-range mode.
 //!
 //! The one fixture whose radar transmits on both ranges, so it is the only
-//! automated cover for Range B: that it registers alongside Range A, and that
-//! spokes actually reach it.
+//! automated cover for Range B: that it registers alongside Range A, that
+//! spokes actually reach it, and that it reports transmitting.
 
 mod common;
 
+use mayara::radar::Power;
+use mayara::radar::settings::ControlId;
 use mayara::{Cli, replay};
 use std::path::Path;
 use std::time::Duration;
@@ -112,6 +114,30 @@ async fn replay_garmin_fantom_pro_dual_range() {
                     )
                     .await;
                     common::assert_spokes(&info, &spokes);
+                }
+
+                // The scanner reports transmit once for both ranges; Range B
+                // must show it too, or clients treat a painting range as off.
+                // The capture switches to transmit 2.5 s into each loop.
+                let transmit = Some(Power::Transmit as i32 as f64);
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+                for key in &keys {
+                    loop {
+                        let power = radars
+                            .get_by_key(key)
+                            .expect("radar info")
+                            .controls
+                            .get(&ControlId::Power)
+                            .and_then(|c| c.value())
+                            .and_then(|v| v.as_f64());
+                        if power == transmit {
+                            break;
+                        }
+                        if tokio::time::Instant::now() > deadline {
+                            panic!("{key}: power {power:?}, expected Transmit");
+                        }
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
                 }
 
                 subsys.request_shutdown();
