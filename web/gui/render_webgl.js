@@ -64,6 +64,10 @@ class WebGLRenderer {
     gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
     gl.vertexAttribPointer(texCoordLocation, 2, gl.FLOAT, false, 0, 0);
 
+    // Spoke rows are tightly packed; the default 4-byte row alignment would
+    // reject any radar whose max spoke length is not a multiple of 4.
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+
     gl.activeTexture(gl.TEXTURE0);
     const texture = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, texture);
