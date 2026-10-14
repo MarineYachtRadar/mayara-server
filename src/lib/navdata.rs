@@ -1717,12 +1717,14 @@ impl NavigationData {
 
 /// Our vessel's context from a Signal K hello, e.g.
 /// `{"name":"signalk-server","self":"vessels.urn:mrn:signalk:uuid:..."}`.
-/// `None` when the server leaves `self` out.
+/// `None` when the server leaves `self` out or sends the `vessels.self`
+/// placeholder, which names no vessel: latching it would route own-ship
+/// deltas under an MMSI context into the AIS store.
 fn hello_self_context(line: &str) -> Option<String> {
     let hello: Value = serde_json::from_str(line).ok()?;
     hello["self"]
         .as_str()
-        .filter(|context| context.starts_with("vessels."))
+        .filter(|context| context.starts_with("vessels.") && *context != "vessels.self")
         .map(str::to_string)
 }
 
@@ -2507,6 +2509,10 @@ mod tests {
         assert_eq!(hello_self_context(r#"{"name":"signalk-server"}"#), None);
         assert_eq!(
             hello_self_context(r#"{"name":"signalk-server","self":"urn:mrn:signalk:uuid:x"}"#),
+            None
+        );
+        assert_eq!(
+            hello_self_context(r#"{"name":"mayara","self":"vessels.self"}"#),
             None
         );
     }
