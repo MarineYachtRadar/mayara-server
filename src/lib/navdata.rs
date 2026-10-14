@@ -725,6 +725,26 @@ const SUBSCRIBE_ALL: &str = concat!(
     "]}\r\n"
 );
 
+/// The own-ship and AIS paths as one `vessels.*` subscription, used when the
+/// server's hello names our vessel. `vessels.*` matches our own vessel too, so
+/// subscribing to `vessels.self` alongside it would deliver every own-ship
+/// delta twice.
+const SUBSCRIBE_VESSELS: &str = concat!(
+    "{\"context\":\"vessels.*\",\"subscribe\":[",
+    "{\"path\":\"\"},",
+    "{\"path\":\"navigation.position\"},",
+    "{\"path\":\"navigation.headingTrue\"},",
+    "{\"path\":\"navigation.headingMagnetic\"},",
+    "{\"path\":\"navigation.magneticVariation\"},",
+    "{\"path\":\"navigation.courseOverGroundTrue\"},",
+    "{\"path\":\"navigation.speedOverGround\"},",
+    "{\"path\":\"design.length\"},",
+    "{\"path\":\"design.beam\"},",
+    "{\"path\":\"sensors.ais.fromBow\"},",
+    "{\"path\":\"sensors.ais.fromCenter\"}",
+    "]}\r\n"
+);
+
 /// A Signal K subscription the transport layer should send in response to an
 /// incoming message. Both TCP and WebSocket receive loops share this decision
 /// logic via `NavigationData::signalk_actions_for_line`.
@@ -735,6 +755,9 @@ enum SignalKSubscription {
     /// All-vessels subscription for AIS forwarding; sent once we know the
     /// own-ship context.
     AllVessels,
+    /// Own-ship and AIS paths in one subscription; sent instead of the two
+    /// above when the hello names our vessel.
+    Vessels,
 }
 
 impl SignalKSubscription {
@@ -742,6 +765,7 @@ impl SignalKSubscription {
         match self {
             Self::OwnShip => SUBSCRIBE_SELF,
             Self::AllVessels => SUBSCRIBE_ALL,
+            Self::Vessels => SUBSCRIBE_VESSELS,
         }
     }
 }
@@ -1496,6 +1520,10 @@ impl NavigationData {
     fn signalk_actions_for_line(&self, line: &str) -> Vec<SignalKSubscription> {
         if line.starts_with("{\"name\":") {
             log::debug!("{} received hello, will subscribe", self.what);
+            if let Some(context) = hello_self_context(line) {
+                set_own_ship_context(&context);
+                return vec![SignalKSubscription::Vessels];
+            }
             return vec![SignalKSubscription::OwnShip];
         }
 
@@ -1685,6 +1713,17 @@ impl NavigationData {
         }
         Ok(())
     }
+}
+
+/// Our vessel's context from a Signal K hello, e.g.
+/// `{"name":"signalk-server","self":"vessels.urn:mrn:signalk:uuid:..."}`.
+/// `None` when the server leaves `self` out.
+fn hello_self_context(line: &str) -> Option<String> {
+    let hello: Value = serde_json::from_str(line).ok()?;
+    hello["self"]
+        .as_str()
+        .filter(|context| context.starts_with("vessels."))
+        .map(str::to_string)
 }
 
 //  {"context":"vessels.urn:mrn:imo:mmsi:244060807","updates":
@@ -2406,13 +2445,7 @@ mod tests {
 
     #[test]
     fn every_path_the_ais_store_reads_is_subscribed() {
-        let subscription: Value = serde_json::from_str(SUBSCRIBE_ALL.trim()).unwrap();
-        let subscribed: Vec<&str> = subscription["subscribe"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|row| row["path"].as_str().unwrap())
-            .collect();
+        let subscribed = subscribed_paths(SUBSCRIBE_ALL);
         // Whatever shape a path's value has, one of these carries it.
         let values = [
             serde_json::json!(1.5),
@@ -2432,11 +2465,49 @@ mod tests {
                 let updates = serde_json::json!([{"values": [{"path": path, "value": value}]}]);
                 if store.update(&context, &updates) {
                     assert!(
-                        subscribed.contains(path),
+                        subscribed.contains(*path),
                         "AIS store reads {path:?}, but it is not subscribed"
                     );
                 }
             }
         }
+    }
+
+    fn subscribed_paths(subscription: &str) -> std::collections::BTreeSet<String> {
+        let subscription: Value = serde_json::from_str(subscription.trim()).unwrap();
+        subscription["subscribe"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["path"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn single_vessels_subscription_covers_own_ship_and_ais_paths() {
+        let vessels: Value = serde_json::from_str(SUBSCRIBE_VESSELS.trim()).unwrap();
+        assert_eq!(vessels["context"], "vessels.*");
+
+        let mut expected = subscribed_paths(SUBSCRIBE_SELF);
+        expected.extend(subscribed_paths(SUBSCRIBE_ALL));
+        assert_eq!(subscribed_paths(SUBSCRIBE_VESSELS), expected);
+    }
+
+    #[test]
+    fn hello_names_our_vessel() {
+        let hello = r#"{"name":"signalk-server","version":"2.30.0","self":"vessels.urn:mrn:signalk:uuid:cf584f10-5686-4836-90cc-571bb95ed70c","roles":["master","main"]}"#;
+        assert_eq!(
+            hello_self_context(hello).as_deref(),
+            Some("vessels.urn:mrn:signalk:uuid:cf584f10-5686-4836-90cc-571bb95ed70c")
+        );
+    }
+
+    #[test]
+    fn hello_without_a_vessel_context_names_none() {
+        assert_eq!(hello_self_context(r#"{"name":"signalk-server"}"#), None);
+        assert_eq!(
+            hello_self_context(r#"{"name":"signalk-server","self":"urn:mrn:signalk:uuid:x"}"#),
+            None
+        );
     }
 }
