@@ -707,8 +707,23 @@ const NMEA0183_SERVICE_NAME: &str = "_nmea-0183._tcp.local.";
 /// Subscription for own-ship navigation data only
 const SUBSCRIBE_SELF: &str = "{\"context\":\"vessels.self\",\"subscribe\":[{\"path\":\"navigation.headingTrue\"},{\"path\":\"navigation.headingMagnetic\"},{\"path\":\"navigation.magneticVariation\"},{\"path\":\"navigation.position\"},{\"path\":\"navigation.speedOverGround\"},{\"path\":\"navigation.courseOverGroundTrue\"}]}\r\n";
 
-/// Additional subscription for all vessels (sent after own-ship context is known)
-const SUBSCRIBE_ALL: &str = "{\"context\":\"vessels.*\",\"subscribe\":[{\"path\":\"*\"}]}\r\n";
+/// Additional subscription for all vessels (sent after own-ship context is known),
+/// limited to the paths the AIS store reads. A `*` path makes the server stream
+/// every path of every vessel, which on a busy boat is most of its output.
+/// The empty path carries the vessel name.
+const SUBSCRIBE_ALL: &str = concat!(
+    "{\"context\":\"vessels.*\",\"subscribe\":[",
+    "{\"path\":\"\"},",
+    "{\"path\":\"navigation.position\"},",
+    "{\"path\":\"navigation.headingTrue\"},",
+    "{\"path\":\"navigation.courseOverGroundTrue\"},",
+    "{\"path\":\"navigation.speedOverGround\"},",
+    "{\"path\":\"design.length\"},",
+    "{\"path\":\"design.beam\"},",
+    "{\"path\":\"sensors.ais.fromBow\"},",
+    "{\"path\":\"sensors.ais.fromCenter\"}",
+    "]}\r\n"
+);
 
 /// A Signal K subscription the transport layer should send in response to an
 /// incoming message. Both TCP and WebSocket receive loops share this decision
@@ -2323,5 +2338,40 @@ mod tests {
         // A real true-heading source must win over derived values.
         assert!(!should_derive(true));
         assert!(should_derive(false));
+    }
+
+    // ----- AIS subscription -----
+
+    #[test]
+    fn all_vessels_subscription_requests_only_paths_the_ais_store_reads() {
+        let subscription: Value = serde_json::from_str(SUBSCRIBE_ALL.trim()).unwrap();
+        assert_eq!(subscription["context"], "vessels.*");
+
+        let (tx, _rx) = tokio::sync::broadcast::channel(16);
+        let store = AisVesselStore::new(tx);
+        for (i, row) in subscription["subscribe"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .enumerate()
+        {
+            let path = row["path"].as_str().unwrap();
+            assert!(!path.contains('*'), "wildcard path {path:?}");
+            let value = match path {
+                "" => serde_json::json!({"name": "TEST VESSEL"}),
+                "navigation.position" => {
+                    serde_json::json!({"latitude": 52.3676, "longitude": 4.9041})
+                }
+                "design.length" => serde_json::json!({"overall": 25.0}),
+                _ => serde_json::json!(1.5),
+            };
+            // A fresh vessel per path, so a change can only come from this path.
+            let context = format!("vessels.urn:mrn:imo:mmsi:{}", 100_000_000 + i);
+            let updates = serde_json::json!([{"values": [{"path": path, "value": value}]}]);
+            assert!(
+                store.update(&context, &updates),
+                "AIS store ignores {path:?}"
+            );
+        }
     }
 }
