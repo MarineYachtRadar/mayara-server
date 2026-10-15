@@ -1356,19 +1356,26 @@ impl SharedRadars {
         &self,
         host_has: impl Fn(&Ipv4Addr) -> bool,
     ) -> Vec<String> {
-        let lost: Vec<String> = {
-            let radars = self.radars.read().unwrap();
-            radars
+        // Select and remove under one lock, so a radar that replaces a lost
+        // one under the same key in between is not removed in its place.
+        let lost: Vec<RadarInfo> = {
+            let mut radars = self.radars.write().unwrap();
+            let keys: Vec<String> = radars
                 .info
                 .values()
                 .filter(|info| !host_has(&info.nic_addr))
                 .map(|info| info.key.clone())
+                .collect();
+            keys.iter()
+                .filter_map(|key| radars.info.remove(key))
                 .collect()
         };
-        for key in &lost {
-            self.remove(key);
-        }
-        lost
+        lost.into_iter()
+            .map(|info| {
+                info.stop_tasks();
+                info.key
+            })
+            .collect()
     }
 
     ///
