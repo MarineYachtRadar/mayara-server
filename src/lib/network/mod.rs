@@ -400,6 +400,43 @@ pub(crate) fn interface_for(nic_addr: &Ipv4Addr) -> Option<(String, Ipv4Addr)> {
     None
 }
 
+/// The address to use for a radar heard via `nic_addr`: an address on the
+/// same interface that shares the radar's subnet when there is one, else
+/// `nic_addr` itself.
+///
+/// Multicast reaches every address of an interface alike, so which of them
+/// heard the radar first is chance. Only an address on the radar's subnet is
+/// one the radar can be commanded from.
+pub(crate) fn preferred_nic_addr(nic_addr: &Ipv4Addr, radar: &Ipv4Addr) -> Ipv4Addr {
+    use network_interface::{NetworkInterface, NetworkInterfaceConfig};
+
+    let Ok(interfaces) = NetworkInterface::show() else {
+        return *nic_addr;
+    };
+    interfaces
+        .into_iter()
+        .map(|itf| {
+            itf.addr
+                .iter()
+                .filter_map(|addr| match (addr.ip(), addr.netmask()) {
+                    (IpAddr::V4(ip), Some(IpAddr::V4(mask))) => Some((ip, mask)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        })
+        .find(|addrs| addrs.iter().any(|(ip, _)| ip == nic_addr))
+        .and_then(|addrs| address_on_subnet(&addrs, radar))
+        .unwrap_or(*nic_addr)
+}
+
+/// The first of `addrs` (address, netmask) whose subnet contains `radar`.
+fn address_on_subnet(addrs: &[(Ipv4Addr, Ipv4Addr)], radar: &Ipv4Addr) -> Option<Ipv4Addr> {
+    addrs
+        .iter()
+        .find(|(ip, mask)| match_ipv4(radar, ip, mask))
+        .map(|(ip, _)| *ip)
+}
+
 /// What an interface's link type means for radar discovery.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LinkKind {
@@ -529,5 +566,39 @@ mod send_socket_tests {
             socket2::SockRef::from(&sock).multicast_if_v4().unwrap(),
             Ipv4Addr::LOCALHOST
         );
+    }
+}
+
+#[cfg(test)]
+mod address_choice_tests {
+    use super::{address_on_subnet, preferred_nic_addr};
+    use std::net::Ipv4Addr;
+
+    const RADAR: Ipv4Addr = Ipv4Addr::new(172, 16, 2, 0);
+    const OTHER: (Ipv4Addr, Ipv4Addr) =
+        (Ipv4Addr::new(10, 56, 0, 4), Ipv4Addr::new(255, 255, 255, 0));
+    const ON_SUBNET: (Ipv4Addr, Ipv4Addr) = (
+        Ipv4Addr::new(172, 16, 3, 150),
+        Ipv4Addr::new(255, 240, 0, 0),
+    );
+
+    #[test]
+    fn the_address_on_the_radars_subnet_is_chosen() {
+        assert_eq!(
+            address_on_subnet(&[OTHER, ON_SUBNET], &RADAR),
+            Some(ON_SUBNET.0)
+        );
+    }
+
+    #[test]
+    fn no_address_on_the_radars_subnet_chooses_none() {
+        assert_eq!(address_on_subnet(&[OTHER], &RADAR), None);
+    }
+
+    /// An address that belongs to no interface, as in a replay, is kept.
+    #[test]
+    fn an_unknown_address_is_kept() {
+        let made_up = Ipv4Addr::new(203, 0, 113, 7);
+        assert_eq!(preferred_nic_addr(&made_up, &RADAR), made_up);
     }
 }

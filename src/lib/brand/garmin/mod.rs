@@ -586,6 +586,7 @@ impl GarminLocator {
         radars: &SharedRadars,
         subsys: &SubsystemHandle,
     ) {
+        let nic_addr = &crate::network::preferred_nic_addr(nic_addr, from.ip());
         let radar_send = SocketAddrV4::new(*from.ip(), COMMAND_PORT);
         let report_addr = SocketAddrV4::new(Ipv4Addr::new(239, 254, 2, 0), REPORT_PORT);
         let spoke_data_addr = match detected_type {
