@@ -378,6 +378,14 @@ fn now_millis() -> u64 {
 #[derive(Clone, Default)]
 struct RadarTasks(Arc<Mutex<Vec<NestedSubsystem>>>);
 
+impl RadarTasks {
+    /// Whether both belong to the same registration of a radar: every clone of
+    /// one `RadarInfo` shares the list, a radar registered anew gets its own.
+    fn is_same(&self, other: &RadarTasks) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
 impl fmt::Debug for RadarTasks {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "RadarTasks({})", self.0.lock().unwrap().len())
@@ -1076,15 +1084,19 @@ impl SharedRadars {
             .ensure_install_id()
     }
 
-    ///
-    /// Update radar info in radars container
-    ///
+    /// Store a change to a registered radar. Only the registration currently
+    /// held under the radar's key is changed: a receiver still winding down
+    /// after its radar was forgotten, or replaced under the same key, must not
+    /// bring its stale copy back.
     pub fn update(&self, radar_info: &mut RadarInfo) {
         let mut radars = self.radars.write().unwrap();
 
-        radars
-            .info
-            .insert(radar_info.key.clone(), radar_info.clone());
+        match radars.info.get_mut(&radar_info.key) {
+            Some(current) if current.tasks.is_same(&radar_info.tasks) => {
+                *current = radar_info.clone();
+            }
+            _ => return,
+        }
 
         radars.persistent_data.store(radar_info);
     }
@@ -3049,6 +3061,57 @@ mod tests {
         assert!(radars.get_by_key(&lost.key()).is_none());
     }
 
+    #[test]
+    fn an_update_changes_the_registered_radar() {
+        let radars = SharedRadars::new();
+        let mut info = radars
+            .add(test_helpers::radar_info(&radars, "0004", None))
+            .unwrap();
+        // Storing the radar saves its name, which a locator always sets.
+        info.controls.set_user_name("Radar".to_string());
+
+        info.serial_no = Some("changed".to_string());
+        radars.update(&mut info);
+
+        let stored = radars.get_by_key(&info.key()).unwrap();
+        assert_eq!(stored.serial_no.as_deref(), Some("changed"));
+    }
+
+    /// A receiver still winding down after its radar was forgotten must not
+    /// list the radar again.
+    #[test]
+    fn an_update_does_not_bring_back_a_forgotten_radar() {
+        let radars = SharedRadars::new();
+        let mut info = radars
+            .add(test_helpers::radar_info(&radars, "0005", None))
+            .unwrap();
+        radars.remove(&info.key());
+
+        radars.update(&mut info);
+
+        assert!(radars.get_by_key(&info.key()).is_none());
+    }
+
+    /// Once a radar is registered anew under the same key, the old
+    /// registration's receiver must not overwrite it.
+    #[test]
+    fn an_update_from_an_older_registration_is_ignored() {
+        let radars = SharedRadars::new();
+        let mut old = radars
+            .add(test_helpers::radar_info(&radars, "0006", None))
+            .unwrap();
+        radars.remove(&old.key());
+        let current = radars
+            .add(test_helpers::radar_info(&radars, "0006", None))
+            .unwrap();
+
+        old.serial_no = Some("stale".to_string());
+        radars.update(&mut old);
+
+        let stored = radars.get_by_key(&current.key()).unwrap();
+        assert_ne!(stored.serial_no.as_deref(), Some("stale"));
+    }
+
     /// Start a subsystem that reports, through the returned receiver, when it
     /// is asked to shut down.
     fn start_task_watching_shutdown(
@@ -3069,7 +3132,7 @@ mod tests {
     async fn stopped(rx: tokio::sync::oneshot::Receiver<()>) -> bool {
         tokio::time::timeout(Duration::from_secs(1), rx)
             .await
-            .is_ok()
+            .is_ok_and(|received| received.is_ok())
     }
 
     #[tokio::test]
