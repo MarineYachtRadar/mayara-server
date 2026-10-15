@@ -134,9 +134,9 @@ const MIN_PRODUCT_DATA_LEN: usize = 0x18;
 /// unicast CDM port 50051.
 pub(crate) const MSG_CDM_PRODUCT_DATA: u32 = 0x0392;
 
-/// `0x0391` — CDM product data request. Sent as a GMN packet to the
-/// radar's IP on port 50050 to solicit a `0x0392` response containing
-/// the factory model name and user-customizable alias.
+/// `0x0391` — CDM product data request. Sent unicast from and to the CDM
+/// control port 50051; the device answers there with a `0x0392`. A request
+/// to the heartbeat port 50050 goes unanswered.
 pub(crate) const MSG_CDM_PRODUCT_DATA_REQUEST: u32 = 0x0391;
 
 /// Decoded fields from a `0x0392` product data message.
@@ -167,7 +167,7 @@ struct CdmProductDataBody {
 }
 
 /// Build a minimal `0x0391` request packet (just the 8-byte GMN header,
-/// no payload). The radar responds with a `0x0392` on the same port.
+/// no payload).
 pub(crate) fn build_product_data_request() -> [u8; 8] {
     let request = GmnHeader {
         packet_type: MSG_CDM_PRODUCT_DATA_REQUEST,
