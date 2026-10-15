@@ -109,7 +109,7 @@ pub(crate) mod cap {
     pub(crate) const PULSE_EXPANSION_A: u32 = 0xab;
     pub(crate) const PULSE_EXPANSION_B: u32 = 0xac;
 
-    // ---- Transmit channel (Fantom Pro / Solid State) ----
+    // ---- Transmit channel (Fantom, solid state) ----
     pub(crate) const TRANSMIT_CHANNEL_MODE: u32 = 0xb2;
     pub(crate) const TRANSMIT_CHANNEL_SELECT: u32 = 0xb5;
 
@@ -117,7 +117,7 @@ pub(crate) mod cap {
     pub(crate) const TARGET_SIZE_MODE_A: u32 = 0xbd;
     pub(crate) const TARGET_SIZE_MODE_B: u32 = 0xbe;
 
-    // ---- Second no-transmit zone (Fantom Pro) ----
+    // ---- Second no-transmit zone (Fantom) ----
     pub(crate) const NO_TX_ZONE_2_MODE: u32 = 0xbf;
     pub(crate) const NO_TX_ZONE_2_START: u32 = 0xc0;
     pub(crate) const NO_TX_ZONE_2_STOP: u32 = 0xc1;
@@ -292,7 +292,7 @@ const LEGACY_HD_BITS: &[u32] = &[
 ];
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// `0x09B1` payload from the GMR xHD captured in
@@ -301,7 +301,7 @@ mod tests {
     /// capability words.
     ///
     /// Sourced from `research/garmin/discovery-handshake.md:271-274`.
-    const SAMPLE_0X09B1_BODY: [u8; 48] = [
+    pub(crate) const SAMPLE_0X09B1_BODY: [u8; 48] = [
         // header
         0x01, 0x00, 0x30, 0x00, 0x9d, 0x00, 0x0a, 0x00, // word 0
         0xdf, 0xfe, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, // word 1
@@ -310,6 +310,32 @@ mod tests {
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // word 4
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     ];
+
+    /// `0x09B1` payload from a GMR Fantom 18x dome (product id `0x0f2c`).
+    /// Byte-identical to the one in `testdata/pcap/garmin-fantom-pro.pcap.gz`.
+    pub(crate) const FANTOM_18X_0X09B1_BODY: [u8; 48] = [
+        0x01, 0x00, 0x30, 0x00, 0xd7, 0x00, 0x0a, 0x00, // header
+        0xff, 0xff, 0xff, 0xbf, 0xff, 0xff, 0xff, 0xc3, // word 0
+        0xff, 0xdf, 0xff, 0xfd, 0x01, 0xfe, 0xff, 0xf8, // word 1
+        0xfd, 0xff, 0xcb, 0xe7, 0xff, 0xe3, 0xef, 0xff, // word 2
+        0xff, 0xff, 0x27, 0x00, 0x00, 0x00, 0x00, 0x00, // word 3
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // word 4
+    ];
+
+    /// What tells a solid-state dome apart: Doppler and no magnetron to
+    /// tune, no open-array antenna. It also reports the transmit channel and
+    /// second no-transmit zone, so those do not mark a Fantom Pro.
+    #[test]
+    fn parse_fantom_18x_capability_message() {
+        let caps = GarminCapabilities::parse(&FANTOM_18X_0X09B1_BODY).unwrap();
+
+        assert!(caps.has_motionscope());
+        assert!(caps.has_doppler_sensitivity());
+        assert!(!caps.has_afc());
+        assert!(!caps.has_open_array_antenna());
+        assert!(caps.has_transmit_channel_select());
+        assert!(caps.has_no_tx_zone_2());
+    }
 
     #[test]
     fn parse_xhd_capability_message() {

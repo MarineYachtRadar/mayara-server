@@ -415,20 +415,15 @@ impl GarminLocator {
         identity_is_new
     }
 
-    /// Parse a CDM `0x0392` product data response and stash the radar's
-    /// factory name and user alias.
+    /// Parse a CDM `0x0392` product data message and stash the device's
+    /// factory name.
     fn handle_cdm_product_data(&self, report: &[u8], from: &SocketAddrV4) {
         let payload = &report[GMN_HEADER_LEN..];
         let pd = match discovery::parse_product_data(payload) {
             Some(p) => p,
             None => return,
         };
-        log::info!(
-            "{}: CDM product data: name={:?} alias={:?}",
-            from,
-            pd.device_name,
-            pd.device_alias,
-        );
+        log::info!("{}: CDM product data: name={:?}", from, pd.device_name);
         let mut state = self.state.lock().unwrap();
         state.device_names.insert(*from.ip(), pd);
     }
@@ -632,13 +627,7 @@ impl GarminLocator {
             })
             .unwrap_or_else(|| detect_model_name(detected_type, &capabilities));
 
-        // User name: prefer the device alias from 0x0392 if it differs
-        // from the factory name (meaning the user actually renamed it).
-        let user_name = device_info
-            .as_ref()
-            .filter(|d| !d.device_alias.is_empty() && d.device_alias != d.device_name)
-            .map(|d| d.device_alias.clone())
-            .unwrap_or_else(|| model_name.clone());
+        let user_name = model_name.clone();
 
         let has_dual_range = capabilities.has_dual_range();
         let has_doppler = capabilities.has_motionscope();
@@ -714,34 +703,33 @@ impl GarminLocator {
     }
 }
 
+/// Infer a model name from the capability bitmap when neither the CDM
+/// product data (0x0392) nor the product_id lookup table gave us a name.
+///
+/// Only what the bitmap shows is named: Doppler marks a solid-state Fantom,
+/// and the open-array bit the antenna. The model or generation within a
+/// family cannot be told: a Fantom 18x dome reports the transmit channel and
+/// second no-transmit zone once taken to mark a Fantom Pro, and a GMR xHD
+/// lacks the pulse expansion once taken to mark an xHD2.
+fn detect_model_name(detected_type: GarminRadarType, caps: &GarminCapabilities) -> String {
+    let family = if detected_type == GarminRadarType::HD {
+        "HD"
+    } else if caps.has_motionscope() || caps.has_doppler_sensitivity() {
+        "Fantom"
+    } else {
+        "xHD"
+    };
+    if caps.has_open_array_antenna() {
+        format!("Garmin {} open array", family)
+    } else {
+        format!("Garmin {}", family)
+    }
+}
+
 /// Build the hardcoded HD range table. HD radars do not broadcast a
 /// range table — the MFD uses a fixed list. Mayara
 /// publishes the union of the metric and nautical fractions used by
 /// the GMR 18 HD / GMR 24 HD.
-/// Infer a model name from the capability bitmap when neither the CDM
-/// product data (0x0392) nor the product_id lookup table gave us a name.
-/// Uses the detection heuristic from research/garmin/feature-detection.md.
-fn detect_model_name(detected_type: GarminRadarType, caps: &GarminCapabilities) -> String {
-    let generation = if detected_type == GarminRadarType::HD {
-        "HD"
-    } else if caps.has_transmit_channel_select() || caps.has_no_tx_zone_2() {
-        // TX channel select (0xb2) or second no-TX zone (0xbf) → Fantom Pro
-        "Fantom Pro"
-    } else if caps.has_motionscope() || caps.has_doppler_sensitivity() {
-        // Doppler mode (0xa3) or sensitivity (0xc3) → Fantom
-        "Fantom"
-    } else if caps.has_scan_average() {
-        // Scan average (0xca) without Doppler → xHD3
-        "xHD3"
-    } else if caps.has_pulse_expansion() || caps.has_target_size_mode() {
-        // Pulse expansion (0xab) or target size (0xbd) → xHD2
-        "xHD2"
-    } else {
-        "xHD"
-    };
-    format!("Garmin {}", generation)
-}
-
 fn hd_ranges() -> Ranges {
     let mut all: Vec<i32> = GARMIN_HD_RANGES_METRIC.to_vec();
     for &r in GARMIN_HD_RANGES_NAUTICAL {
@@ -953,36 +941,37 @@ mod tests {
     }
 
     #[test]
-    fn detect_model_name_from_capabilities() {
-        use super::capabilities::cap;
-
-        // Plain xHD — no advanced bits
-        let mut caps = GarminCapabilities::empty();
-        caps.set(cap::TRANSMIT_MODE);
+    fn a_magnetron_xhd_is_named_xhd() {
+        let caps = GarminCapabilities::parse(&capabilities::tests::SAMPLE_0X09B1_BODY).unwrap();
         assert_eq!(detect_model_name(GarminRadarType::XHD, &caps), "Garmin xHD");
+    }
 
-        // xHD2 — has pulse expansion
-        caps.set(cap::PULSE_EXPANSION_A);
-        assert_eq!(
-            detect_model_name(GarminRadarType::XHD, &caps),
-            "Garmin xHD2"
-        );
-
-        // Fantom — has Doppler
-        caps.set(cap::DOPPLER_RANGE_A);
+    /// The Fantom 18x reports what used to be taken for a Fantom Pro.
+    #[test]
+    fn a_fantom_dome_is_named_fantom() {
+        let caps = GarminCapabilities::parse(&capabilities::tests::FANTOM_18X_0X09B1_BODY).unwrap();
         assert_eq!(
             detect_model_name(GarminRadarType::XHD, &caps),
             "Garmin Fantom"
         );
+    }
 
-        // Fantom Pro — has TX channel select
-        caps.set(cap::TRANSMIT_CHANNEL_MODE);
+    #[test]
+    fn an_open_array_is_named_so() {
+        use super::capabilities::cap;
+
+        let mut caps =
+            GarminCapabilities::parse(&capabilities::tests::FANTOM_18X_0X09B1_BODY).unwrap();
+        caps.set(cap::ANTENNA_SIZE);
         assert_eq!(
             detect_model_name(GarminRadarType::XHD, &caps),
-            "Garmin Fantom Pro"
+            "Garmin Fantom open array"
         );
+    }
 
-        // HD is always HD
+    #[test]
+    fn an_hd_is_named_hd() {
+        let caps = GarminCapabilities::for_legacy_hd();
         assert_eq!(detect_model_name(GarminRadarType::HD, &caps), "Garmin HD");
     }
 }
