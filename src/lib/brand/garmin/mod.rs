@@ -353,8 +353,7 @@ impl GarminLocator {
     }
 
     /// Parse a CDM `0x038E` heartbeat and stash the radar's identity and
-    /// product_id. On first receipt, also send a `0x0391` product data
-    /// request to learn the radar's factory name and user alias.
+    /// product_id.
     ///
     /// Returns whether this heartbeat was the first to identify the radar,
     /// which is the moment a radar waiting on its identity can be
@@ -397,19 +396,6 @@ impl GarminLocator {
                 discovery::product_name(hb.product_id).unwrap_or("unknown"),
             );
             state.product_ids.insert(*from.ip(), hb.product_id);
-
-            // Send a product data request to learn the device name/alias.
-            // This is fire-and-forget; the response arrives as 0x0392 on
-            // the same CDM multicast port and is handled by
-            // handle_cdm_product_data().
-            let request = discovery::build_product_data_request();
-            let dest = std::net::SocketAddrV4::new(*from.ip(), CDM_HEARTBEAT_PORT);
-            // Spawn a one-shot UDP send so we don't block the locator.
-            tokio::spawn(async move {
-                if let Ok(sock) = tokio::net::UdpSocket::bind("0.0.0.0:0").await {
-                    let _ = sock.send_to(&request, dest).await;
-                }
-            });
         }
 
         identity_is_new

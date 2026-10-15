@@ -2,6 +2,7 @@ use anyhow::{Error, bail};
 use deku::DekuRead;
 use std::collections::HashMap;
 use std::io;
+use std::net::SocketAddrV4;
 use std::time::Duration;
 use tokio::time::{Instant, sleep, sleep_until};
 use tokio_graceful_shutdown::SubsystemHandle;
@@ -9,6 +10,9 @@ use tokio_graceful_shutdown::SubsystemHandle;
 use super::GarminRadarType;
 use super::capabilities::GarminCapabilities;
 use super::command::Command;
+use super::discovery::{
+    CDM_CONTROL_PORT, MSG_CDM_PRODUCT_DATA, build_product_data_request, parse_product_data,
+};
 use super::protocol::*;
 use super::range_table;
 use crate::Cli;
@@ -209,6 +213,9 @@ pub(crate) struct GarminReportReceiver {
     radar_type: GarminRadarType,
     report_socket: Option<RadarSocket>,
     data_socket: Option<RadarSocket>,
+    /// Asks the radar for its product data, which carries its model name;
+    /// closed once the answer is in.
+    cdm_socket: Option<tokio::net::UdpSocket>,
     command_sender: Option<Command>,
     reported_unknown: HashMap<u32, bool>,
     /// The dual-range id a client asked to Transmit through mayara,
@@ -324,6 +331,7 @@ impl GarminReportReceiver {
             radar_type,
             report_socket: None,
             data_socket: None,
+            cdm_socket: None,
             command_sender,
             reported_unknown: HashMap::new(),
             transmit_is_ours: None,
@@ -435,7 +443,45 @@ impl GarminReportReceiver {
             }
         }
 
+        self.request_product_data().await;
+
         Ok(())
+    }
+
+    /// Ask the radar for its product data. It multicasts that only while
+    /// booting; a radar that is already up answers a request on the unicast
+    /// CDM port, and only there.
+    async fn request_product_data(&mut self) {
+        if crate::replay::is_active() {
+            return;
+        }
+        let local = SocketAddrV4::new(self.common.info.nic_addr, CDM_CONTROL_PORT);
+        let radar = SocketAddrV4::new(*self.common.info.addr.ip(), CDM_CONTROL_PORT);
+        let socket = match connected_cdm_socket(local, radar) {
+            Ok(socket) => socket,
+            Err(e) => {
+                log::debug!("{}: cannot ask the radar its name: {}", self.common.key, e);
+                return;
+            }
+        };
+        if let Err(e) = socket.send(&build_product_data_request()).await {
+            log::debug!("{}: cannot ask the radar its name: {}", self.common.key, e);
+            return;
+        }
+        self.cdm_socket = Some(socket);
+    }
+
+    /// Take the radar's model name from its product data. True once it is in.
+    fn process_cdm_reply(&mut self, packet: &[u8]) -> bool {
+        let Some(name) = model_name_in_cdm_reply(packet) else {
+            return false;
+        };
+        log::info!("{}: the radar calls itself '{}'", self.common.key, name);
+        if let Some(cb) = self.common_b.as_mut() {
+            rename(cb, format!("{} B", name));
+        }
+        rename(&mut self.common, name);
+        true
     }
 
     async fn socket_loop(&mut self, subsys: &SubsystemHandle) -> Result<(), RadarError> {
@@ -508,6 +554,23 @@ impl GarminReportReceiver {
                         }
                     }
                 },
+                r = async {
+                    if let Some(sock) = self.cdm_socket.as_ref() {
+                        let mut buf = [0u8; CDM_REPLY_MAX];
+                        sock.recv(&mut buf).await.map(|len| buf[..len].to_vec())
+                    } else {
+                        std::future::pending().await
+                    }
+                } => {
+                    match r {
+                        Ok(packet) => {
+                            if self.process_cdm_reply(&packet) {
+                                self.cdm_socket = None;
+                            }
+                        }
+                        Err(_) => self.cdm_socket = None,
+                    }
+                },
                 r = self.common.control_update_rx.recv() => {
                     match r {
                         Err(_) => {},
@@ -550,6 +613,7 @@ impl GarminReportReceiver {
                 _ => {
                     self.report_socket = None;
                     self.data_socket = None;
+                    self.cdm_socket = None;
                 }
             }
 
@@ -1659,6 +1723,60 @@ impl GarminReportReceiver {
     }
 }
 
+/// Largest CDM reply read; a `0x0392` is 124 bytes.
+const CDM_REPLY_MAX: usize = 512;
+
+/// A socket on our CDM port, connected to the radar's. Each Garmin radar's
+/// receiver binds that same port, which only address reuse permits, and only
+/// a connected socket is sure to be handed its own radar's replies.
+fn connected_cdm_socket(
+    local: SocketAddrV4,
+    radar: SocketAddrV4,
+) -> io::Result<tokio::net::UdpSocket> {
+    let socket = network::new_socket()?;
+    #[cfg(unix)]
+    socket.set_reuse_port(true)?;
+    socket.bind(&local.into())?;
+    socket.connect(&radar.into())?;
+    tokio::net::UdpSocket::from_std(socket.into())
+}
+
+/// The model name in a CDM reply, if it is product data that carries one.
+fn model_name_in_cdm_reply(packet: &[u8]) -> Option<String> {
+    let header = decode_head::<GmnHeader>(packet).ok()?;
+    if header.packet_type != MSG_CDM_PRODUCT_DATA {
+        return None;
+    }
+    parse_product_data(&packet[GMN_HEADER_LEN..])
+        .map(|pd| pd.device_name)
+        .filter(|name| !name.is_empty())
+}
+
+/// Give a radar the model name it reported, and the user name with it
+/// unless the user chose their own.
+fn rename(common: &mut CommonRadar, model: String) {
+    let controls = &common.info.controls;
+    if let Some(user_name) = user_name_after_rename(
+        &controls.user_name(),
+        controls.model_name().as_deref(),
+        &model,
+    ) {
+        let _ = controls.set_string(&ControlId::UserName, user_name);
+    }
+    let _ = controls.set_string(&ControlId::ModelName, model);
+    common.update();
+}
+
+/// A user name still equal to the previous model name was never chosen by
+/// the user, so it follows the model.
+fn user_name_after_rename(
+    user_name: &str,
+    previous_model: Option<&str>,
+    model: &str,
+) -> Option<String> {
+    (previous_model == Some(user_name)).then(|| model.to_string())
+}
+
 /// Receive a control update from an optional CommonRadar. Returns
 /// `None` (which makes the `tokio::select!` branch dormant) when
 /// the CommonRadar is absent.
@@ -1687,6 +1805,88 @@ fn unpack_hd_spoke(packed: &[u8], wire_to_legend: &WireToLegendTable) -> Generic
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::brand::garmin::discovery::tests::FANTOM_18X_PRODUCT_DATA;
+
+    fn cdm_packet(packet_type: u32, payload: &[u8]) -> Vec<u8> {
+        let header = GmnHeader {
+            packet_type,
+            payload_len: payload.len() as u32,
+        };
+        let mut packet = crate::util::encode(&header);
+        packet.extend_from_slice(payload);
+        packet
+    }
+
+    #[test]
+    fn the_model_name_is_taken_from_product_data() {
+        let reply = cdm_packet(MSG_CDM_PRODUCT_DATA, &FANTOM_18X_PRODUCT_DATA);
+        assert_eq!(
+            model_name_in_cdm_reply(&reply),
+            Some("Fantom Dome 18x".to_string())
+        );
+    }
+
+    #[test]
+    fn a_cdm_reply_other_than_product_data_names_nothing() {
+        let reply = cdm_packet(MSG_CDM_PRODUCT_DATA + 1, &FANTOM_18X_PRODUCT_DATA);
+        assert_eq!(model_name_in_cdm_reply(&reply), None);
+    }
+
+    #[test]
+    fn product_data_without_a_name_names_nothing() {
+        let mut nameless = FANTOM_18X_PRODUCT_DATA;
+        nameless[8] = 0;
+        let reply = cdm_packet(MSG_CDM_PRODUCT_DATA, &nameless);
+        assert_eq!(model_name_in_cdm_reply(&reply), None);
+    }
+
+    /// Two radars on one boat: each receiver must get its own radar's reply.
+    /// Windows makes no promise which of two sockets on a port gets a datagram.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn each_cdm_socket_on_the_shared_port_gets_its_own_radars_reply() {
+        use std::net::Ipv4Addr;
+
+        let radar_a = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let radar_b = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let v4 = |addr: std::net::SocketAddr| match addr {
+            std::net::SocketAddr::V4(addr) => addr,
+            other => panic!("expected an IPv4 address, got {other}"),
+        };
+        let free_port = std::net::UdpSocket::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let local = SocketAddrV4::new(Ipv4Addr::LOCALHOST, free_port);
+
+        let ours_a = connected_cdm_socket(local, v4(radar_a.local_addr().unwrap())).unwrap();
+        let ours_b = connected_cdm_socket(local, v4(radar_b.local_addr().unwrap())).unwrap();
+        radar_a.send_to(b"a", local).await.unwrap();
+        radar_b.send_to(b"b", local).await.unwrap();
+
+        let mut buf = [0u8; 1];
+        ours_a.recv(&mut buf).await.unwrap();
+        assert_eq!(&buf, b"a");
+        ours_b.recv(&mut buf).await.unwrap();
+        assert_eq!(&buf, b"b");
+    }
+
+    #[test]
+    fn a_default_user_name_follows_the_reported_model() {
+        assert_eq!(
+            user_name_after_rename("Garmin Fantom", Some("Garmin Fantom"), "Fantom Dome 18x"),
+            Some("Fantom Dome 18x".to_string())
+        );
+    }
+
+    #[test]
+    fn a_user_chosen_name_is_kept() {
+        assert_eq!(
+            user_name_after_rename("Bow Radar", Some("Garmin Fantom"), "Fantom Dome 18x"),
+            None
+        );
+    }
 
     /// A scalar setting report: the GMN header, then `payload` as the value.
     /// `declared_len` is written into the header's length field, which is what
