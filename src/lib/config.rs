@@ -260,6 +260,11 @@ impl Persistence {
             debug!("persistence disabled in pcap replay mode");
             return Self::disabled(None);
         }
+        // A unit test that stores a radar must not write into the settings
+        // of whoever runs the tests.
+        if cfg!(test) {
+            return Self::disabled(None);
+        }
 
         let config_dir = get_project_dirs().config_dir().to_owned();
         let Some(settings_path) = settings_path(&config_dir) else {
@@ -726,6 +731,15 @@ mod tests {
             },
             ..Persistence::disabled(None)
         }
+    }
+
+    /// Tests that store radars must leave the real settings file alone.
+    #[test]
+    fn unit_tests_use_no_settings_file() {
+        assert!(matches!(
+            Persistence::new().storage(),
+            SettingsStorage::NotWanted
+        ));
     }
 
     /// Settings follow a radar to its new key exactly once, and the old
