@@ -142,6 +142,7 @@ class PPI {
     // Radar state
     this.range = 0;
     this.spoke_range = 0;
+    this.spoke_length = 0;
     this.lastHeading = null;
     // Smoothed unit vector of the radar-derived heading; null until the first
     // spoke carries a bearing, so smoothing starts from a real value rather
@@ -343,9 +344,17 @@ class PPI {
     this.#resetWriteTracking();
     // Update renderer scale when control range changes
     if (this.renderer && this.renderer.setRangeScale) {
-      this.renderer.setRangeScale(this.range, this.spoke_range || this.range);
+      this.renderer.setRangeScale(this.range, this.#imageRange() || this.range);
     }
     this.redrawCanvas();
+  }
+
+  // The distance at the outer edge of the image. A spoke's range is that of
+  // its last sample, but each image row is maxspokelength samples wide, so
+  // a shorter spoke ends before the row does.
+  #imageRange() {
+    if (!this.spoke_length) return this.spoke_range;
+    return (this.spoke_range * this.maxspokelength) / this.spoke_length;
   }
 
   setHeadingMode(mode) {
@@ -932,9 +941,10 @@ class PPI {
     }
 
     // Handle range changes
-    if (this.spoke_range !== spoke.range) {
+    if (this.spoke_range !== spoke.range || this.spoke_length !== spoke.data.length) {
       const wasInitialRange = this.spoke_range === 0;
       this.spoke_range = spoke.range;
+      this.spoke_length = spoke.data.length;
       this.data.fill(0);
       this.#resetWriteTracking();
       if (this.spokeProcessor) {
@@ -942,7 +952,7 @@ class PPI {
       }
       // Update renderer scale when spoke range changes
       if (this.renderer && this.renderer.setRangeScale) {
-        this.renderer.setRangeScale(this.range || this.spoke_range, this.spoke_range);
+        this.renderer.setRangeScale(this.range || this.spoke_range, this.#imageRange());
       }
       this.redrawCanvas();
 
