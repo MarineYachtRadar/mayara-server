@@ -413,17 +413,27 @@ pub(crate) fn preferred_nic_addr(nic_addr: &Ipv4Addr, radar: &Ipv4Addr) -> Ipv4A
     let Ok(interfaces) = NetworkInterface::show() else {
         return *nic_addr;
     };
+    let interfaces = interfaces.into_iter().map(|itf| {
+        itf.addr
+            .iter()
+            .filter_map(|addr| match (addr.ip(), addr.netmask()) {
+                (IpAddr::V4(ip), Some(IpAddr::V4(mask))) => Some((ip, mask)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    });
+    preferred_among(interfaces, nic_addr, radar)
+}
+
+/// [`preferred_nic_addr`] over `interfaces`, each given as its (address,
+/// netmask) pairs.
+fn preferred_among(
+    interfaces: impl IntoIterator<Item = Vec<(Ipv4Addr, Ipv4Addr)>>,
+    nic_addr: &Ipv4Addr,
+    radar: &Ipv4Addr,
+) -> Ipv4Addr {
     interfaces
         .into_iter()
-        .map(|itf| {
-            itf.addr
-                .iter()
-                .filter_map(|addr| match (addr.ip(), addr.netmask()) {
-                    (IpAddr::V4(ip), Some(IpAddr::V4(mask))) => Some((ip, mask)),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-        })
         .find(|addrs| addrs.iter().any(|(ip, _)| ip == nic_addr))
         .and_then(|addrs| address_on_subnet(&addrs, radar))
         .unwrap_or(*nic_addr)
@@ -571,7 +581,7 @@ mod send_socket_tests {
 
 #[cfg(test)]
 mod address_choice_tests {
-    use super::{address_on_subnet, preferred_nic_addr};
+    use super::{address_on_subnet, preferred_among, preferred_nic_addr};
     use std::net::Ipv4Addr;
 
     const RADAR: Ipv4Addr = Ipv4Addr::new(172, 16, 2, 0);
@@ -593,6 +603,21 @@ mod address_choice_tests {
     #[test]
     fn no_address_on_the_radars_subnet_chooses_none() {
         assert_eq!(address_on_subnet(&[OTHER], &RADAR), None);
+    }
+
+    /// The radar was heard via `OTHER`; its interface also has `ON_SUBNET`.
+    /// Another interface on the radar's subnet is not the one it was heard on.
+    #[test]
+    fn the_on_subnet_address_of_the_same_interface_is_chosen() {
+        let elsewhere = (Ipv4Addr::new(172, 16, 9, 9), Ipv4Addr::new(255, 240, 0, 0));
+        let interfaces = vec![vec![elsewhere], vec![OTHER, ON_SUBNET]];
+        assert_eq!(preferred_among(interfaces, &OTHER.0, &RADAR), ON_SUBNET.0);
+    }
+
+    #[test]
+    fn without_an_on_subnet_address_on_its_interface_the_address_is_kept() {
+        let interfaces = vec![vec![ON_SUBNET], vec![OTHER]];
+        assert_eq!(preferred_among(interfaces, &OTHER.0, &RADAR), OTHER.0);
     }
 
     /// An address that belongs to no interface, as in a replay, is kept.
