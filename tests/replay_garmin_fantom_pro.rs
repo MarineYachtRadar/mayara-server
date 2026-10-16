@@ -3,15 +3,24 @@
 //! Integration test: replay a Garmin Fantom Pro running in dual-range mode.
 //!
 //! The one fixture whose radar transmits on both ranges, so it is the only
-//! automated cover for Range B: that it registers alongside Range A, and that
-//! spokes actually reach it.
+//! automated cover for Range B: that it registers alongside Range A, that
+//! spokes actually reach it, and that it reports transmitting and stays
+//! alive on the report stream it shares with Range A.
 
 mod common;
 
+use mayara::radar::Power;
+use mayara::radar::settings::ControlId;
 use mayara::{Cli, replay};
 use std::path::Path;
 use std::time::Duration;
 use tokio_graceful_shutdown::{SubsystemBuilder, SubsystemHandle, Toplevel};
+
+/// How long the radar watchdog lets a radar stay silent before setting it
+/// Off, and how often it checks (`SharedRadars::RADAR_SILENCE_TIMEOUT` and the
+/// watchdog interval, both private to the library).
+const RADAR_SILENCE_TIMEOUT: Duration = Duration::from_secs(30);
+const WATCHDOG_PERIOD: Duration = Duration::from_secs(5);
 
 fn test_args() -> Cli {
     Cli {
@@ -99,6 +108,7 @@ async fn replay_garmin_fantom_pro_dual_range() {
                     keys[1][..keys[1].len() - 1],
                     "the two ranges are one radar"
                 );
+                let registered = tokio::time::Instant::now();
 
                 // And each of them decodes a picture of its own. Range A and
                 // Range B run at different ranges, which is what makes this the
@@ -112,6 +122,51 @@ async fn replay_garmin_fantom_pro_dual_range() {
                     )
                     .await;
                     common::assert_spokes(&info, &spokes);
+                }
+
+                // The scanner reports transmit once for both ranges; Range B
+                // must show it too, or clients treat a painting range as off.
+                // The capture switches to transmit 2.5 s into each loop.
+                let transmit = Some(Power::Transmit as i32 as f64);
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+                for key in &keys {
+                    loop {
+                        let power = radars
+                            .get_by_key(key)
+                            .expect("radar info")
+                            .controls
+                            .get(&ControlId::Power)
+                            .and_then(|c| c.value())
+                            .and_then(|v| v.as_f64());
+                        if power == transmit {
+                            break;
+                        }
+                        if tokio::time::Instant::now() > deadline {
+                            panic!("{key}: power {power:?}, expected Transmit");
+                        }
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+                }
+
+                // Both ranges share one report stream. Once the watchdog's
+                // silence timeout has passed, a range the stream does not
+                // keep alive is set to Off on every watchdog tick, so watch
+                // both for longer than a tick.
+                tokio::time::sleep_until(registered + RADAR_SILENCE_TIMEOUT).await;
+                let watch_until = tokio::time::Instant::now() + WATCHDOG_PERIOD * 2;
+                let off = Some(Power::Off as i32 as f64);
+                while tokio::time::Instant::now() < watch_until {
+                    for key in &keys {
+                        let power = radars
+                            .get_by_key(key)
+                            .expect("radar info")
+                            .controls
+                            .get(&ControlId::Power)
+                            .and_then(|c| c.value())
+                            .and_then(|v| v.as_f64());
+                        assert_ne!(power, off, "{key}: set Off while reports keep coming");
+                    }
+                    tokio::time::sleep(Duration::from_millis(50)).await;
                 }
 
                 subsys.request_shutdown();

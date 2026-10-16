@@ -219,6 +219,11 @@ pub(crate) struct GarminReportReceiver {
     /// and only for a transmit that was ours: an MFD's transmit is never
     /// touched. Both ranges share the scanner, so this is one fact for it.
     transmit_is_ours: Option<i32>,
+    /// The scanner's last reported transmit state and whether it runs both
+    /// ranges (`MSG_RANGE_MODE`). The radar reports transmit once for the
+    /// whole scanner, so Range B's power is derived from the two.
+    reported_power: Option<Power>,
+    dual_range: bool,
 
     range_a: RangeState,
     range_b: Option<RangeState>,
@@ -322,6 +327,8 @@ impl GarminReportReceiver {
             command_sender,
             reported_unknown: HashMap::new(),
             transmit_is_ours: None,
+            reported_power: None,
+            dual_range: false,
             range_a: RangeState {
                 range_meters: 0,
                 doppler: DopplerMode::None,
@@ -368,6 +375,7 @@ impl GarminReportReceiver {
             gain_auto: false,
             wire_to_legend,
         });
+        self.publish_range_b_power();
     }
 
     async fn start_sockets(&mut self) -> io::Result<()> {
@@ -463,7 +471,12 @@ impl GarminReportReceiver {
                 } => {
                     match r {
                         Ok((_len, _addr)) => {
+                            // The report stream is shared by both ranges of a
+                            // dual-range radar, so a report keeps both alive.
                             self.common.info.mark_input();
+                            if let Some(ref cb) = self.common_b {
+                                cb.info.mark_input();
+                            }
                             if let Err(e) = self.process_report(&report_buf) {
                                 log::error!("{}: {}", self.common.key, e);
                             }
@@ -1333,6 +1346,21 @@ impl GarminReportReceiver {
         self.transmit_is_ours = transmit_claim_after_report(self.transmit_is_ours, power);
         self.common
             .set_value(&ControlId::Power, power as i32 as f64);
+        self.reported_power = Some(power);
+        self.publish_range_b_power();
+    }
+
+    /// Range B transmits only while the scanner transmits in dual-range mode.
+    fn publish_range_b_power(&mut self) {
+        let (Some(common_b), Some(power)) = (&mut self.common_b, self.reported_power) else {
+            return;
+        };
+        let power = if power == Power::Transmit && !self.dual_range {
+            Power::Standby
+        } else {
+            power
+        };
+        common_b.set_value(&ControlId::Power, power as i32 as f64);
     }
 
     /// Nobody is watching: if the radar is transmitting on our behalf, put it
@@ -1400,8 +1428,10 @@ impl GarminReportReceiver {
 
     fn process_range_mode(&mut self, data: &[u8]) -> Result<(), Error> {
         let value = self.extract_xhd_value(data)?;
-        // 0=single, 1=dual. Logged for now; dual range isn't exposed.
+        // 0=single, 1=dual.
         log::debug!("{}: range mode: {}", self.common.key, value);
+        self.dual_range = value == 1;
+        self.publish_range_b_power();
         Ok(())
     }
 
