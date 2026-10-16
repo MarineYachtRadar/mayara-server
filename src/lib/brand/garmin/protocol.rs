@@ -21,7 +21,7 @@
 
 #![allow(dead_code)]
 
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 
 // =============================================================================
 // Network — multicast groups, ports, subnet
@@ -37,6 +37,10 @@ pub(crate) const GARMIN_NETMASK: Ipv4Addr = Ipv4Addr::new(255, 240, 0, 0);
 /// here every 5 seconds, advertising its product ID and service IDs.
 pub(crate) const CDM_HEARTBEAT_ADDRESS: SocketAddr =
     SocketAddr::new(IpAddr::V4(Ipv4Addr::new(239, 254, 2, 2)), 50050);
+
+/// Where a chartplotter sends its wake-up frame: every host on the network,
+/// port 50030.
+pub(crate) const WAKE_ADDRESS: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::new(224, 0, 0, 1), 50030);
 
 /// Settings/status report multicast group. The radar broadcasts ~80
 /// individual report messages per second here, one setting per packet.
@@ -161,6 +165,15 @@ pub(crate) const DEGREE_SCALE: i32 = 32;
 /// Enhanced-protocol gain, sea, and rain levels are reported and accepted as `uint16 LE`
 /// in `0..=10000`, i.e. percent × 100.
 pub(crate) const GAIN_SCALE: u16 = 100;
+
+// =============================================================================
+// Wake-up (`0x0a2c`)
+// =============================================================================
+
+/// `0x0a2c` — wake-up frame a chartplotter sends to [`WAKE_ADDRESS`]. Its
+/// body is a Wake-on-LAN magic packet, which the radar's network chip
+/// answers by powering the radar on.
+pub(crate) const MSG_WAKE: u32 = 0x0a2c;
 
 // =============================================================================
 // CDM discovery (`0x038e` heartbeat)

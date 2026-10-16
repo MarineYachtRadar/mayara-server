@@ -21,6 +21,7 @@ mod protocol;
 mod range_table;
 mod report;
 mod settings;
+mod wake;
 
 #[cfg(test)]
 pub(crate) use settings::controls_for_every_model;
@@ -802,11 +803,9 @@ pub(super) fn new(args: &Cli, addresses: &mut Vec<LocatorAddress>) {
         Box::new(locator),
     ));
 
-    // Wake-up sender. Garmin Fantom-class radars gate their report
-    // stream on seeing a peer CDM device (an MFD) on the network.
-    // Legacy GMR HD/xHD radars use a hardwired Ethernet-cable pin for
-    // the same purpose. Without this loop, a Fantom never broadcasts
-    // anything for us to discover.
+    // Announce mayara as a CDM device, and wake a radar that powered
+    // itself down for want of a chartplotter: without the wake-up
+    // frames it never sends anything for us to discover.
     //
     // Skip in replay mode (no network) and in emulator mode (no
     // physical radar to wake).
@@ -816,6 +815,7 @@ pub(super) fn new(args: &Cli, addresses: &mut Vec<LocatorAddress>) {
             return;
         }
         tokio::spawn(cdm_heartbeat::run(syc_group_id));
+        tokio::spawn(wake::run());
     }
 }
 

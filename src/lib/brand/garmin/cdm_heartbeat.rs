@@ -1,17 +1,11 @@
-//! CDM "V2 heartbeat" sender — wakes a sleeping Fantom radar.
+//! CDM "V2 heartbeat" sender — announces mayara as a CDM device.
 //!
-//! Garmin radars (Fantom, Fantom Pro and likely xHD2/xHD3 as well) gate
-//! their report stream on observing a peer CDM device on the network.
-//! The MFD signals "I'm here" by multicasting `0x038e` to
-//! `239.254.2.2:50050` every 5 s (every 1 s for the first 30 sends
-//! after boot — see `cdm_build_and_send_v2_heartbeat` at
-//! `0x030879a4` in the MFD firmware decompilation).
+//! Every Garmin device announces itself by multicasting `0x038e` to
+//! `239.254.2.2:50050`; an MFD does so every 5 s (every 1 s for the first
+//! 30 sends after boot — see `cdm_build_and_send_v2_heartbeat` at
+//! `0x030879a4` in the MFD firmware decompilation). mayara does the same.
 //!
-//! Legacy GMR HD/xHD radars achieve the same handshake via a hardwired
-//! pin in the Ethernet cable that an attached chartplotter energises;
-//! Fantom-class radars dropped that pin in favour of the Ethernet
-//! mechanism. Without anyone sending the heartbeat, the radar stays
-//! quiet and mayara never sees it.
+//! The heartbeat does not wake a sleeping radar; [`super::wake`] does.
 //!
 //! ## Wire format (30-byte UDP datagram)
 //!
@@ -212,7 +206,7 @@ async fn send_one(packet: &[u8], dest: &SocketAddrV4, nic: &Ipv4Addr) {
 /// Enumerate NICs that have at least one IPv4 address inside the
 /// Garmin marine subnet (`172.16.0.0/12`). Returns the first matching
 /// address per interface.
-fn garmin_eligible_nics() -> Vec<Ipv4Addr> {
+pub(super) fn garmin_eligible_nics() -> Vec<Ipv4Addr> {
     let interfaces = match NetworkInterface::show() {
         Ok(v) => v,
         Err(e) => {
