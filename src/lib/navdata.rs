@@ -2374,4 +2374,69 @@ mod tests {
             );
         }
     }
+
+    /// Paths a Signal K server keeps for an AIS vessel, as its NMEA 0183 and
+    /// NMEA 2000 AIS converters write them.
+    const AIS_VESSEL_PATHS: &[&str] = &[
+        "",
+        "name",
+        "mmsi",
+        "communication.callsignVhf",
+        "registrations.imo",
+        "navigation.position",
+        "navigation.headingTrue",
+        "navigation.headingMagnetic",
+        "navigation.courseOverGroundTrue",
+        "navigation.courseOverGroundMagnetic",
+        "navigation.speedOverGround",
+        "navigation.rateOfTurn",
+        "navigation.state",
+        "navigation.specialManeuver",
+        "navigation.destination.commonName",
+        "navigation.destination.eta",
+        "design.length",
+        "design.beam",
+        "design.draft",
+        "design.airHeight",
+        "design.aisShipType",
+        "sensors.ais.class",
+        "sensors.ais.fromBow",
+        "sensors.ais.fromCenter",
+    ];
+
+    #[test]
+    fn every_path_the_ais_store_reads_is_subscribed() {
+        let subscription: Value = serde_json::from_str(SUBSCRIBE_ALL.trim()).unwrap();
+        let subscribed: Vec<&str> = subscription["subscribe"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["path"].as_str().unwrap())
+            .collect();
+        // Whatever shape a path's value has, one of these carries it.
+        let values = [
+            serde_json::json!(1.5),
+            serde_json::json!("TEST"),
+            serde_json::json!({"latitude": 52.3676, "longitude": 4.9041}),
+            serde_json::json!({"name": "TEST VESSEL", "overall": 25.0, "value": 1.5}),
+        ];
+
+        let (tx, _rx) = tokio::sync::broadcast::channel(16);
+        let store = AisVesselStore::new(tx);
+        let mut mmsi = 200_000_000;
+        for path in AIS_VESSEL_PATHS {
+            for value in &values {
+                // A fresh vessel per try, so a change can only come from this path.
+                mmsi += 1;
+                let context = format!("vessels.urn:mrn:imo:mmsi:{mmsi}");
+                let updates = serde_json::json!([{"values": [{"path": path, "value": value}]}]);
+                if store.update(&context, &updates) {
+                    assert!(
+                        subscribed.contains(path),
+                        "AIS store reads {path:?}, but it is not subscribed"
+                    );
+                }
+            }
+        }
+    }
 }
