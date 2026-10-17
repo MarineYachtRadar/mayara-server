@@ -642,13 +642,14 @@ impl RaymarineLocator {
             let navdata_name = format!("{}-navdata", report_name);
             let navdata = subsys.start(SubsystemBuilder::new(
                 navdata_name,
-                async move |s: &mut SubsystemHandle| match crate::network::create_connected_send(
-                    &send_addr, &nic_addr,
-                ) {
-                    Ok(sock) => navdata::run(s, sock).await.map_err(|e| e.into()),
-                    Err(e) => {
-                        log::warn!("Failed to create NavData socket: {}", e);
-                        Ok::<(), anyhow::Error>(())
+                async move |s: &mut SubsystemHandle| {
+                    match crate::network::create_connected_send_from_any_port(&send_addr, &nic_addr)
+                    {
+                        Ok(sock) => navdata::run(s, sock).await.map_err(|e| e.into()),
+                        Err(e) => {
+                            log::warn!("Failed to create NavData socket: {}", e);
+                            Ok::<(), anyhow::Error>(())
+                        }
                     }
                 },
             ));

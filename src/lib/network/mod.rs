@@ -302,6 +302,25 @@ pub(crate) fn create_connected_send(
     addr: &SocketAddrV4,
     nic_addr: &Ipv4Addr,
 ) -> io::Result<UdpSocket> {
+    connected_send_from_port(addr, nic_addr, addr.port())
+}
+
+/// [`create_connected_send`] from a port of the OS's choosing, for a stream the
+/// radar does not reply to. Two sockets cannot share the radar's own port on
+/// macOS and the BSDs, and where they can (Linux) one would take the other's
+/// replies.
+pub(crate) fn create_connected_send_from_any_port(
+    addr: &SocketAddrV4,
+    nic_addr: &Ipv4Addr,
+) -> io::Result<UdpSocket> {
+    connected_send_from_port(addr, nic_addr, 0)
+}
+
+fn connected_send_from_port(
+    addr: &SocketAddrV4,
+    nic_addr: &Ipv4Addr,
+    local_port: u16,
+) -> io::Result<UdpSocket> {
     let socket: socket2::Socket = new_socket()?;
 
     // Send multicast out of the radar's own interface. Without this the kernel
@@ -312,7 +331,7 @@ pub(crate) fn create_connected_send(
     socket.set_multicast_if_v4(nic_addr)?;
 
     let socketaddr = SocketAddr::new(IpAddr::V4(*addr.ip()), addr.port());
-    let socketaddr_nic = SocketAddr::new(IpAddr::V4(*nic_addr), addr.port());
+    let socketaddr_nic = SocketAddr::new(IpAddr::V4(*nic_addr), local_port);
     socket.bind(&socket2::SockAddr::from(socketaddr_nic))?;
     socket.connect(&socket2::SockAddr::from(socketaddr))?;
 
@@ -525,7 +544,7 @@ mod reachability_tests {
 
 #[cfg(test)]
 mod send_socket_tests {
-    use super::{UdpSocket, create_connected_send};
+    use super::{UdpSocket, create_connected_send, create_connected_send_from_any_port};
     use std::io;
     use std::net::{Ipv4Addr, SocketAddrV4};
 
@@ -564,6 +583,24 @@ mod send_socket_tests {
             }
         }
         panic!("no local port stayed free after {PORT_ATTEMPTS} attempts");
+    }
+
+    /// A second sender to the same radar must not need the first one's port.
+    #[tokio::test]
+    async fn a_send_socket_from_any_port_coexists_with_one_on_the_radars_port() {
+        let first = a_send_socket_on_some_free_port();
+        let dst = match first.peer_addr().unwrap() {
+            std::net::SocketAddr::V4(dst) => dst,
+            other => panic!("expected an IPv4 peer, got {other}"),
+        };
+
+        let second = create_connected_send_from_any_port(&dst, &Ipv4Addr::LOCALHOST)
+            .expect("a second sender should get a port of its own");
+
+        assert_ne!(
+            second.local_addr().unwrap().port(),
+            first.local_addr().unwrap().port()
+        );
     }
 
     /// Multicast commands must leave by the interface the radar was found on,
