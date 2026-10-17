@@ -347,21 +347,29 @@ pub(crate) fn match_ipv4(addr: &Ipv4Addr, bcast: &Ipv4Addr, netmask: &Ipv4Addr) 
 pub(crate) fn can_reach(nic_addr: &Ipv4Addr, dst: &SocketAddrV4) -> Option<bool> {
     let (ifname, _) = interface_for(nic_addr)?;
 
-    let probe = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
-    if probe.connect(*dst).is_err() {
+    let Ok(local) = routed_source(dst) else {
         // No route at all to that destination.
         return Some(false);
-    }
-    let SocketAddr::V4(local) = probe.local_addr().ok()? else {
-        return None;
     };
 
     // The source address the kernel chose identifies the interface it would
     // send from. If that is not the radar's interface, the command would go
     // out of the wrong one and be lost.
-    let (chosen, _) = interface_for(local.ip())?;
+    let (chosen, _) = interface_for(&local)?;
 
     Some(chosen == ifname)
+}
+
+/// The source address the kernel would send from to reach `dst`, found by
+/// connecting a UDP socket, which looks up the route and sends nothing. `Err`
+/// when there is no route at all.
+fn routed_source(dst: &SocketAddrV4) -> io::Result<Ipv4Addr> {
+    let probe = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))?;
+    probe.connect(*dst)?;
+    match probe.local_addr()? {
+        SocketAddr::V4(local) => Ok(*local.ip()),
+        SocketAddr::V6(_) => Err(io::Error::other("IPv4 socket has an IPv6 address")),
+    }
 }
 
 /// Every IPv4 address this host has, or `None` when the interfaces cannot be
@@ -401,14 +409,16 @@ pub(crate) fn interface_for(nic_addr: &Ipv4Addr) -> Option<(String, Ipv4Addr)> {
 }
 
 /// The address to use for a radar heard via `nic_addr`: an address on the
-/// radar's subnet, preferring one on `nic_addr`'s own interface, else
-/// `nic_addr` itself.
+/// radar's subnet on `nic_addr`'s own interface, else the address the kernel
+/// routes to the radar from if that is on the radar's subnet, else `nic_addr`
+/// itself.
 ///
 /// Multicast reaches every address of an interface alike, so which of them
 /// heard the radar first is chance. Nor is the interface certain: macOS hands a
 /// group's datagrams to a socket joined on any interface, so a radar on the
 /// Ethernet can appear to be heard on a VM bridge. Only an address on the
-/// radar's subnet is one the radar can be commanded from.
+/// radar's subnet is one the radar can be commanded from, and of those only
+/// the routed one is sure to leave by the interface the commands take.
 pub(crate) fn preferred_nic_addr(nic_addr: &Ipv4Addr, radar: &Ipv4Addr) -> Ipv4Addr {
     use network_interface::{NetworkInterface, NetworkInterfaceConfig};
 
@@ -424,15 +434,21 @@ pub(crate) fn preferred_nic_addr(nic_addr: &Ipv4Addr, radar: &Ipv4Addr) -> Ipv4A
             })
             .collect::<Vec<_>>()
     });
-    preferred_among(interfaces, nic_addr, radar)
+    let routed = routed_source(&SocketAddrV4::new(*radar, ROUTE_PROBE_PORT)).ok();
+    preferred_among(interfaces, nic_addr, radar, routed)
 }
 
+/// Any port does for a route lookup, which depends on the address alone; it
+/// only has to be non-zero for the connect to succeed.
+const ROUTE_PROBE_PORT: u16 = 9;
+
 /// [`preferred_nic_addr`] over `interfaces`, each given as its (address,
-/// netmask) pairs.
+/// netmask) pairs, with `routed` the source the kernel would use for the radar.
 fn preferred_among(
     interfaces: impl IntoIterator<Item = Vec<(Ipv4Addr, Ipv4Addr)>>,
     nic_addr: &Ipv4Addr,
     radar: &Ipv4Addr,
+    routed: Option<Ipv4Addr>,
 ) -> Ipv4Addr {
     let interfaces: Vec<_> = interfaces.into_iter().collect();
     let own = interfaces
@@ -441,12 +457,14 @@ fn preferred_among(
     let Some(own) = own else {
         return *nic_addr;
     };
+    let routed_on_subnet = routed.filter(|routed| {
+        interfaces
+            .iter()
+            .flatten()
+            .any(|(ip, mask)| ip == routed && match_ipv4(radar, ip, mask))
+    });
     address_on_subnet(own, radar)
-        .or_else(|| {
-            interfaces
-                .iter()
-                .find_map(|addrs| address_on_subnet(addrs, radar))
-        })
+        .or(routed_on_subnet)
         .unwrap_or(*nic_addr)
 }
 
@@ -622,21 +640,54 @@ mod address_choice_tests {
     fn the_on_subnet_address_of_the_same_interface_is_chosen() {
         let elsewhere = (Ipv4Addr::new(172, 16, 9, 9), Ipv4Addr::new(255, 240, 0, 0));
         let interfaces = vec![vec![elsewhere], vec![OTHER, ON_SUBNET]];
-        assert_eq!(preferred_among(interfaces, &OTHER.0, &RADAR), ON_SUBNET.0);
+        assert_eq!(
+            preferred_among(interfaces, &OTHER.0, &RADAR, Some(elsewhere.0)),
+            ON_SUBNET.0
+        );
     }
 
     /// macOS can deliver a radar's multicast to a socket on another
-    /// interface, so an on-subnet address elsewhere beats an unreachable one.
+    /// interface, so the routed on-subnet address beats an unreachable one.
     #[test]
-    fn without_an_on_subnet_address_on_its_interface_another_interface_is_used() {
+    fn without_an_on_subnet_address_on_its_interface_the_routed_one_is_used() {
         let interfaces = vec![vec![ON_SUBNET], vec![OTHER]];
-        assert_eq!(preferred_among(interfaces, &OTHER.0, &RADAR), ON_SUBNET.0);
+        assert_eq!(
+            preferred_among(interfaces, &OTHER.0, &RADAR, Some(ON_SUBNET.0)),
+            ON_SUBNET.0
+        );
+    }
+
+    /// A VM bridge or VPN overlapping the radar's subnet does not win over
+    /// the interface the kernel routes the radar's traffic by.
+    #[test]
+    fn of_several_on_subnet_addresses_elsewhere_the_routed_one_is_used() {
+        let bridge = (Ipv4Addr::new(172, 16, 9, 9), Ipv4Addr::new(255, 240, 0, 0));
+        let interfaces = vec![vec![bridge], vec![ON_SUBNET], vec![OTHER]];
+        assert_eq!(
+            preferred_among(interfaces, &OTHER.0, &RADAR, Some(ON_SUBNET.0)),
+            ON_SUBNET.0
+        );
+    }
+
+    /// A route through a gateway gives a source the radar cannot answer
+    /// either, so it is no better than the address the radar was heard on.
+    #[test]
+    fn a_routed_address_off_the_radars_subnet_is_not_used() {
+        let gateway_side = (
+            Ipv4Addr::new(192, 168, 8, 9),
+            Ipv4Addr::new(255, 255, 255, 0),
+        );
+        let interfaces = vec![vec![gateway_side], vec![OTHER]];
+        assert_eq!(
+            preferred_among(interfaces, &OTHER.0, &RADAR, Some(gateway_side.0)),
+            OTHER.0
+        );
     }
 
     #[test]
     fn with_no_on_subnet_address_anywhere_the_address_is_kept() {
         let interfaces = vec![vec![OTHER]];
-        assert_eq!(preferred_among(interfaces, &OTHER.0, &RADAR), OTHER.0);
+        assert_eq!(preferred_among(interfaces, &OTHER.0, &RADAR, None), OTHER.0);
     }
 
     /// An address that belongs to no interface, as in a replay, is kept.
