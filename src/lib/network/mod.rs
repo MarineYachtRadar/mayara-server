@@ -347,9 +347,10 @@ pub(crate) fn match_ipv4(addr: &Ipv4Addr, bcast: &Ipv4Addr, netmask: &Ipv4Addr) 
 pub(crate) fn can_reach(nic_addr: &Ipv4Addr, dst: &SocketAddrV4) -> Option<bool> {
     let (ifname, _) = interface_for(nic_addr)?;
 
-    let Ok(local) = routed_source(dst) else {
-        // No route at all to that destination.
-        return Some(false);
+    let local = match routed_source(dst) {
+        Ok(local) => local,
+        Err(e) if is_unroutable(&e) => return Some(false),
+        Err(_) => return None,
     };
 
     // The source address the kernel chose identifies the interface it would
@@ -362,7 +363,8 @@ pub(crate) fn can_reach(nic_addr: &Ipv4Addr, dst: &SocketAddrV4) -> Option<bool>
 
 /// The source address the kernel would send from to reach `dst`, found by
 /// connecting a UDP socket, which looks up the route and sends nothing. `Err`
-/// when there is no route at all.
+/// when there is no route at all (see [`is_unroutable`]), but also when the
+/// probe socket cannot be created or queried.
 fn routed_source(dst: &SocketAddrV4) -> io::Result<Ipv4Addr> {
     let probe = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))?;
     probe.connect(*dst)?;
@@ -370,6 +372,15 @@ fn routed_source(dst: &SocketAddrV4) -> io::Result<Ipv4Addr> {
         SocketAddr::V4(local) => Ok(*local.ip()),
         SocketAddr::V6(_) => Err(io::Error::other("IPv4 socket has an IPv6 address")),
     }
+}
+
+/// Whether a [`routed_source`] error means the routing table has no way to
+/// `dst`, rather than that the probe itself failed.
+fn is_unroutable(e: &io::Error) -> bool {
+    matches!(
+        e.kind(),
+        io::ErrorKind::NetworkUnreachable | io::ErrorKind::HostUnreachable
+    )
 }
 
 /// Every IPv4 address this host has, or `None` when the interfaces cannot be
@@ -508,8 +519,19 @@ pub(crate) use windows::spawn_wait_for_ip_addr_change;
 
 #[cfg(test)]
 mod reachability_tests {
-    use super::can_reach;
+    use super::{can_reach, is_unroutable};
+    use std::io;
     use std::net::{Ipv4Addr, SocketAddrV4};
+
+    /// Only a missing route says the radar is unreachable; a probe that fails
+    /// for any other reason says nothing about it.
+    #[test]
+    fn only_a_missing_route_counts_as_unroutable() {
+        assert!(is_unroutable(&io::ErrorKind::NetworkUnreachable.into()));
+        assert!(is_unroutable(&io::ErrorKind::HostUnreachable.into()));
+        assert!(!is_unroutable(&io::ErrorKind::AddrInUse.into()));
+        assert!(!is_unroutable(&io::Error::other("probe failed")));
+    }
 
     /// Loopback is the only pair guaranteed to exist wherever the tests run.
     #[test]
