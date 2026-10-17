@@ -397,7 +397,7 @@ impl RaymarineLocator {
                     };
 
                     let radar_send: SocketAddrV4 = data.command.into();
-                    let nic_addr = crate::network::preferred_nic_addr(from, radar_send.ip());
+                    let nic_addr = crate::network::preferred_nic_addr(from, &radar_send);
 
                     // Quantum WiFi radars connect to a well-known SSID and password,
                     // and the Quantum advertises an

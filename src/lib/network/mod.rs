@@ -419,10 +419,10 @@ pub(crate) fn interface_for(nic_addr: &Ipv4Addr) -> Option<(String, Ipv4Addr)> {
     None
 }
 
-/// The address to use for a radar heard via `nic_addr`: an address on the
-/// radar's subnet on `nic_addr`'s own interface, else the address the kernel
-/// routes to the radar from if that is on the radar's subnet, else `nic_addr`
-/// itself.
+/// The address to use for a radar heard via `nic_addr` and commanded at
+/// `radar_send`: an address on the radar's subnet on `nic_addr`'s own
+/// interface, else the address the kernel routes the commands from if that is
+/// on the radar's subnet, else `nic_addr` itself.
 ///
 /// Multicast reaches every address of an interface alike, so which of them
 /// heard the radar first is chance. Nor is the interface certain: macOS hands a
@@ -430,7 +430,7 @@ pub(crate) fn interface_for(nic_addr: &Ipv4Addr) -> Option<(String, Ipv4Addr)> {
 /// Ethernet can appear to be heard on a VM bridge. Only an address on the
 /// radar's subnet is one the radar can be commanded from, and of those only
 /// the routed one is sure to leave by the interface the commands take.
-pub(crate) fn preferred_nic_addr(nic_addr: &Ipv4Addr, radar: &Ipv4Addr) -> Ipv4Addr {
+pub(crate) fn preferred_nic_addr(nic_addr: &Ipv4Addr, radar_send: &SocketAddrV4) -> Ipv4Addr {
     use network_interface::{NetworkInterface, NetworkInterfaceConfig};
 
     let Ok(interfaces) = NetworkInterface::show() else {
@@ -445,13 +445,10 @@ pub(crate) fn preferred_nic_addr(nic_addr: &Ipv4Addr, radar: &Ipv4Addr) -> Ipv4A
             })
             .collect::<Vec<_>>()
     });
-    let routed = routed_source(&SocketAddrV4::new(*radar, ROUTE_PROBE_PORT)).ok();
-    preferred_among(interfaces, nic_addr, radar, routed)
+    // Probe the command port itself: policy routing can select by port.
+    let routed = routed_source(radar_send).ok();
+    preferred_among(interfaces, nic_addr, radar_send.ip(), routed)
 }
-
-/// Any port does for a route lookup, which depends on the address alone; it
-/// only has to be non-zero for the connect to succeed.
-const ROUTE_PROBE_PORT: u16 = 9;
 
 /// [`preferred_nic_addr`] over `interfaces`, each given as its (address,
 /// netmask) pairs, with `routed` the source the kernel would use for the radar.
@@ -633,7 +630,7 @@ mod send_socket_tests {
 #[cfg(test)]
 mod address_choice_tests {
     use super::{address_on_subnet, preferred_among, preferred_nic_addr};
-    use std::net::Ipv4Addr;
+    use std::net::{Ipv4Addr, SocketAddrV4};
 
     const RADAR: Ipv4Addr = Ipv4Addr::new(172, 16, 2, 0);
     const OTHER: (Ipv4Addr, Ipv4Addr) =
@@ -716,6 +713,7 @@ mod address_choice_tests {
     #[test]
     fn an_unknown_address_is_kept() {
         let made_up = Ipv4Addr::new(203, 0, 113, 7);
-        assert_eq!(preferred_nic_addr(&made_up, &RADAR), made_up);
+        let radar_send = SocketAddrV4::new(RADAR, 50101);
+        assert_eq!(preferred_nic_addr(&made_up, &radar_send), made_up);
     }
 }
