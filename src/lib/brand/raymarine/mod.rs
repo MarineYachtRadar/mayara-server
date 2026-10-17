@@ -397,6 +397,7 @@ impl RaymarineLocator {
                     };
 
                     let radar_send: SocketAddrV4 = data.command.into();
+                    let nic_addr = crate::network::preferred_nic_addr(from, &radar_send);
 
                     // Quantum WiFi radars connect to a well-known SSID and password,
                     // and the Quantum advertises an
@@ -439,7 +440,7 @@ impl RaymarineLocator {
                         spokes_per_revolution,
                         max_spoke_len,
                         radar_addr,
-                        *from,
+                        nic_addr,
                         radar_addr,
                         radar_addr,
                         radar_send,
