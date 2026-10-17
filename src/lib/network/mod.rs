@@ -401,12 +401,14 @@ pub(crate) fn interface_for(nic_addr: &Ipv4Addr) -> Option<(String, Ipv4Addr)> {
 }
 
 /// The address to use for a radar heard via `nic_addr`: an address on the
-/// same interface that shares the radar's subnet when there is one, else
+/// radar's subnet, preferring one on `nic_addr`'s own interface, else
 /// `nic_addr` itself.
 ///
 /// Multicast reaches every address of an interface alike, so which of them
-/// heard the radar first is chance. Only an address on the radar's subnet is
-/// one the radar can be commanded from.
+/// heard the radar first is chance. Nor is the interface certain: macOS hands a
+/// group's datagrams to a socket joined on any interface, so a radar on the
+/// Ethernet can appear to be heard on a VM bridge. Only an address on the
+/// radar's subnet is one the radar can be commanded from.
 pub(crate) fn preferred_nic_addr(nic_addr: &Ipv4Addr, radar: &Ipv4Addr) -> Ipv4Addr {
     use network_interface::{NetworkInterface, NetworkInterfaceConfig};
 
@@ -432,10 +434,19 @@ fn preferred_among(
     nic_addr: &Ipv4Addr,
     radar: &Ipv4Addr,
 ) -> Ipv4Addr {
-    interfaces
-        .into_iter()
-        .find(|addrs| addrs.iter().any(|(ip, _)| ip == nic_addr))
-        .and_then(|addrs| address_on_subnet(&addrs, radar))
+    let interfaces: Vec<_> = interfaces.into_iter().collect();
+    let own = interfaces
+        .iter()
+        .find(|addrs| addrs.iter().any(|(ip, _)| ip == nic_addr));
+    let Some(own) = own else {
+        return *nic_addr;
+    };
+    address_on_subnet(own, radar)
+        .or_else(|| {
+            interfaces
+                .iter()
+                .find_map(|addrs| address_on_subnet(addrs, radar))
+        })
         .unwrap_or(*nic_addr)
 }
 
@@ -614,9 +625,17 @@ mod address_choice_tests {
         assert_eq!(preferred_among(interfaces, &OTHER.0, &RADAR), ON_SUBNET.0);
     }
 
+    /// macOS can deliver a radar's multicast to a socket on another
+    /// interface, so an on-subnet address elsewhere beats an unreachable one.
     #[test]
-    fn without_an_on_subnet_address_on_its_interface_the_address_is_kept() {
+    fn without_an_on_subnet_address_on_its_interface_another_interface_is_used() {
         let interfaces = vec![vec![ON_SUBNET], vec![OTHER]];
+        assert_eq!(preferred_among(interfaces, &OTHER.0, &RADAR), ON_SUBNET.0);
+    }
+
+    #[test]
+    fn with_no_on_subnet_address_anywhere_the_address_is_kept() {
+        let interfaces = vec![vec![OTHER]];
         assert_eq!(preferred_among(interfaces, &OTHER.0, &RADAR), OTHER.0);
     }
 
