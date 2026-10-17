@@ -381,6 +381,14 @@ pub(crate) fn host_ipv4_addresses() -> Option<HashSet<Ipv4Addr>> {
     Some(addresses)
 }
 
+/// Whether `ip` is one of this host's own addresses, so a packet from it is
+/// one of ours come back. Comparing with the address of the socket that
+/// received it is not enough: our multicast loops back on every interface,
+/// each copy carrying the source address of the interface it left by.
+pub(crate) fn is_host_address(ip: &Ipv4Addr) -> bool {
+    host_ipv4_addresses().is_some_and(|addresses| addresses.contains(ip))
+}
+
 /// Find the name and netmask of the interface carrying `nic_addr`.
 ///
 /// `None` when no interface has that address, in which case nothing can be
@@ -576,6 +584,22 @@ mod send_socket_tests {
             socket2::SockRef::from(&sock).multicast_if_v4().unwrap(),
             Ipv4Addr::LOCALHOST
         );
+    }
+}
+
+#[cfg(test)]
+mod host_address_tests {
+    use super::is_host_address;
+    use std::net::Ipv4Addr;
+
+    #[test]
+    fn loopback_is_a_host_address() {
+        assert!(is_host_address(&Ipv4Addr::LOCALHOST));
+    }
+
+    #[test]
+    fn a_documentation_address_is_not() {
+        assert!(!is_host_address(&Ipv4Addr::new(203, 0, 113, 7)));
     }
 }
 
