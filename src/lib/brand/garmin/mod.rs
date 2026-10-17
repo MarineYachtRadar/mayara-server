@@ -360,6 +360,11 @@ impl GarminLocator {
     /// which is the moment a radar waiting on its identity can be
     /// registered.
     fn handle_cdm_heartbeat(&self, report: &[u8], from: &SocketAddrV4) -> bool {
+        // Our own outbound heartbeat comes back on the group, and is not a
+        // device on the network.
+        if crate::network::is_host_address(from.ip()) {
+            return false;
+        }
         let payload = &report[GMN_HEADER_LEN..];
         let hb = match discovery::parse(payload) {
             Some(h) => h,
@@ -884,6 +889,19 @@ mod tests {
             !locator.state.lock().unwrap().radars.contains_key(&RADAR),
             "the stale registration must be dropped"
         );
+    }
+
+    /// The heartbeat mayara itself sends must not be taken for a device: it
+    /// would be asked for its name, and its SYC group adopted as the boat's.
+    #[test]
+    fn our_own_cdm_heartbeat_is_ignored() {
+        let args = Cli::parse_from(["mayara-server"]);
+        let locator = GarminLocator::new(args, Arc::new(AtomicU8::new(0)));
+        let own = SocketAddrV4::new(Ipv4Addr::LOCALHOST, CDM_HEARTBEAT_PORT);
+
+        assert!(!locator.handle_cdm_heartbeat(&cdm_heartbeat::build(5, 0), &own));
+        assert_eq!(locator.syc_group_id.load(Ordering::Relaxed), 0);
+        assert!(locator.state.lock().unwrap().product_ids.is_empty());
     }
 
     #[test]

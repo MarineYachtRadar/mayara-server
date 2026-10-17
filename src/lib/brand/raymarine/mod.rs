@@ -694,7 +694,7 @@ impl RadarLocator for RaymarineLocator {
         );
         log::trace!("{}: printable:     {}", from, PrintableSlice::new(report));
 
-        if from.ip() != nic_addr && is_external_controller_signal(report) {
+        if is_external_controller(report, from.ip(), nic_addr) {
             log::debug!(
                 "{}: external Raymarine controller observed (len {})",
                 from,
@@ -740,10 +740,18 @@ impl RadarLocator for RaymarineLocator {
     }
 }
 
+/// Whether `report` shows another controller on the network: a controller's
+/// signal, sent by someone other than this host.
+fn is_external_controller(report: &[u8], from: &Ipv4Addr, nic_addr: &Ipv4Addr) -> bool {
+    is_external_controller_signal(report)
+        && from != nic_addr
+        && !crate::network::is_host_address(from)
+}
+
 /// True if `report` looks like a packet another Raymarine controller (MFD or
 /// another mayara) would emit on the beacon group: the 16-byte `ABCDEFGHIJKLMNOP`
 /// wake literal, the 102-byte WOL signature, or a 56-byte beacon with the
-/// MFD subtype. Caller is responsible for the "not us" filter on source IP.
+/// MFD subtype. [`is_external_controller`] adds the "not us" filter.
 fn is_external_controller_signal(report: &[u8]) -> bool {
     match report.len() {
         16 => report == RAYMARINE_WAKE_RADAR,
@@ -1502,6 +1510,29 @@ mod tests {
         radar_beacon[0..4].copy_from_slice(&1u32.to_le_bytes());
         radar_beacon[4..8].copy_from_slice(&(protocol::beacon56::QUANTUM).to_le_bytes());
         assert!(!is_external_controller_signal(&radar_beacon));
+    }
+
+    /// mayara's own MFD beacon loops back from every address this host has,
+    /// not just from the one the receiving socket is bound to.
+    #[test]
+    fn our_own_controller_signal_from_another_local_address_is_not_external() {
+        use super::{RAYMARINE_MFD_BEACON, is_external_controller};
+
+        let nic = Ipv4Addr::new(198, 18, 3, 150);
+        assert!(!is_external_controller(
+            &RAYMARINE_MFD_BEACON,
+            &Ipv4Addr::LOCALHOST,
+            &nic
+        ));
+    }
+
+    #[test]
+    fn a_controller_signal_from_another_host_is_external() {
+        use super::{RAYMARINE_MFD_BEACON, is_external_controller};
+
+        let nic = Ipv4Addr::new(198, 18, 3, 150);
+        let mfd = Ipv4Addr::new(203, 0, 113, 7);
+        assert!(is_external_controller(&RAYMARINE_MFD_BEACON, &mfd, &nic));
     }
 
     #[test]
