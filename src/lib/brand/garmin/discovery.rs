@@ -126,51 +126,48 @@ pub(crate) fn parse(payload: &[u8]) -> Option<CdmHeartbeat> {
     })
 }
 
-/// Minimum body length for a `0x0392` product data response to contain
-/// the device_name (30 bytes at +0x04) and device_alias (31 bytes at +0x23).
-const MIN_PRODUCT_DATA_LEN: usize = 0x42;
+/// Minimum body length for a `0x0392` to contain the device name.
+const MIN_PRODUCT_DATA_LEN: usize = 0x18;
 
-/// `0x0392` — CDM product data response.
+/// `0x0392` — CDM product data. Every device multicasts it unasked on
+/// `239.254.2.2:50050` while booting, and answers a request for it on the
+/// unicast CDM port 50051.
 pub(crate) const MSG_CDM_PRODUCT_DATA: u32 = 0x0392;
 
-/// `0x0391` — CDM product data request. Sent as a GMN packet to the
-/// radar's IP on port 50050 to solicit a `0x0392` response containing
-/// the factory model name and user-customizable alias.
+/// `0x0391` — CDM product data request. Sent unicast from and to the CDM
+/// control port 50051; the device answers there with a `0x0392`. A request
+/// to the heartbeat port 50050 goes unanswered.
 pub(crate) const MSG_CDM_PRODUCT_DATA_REQUEST: u32 = 0x0391;
 
-/// Decoded fields from a `0x0392` product data response.
+/// Decoded fields from a `0x0392` product data message.
 #[derive(Debug, Clone)]
 pub(crate) struct CdmProductData {
-    /// Factory model name (e.g. "GMR Fantom 24"), up to 30 chars.
+    /// Factory model name (e.g. "Fantom Dome 18x").
     pub device_name: String,
-    /// User-customizable alias (e.g. "Bow Radar"), up to 31 chars.
-    pub device_alias: String,
 }
 
-/// Parse the body of a `0x0392` product data response. `payload` is the
+/// Parse the body of a `0x0392` product data message. `payload` is the
 /// slice after the 8-byte GMN header.
 pub(crate) fn parse_product_data(payload: &[u8]) -> Option<CdmProductData> {
     let body: CdmProductDataBody = decode_head(payload).ok()?;
 
     Some(CdmProductData {
         device_name: crate::util::c_string(&body.device_name)?.to_string(),
-        device_alias: crate::util::c_string(&body.device_alias)?.to_string(),
     })
 }
 
-/// The body of a `0x0392`. Both names are fixed-width and NUL-padded; what
-/// the byte between them is for is not known.
+/// The start of a `0x0392` body, as a Fantom 18x and a GPSMAP 723xsv send
+/// it. What follows the name is not known.
 #[derive(DekuRead, Debug)]
 #[deku(endian = "little")]
 struct CdmProductDataBody {
-    _u00: [u8; 4],          // 0x00..0x04
-    device_name: [u8; 30],  // 0x04..0x22
-    _u01: u8,               // 0x22
-    device_alias: [u8; 31], // 0x23..0x42
+    _u00: [u8; 6],         // 0x00..0x06: version 2, then unknown
+    _product_id: u16,      // 0x06, as in the heartbeat
+    device_name: [u8; 16], // 0x08..0x18, NUL-padded
 }
 
 /// Build a minimal `0x0391` request packet (just the 8-byte GMN header,
-/// no payload). The radar responds with a `0x0392` on the same port.
+/// no payload).
 pub(crate) fn build_product_data_request() -> [u8; 8] {
     let request = GmnHeader {
         packet_type: MSG_CDM_PRODUCT_DATA_REQUEST,
@@ -241,30 +238,46 @@ mod tests {
     // struct — but a test that corrupts one field still names where it is.
     use crate::brand::garmin::protocol::{CDM_OFFSET_VERSION_MARKER, GMN_HEADER_LEN};
 
-    /// A `0x0392` body with both names at the offsets the radar writes them.
-    fn product_data_body(name: &str, alias: &str) -> Vec<u8> {
-        let mut body = vec![0u8; MIN_PRODUCT_DATA_LEN];
-        body[0x04..0x04 + name.len()].copy_from_slice(name.as_bytes());
-        body[0x23..0x23 + alias.len()].copy_from_slice(alias.as_bytes());
-        body
+    /// `0x0392` body a Fantom 18x multicast while booting.
+    const FANTOM_18X_PRODUCT_DATA: [u8; 116] = [
+        0x02, 0x00, 0x00, 0x00, 0x01, 0x00, 0x2c, 0x0f, 0x46, 0x61, 0x6e, 0x74, 0x6f, 0x6d, 0x20,
+        0x44, 0x6f, 0x6d, 0x65, 0x20, 0x31, 0x38, 0x78, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46, 0x61, 0x6e, 0x74, 0x6f, 0x6d,
+        0x20, 0x44, 0x6f, 0x6d, 0x65, 0x20, 0x31, 0x38, 0x78, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x80, 0xee, 0x36, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0e, 0x00, 0x3b,
+        0x02, 0x00, 0x00, 0x53, 0x79, 0x73, 0x74, 0x65, 0x6d, 0x20, 0x43, 0x6f, 0x64, 0x65, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xc9, 0xd4, 0x0f,
+    ];
+
+    /// `0x0392` body a GPSMAP 723xsv chartplotter multicast while booting.
+    /// Its name is followed by padding and then other data.
+    const GPSMAP_723XSV_PRODUCT_DATA: [u8; 116] = [
+        0x02, 0x00, 0x00, 0x00, 0x01, 0x25, 0xfd, 0x0d, 0x47, 0x50, 0x53, 0x4d, 0x41, 0x50, 0x20,
+        0x37, 0x32, 0x33, 0x78, 0x73, 0x76, 0x00, 0x00, 0x00, 0x00, 0xc2, 0xdc, 0x0d, 0x4e, 0x30,
+        0x31, 0x38, 0x33, 0x5f, 0x53, 0x4e, 0x54, 0x43, 0x5f, 0x47, 0x50, 0x53, 0x4d, 0x41, 0x50,
+        0x20, 0x37, 0x32, 0x33, 0x78, 0x73, 0x76, 0x00, 0xa7, 0x86, 0xbe, 0x1c, 0xa9, 0x86, 0xbe,
+        0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0xe8, 0x00, 0x86, 0xbe, 0x0e, 0xa7, 0x6d,
+        0x10, 0x00, 0x00, 0x53, 0x79, 0x73, 0x74, 0x65, 0x6d, 0x20, 0x43, 0x6f, 0x64, 0x65, 0x00,
+        0x00, 0x00, 0x69, 0x73, 0x6f, 0x2d, 0x6e, 0x61, 0x6d, 0x65, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xd6, 0x11, 0x0c,
+    ];
+
+    #[test]
+    fn product_data_reads_the_radar_name() {
+        let data = parse_product_data(&FANTOM_18X_PRODUCT_DATA).unwrap();
+        assert_eq!(data.device_name, "Fantom Dome 18x");
     }
 
     #[test]
-    fn product_data_reads_both_names() {
-        let body = product_data_body("GMR Fantom 24", "Bow Radar");
-
-        let data = parse_product_data(&body).unwrap();
-
-        assert_eq!(data.device_name, "GMR Fantom 24");
-        assert_eq!(data.device_alias, "Bow Radar");
+    fn product_data_reads_the_chartplotter_name() {
+        let data = parse_product_data(&GPSMAP_723XSV_PRODUCT_DATA).unwrap();
+        assert_eq!(data.device_name, "GPSMAP 723xsv");
     }
 
-    /// A body that stops inside the alias has no alias to report.
     #[test]
-    fn product_data_shorter_than_its_layout_is_rejected() {
-        let body = product_data_body("GMR xHD", "Mast");
-
-        assert!(parse_product_data(&body[..MIN_PRODUCT_DATA_LEN - 1]).is_none());
+    fn product_data_shorter_than_its_name_is_rejected() {
+        assert!(parse_product_data(&FANTOM_18X_PRODUCT_DATA[..MIN_PRODUCT_DATA_LEN - 1]).is_none());
         assert!(parse_product_data(&[]).is_none());
     }
 
