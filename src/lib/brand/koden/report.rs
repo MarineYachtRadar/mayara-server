@@ -6,6 +6,7 @@ use tokio_graceful_shutdown::SubsystemHandle;
 use super::command::Command;
 use super::protocol::*;
 use crate::Cli;
+use crate::network::{SocketType, create_udp_listen};
 use crate::radar::CommonRadar;
 use crate::radar::SharedRadars;
 use crate::radar::SpokeBearing;
@@ -78,13 +79,16 @@ impl KodenReportReceiver {
             cmd.send_startup().await?;
         }
 
-        // Bind receive socket on the Koden port
-        let recv_socket = UdpSocket::bind(("0.0.0.0", RADAR_PORT))
-            .await
-            .map_err(RadarError::Io)?;
-        recv_socket.set_broadcast(true).map_err(RadarError::Io)?;
+        // The locator holds the Koden port on every interface, so this socket
+        // has to share it.
+        let mut recv_socket = create_udp_listen(
+            &BROADCAST_ADDRESS,
+            &self.common.info.nic_addr,
+            SocketType::Broadcast,
+        )
+        .map_err(RadarError::Io)?;
 
-        let mut buf = [0u8; 4096];
+        let mut buf = Vec::with_capacity(4096);
         let mut next_keepalive = Instant::now() + Duration::from_secs(KEEPALIVE_INTERVAL_SECS);
 
         loop {
@@ -118,12 +122,13 @@ impl KodenReportReceiver {
                     }
                 }
 
-                result = recv_socket.recv_from(&mut buf) => {
+                result = recv_socket.recv_buf_from(&mut buf) => {
                     match result {
                         Ok((len, _from)) => {
                             if len >= 3 {
-                                self.process_packet(&buf[..len]);
+                                self.process_packet(&buf);
                             }
+                            buf.clear();
                         }
                         Err(e) => {
                             log::error!("{}: recv error: {}", self.common.key, e);

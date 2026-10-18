@@ -20,7 +20,7 @@
 
 #![allow(dead_code)]
 
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
 use crate::radar::NM_F64;
 
@@ -50,8 +50,11 @@ pub(crate) const RADAR_PORT: u16 = 10001;
 
 /// Broadcast address for radar discovery.
 /// We listen on 0.0.0.0:10001 and broadcast to 255.255.255.255:10001.
-pub(crate) const BEACON_ADDRESS: SocketAddr =
-    SocketAddr::new(IpAddr::V4(Ipv4Addr::BROADCAST), RADAR_PORT);
+pub(crate) const BEACON_ADDRESS: SocketAddr = SocketAddr::V4(BROADCAST_ADDRESS);
+
+/// [`BEACON_ADDRESS`] as the IPv4 address a listen socket is created for.
+pub(crate) const BROADCAST_ADDRESS: SocketAddrV4 =
+    SocketAddrV4::new(Ipv4Addr::BROADCAST, RADAR_PORT);
 
 // =============================================================================
 // Timing
