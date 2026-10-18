@@ -1,3 +1,4 @@
+use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::time::{Instant, sleep_until};
@@ -124,10 +125,8 @@ impl KodenReportReceiver {
 
                 result = recv_socket.recv_buf_from(&mut buf) => {
                     match result {
-                        Ok((len, _from)) => {
-                            if len >= 3 {
-                                self.process_packet(&buf);
-                            }
+                        Ok((_len, from)) => {
+                            self.process_datagram(&buf, &from);
                             buf.clear();
                         }
                         Err(e) => {
@@ -147,6 +146,18 @@ impl KodenReportReceiver {
                 }
             }
         }
+    }
+
+    /// The radar port is shared with the locator and with any other Koden
+    /// radar on the network, so only this radar's own datagrams are its
+    /// input. Without marking it, the watchdog decays the power state to Off
+    /// between status reports.
+    fn process_datagram(&mut self, data: &[u8], from: &SocketAddr) {
+        if from.ip() != IpAddr::V4(*self.common.info.addr.ip()) {
+            return;
+        }
+        self.common.info.mark_input();
+        self.process_packet(data);
     }
 
     fn process_packet(&mut self, data: &[u8]) {
@@ -546,5 +557,47 @@ impl KodenReportReceiver {
         }
 
         self.common.send_spoke_message();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    const QUIET: Duration = Duration::from_millis(50);
+    const STATUS: [u8; 3] = [STATUS_PREFIX, CMD_MAC_ADDRESS, PACKET_END];
+
+    fn receiver() -> KodenReportReceiver {
+        let args = Cli::parse_from(["mayara-server", "--replay"]);
+        let info = crate::radar::ui_strings::radar_info(crate::Brand::Koden, &args, |id, tx| {
+            super::super::settings::new(id, tx, &args)
+        });
+        KodenReportReceiver::new(&args, SharedRadars::new(), info)
+    }
+
+    /// The watchdog decays a silent radar's power to Off, so every packet
+    /// must count as input, not only the image frames.
+    #[test]
+    fn a_status_packet_from_the_radar_counts_as_input() {
+        let mut receiver = receiver();
+        let radar = SocketAddr::V4(receiver.common.info.addr);
+        std::thread::sleep(QUIET);
+
+        receiver.process_datagram(&STATUS, &radar);
+
+        assert!(receiver.common.info.input_silence() < QUIET);
+    }
+
+    /// Another radar on the shared port must not keep this one alive.
+    #[test]
+    fn a_packet_from_another_address_is_not_input() {
+        let mut receiver = receiver();
+        let other = "10.0.0.99:10001".parse().unwrap();
+        std::thread::sleep(QUIET);
+
+        receiver.process_datagram(&STATUS, &other);
+
+        assert!(receiver.common.info.input_silence() >= QUIET);
     }
 }
