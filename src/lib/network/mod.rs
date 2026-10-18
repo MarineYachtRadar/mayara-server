@@ -447,9 +447,9 @@ pub(crate) fn interface_for(nic_addr: &Ipv4Addr) -> Option<(String, Ipv4Addr)> {
 }
 
 /// The address to use for a radar heard via `nic_addr` and commanded at
-/// `radar_send`: an address on the radar's subnet on `nic_addr`'s own
-/// interface, else the address the kernel routes the commands from if that is
-/// on the radar's subnet, else `nic_addr` itself.
+/// `radar_send`: the address the kernel routes the commands from if that is on
+/// the radar's subnet, else an address on the radar's subnet on `nic_addr`'s
+/// own interface, else `nic_addr` itself.
 ///
 /// Multicast reaches every address of an interface alike, so which of them
 /// heard the radar first is chance. Nor is the interface certain: macOS hands a
@@ -498,8 +498,8 @@ fn preferred_among(
             .flatten()
             .any(|(ip, mask)| ip == routed && match_ipv4(radar, ip, mask))
     });
-    address_on_subnet(own, radar)
-        .or(routed_on_subnet)
+    routed_on_subnet
+        .or_else(|| address_on_subnet(own, radar))
         .unwrap_or(*nic_addr)
 }
 
@@ -715,13 +715,25 @@ mod address_choice_tests {
     }
 
     /// The radar was heard via `OTHER`; its interface also has `ON_SUBNET`.
-    /// Another interface on the radar's subnet is not the one it was heard on.
     #[test]
-    fn the_on_subnet_address_of_the_same_interface_is_chosen() {
+    fn without_a_route_the_on_subnet_address_of_the_same_interface_is_chosen() {
         let elsewhere = (Ipv4Addr::new(172, 16, 9, 9), Ipv4Addr::new(255, 240, 0, 0));
         let interfaces = vec![vec![elsewhere], vec![OTHER, ON_SUBNET]];
         assert_eq!(
-            preferred_among(interfaces, &OTHER.0, &RADAR, Some(elsewhere.0)),
+            preferred_among(interfaces, &OTHER.0, &RADAR, None),
+            ON_SUBNET.0
+        );
+    }
+
+    /// The interface a radar seems heard on is chance on macOS, and the
+    /// commands leave by the routed interface whatever their source, so the
+    /// routed on-subnet address beats one on the interface it was heard on.
+    #[test]
+    fn the_routed_on_subnet_address_beats_the_one_it_was_heard_on() {
+        let bridge = (Ipv4Addr::new(172, 16, 9, 9), Ipv4Addr::new(255, 240, 0, 0));
+        let interfaces = vec![vec![OTHER, bridge], vec![ON_SUBNET]];
+        assert_eq!(
+            preferred_among(interfaces, &OTHER.0, &RADAR, Some(ON_SUBNET.0)),
             ON_SUBNET.0
         );
     }
