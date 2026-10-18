@@ -1693,11 +1693,7 @@ impl NavigationData {
             }
             Ok(ParsedMessage::Vtg(vtg)) => {
                 set_cog(vtg.cog_true.map(|c| c.to_radians()));
-                let sog = vtg
-                    .sog_kph
-                    .or_else(|| vtg.sog_knots.map(|k| k * 1.852))
-                    .map(|s| s * 3.6); // convert to m/s
-                set_sog(sog);
+                set_sog(vtg_sog(&vtg));
             }
 
             Err(e) => match e {
@@ -1713,6 +1709,16 @@ impl NavigationData {
         }
         Ok(())
     }
+}
+
+const KPH_PER_KNOT: f64 = 1.852;
+const KPH_PER_METER_PER_SECOND: f64 = 3.6;
+
+/// Speed over ground in m/s, the unit Signal K and the rest of mayara use.
+fn vtg_sog(vtg: &gnss::VtgData) -> Option<f64> {
+    vtg.sog_kph
+        .or_else(|| vtg.sog_knots.map(|k| k * KPH_PER_KNOT))
+        .map(|kph| kph / KPH_PER_METER_PER_SECOND)
 }
 
 /// Our vessel's context from a Signal K hello, e.g.
@@ -1899,6 +1905,27 @@ mod tests {
         let mut full = vec!["mayara-server"];
         full.extend_from_slice(args);
         Cli::parse_from(full)
+    }
+
+    fn parsed_vtg(sentence: &str) -> gnss::VtgData {
+        match NmeaParser::new().parse_sentence(sentence) {
+            Ok(ParsedMessage::Vtg(vtg)) => vtg,
+            other => panic!("{sentence} is not a VTG: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn vtg_speed_in_kph_is_stored_in_meters_per_second() {
+        let vtg = parsed_vtg("$GPVTG,0.0,T,,M,6.0,N,11.1,K,A*3A");
+        let sog = vtg_sog(&vtg).unwrap();
+        assert!((sog - 11.1 / 3.6).abs() < 1e-9, "{sog} m/s");
+    }
+
+    #[test]
+    fn vtg_speed_in_knots_only_is_stored_in_meters_per_second() {
+        let vtg = parsed_vtg("$GPVTG,0.0,T,,M,6.0,N,,K,A*25");
+        let sog = vtg_sog(&vtg).unwrap();
+        assert!((sog - 6.0 * 1852.0 / 3600.0).abs() < 1e-9, "{sog} m/s");
     }
 
     // ----- nav_status transport derivation -----
