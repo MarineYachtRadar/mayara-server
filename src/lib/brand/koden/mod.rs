@@ -224,33 +224,25 @@ impl KodenLocator {
         Ok(())
     }
 
-    fn found(
-        &mut self,
+    /// The radar as it is registered: named after its key until the user
+    /// renames it, as every caller of `user_name()` expects a name.
+    fn radar_info(
+        &self,
+        radars: &SharedRadars,
         radar_addr: SocketAddrV4,
         nic_addr: Ipv4Addr,
-        radars: &SharedRadars,
-        subsys: &SubsystemHandle,
-    ) {
+        hardware_id: Option<&str>,
+    ) -> RadarInfo {
         let spoke_data_addr = SocketAddrV4::new(*radar_addr.ip(), RADAR_PORT);
         let report_addr = SocketAddrV4::new(*radar_addr.ip(), RADAR_PORT);
         let send_command_addr = SocketAddrV4::new(*radar_addr.ip(), RADAR_PORT);
-
-        let hardware_id = match self.identity_for(&radar_addr) {
-            Identity::Known(mac) => Some(mac),
-            Identity::Ask => {
-                request_mac(&radar_addr);
-                return;
-            }
-            Identity::Wait => return,
-            Identity::UseAddress => None,
-        };
 
         let radar_info = RadarInfo::new(
             radars,
             &self.args,
             Brand::Koden,
             None, // serial number discovered later
-            hardware_id.as_deref(),
+            hardware_id,
             None, // no dual range
             PIXEL_VALUES,
             SPOKES,
@@ -264,6 +256,27 @@ impl KodenLocator {
             false, // no doppler
             false, // not sparse spokes
         );
+        radar_info.controls.set_user_name(radar_info.key());
+        radar_info
+    }
+
+    fn found(
+        &mut self,
+        radar_addr: SocketAddrV4,
+        nic_addr: Ipv4Addr,
+        radars: &SharedRadars,
+        subsys: &SubsystemHandle,
+    ) {
+        let hardware_id = match self.identity_for(&radar_addr) {
+            Identity::Known(mac) => Some(mac),
+            Identity::Ask => {
+                request_mac(&radar_addr);
+                return;
+            }
+            Identity::Wait => return,
+            Identity::UseAddress => None,
+        };
+        let radar_info = self.radar_info(radars, radar_addr, nic_addr, hardware_id.as_deref());
 
         if let Some(info) = radars.add(radar_info) {
             let report_name = info.key();
@@ -505,5 +518,18 @@ mod tests {
             );
         }
         assert!(!locator.asked.contains_key(&RADAR), "nothing left to chase");
+    }
+
+    /// Every caller of `user_name()` expects a name, so a radar registered
+    /// without one would panic the first of them.
+    #[test]
+    fn a_registered_radar_is_named_after_its_key() {
+        let info = locator().radar_info(
+            &SharedRadars::new(),
+            SocketAddrV4::new(RADAR, RADAR_PORT),
+            Ipv4Addr::new(172, 31, 3, 1),
+            None,
+        );
+        assert_eq!(info.controls.user_name(), info.key());
     }
 }
