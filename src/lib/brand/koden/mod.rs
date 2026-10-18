@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use tokio_graceful_shutdown::{SubsystemBuilder, SubsystemHandle};
 
 use crate::locator::LocatorAddress;
+use crate::network::{interface_for, match_ipv4};
 use crate::radar::{RadarInfo, SharedRadars};
 use crate::util::PrintableSlice;
 use crate::{Brand, Cli};
@@ -72,6 +73,9 @@ struct KodenLocator {
     /// in time. Nothing re-keys a registered radar, so the decision has
     /// to stand for the session.
     settled: HashSet<Ipv4Addr>,
+    /// The netmask of each interface address a radar was heard via, looked
+    /// up once: image frames arrive continuously.
+    netmasks: HashMap<Ipv4Addr, Option<Ipv4Addr>>,
 }
 
 impl RadarLocator for KodenLocator {
@@ -98,7 +102,20 @@ impl KodenLocator {
             macs: HashMap::new(),
             asked: HashMap::new(),
             settled: HashSet::new(),
+            netmasks: HashMap::new(),
         }
+    }
+
+    /// Whether `nic_addr` is on the radar's subnet. The radar broadcasts to
+    /// 255.255.255.255, which every interface's socket hears, each tagged
+    /// with its own address; commands go back by unicast, so only an address
+    /// on the radar's subnet can reach it.
+    fn heard_on_radar_subnet(&mut self, nic_addr: &Ipv4Addr, radar_addr: &Ipv4Addr) -> bool {
+        let netmask = *self
+            .netmasks
+            .entry(*nic_addr)
+            .or_insert_with(|| interface_for(nic_addr).map(|(_, netmask)| netmask));
+        on_radar_subnet(nic_addr, radar_addr, netmask)
     }
 
     /// Record the MAC from a `0xA7` response. Returns whether it was new,
@@ -205,6 +222,10 @@ impl KodenLocator {
         if !is_koden {
             return Ok(());
         }
+        // A replay has no real interface to compare with.
+        if !self.args.is_replay() && !self.heard_on_radar_subnet(nic_addr, from.ip()) {
+            return Ok(());
+        }
 
         if first == STATUS_PREFIX
             && report[1] == CMD_MAC_ADDRESS
@@ -305,6 +326,13 @@ pub(super) fn new(args: &Cli, addresses: &mut Vec<LocatorAddress>) {
             Box::new(KodenLocator::new(args.clone())),
         ));
     }
+}
+
+/// Whether `nic_addr` is on `radar_addr`'s subnet, given the netmask of the
+/// interface carrying `nic_addr`. Without one, as for an address that belongs
+/// to no interface, nothing can be concluded and the radar is accepted.
+fn on_radar_subnet(nic_addr: &Ipv4Addr, radar_addr: &Ipv4Addr, netmask: Option<Ipv4Addr>) -> bool {
+    netmask.is_none_or(|netmask| match_ipv4(nic_addr, radar_addr, &netmask))
 }
 
 /// Ask a radar for its MAC address. Fire-and-forget: the answer arrives
@@ -531,5 +559,26 @@ mod tests {
             None,
         );
         assert_eq!(info.controls.user_name(), info.key());
+    }
+
+    #[test]
+    fn a_radar_is_accepted_on_its_own_subnet_only() {
+        let netmask = Some(Ipv4Addr::new(255, 255, 0, 0));
+        assert!(on_radar_subnet(
+            &Ipv4Addr::new(172, 31, 0, 1),
+            &RADAR,
+            netmask
+        ));
+        assert!(!on_radar_subnet(
+            &Ipv4Addr::new(10, 56, 0, 4),
+            &RADAR,
+            netmask
+        ));
+    }
+
+    /// An address on no interface, so with no netmask, cannot rule a radar out.
+    #[test]
+    fn without_a_netmask_the_radar_is_accepted() {
+        assert!(on_radar_subnet(&Ipv4Addr::new(10, 56, 0, 4), &RADAR, None));
     }
 }
