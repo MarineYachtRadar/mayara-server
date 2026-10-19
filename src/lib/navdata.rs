@@ -1808,8 +1808,7 @@ impl NavigationData {
 
         match parser.parse_sentence(s) {
             Ok(ParsedMessage::Rmc(rmc)) => {
-                check_rmc_motion(&rmc)
-                    .map_err(|e| RadarError::ParseNmea0183(format!("{s}: {e}")))?;
+                check_rmc_motion(&rmc).map_err(sentence_error)?;
                 set_position(rmc.latitude, rmc.longitude, "nmea0183");
                 set_rmc_motion(&rmc);
             }
@@ -1822,23 +1821,16 @@ impl NavigationData {
             }
             Ok(ParsedMessage::Vtg(vtg)) => {
                 let cog = nmea_angle(vtg.cog_true, "course").map_err(sentence_error)?;
-                let sog = vtg_sog(&vtg);
-                if let Some(sog) = sog
-                    && !(sog.is_finite() && sog >= 0.0)
-                {
-                    return Err(sentence_error(format!("speed {sog} m/s is out of range")));
-                }
+                check_nmea_speed(vtg.sog_knots, "kn").map_err(sentence_error)?;
+                check_nmea_speed(vtg.sog_kph, "km/h").map_err(sentence_error)?;
                 set_cog(cog);
-                set_sog(sog);
+                set_sog(vtg_sog(&vtg));
             }
 
             Err(e) => match e {
                 ParseError::UnsupportedSentenceType(_) => {}
-                ParseError::CorruptedSentence(e2) => {
-                    return Err(RadarError::ParseNmea0183(format!("{s}: {e2}")));
-                }
-                ParseError::InvalidSentence(e2) => {
-                    return Err(RadarError::ParseNmea0183(format!("{s}: {e2}")));
+                ParseError::CorruptedSentence(e2) | ParseError::InvalidSentence(e2) => {
+                    return Err(sentence_error(e2));
                 }
             },
             _ => {}
@@ -1880,23 +1872,24 @@ fn check_rmc_motion(rmc: &gnss::RmcData) -> Result<(), String> {
     if rmc.status_active != Some(true) {
         return Ok(());
     }
-    if let Some(cog) = rmc.bearing
-        && !(0.0..=FULL_CIRCLE_DEGREES).contains(&cog)
-    {
-        return Err(format!("course {cog}° is out of range"));
+    nmea_angle(rmc.bearing, "course")?;
+    check_nmea_speed(rmc.sog_knots, "kn")
+}
+
+/// A speed no GPS gives makes the sentence corrupt. Every speed field is
+/// checked, not just the one used, as a bad one means the rest is suspect.
+fn check_nmea_speed(speed: Option<f64>, unit: &str) -> Result<(), String> {
+    match speed {
+        Some(v) if !(v.is_finite() && v >= 0.0) => Err(format!("speed {v} {unit} is out of range")),
+        _ => Ok(()),
     }
-    if let Some(knots) = rmc.sog_knots
-        && !(knots.is_finite() && knots >= 0.0)
-    {
-        return Err(format!("speed {knots} kn is out of range"));
-    }
-    Ok(())
 }
 
 /// An NMEA 0183 heading or course in degrees, in radians; an error for a
 /// value no compass or GPS gives, as the sentence is corrupt.
 fn nmea_angle(degrees: Option<f64>, what: &str) -> Result<Option<f64>, String> {
     match degrees {
+        // `contains` rather than comparisons, so a NaN is rejected too.
         Some(d) if !(0.0..=FULL_CIRCLE_DEGREES).contains(&d) => {
             Err(format!("{what} {d}° is out of range"))
         }
@@ -1905,15 +1898,22 @@ fn nmea_angle(degrees: Option<f64>, what: &str) -> Result<Option<f64>, String> {
 }
 
 /// A Signal K heading or course in radians: `Some(None)` for a null, which
-/// withdraws it, and `None` for a value too far out of range to be an angle,
-/// which is dropped with a warning.
+/// withdraws it, and `None` for a value that is not a number or too far out
+/// of range to be an angle, which is dropped with a warning.
 fn signalk_angle(path: &str, value: &Value) -> Option<Option<f64>> {
+    if value.is_null() {
+        return Some(None);
+    }
     match value.as_f64() {
-        Some(angle) if !is_storable_angle(angle) => {
+        Some(angle) if is_storable_angle(angle) => Some(Some(angle)),
+        Some(angle) => {
             log::warn!("Signal K {path} of {angle} rad is out of range; ignored");
             None
         }
-        angle => Some(angle),
+        None => {
+            log::warn!("Signal K {path} of {value} is not a number; ignored");
+            None
+        }
     }
 }
 
@@ -2325,16 +2325,17 @@ mod tests {
             "$GPHDT,NaN,T*7A",
             "$GPVTG,720.0,T,,M,6.0,N,11.1,K,A*3F",
             "$GPVTG,90.0,T,,M,-6.0,N,-11.1,K,A*03",
+            "$GPVTG,90.0,T,,M,-6.0,N,11.1,K,A*2E",
         ] {
             let r = nmea0183_receiver().parse_nmea0183(sentence);
             assert!(
                 matches!(r, Err(RadarError::ParseNmea0183(_))),
                 "{sentence}: {r:?}"
             );
+            assert_eq!(get_heading_true(), None, "{sentence}");
+            assert_eq!(get_cog(), None, "{sentence}");
+            assert_eq!(get_sog(), None, "{sentence} sets nothing");
         }
-        assert_eq!(get_heading_true(), None);
-        assert_eq!(get_cog(), None);
-        assert_eq!(get_sog(), None, "a rejected sentence sets nothing");
     }
 
     #[test]
@@ -2363,6 +2364,22 @@ mod tests {
         signalk_value("navigation.headingTrue", 100.0.into());
         signalk_value("navigation.courseOverGroundTrue", (-100.0).into());
         signalk_value("navigation.headingMagnetic", 100.0.into());
+
+        assert_eq!(get_heading_true(), Some(1.0));
+        assert_eq!(get_cog(), Some(2.0));
+        assert_eq!(get_heading_magnetic(), Some(3.0));
+    }
+
+    #[test]
+    fn a_signalk_heading_or_course_that_is_not_a_number_is_ignored() {
+        let _globals = nav_globals();
+        signalk_value("navigation.headingTrue", 1.0.into());
+        signalk_value("navigation.courseOverGroundTrue", 2.0.into());
+        signalk_value("navigation.headingMagnetic", 3.0.into());
+
+        signalk_value("navigation.headingTrue", "north".into());
+        signalk_value("navigation.courseOverGroundTrue", serde_json::json!({}));
+        signalk_value("navigation.headingMagnetic", true.into());
 
         assert_eq!(get_heading_true(), Some(1.0));
         assert_eq!(get_cog(), Some(2.0));
