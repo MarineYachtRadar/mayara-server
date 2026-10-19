@@ -1797,8 +1797,10 @@ impl NavigationData {
 
         match parser.parse_sentence(s) {
             Ok(ParsedMessage::Rmc(rmc)) => {
+                check_rmc_motion(&rmc)
+                    .map_err(|e| RadarError::ParseNmea0183(format!("{s}: {e}")))?;
                 set_position(rmc.latitude, rmc.longitude, "nmea0183");
-                set_rmc_motion(&rmc).map_err(|e| RadarError::ParseNmea0183(format!("{s}: {e}")))?;
+                set_rmc_motion(&rmc);
             }
             Ok(ParsedMessage::Gll(gll)) => {
                 set_position(gll.latitude, gll.longitude, "nmea0183");
@@ -1835,7 +1837,7 @@ const FULL_CIRCLE_DEGREES: f64 = 360.0;
 /// to be trusted, and one without a status changes neither. An active fix
 /// sets only the fields it carries, so one that leaves them empty does not
 /// erase what VTG reported.
-fn set_rmc_motion(rmc: &gnss::RmcData) -> Result<(), String> {
+fn set_rmc_motion(rmc: &gnss::RmcData) {
     match rmc.status_active {
         Some(false) => {
             set_cog(None);
@@ -1843,9 +1845,6 @@ fn set_rmc_motion(rmc: &gnss::RmcData) -> Result<(), String> {
         }
         Some(true) => {
             if let Some(cog) = rmc.bearing {
-                if !(0.0..=FULL_CIRCLE_DEGREES).contains(&cog) {
-                    return Err(format!("course {cog}° is out of range"));
-                }
                 set_cog(Some(cog.to_radians()));
             }
             if let Some(knots) = rmc.sog_knots {
@@ -1853,6 +1852,24 @@ fn set_rmc_motion(rmc: &gnss::RmcData) -> Result<(), String> {
             }
         }
         None => {}
+    }
+}
+
+/// An active fix with an impossible course or speed is a corrupt sentence, so
+/// none of it is used.
+fn check_rmc_motion(rmc: &gnss::RmcData) -> Result<(), String> {
+    if rmc.status_active != Some(true) {
+        return Ok(());
+    }
+    if let Some(cog) = rmc.bearing
+        && !(0.0..=FULL_CIRCLE_DEGREES).contains(&cog)
+    {
+        return Err(format!("course {cog}° is out of range"));
+    }
+    if let Some(knots) = rmc.sog_knots
+        && !(knots.is_finite() && knots >= 0.0)
+    {
+        return Err(format!("speed {knots} kn is out of range"));
     }
     Ok(())
 }
@@ -2228,6 +2245,28 @@ mod tests {
         assert!(matches!(r, Err(RadarError::ParseNmea0183(_))), "{r:?}");
         assert_eq!(get_cog(), None);
         assert_eq!(get_sog(), None);
+    }
+
+    #[test]
+    fn a_negative_rmc_speed_is_a_sentence_error() {
+        let _globals = nav_globals();
+        let r = nmea0183_receiver()
+            .parse_nmea0183("$GPRMC,123519,A,4807.038,N,01131.000,E,-1.0,084.4,230394,003.1,W*42");
+
+        assert!(matches!(r, Err(RadarError::ParseNmea0183(_))), "{r:?}");
+        assert_eq!(get_cog(), None, "a rejected sentence sets nothing");
+        assert_eq!(get_sog(), None);
+        assert_eq!(get_radar_position(), None);
+    }
+
+    #[test]
+    fn an_rmc_course_of_a_full_circle_is_north() {
+        let _globals = nav_globals();
+        nmea0183_receiver()
+            .parse_nmea0183("$GPRMC,123519,A,4807.038,N,01131.000,E,022.4,360.0,230394,003.1,W*67")
+            .unwrap();
+
+        assert!(get_cog().unwrap().abs() < 1e-9, "{:?}", get_cog());
     }
 
     // ----- nav_status transport derivation -----
