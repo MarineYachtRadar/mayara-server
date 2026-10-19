@@ -1841,6 +1841,8 @@ impl NavigationData {
 
 const KPH_PER_KNOT: f64 = 1.852;
 const KPH_PER_METER_PER_SECOND: f64 = 3.6;
+// One factor rather than two steps, so no finite speed overflows on the way.
+const METERS_PER_SECOND_PER_KNOT: f64 = KPH_PER_KNOT / KPH_PER_METER_PER_SECOND;
 
 const FULL_CIRCLE_DEGREES: f64 = 360.0;
 
@@ -1859,7 +1861,7 @@ fn set_rmc_motion(rmc: &gnss::RmcData) {
                 set_cog(Some(cog.to_radians()));
             }
             if let Some(knots) = rmc.sog_knots {
-                set_sog(Some(knots * KPH_PER_KNOT / KPH_PER_METER_PER_SECOND));
+                set_sog(Some(knots * METERS_PER_SECOND_PER_KNOT));
             }
         }
         None => {}
@@ -1920,8 +1922,8 @@ fn signalk_angle(path: &str, value: &Value) -> Option<Option<f64>> {
 /// Speed over ground in m/s, the unit Signal K and the rest of mayara use.
 fn vtg_sog(vtg: &gnss::VtgData) -> Option<f64> {
     vtg.sog_kph
-        .or_else(|| vtg.sog_knots.map(|k| k * KPH_PER_KNOT))
         .map(|kph| kph / KPH_PER_METER_PER_SECOND)
+        .or_else(|| vtg.sog_knots.map(|k| k * METERS_PER_SECOND_PER_KNOT))
 }
 
 /// Our vessel's context from a Signal K hello, e.g.
@@ -2345,6 +2347,15 @@ mod tests {
             .parse_nmea0183("$GPHDT,90.0,T*0C")
             .unwrap();
         assert!((get_heading_true().unwrap() - 90f64.to_radians()).abs() < 1e-9);
+    }
+
+    #[test]
+    fn the_largest_vtg_speed_in_knots_converts_without_overflow() {
+        let _globals = nav_globals();
+        nmea0183_receiver()
+            .parse_nmea0183("$GPVTG,90.0,T,,M,1e308,N,,K,A*5B")
+            .unwrap();
+        assert!(get_sog().unwrap().is_finite(), "{:?}", get_sog());
     }
 
     fn signalk_value(path: &str, value: Value) {
