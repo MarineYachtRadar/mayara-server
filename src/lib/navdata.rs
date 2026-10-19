@@ -454,6 +454,16 @@ pub fn get_heading_magnetic() -> Option<f64> {
     None
 }
 
+/// Whether an angle in radians is one the heading and course setters take:
+/// they normalise anything within a turn either side of [0, 2π) and assert
+/// on the rest, so a value from the network must be checked against this
+/// first.
+fn is_storable_angle(radians: f64) -> bool {
+    use std::f64::consts::TAU;
+
+    radians > -TAU && radians < 2.0 * TAU
+}
+
 ///
 /// Set the heading in radians [0..2*PI>
 ///
@@ -466,7 +476,7 @@ pub(crate) fn set_heading_true(heading: Option<f64>, source: &str) {
 
     if let Some(h) = heading {
         assert!(
-            h > -TAU && h < 2.0 * TAU,
+            is_storable_angle(h),
             "set_heading_true: heading {h} rad ({} deg) from '{source}' is out of range",
             h.to_degrees()
         );
@@ -519,7 +529,7 @@ pub(crate) fn set_heading_magnetic(heading: Option<f64>, source: &str) {
 
     if let Some(h) = heading {
         assert!(
-            h > -TAU && h < 2.0 * TAU,
+            is_storable_angle(h),
             "set_heading_magnetic: heading {h} rad ({} deg) from '{source}' is out of range",
             h.to_degrees()
         );
@@ -669,7 +679,7 @@ fn store_cog(cog: Option<f64>) {
 
     if let Some(c) = cog {
         assert!(
-            c > -TAU && c < 2.0 * TAU,
+            is_storable_angle(c),
             "set_cog: COG {c} rad ({} deg) is out of range",
             c.to_degrees()
         );
@@ -1794,6 +1804,7 @@ impl NavigationData {
 
     fn parse_nmea0183(&mut self, s: &str) -> Result<(), RadarError> {
         let parser = self.nmea_parser.as_mut().unwrap();
+        let sentence_error = |e: String| RadarError::ParseNmea0183(format!("{s}: {e}"));
 
         match parser.parse_sentence(s) {
             Ok(ParsedMessage::Rmc(rmc)) => {
@@ -1806,11 +1817,19 @@ impl NavigationData {
                 set_position(gll.latitude, gll.longitude, "nmea0183");
             }
             Ok(ParsedMessage::Hdt(hdt)) => {
-                set_heading_true(hdt.heading_true.map(|h| h.to_radians()), "nmea0183");
+                let heading = nmea_angle(hdt.heading_true, "heading").map_err(sentence_error)?;
+                set_heading_true(heading, "nmea0183");
             }
             Ok(ParsedMessage::Vtg(vtg)) => {
-                set_cog(vtg.cog_true.map(|c| c.to_radians()));
-                set_sog(vtg_sog(&vtg));
+                let cog = nmea_angle(vtg.cog_true, "course").map_err(sentence_error)?;
+                let sog = vtg_sog(&vtg);
+                if let Some(sog) = sog
+                    && !(sog.is_finite() && sog >= 0.0)
+                {
+                    return Err(sentence_error(format!("speed {sog} m/s is out of range")));
+                }
+                set_cog(cog);
+                set_sog(sog);
             }
 
             Err(e) => match e {
@@ -1872,6 +1891,30 @@ fn check_rmc_motion(rmc: &gnss::RmcData) -> Result<(), String> {
         return Err(format!("speed {knots} kn is out of range"));
     }
     Ok(())
+}
+
+/// An NMEA 0183 heading or course in degrees, in radians; an error for a
+/// value no compass or GPS gives, as the sentence is corrupt.
+fn nmea_angle(degrees: Option<f64>, what: &str) -> Result<Option<f64>, String> {
+    match degrees {
+        Some(d) if !(0.0..=FULL_CIRCLE_DEGREES).contains(&d) => {
+            Err(format!("{what} {d}° is out of range"))
+        }
+        d => Ok(d.map(f64::to_radians)),
+    }
+}
+
+/// A Signal K heading or course in radians: `Some(None)` for a null, which
+/// withdraws it, and `None` for a value too far out of range to be an angle,
+/// which is dropped with a warning.
+fn signalk_angle(path: &str, value: &Value) -> Option<Option<f64>> {
+    match value.as_f64() {
+        Some(angle) if !is_storable_angle(angle) => {
+            log::warn!("Signal K {path} of {angle} rad is out of range; ignored");
+            None
+        }
+        angle => Some(angle),
+    }
 }
 
 /// Speed over ground in m/s, the unit Signal K and the rest of mayara use.
@@ -1976,16 +2019,19 @@ fn apply_signalk_value(values_entry: &Value, source: &str) {
             }
         }
         "navigation.headingTrue" => {
-            let heading = value.as_f64();
-            set_heading_true(heading, source);
-            if heading.is_some() {
-                mark_signalk_own_ship_nav_seen();
+            if let Some(heading) = signalk_angle(path, value) {
+                set_heading_true(heading, source);
+                if heading.is_some() {
+                    mark_signalk_own_ship_nav_seen();
+                }
             }
         }
         // Magnetic heading and variation are in radians (Signal K convention),
         // unlike the NMEA0183 HDT path which converts from degrees.
         "navigation.headingMagnetic" => {
-            set_heading_magnetic(value.as_f64(), source);
+            if let Some(heading) = signalk_angle(path, value) {
+                set_heading_magnetic(heading, source);
+            }
         }
         "navigation.magneticVariation" => {
             set_magnetic_variation(value.as_f64());
@@ -1994,7 +2040,9 @@ fn apply_signalk_value(values_entry: &Value, source: &str) {
             set_sog(value.as_f64());
         }
         "navigation.courseOverGroundTrue" => {
-            set_cog(value.as_f64());
+            if let Some(cog) = signalk_angle(path, value) {
+                set_cog(cog);
+            }
         }
         _ => {
             log::trace!("Ignored path '{}'", path);
@@ -2269,6 +2317,71 @@ mod tests {
         assert!(get_cog().unwrap().abs() < 1e-9, "{:?}", get_cog());
     }
 
+    #[test]
+    fn an_impossible_nmea_heading_or_course_is_a_sentence_error() {
+        let _globals = nav_globals();
+        for sentence in [
+            "$GPHDT,720.0,T*30",
+            "$GPHDT,NaN,T*7A",
+            "$GPVTG,720.0,T,,M,6.0,N,11.1,K,A*3F",
+            "$GPVTG,90.0,T,,M,-6.0,N,-11.1,K,A*03",
+        ] {
+            let r = nmea0183_receiver().parse_nmea0183(sentence);
+            assert!(
+                matches!(r, Err(RadarError::ParseNmea0183(_))),
+                "{sentence}: {r:?}"
+            );
+        }
+        assert_eq!(get_heading_true(), None);
+        assert_eq!(get_cog(), None);
+        assert_eq!(get_sog(), None, "a rejected sentence sets nothing");
+    }
+
+    #[test]
+    fn an_nmea_heading_is_stored_in_radians() {
+        let _globals = nav_globals();
+        nmea0183_receiver()
+            .parse_nmea0183("$GPHDT,90.0,T*0C")
+            .unwrap();
+        assert!((get_heading_true().unwrap() - 90f64.to_radians()).abs() < 1e-9);
+    }
+
+    fn signalk_value(path: &str, value: Value) {
+        apply_signalk_value(
+            &serde_json::json!({ "path": path, "value": value }),
+            "signalk",
+        );
+    }
+
+    #[test]
+    fn an_impossible_signalk_heading_or_course_is_ignored() {
+        let _globals = nav_globals();
+        signalk_value("navigation.headingTrue", 1.0.into());
+        signalk_value("navigation.courseOverGroundTrue", 2.0.into());
+        signalk_value("navigation.headingMagnetic", 3.0.into());
+
+        signalk_value("navigation.headingTrue", 100.0.into());
+        signalk_value("navigation.courseOverGroundTrue", (-100.0).into());
+        signalk_value("navigation.headingMagnetic", 100.0.into());
+
+        assert_eq!(get_heading_true(), Some(1.0));
+        assert_eq!(get_cog(), Some(2.0));
+        assert_eq!(get_heading_magnetic(), Some(3.0));
+    }
+
+    #[test]
+    fn a_null_signalk_heading_or_course_still_withdraws_it() {
+        let _globals = nav_globals();
+        signalk_value("navigation.headingTrue", 1.0.into());
+        signalk_value("navigation.courseOverGroundTrue", 2.0.into());
+
+        signalk_value("navigation.headingTrue", Value::Null);
+        signalk_value("navigation.courseOverGroundTrue", Value::Null);
+
+        assert_eq!(get_heading_true(), None);
+        assert_eq!(get_cog(), None);
+    }
+
     // ----- nav_status transport derivation -----
 
     #[test]
@@ -2454,6 +2567,7 @@ mod tests {
             STATIC_NAV.store(false, Ordering::Release);
             TRUE_HEADING_AUTHORITATIVE.store(false, Ordering::Release);
             set_heading_true(None, "test-reset");
+            set_heading_magnetic(None, "test-reset");
             set_position(None, None, "test-reset");
             set_cog(None);
             set_sog(None);
