@@ -434,7 +434,7 @@ impl RaymarineLocator {
                     // distinguishes one radar from another.
                     let hardware_id = format!("{:08x}", link_id);
 
-                    let location_info: RadarInfo = RadarInfo::new(
+                    let mut location_info: RadarInfo = RadarInfo::new(
                         radars,
                         &self.args,
                         Brand::Raymarine,
@@ -453,6 +453,9 @@ impl RaymarineLocator {
                         doppler,
                         false,
                     );
+                    // Before the link_id identified it, a Raymarine was keyed
+                    // by its report address.
+                    location_info.legacy_addr = report_addr;
 
                     return Ok(Some((location_info, model)));
                 } else {
@@ -1217,6 +1220,11 @@ mod tests {
         assert_eq!(
             info.addr, info.send_command_addr,
             "the radar is at its command address, not its multicast group"
+        );
+        assert_eq!(
+            crate::radar::legacy_address_key(&info),
+            "ray5362",
+            "settings saved before the hardware identity are keyed by the report address"
         );
         assert_eq!(
             info.report_addr,

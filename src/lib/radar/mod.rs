@@ -428,6 +428,11 @@ pub struct RadarInfo {
     pub stationary: bool,                // Is radar stationary (shore-based)?
     rotation_timestamp: Instant,
 
+    /// The address the radar was keyed by before it had a hardware
+    /// identity, to find settings saved under that key. `addr` unless the
+    /// brand used another.
+    pub(crate) legacy_addr: SocketAddrV4,
+
     /// Display name reported by the radar itself (Navico 0xC406 NAME tag), with
     /// the trailing marker stripped. `None` until the radar reports one. Drives
     /// [`SharedRadars::refresh_user_names`] so radars reporting the same name are
@@ -564,7 +569,7 @@ pub(crate) fn legacy_address_key(info: &RadarInfo) -> String {
         None,
         None,
         info.dual.as_deref(),
-        &info.addr,
+        &info.legacy_addr,
     )
 }
 
@@ -627,6 +632,7 @@ impl RadarInfo {
             spoke_data_addr,
             report_addr,
             send_command_addr,
+            legacy_addr: addr,
             legend,
             message_tx,
             ranges: Ranges::empty(),
