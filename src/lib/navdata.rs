@@ -703,6 +703,92 @@ fn store_sog(sog: Option<f64>) {
 }
 
 const NMEA0183_SERVICE_NAME: &str = "_nmea-0183._tcp.local.";
+/// The IANA `nmea-0183` port, where gateways, AIS receivers and multiplexers
+/// that announce nothing broadcast their sentences.
+const NMEA0183_UDP_PORT: u16 = 10110;
+/// How long an announced TCP service gets to turn up before a broadcaster is
+/// taken instead: a lost connection shows, a broadcast just stops.
+const TCP_SERVICE_PREFERENCE: Duration = Duration::from_secs(5);
+/// How long a broadcaster may go quiet before discovery starts over.
+const BROADCAST_QUIET_LIMIT: Duration = Duration::from_secs(30);
+
+/// Listens on the NMEA 0183 port alongside any other program on this host
+/// that does the same, as each of them should get the broadcasts.
+fn nmea0183_broadcast_listener() -> std::io::Result<UdpSocket> {
+    let socket = crate::network::new_socket()?;
+    #[cfg(unix)]
+    socket.set_reuse_port(true)?;
+    let addr = SocketAddr::from((std::net::Ipv4Addr::UNSPECIFIED, NMEA0183_UDP_PORT));
+    socket.bind(&addr.into())?;
+    UdpSocket::from_std(socket.into())
+}
+
+/// `socket`, connected to the first sender of navigation data from `from` on,
+/// on `interface` when discovery is restricted to one. Connected, it hears
+/// only that sender, as a TCP connection would. Pending forever without a
+/// socket, so a select! branch on it never fires.
+async fn nmea0183_broadcaster(
+    socket: Option<UdpSocket>,
+    from: tokio::time::Instant,
+    interface: Option<&str>,
+) -> std::io::Result<UdpSocket> {
+    let Some(socket) = socket else {
+        return std::future::pending().await;
+    };
+    let mut buf = [0; 2000];
+    loop {
+        let (len, sender) = socket.recv_from(&mut buf).await?;
+        if tokio::time::Instant::now() >= from
+            && is_on(interface, &sender)
+            && carries_navigation(&buf[..len])
+        {
+            socket.connect(sender).await?;
+            return Ok(socket);
+        }
+    }
+}
+
+fn is_on(interface: Option<&str>, sender: &SocketAddr) -> bool {
+    match (interface, sender) {
+        (None, _) => true,
+        (Some(name), SocketAddr::V4(v4)) => crate::network::is_on_interface(name, v4.ip()),
+        (Some(_), SocketAddr::V6(_)) => false,
+    }
+}
+
+/// Whether a datagram holds a checksummed sentence with position, heading or
+/// motion, which tells a navigation source from AIS or other traffic.
+fn carries_navigation(datagram: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(datagram) else {
+        return false;
+    };
+    let mut parser = NmeaParser::new();
+    text.lines().map(str::trim).any(|line| {
+        line.rfind('*').is_some_and(|star| star + 3 <= line.len())
+            && matches!(
+                parser.parse_sentence(line),
+                Ok(ParsedMessage::Rmc(_)
+                    | ParsedMessage::Gll(_)
+                    | ParsedMessage::Hdt(_)
+                    | ParsedMessage::Vtg(_))
+            )
+    })
+}
+
+/// Waits for `socket` to be readable, failing once it has been quiet for
+/// longer than `quiet_limit`.
+async fn readable_within(
+    socket: &UdpSocket,
+    quiet_limit: Option<Duration>,
+) -> Result<(), RadarError> {
+    match quiet_limit {
+        Some(limit) => tokio::time::timeout(limit, socket.readable())
+            .await
+            .map_err(|_| RadarError::Timeout)?
+            .map_err(RadarError::from),
+        None => socket.readable().await.map_err(RadarError::from),
+    }
+}
 
 /// Subscription for own-ship navigation data only
 const SUBSCRIBE_SELF: &str = "{\"context\":\"vessels.self\",\"subscribe\":[{\"path\":\"navigation.headingTrue\"},{\"path\":\"navigation.headingMagnetic\"},{\"path\":\"navigation.magneticVariation\"},{\"path\":\"navigation.position\"},{\"path\":\"navigation.speedOverGround\"},{\"path\":\"navigation.courseOverGroundTrue\"}]}\r\n";
@@ -864,7 +950,9 @@ enum Stream {
     /// resolved so the cooldown logic can mark the server silent on close.
     /// For non-Signal K (e.g. raw NMEA 0183) it is `None`.
     Tcp(TcpStream, Option<SocketAddr>),
-    Udp(UdpSocket),
+    /// UDP, with how long it may stay quiet before discovery starts over;
+    /// `None` for an address the user gave, which is kept however quiet.
+    Udp(UdpSocket, Option<Duration>),
     /// Signal K WebSocket. `peer` carries the discovery-time SocketAddr; the
     /// url string is the WS endpoint URL for logging.
     WebSocket(WsStream, String, SocketAddr),
@@ -1170,19 +1258,22 @@ impl NavigationData {
                         }
                     }
                 }
-                Ok(Stream::Udp(socket)) => {
+                Ok(Stream::Udp(socket, quiet_limit)) => {
                     log::info!(
                         "Listening to {} data via UDP from {}",
                         self.what,
+                        // A discovered broadcaster is connected to; a given
+                        // address is only bound.
                         socket
-                            .local_addr()
+                            .peer_addr()
+                            .or_else(|_| socket.local_addr())
                             .map(|a| a.to_string())
                             .unwrap_or_else(|_| "<unknown>".to_string())
                     );
                     // NMEA0183-over-UDP has no Signal K own-ship probe so
                     // it's outside the backoff path: success or failure
                     // here doesn't update consecutive_no_nav.
-                    match self.receive_udp_loop(socket, subsys).await {
+                    match self.receive_udp_loop(socket, quiet_limit, subsys).await {
                         Err(RadarError::Shutdown) => {
                             log::debug!("{} receive_loop shutdown", self.what);
                             return Ok(());
@@ -1278,7 +1369,9 @@ impl NavigationData {
         }
 
         if self.nmea0183_mode {
-            return self.find_mdns_nmea0183(&mdns, subsys, rx_ip_change).await;
+            return self
+                .find_mdns_nmea0183(&mdns, subsys, rx_ip_change, interface.as_deref())
+                .await;
         }
 
         let r = crate::signalk::find_mdns_service(
@@ -1304,11 +1397,25 @@ impl NavigationData {
         mdns: &ServiceDaemon,
         subsys: &SubsystemHandle,
         rx_ip_change: &mut Receiver<()>,
+        interface: Option<&str>,
     ) -> Result<Stream, RadarError> {
         let mut known_addresses: HashSet<SocketAddr> = HashSet::new();
         let locator = mdns
             .browse(NMEA0183_SERVICE_NAME)
             .expect("Failed to browse for NMEA0183 service");
+        let broadcast = match nmea0183_broadcast_listener() {
+            Ok(socket) => Some(socket),
+            Err(e) => {
+                log::debug!("NMEA0183: cannot listen on UDP port {NMEA0183_UDP_PORT}: {e}");
+                None
+            }
+        };
+        let broadcaster = nmea0183_broadcaster(
+            broadcast,
+            tokio::time::Instant::now() + TCP_SERVICE_PREFERENCE,
+            interface,
+        );
+        tokio::pin!(broadcaster);
 
         log::debug!("NMEA0183 find_mdns_service (re)start");
 
@@ -1323,6 +1430,12 @@ impl NavigationData {
                 _ = rx_ip_change.recv() => {
                     log::debug!("rx_ip_change");
                     r = Err(RadarError::IPAddressChanged);
+                    break;
+                },
+                socket = &mut broadcaster => {
+                    r = socket
+                        .map(|socket| Stream::Udp(socket, Some(BROADCAST_QUIET_LIMIT)))
+                        .map_err(RadarError::from);
                     break;
                 },
                 event = locator.recv_async() => {
@@ -1413,7 +1526,7 @@ impl NavigationData {
                 stream = UdpSocket::bind(addr) => {
                     match stream {
                         Ok(stream) => {
-                            return Ok(Stream::Udp(stream));
+                            return Ok(Stream::Udp(stream, None));
                         }
                         Err(e) => {
                             log::trace!("Failed to bind {} to {addr}: {e}", self.what);
@@ -1633,6 +1746,7 @@ impl NavigationData {
     async fn receive_udp_loop(
         &mut self,
         socket: UdpSocket,
+        quiet_limit: Option<Duration>,
         subsys: &SubsystemHandle,
     ) -> Result<(), RadarError> {
         loop {
@@ -1641,7 +1755,7 @@ impl NavigationData {
                     log::debug!("{} receive_loop shutdown", self.what);
                     return Ok(());
                 },
-                r = socket.readable() => {
+                r = readable_within(&socket, quiet_limit) => {
                     match r {
                         Ok(()) => {
                             let mut buf = [0; 2000];
@@ -1656,7 +1770,7 @@ impl NavigationData {
                         }
 
                         Err(e) => {
-                            return Err(e.into());
+                            return Err(e);
                         }
                     }
                 }
@@ -1926,6 +2040,96 @@ mod tests {
         let vtg = parsed_vtg("$GPVTG,0.0,T,,M,6.0,N,,K,A*25");
         let sog = vtg_sog(&vtg).unwrap();
         assert!((sog - 6.0 * 1852.0 / 3600.0).abs() < 1e-9, "{sog} m/s");
+    }
+
+    const NMEA_RMC: &str = "$GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W*6A";
+    const NMEA_AIS: &str = "!AIVDM,1,1,,B,177KQJ5000G?tO`K>RA1wUbN0TKH,0*5C";
+
+    #[test]
+    fn a_checksummed_position_sentence_carries_navigation() {
+        assert!(carries_navigation(NMEA_RMC.as_bytes()));
+        assert!(carries_navigation(
+            format!("{NMEA_AIS}\r\n{NMEA_RMC}\r\n").as_bytes()
+        ));
+    }
+
+    #[test]
+    fn ais_unchecked_or_corrupt_sentences_carry_no_navigation() {
+        assert!(!carries_navigation(NMEA_AIS.as_bytes()));
+        let unchecked = NMEA_RMC.split('*').next().unwrap();
+        assert!(!carries_navigation(unchecked.as_bytes()));
+        let corrupt = NMEA_RMC.replace("*6A", "*00");
+        assert!(!carries_navigation(corrupt.as_bytes()));
+        assert!(!carries_navigation(b"\xff\xfe not text"));
+    }
+
+    async fn loopback_socket() -> UdpSocket {
+        UdpSocket::bind("127.0.0.1:0").await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn the_broadcaster_is_the_first_sender_of_navigation_data() {
+        let listener = loopback_socket().await;
+        let to = listener.local_addr().unwrap();
+        let ais_sender = loopback_socket().await;
+        let nav_sender = loopback_socket().await;
+
+        ais_sender.send_to(NMEA_AIS.as_bytes(), to).await.unwrap();
+        nav_sender.send_to(NMEA_RMC.as_bytes(), to).await.unwrap();
+
+        let found = nmea0183_broadcaster(Some(listener), tokio::time::Instant::now(), None)
+            .await
+            .unwrap();
+        assert_eq!(found.peer_addr().unwrap(), nav_sender.local_addr().unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_broadcaster_heard_before_tcp_had_its_chance_is_not_taken_yet() {
+        let listener = loopback_socket().await;
+        let to = listener.local_addr().unwrap();
+        let early = loopback_socket().await;
+        let late = loopback_socket().await;
+        let from = tokio::time::Instant::now() + Duration::from_millis(100);
+
+        early.send_to(NMEA_RMC.as_bytes(), to).await.unwrap();
+        let search = nmea0183_broadcaster(Some(listener), from, None);
+        let send_late = async {
+            tokio::time::sleep_until(from + Duration::from_millis(50)).await;
+            late.send_to(NMEA_RMC.as_bytes(), to).await.unwrap();
+        };
+        let (found, ()) = tokio::join!(search, send_late);
+        assert_eq!(
+            found.unwrap().peer_addr().unwrap(),
+            late.local_addr().unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_broadcaster_off_the_named_interface_is_not_taken() {
+        let listener = loopback_socket().await;
+        let sender = loopback_socket().await;
+        sender
+            .send_to(NMEA_RMC.as_bytes(), listener.local_addr().unwrap())
+            .await
+            .unwrap();
+
+        let search = nmea0183_broadcaster(
+            Some(listener),
+            tokio::time::Instant::now(),
+            Some("no-such-interface"),
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), search)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_quiet_broadcaster_times_out() {
+        let socket = loopback_socket().await;
+        let r = readable_within(&socket, Some(Duration::from_millis(20))).await;
+        assert!(matches!(r, Err(RadarError::Timeout)), "{r:?}");
     }
 
     // ----- nav_status transport derivation -----

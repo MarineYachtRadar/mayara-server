@@ -126,7 +126,10 @@ pub struct Cli {
     #[arg(short, long, value_parser = validate_navigation_address)]
     pub navigation_address: Option<String>,
 
-    /// Use NMEA 0183 for navigation service instead of Signal K
+    /// Use NMEA 0183 for navigation service instead of Signal K.
+    ///
+    /// Without `-n` it is found as an announced `_nmea-0183._tcp` service,
+    /// or else as a sender of NMEA 0183 broadcasts on UDP port 10110.
     #[arg(long)]
     pub nmea0183: bool,
 

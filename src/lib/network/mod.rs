@@ -345,6 +345,21 @@ pub(crate) fn match_ipv4(addr: &Ipv4Addr, bcast: &Ipv4Addr, netmask: &Ipv4Addr) 
     r == b
 }
 
+/// Whether `ip` is on one of the subnets of the interface called `name`.
+pub(crate) fn is_on_interface(name: &str, ip: &Ipv4Addr) -> bool {
+    use network_interface::{NetworkInterface, NetworkInterfaceConfig};
+
+    NetworkInterface::show()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|itf| itf.name == name)
+        .flat_map(|itf| itf.addr)
+        .any(|addr| match (addr.ip(), addr.netmask()) {
+            (IpAddr::V4(own), Some(IpAddr::V4(mask))) => match_ipv4(ip, &own, &mask),
+            _ => false,
+        })
+}
+
 /// Whether a unicast command sent to `dst` would actually leave by the
 /// interface the radar was discovered on.
 ///
@@ -674,8 +689,16 @@ mod send_socket_tests {
 
 #[cfg(test)]
 mod host_address_tests {
-    use super::is_host_address;
+    use super::{interface_for, is_host_address, is_on_interface};
     use std::net::Ipv4Addr;
+
+    #[test]
+    fn an_address_on_an_interfaces_subnet_is_on_it() {
+        let (loopback, _) = interface_for(&Ipv4Addr::LOCALHOST).unwrap();
+        assert!(is_on_interface(&loopback, &Ipv4Addr::new(127, 0, 0, 2)));
+        assert!(!is_on_interface(&loopback, &Ipv4Addr::new(203, 0, 113, 7)));
+        assert!(!is_on_interface("no-such-interface", &Ipv4Addr::LOCALHOST));
+    }
 
     #[test]
     fn loopback_is_a_host_address() {

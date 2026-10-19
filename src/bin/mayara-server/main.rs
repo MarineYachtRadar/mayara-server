@@ -105,7 +105,7 @@ async fn main() -> Result<()> {
             "NMEA0183 mode activated; will load GPS position, heading and date/time from {}",
             args.navigation_address
                 .as_ref()
-                .unwrap_or(&"MDNS".to_string())
+                .unwrap_or(&"mDNS or UDP port 10110".to_string())
         );
     }
 
