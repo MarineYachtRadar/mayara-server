@@ -413,8 +413,13 @@ impl RaymarineLocator {
                     // address; the report.rs code only reads report_addr.port()
                     // (with nic_addr) to bind our local end of the connected
                     // socket.
+                    //
+                    // Otherwise the report address is a multicast group, which
+                    // is where the data goes, not where the radar is. The
+                    // command address is where the radar is reached: the radar
+                    // itself, or the W3 bridge that forwards to it.
                     let beacon_report: SocketAddrV4 = data.report.into();
-                    let radar_addr: SocketAddrV4 = if beacon_report.ip().is_unspecified() {
+                    let report_addr: SocketAddrV4 = if beacon_report.ip().is_unspecified() {
                         radar_send
                     } else {
                         beacon_report
@@ -439,10 +444,10 @@ impl RaymarineLocator {
                         0,
                         spokes_per_revolution,
                         max_spoke_len,
-                        radar_addr,
+                        radar_send,
                         nic_addr,
-                        radar_addr,
-                        radar_addr,
+                        report_addr,
+                        report_addr,
                         radar_send,
                         |id, tx| settings::new(id, tx, &self.args, info.model),
                         doppler,
@@ -1208,6 +1213,10 @@ mod tests {
         assert_eq!(
             info.send_command_addr,
             SocketAddrV4::new(Ipv4Addr::new(10, 18, 106, 155), 2573)
+        );
+        assert_eq!(
+            info.addr, info.send_command_addr,
+            "the radar is at its command address, not its multicast group"
         );
         assert_eq!(
             info.report_addr,
