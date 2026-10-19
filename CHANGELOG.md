@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 3.15.0 (2026-10-19)
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### 🚀 Features
+* feat: add --version / -V by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/751
+* feat(garmin): wake the radar without a chartplotter by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/764
+* feat(navdata): find NMEA 0183 broadcasts on UDP 10110 by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/784
+### 🐛 Fixes
+* fix(windows): link the C runtime statically by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/749
+* fix(arpa): join an echo across spokes the radar skips by @dirkwa in https://github.com/MarineYachtRadar/mayara-server/pull/755
+* fix(gui): draw spokes whose length is not a multiple of 4 by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/757
+* fix(gui): let the overview page scroll by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/752
+* fix(gui): show the first-run tour only once by @dirkwa in https://github.com/MarineYachtRadar/mayara-server/pull/756
+* fix(gui): place short spokes at their reported range by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/763
+* fix(locator): rediscover radars after address loss by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/761
+* fix(garmin): use the address on the radar's subnet by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/762
+* fix(navdata): subscribe to AIS paths only, not every path by @inspirity in https://github.com/MarineYachtRadar/mayara-server/pull/758
+* fix(navdata): take own ship from the hello, subscribe once by @inspirity in https://github.com/MarineYachtRadar/mayara-server/pull/759
+* fix(garmin): report Range B transmitting while the radar transmits by @inspirity in https://github.com/MarineYachtRadar/mayara-server/pull/760
+* fix(raymarine): command from the radar's subnet by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/768
+* fix(raymarine): send NavData from its own port by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/769
+* fix(locator): ignore our own packets from any address by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/770
+* fix(garmin): show the radar's own model name by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/765
+* fix(koden): keep mayara running when a Koden radar is found by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/778
+* fix(network): prefer the routed on-subnet address by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/771
+* fix(navdata): convert NMEA VTG speed to m/s correctly by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/780
+* fix(raymarine): show the radar's own IP address by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/782
+* fix(navdata): take SOG and COG from NMEA RMC by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/783
+* fix(navdata): drop impossible headings and courses by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/786
+### 📦 Dependencies
+* build(deps): bump the cargo-minor-patch group with 6 updates by @dependabot[bot] in https://github.com/MarineYachtRadar/mayara-server/pull/754
+* build(deps): bump the cargo-minor-patch group with 5 updates by @dependabot[bot] in https://github.com/MarineYachtRadar/mayara-server/pull/767
+
+## New Contributors
+* @inspirity made their first contribution in https://github.com/MarineYachtRadar/mayara-server/pull/758
+
+**Full Changelog**: https://github.com/MarineYachtRadar/mayara-server/compare/v3.14.0...v3.15.0
+
 ## 3.14.0 (2026-10-09)
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
