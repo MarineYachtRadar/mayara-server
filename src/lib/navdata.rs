@@ -1798,6 +1798,7 @@ impl NavigationData {
         match parser.parse_sentence(s) {
             Ok(ParsedMessage::Rmc(rmc)) => {
                 set_position(rmc.latitude, rmc.longitude, "nmea0183");
+                set_rmc_motion(&rmc).map_err(|e| RadarError::ParseNmea0183(format!("{s}: {e}")))?;
             }
             Ok(ParsedMessage::Gll(gll)) => {
                 set_position(gll.latitude, gll.longitude, "nmea0183");
@@ -1827,6 +1828,34 @@ impl NavigationData {
 
 const KPH_PER_KNOT: f64 = 1.852;
 const KPH_PER_METER_PER_SECOND: f64 = 3.6;
+
+const FULL_CIRCLE_DEGREES: f64 = 360.0;
+
+/// A void fix (status `V`) withdraws course and speed, as its motion is not
+/// to be trusted, and one without a status changes neither. An active fix
+/// sets only the fields it carries, so one that leaves them empty does not
+/// erase what VTG reported.
+fn set_rmc_motion(rmc: &gnss::RmcData) -> Result<(), String> {
+    match rmc.status_active {
+        Some(false) => {
+            set_cog(None);
+            set_sog(None);
+        }
+        Some(true) => {
+            if let Some(cog) = rmc.bearing {
+                if !(0.0..=FULL_CIRCLE_DEGREES).contains(&cog) {
+                    return Err(format!("course {cog}° is out of range"));
+                }
+                set_cog(Some(cog.to_radians()));
+            }
+            if let Some(knots) = rmc.sog_knots {
+                set_sog(Some(knots * KPH_PER_KNOT / KPH_PER_METER_PER_SECOND));
+            }
+        }
+        None => {}
+    }
+    Ok(())
+}
 
 /// Speed over ground in m/s, the unit Signal K and the rest of mayara use.
 fn vtg_sog(vtg: &gnss::VtgData) -> Option<f64> {
@@ -2130,6 +2159,75 @@ mod tests {
         let socket = loopback_socket().await;
         let r = readable_within(&socket, Some(Duration::from_millis(20))).await;
         assert!(matches!(r, Err(RadarError::Timeout)), "{r:?}");
+    }
+
+    const ACTIVE_RMC: &str = "$GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W*6A";
+
+    fn nmea0183_receiver() -> NavigationData {
+        NavigationData::new(cli(&["--nmea0183"]))
+    }
+
+    #[test]
+    fn rmc_sets_course_in_radians_and_speed_in_meters_per_second() {
+        let _globals = nav_globals();
+        nmea0183_receiver().parse_nmea0183(ACTIVE_RMC).unwrap();
+
+        assert!((get_cog().unwrap() - 84.4f64.to_radians()).abs() < 1e-9);
+        assert!((get_sog().unwrap() - 22.4 * 1852.0 / 3600.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_void_rmc_fix_withdraws_course_and_speed() {
+        let _globals = nav_globals();
+        let mut receiver = nmea0183_receiver();
+        receiver.parse_nmea0183(ACTIVE_RMC).unwrap();
+        receiver
+            .parse_nmea0183("$GPRMC,123519,V,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W*7D")
+            .unwrap();
+
+        assert_eq!(get_cog(), None);
+        assert_eq!(get_sog(), None);
+    }
+
+    #[test]
+    fn an_rmc_fix_without_motion_keeps_what_vtg_reported() {
+        let _globals = nav_globals();
+        let mut receiver = nmea0183_receiver();
+        receiver
+            .parse_nmea0183("$GPVTG,90.0,T,,M,6.0,N,11.1,K,A*03")
+            .unwrap();
+        receiver
+            .parse_nmea0183("$GPRMC,123519,A,4807.038,N,01131.000,E,,,230394,003.1,W*66")
+            .unwrap();
+
+        assert!((get_cog().unwrap() - 90f64.to_radians()).abs() < 1e-9);
+        assert!((get_sog().unwrap() - 11.1 / 3.6).abs() < 1e-9);
+    }
+
+    #[test]
+    fn an_rmc_fix_without_a_status_changes_no_motion() {
+        let _globals = nav_globals();
+        let mut receiver = nmea0183_receiver();
+        receiver
+            .parse_nmea0183("$GPVTG,90.0,T,,M,6.0,N,11.1,K,A*03")
+            .unwrap();
+        receiver
+            .parse_nmea0183("$GPRMC,123519,,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W*2B")
+            .unwrap();
+
+        assert!((get_cog().unwrap() - 90f64.to_radians()).abs() < 1e-9);
+        assert!((get_sog().unwrap() - 11.1 / 3.6).abs() < 1e-9);
+    }
+
+    #[test]
+    fn an_rmc_course_beyond_a_full_circle_is_a_sentence_error() {
+        let _globals = nav_globals();
+        let r = nmea0183_receiver()
+            .parse_nmea0183("$GPRMC,123519,A,4807.038,N,01131.000,E,022.4,720.0,230394,003.1,W*67");
+
+        assert!(matches!(r, Err(RadarError::ParseNmea0183(_))), "{r:?}");
+        assert_eq!(get_cog(), None);
+        assert_eq!(get_sog(), None);
     }
 
     // ----- nav_status transport derivation -----
