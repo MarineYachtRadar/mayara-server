@@ -243,6 +243,10 @@ impl Command {
         self.send(CommandMode::Request, CommandId::JammingAble, &[])
             .await?; // $RE8
 
+        // The radar sends $N7D only when a signal bit changes, so ask.
+        self.send(CommandMode::Request, CommandId::Alarm, &[])
+            .await?; // $R7D
+
         // STC (Sensitivity Time Control) curves
         if self.controls.contains_key(&ControlId::NearStcCurve) {
             self.send(CommandMode::Request, CommandId::NearSTC, &[])
@@ -1394,6 +1398,7 @@ mod tests {
                 "$REC",       // transmit channel
                 "$R77",       // no-transmit sectors
                 "$RE8",       // anti-jamming
+                "$R7D",       // signal alarms
                 "$R85",       // near STC curve
                 "$R86",       // middle STC curve
                 "$R87",       // far STC curve

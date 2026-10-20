@@ -69,13 +69,17 @@ const SIGNALS_PRESENT_MASK: u32 = 0xF;
 const NN3_SUPPLY_12V: u32 = 3;
 const NN3_SUPPLY_5V: u32 = 4;
 
-/// The signals `status` reports missing. A radar only drives them while it
-/// transmits, so outside Transmit none is missing.
-fn missing_signals(status: u32, transmitting: bool) -> u32 {
+/// The signals that count as missing after `status`, given those that did
+/// before. The antenna stops in standby, so only a transmitting radar can lose
+/// a signal; one already lost stays lost until `status` sees it again, because
+/// a DRS-NXT that loses its heading line or bearing pulses for about 20 s
+/// drops itself to standby and the alarm is the reason why.
+fn missing_signals(missing: u32, status: u32, transmitting: bool) -> u32 {
+    let absent = !status & SIGNALS_PRESENT_MASK;
     if transmitting {
-        !status & SIGNALS_PRESENT_MASK
+        absent
     } else {
-        0
+        missing & absent
     }
 }
 
@@ -832,7 +836,6 @@ impl FurunoReportReceiver {
                 // claim on it.
                 if generic_state != Power::Transmit {
                     self.transmit_is_ours = None;
-                    self.set_missing_signals(0);
                 }
                 let target = self.common_for_range(drid);
                 target.set_value(&ControlId::Power, power_value);
@@ -1244,7 +1247,11 @@ impl FurunoReportReceiver {
                 {
                     let transmitting =
                         self.common.info.controls.get_status() == Some(Power::Transmit);
-                    self.set_missing_signals(missing_signals(status as u32, transmitting));
+                    self.set_missing_signals(missing_signals(
+                        self.missing_signals,
+                        status as u32,
+                        transmitting,
+                    ));
                 }
             }
 
@@ -2606,18 +2613,28 @@ mod tests {
     }
 
     /// A transmitting radar flags each signal it sees; a clear bit is a lost
-    /// signal. A FAR-2127 sent `$N7D,15` with all four present.
+    /// signal. A FAR-2127 sent `$N7D,15` with all four present, a DRS4D-NXT
+    /// `$N7D,64543` whose bits above the low four are boot leftovers.
     #[test]
-    fn a_clear_signal_bit_is_missing_only_while_transmitting() {
-        assert_eq!(missing_signals(15, true), 0);
-        assert_eq!(missing_signals(0xFC1F, true), 0);
-        assert_eq!(missing_signals(0b1011, true), 0x4);
-        assert_eq!(missing_signals(0, true), SIGNALS_PRESENT_MASK);
-        assert_eq!(missing_signals(0, false), 0);
+    fn a_clear_signal_bit_is_lost_only_while_transmitting() {
+        assert_eq!(missing_signals(0, 15, true), 0);
+        assert_eq!(missing_signals(0, 0xFC1F, true), 0);
+        assert_eq!(missing_signals(0, 0b1011, true), 0x4);
+        assert_eq!(missing_signals(0, 0, true), SIGNALS_PRESENT_MASK);
+        assert_eq!(missing_signals(0, 0, false), 0);
     }
 
-    /// A lost signal is raised while the radar transmits, clears when the
-    /// signal returns, and clears again when the radar leaves Transmit.
+    /// A signal lost while transmitting stays lost through standby, where the
+    /// radar may have put itself because of it, until the radar sees it again.
+    #[test]
+    fn a_lost_signal_stays_lost_until_it_returns() {
+        assert_eq!(missing_signals(0x1, 0, false), 0x1);
+        assert_eq!(missing_signals(0x1, 0xF, false), 0);
+        assert_eq!(missing_signals(0x3, 0b1101, false), 0x2);
+    }
+
+    /// A lost signal is raised while the radar transmits, survives standby,
+    /// and clears when the signal returns.
     #[tokio::test]
     async fn a_lost_signal_is_raised_while_transmitting() {
         let mut receiver = nxt_receiver();
@@ -2632,9 +2649,16 @@ mod tests {
         receiver.process_report("$N7D,15,0,0,0").unwrap();
         assert_eq!(receiver.missing_signals, 0, "trigger back");
 
-        receiver.process_report("$N7D,7,0,0,0").unwrap();
+        receiver.process_report("$N7D,14,0,0,0").unwrap();
         receiver.process_report("$N69,1,0,0,60,300,0").unwrap();
-        assert_eq!(receiver.missing_signals, 0, "back to standby");
+        receiver.process_report("$N7D,0,0,0,0").unwrap();
+        assert_eq!(
+            receiver.missing_signals, 0x1,
+            "heading still lost in standby"
+        );
+
+        receiver.process_report("$N7D,1,0,0,0").unwrap();
+        assert_eq!(receiver.missing_signals, 0, "heading back");
     }
 
     /// `$NF5` subs 3 and 4 are the 12 V and 5 V rails in hundredths of a
