@@ -55,6 +55,30 @@ const RECONNECT_BACKOFF_MAX: Duration = Duration::from_secs(60);
 /// A session that survived this long counts as stable: reset the backoff.
 const RECONNECT_STABLE_AFTER: Duration = Duration::from_secs(60);
 
+/// The signals a transmitting radar flags as present in the first field of
+/// `$N7D`, each with the alarm raised while its bit is clear.
+const SIGNAL_ALARMS: [(u32, &str); 4] = [
+    (0x1, "Heading line signal lost"),
+    (0x2, "Azimuth signal lost"),
+    (0x4, "Trigger signal lost"),
+    (0x8, "Video signal lost"),
+];
+const SIGNALS_PRESENT_MASK: u32 = 0xF;
+
+/// `$NF5` subs that carry a supply rail in hundredths of a volt.
+const NN3_SUPPLY_12V: u32 = 3;
+const NN3_SUPPLY_5V: u32 = 4;
+
+/// The signals `status` reports missing. A radar only drives them while it
+/// transmits, so outside Transmit none is missing.
+fn missing_signals(status: u32, transmitting: bool) -> u32 {
+    if transmitting {
+        !status & SIGNALS_PRESENT_MASK
+    } else {
+        0
+    }
+}
+
 /// Split out from the connection loop so the policy can be exercised without a
 /// radar: the loop supplies real elapsed times and sleeps.
 fn next_reconnect_backoff(
@@ -137,7 +161,8 @@ pub(crate) struct FurunoReportReceiver {
     prev_spoke: [Vec<u8>; 2],
     prev_angle: [u16; 2],
     guard_zone_alarm: [bool; 2],
-    alarm_active: bool,
+    /// `SIGNAL_ALARMS` bits currently raised as notifications.
+    missing_signals: u32,
     /// Precomputed raw-byte → legend-index lookup tables, one per range
     /// (index 0 = Range A, 1 = Range B). Range A and B can have independent
     /// Target Analyzer state in dual-range mode, so each needs its own LUT.
@@ -225,9 +250,31 @@ impl FurunoReportReceiver {
             transmit_is_ours: None,
             prev_angle: [0, 0],
             guard_zone_alarm: [false, false],
-            alarm_active: false,
+            missing_signals: 0,
             wire_to_legend,
             target_analyzer_known: [initial_ta_known, initial_ta_known],
+        }
+    }
+
+    /// Raise a notification for each signal that went missing and clear it
+    /// for each that came back.
+    fn set_missing_signals(&mut self, missing: u32) {
+        let changed = missing ^ self.missing_signals;
+        self.missing_signals = missing;
+        for (bit, name) in SIGNAL_ALARMS {
+            if changed & bit == 0 {
+                continue;
+            }
+            let active = missing & bit != 0;
+            if active {
+                log::warn!("{}: {}", self.common.key, name);
+            } else {
+                log::info!("{}: {} cleared", self.common.key, name);
+            }
+            self.common
+                .info
+                .controls
+                .send_radar_error_notification(bit, Some(name), active);
         }
     }
 
@@ -785,6 +832,7 @@ impl FurunoReportReceiver {
                 // claim on it.
                 if generic_state != Power::Transmit {
                     self.transmit_is_ours = None;
+                    self.set_missing_signals(0);
                 }
                 let target = self.common_for_range(drid);
                 target.set_value(&ControlId::Power, power_value);
@@ -1189,24 +1237,14 @@ impl FurunoReportReceiver {
             }
 
             CommandId::Alarm => {
-                // $N7D,<type>,<d1>,<d2>,<d3> — generic radar alarm; idle = all zero.
-                // Bit meanings not yet decoded; log raw values on state change.
-                if numbers.len() >= 4 {
-                    let alarm_type = numbers[0] as u32;
-                    if alarm_type != 0 && !self.alarm_active {
-                        log::warn!(
-                            "{}: radar alarm type {} details {} {} {}",
-                            self.common.key,
-                            alarm_type,
-                            numbers[1] as u32,
-                            numbers[2] as u32,
-                            numbers[3] as u32,
-                        );
-                        self.alarm_active = true;
-                    } else if self.alarm_active {
-                        log::info!("{}: radar alarm cleared", self.common.key);
-                        self.alarm_active = false;
-                    }
+                // $N7D,<status>,<d1>,<d2>,<d3> — status bits flag the signals
+                // the radar sees; see SIGNAL_ALARMS.
+                if let Some(&status) = numbers.first()
+                    && self.model.reports_signal_alarms()
+                {
+                    let transmitting =
+                        self.common.info.controls.get_status() == Some(Power::Transmit);
+                    self.set_missing_signals(missing_signals(status as u32, transmitting));
                 }
             }
 
@@ -1246,6 +1284,22 @@ impl FurunoReportReceiver {
                 }
             }
 
+            CommandId::NN3Command => {
+                // $NF5,<sub>,<p1>,<p2>,<p3>,<p4>
+                if numbers.len() >= 2 {
+                    let control_id = match numbers[0] as u32 {
+                        NN3_SUPPLY_12V => Some(ControlId::Supply12Voltage),
+                        NN3_SUPPLY_5V => Some(ControlId::Supply5Voltage),
+                        _ => None,
+                    };
+                    if let Some(control_id) = control_id
+                        && self.common.info.controls.contains_key(&control_id)
+                    {
+                        self.common.set_value(&control_id, numbers[1]);
+                    }
+                }
+            }
+
             CommandId::NearSTC | CommandId::MiddleSTC | CommandId::FarSTC | CommandId::STCRange => {
                 if let Some(&value) = numbers.first() {
                     // Single-field responses ($N85,2) have no drid — default to range A.
@@ -1267,7 +1321,6 @@ impl FurunoReportReceiver {
 
             // Silently handled (no state to update)
             CommandId::AliveCheck
-            | CommandId::NN3Command
             | CommandId::CustomPictureAll
             | CommandId::AntennaType
             | CommandId::DispMode
@@ -2550,6 +2603,54 @@ mod tests {
                 .unwrap();
             assert_eq!((control.value, control.auto), (Some(3.), Some(true)));
         }
+    }
+
+    /// A transmitting radar flags each signal it sees; a clear bit is a lost
+    /// signal. A FAR-2127 sent `$N7D,15` with all four present.
+    #[test]
+    fn a_clear_signal_bit_is_missing_only_while_transmitting() {
+        assert_eq!(missing_signals(15, true), 0);
+        assert_eq!(missing_signals(0xFC1F, true), 0);
+        assert_eq!(missing_signals(0b1011, true), 0x4);
+        assert_eq!(missing_signals(0, true), SIGNALS_PRESENT_MASK);
+        assert_eq!(missing_signals(0, false), 0);
+    }
+
+    /// A lost signal is raised while the radar transmits, clears when the
+    /// signal returns, and clears again when the radar leaves Transmit.
+    #[tokio::test]
+    async fn a_lost_signal_is_raised_while_transmitting() {
+        let mut receiver = nxt_receiver();
+
+        receiver.process_report("$N7D,0,0,0,0").unwrap();
+        assert_eq!(receiver.missing_signals, 0, "standby");
+
+        receiver.process_report("$N69,2,0,0,60,300,0").unwrap();
+        receiver.process_report("$N7D,11,0,0,0").unwrap();
+        assert_eq!(receiver.missing_signals, 0x4, "trigger lost");
+
+        receiver.process_report("$N7D,15,0,0,0").unwrap();
+        assert_eq!(receiver.missing_signals, 0, "trigger back");
+
+        receiver.process_report("$N7D,7,0,0,0").unwrap();
+        receiver.process_report("$N69,1,0,0,60,300,0").unwrap();
+        assert_eq!(receiver.missing_signals, 0, "back to standby");
+    }
+
+    /// `$NF5` subs 3 and 4 are the 12 V and 5 V rails in hundredths of a
+    /// volt; TimeZero showed 12.06V and 5.04V for a DRS2D-NXT.
+    #[tokio::test]
+    async fn the_supply_rails_are_read_in_hundredths_of_a_volt() {
+        let mut receiver = nxt_receiver();
+        let volts = |receiver: &FurunoReportReceiver, id: &ControlId| {
+            receiver.common.info.controls.get(id).unwrap().value
+        };
+
+        receiver.process_report("$NF5,3,1206,0,0,0").unwrap();
+        receiver.process_report("$NF5,4,504,0,0,0").unwrap();
+
+        assert_eq!(volts(&receiver, &ControlId::Supply12Voltage), Some(12.06));
+        assert_eq!(volts(&receiver, &ControlId::Supply5Voltage), Some(5.04));
     }
 
     /// A report that should carry a number but does not must be refused, not

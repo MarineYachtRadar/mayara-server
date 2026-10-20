@@ -14,6 +14,9 @@ use crate::{
 
 use super::protocol::{RadarModel, TX_CHANNEL_MAX};
 
+/// `$NF5` reports supply rails in hundredths of a volt.
+const SUPPLY_VOLTAGE_SCALE: f64 = 100.;
+
 pub(crate) fn new(
     radar_id: String,
     sk_client_tx: tokio::sync::broadcast::Sender<SignalKDelta>,
@@ -434,6 +437,14 @@ pub(crate) fn update_when_model_known(info: &mut RadarInfo, model: RadarModel, v
     if model.is_nxt() {
         info.controls
             .add(new_list(ControlId::EchoFormat, &["IMO", "Tile"]));
+        for control_id in [ControlId::Supply12Voltage, ControlId::Supply5Voltage] {
+            info.controls.add(
+                new_numeric(control_id, 0., u16::MAX as f64)
+                    .read_only(true)
+                    .wire_scale_factor(SUPPLY_VOLTAGE_SCALE, true)
+                    .wire_units(Units::Volts),
+            );
+        }
     }
     if cap.dual_range {
         info.dual_range = true;

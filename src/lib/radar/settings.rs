@@ -174,6 +174,8 @@ pub enum ControlId {
     AntiJamming,
     EchoFormat,
     AutoStandby,
+    Supply12Voltage,
+    Supply5Voltage,
 }
 
 impl Display for ControlId {
@@ -258,7 +260,10 @@ impl ControlId {
             | ControlId::Spokes
             | ControlId::SpokeLength
             | ControlId::PulseWidth => Category::Info,
-            ControlId::SupplyVoltage | ControlId::DeviceTemperature => Category::Info,
+            ControlId::SupplyVoltage
+            | ControlId::Supply12Voltage
+            | ControlId::Supply5Voltage
+            | ControlId::DeviceTemperature => Category::Info,
             ControlId::ScanAverageMode | ControlId::ScanAverageSensitivity => Category::Advanced,
             ControlId::ParkPosition | ControlId::AutoStandby => Category::Installation,
             ControlId::TransmitChannel => Category::Advanced,
@@ -373,6 +378,8 @@ impl ControlId {
             ControlId::PulseWidth => "Current transmit pulse width selected by the radar",
             ControlId::UserName => "User defined name for the radar",
             ControlId::SupplyVoltage => "DC supply voltage at the radar",
+            ControlId::Supply12Voltage => "12 V supply rail measured inside the radar",
+            ControlId::Supply5Voltage => "5 V supply rail measured inside the radar",
             ControlId::DeviceTemperature => "Internal temperature of the radar",
             ControlId::ScanAverageMode => {
                 "Scan-to-scan averaging reduces noise by comparing successive sweeps"
@@ -473,6 +480,8 @@ impl ControlId {
             ControlId::UserName => "Custom name",
             ControlId::WarmupTime => "Warmup time",
             ControlId::SupplyVoltage => "Supply voltage",
+            ControlId::Supply12Voltage => "12 V supply",
+            ControlId::Supply5Voltage => "5 V supply",
             ControlId::DeviceTemperature => "Device temperature",
             ControlId::ScanAverageMode => "Scan average",
             ControlId::ScanAverageSensitivity => "Scan average sensitivity",
@@ -560,6 +569,8 @@ impl ControlId {
             ControlId::RangeUnits => ControlDestination::Command,
             ControlId::UserName => ControlDestination::Internal,
             ControlId::SupplyVoltage => ControlDestination::ReadOnly,
+            ControlId::Supply12Voltage => ControlDestination::ReadOnly,
+            ControlId::Supply5Voltage => ControlDestination::ReadOnly,
             ControlId::DeviceTemperature => ControlDestination::ReadOnly,
             ControlId::ScanAverageMode => ControlDestination::Command,
             ControlId::ScanAverageSensitivity => ControlDestination::Command,

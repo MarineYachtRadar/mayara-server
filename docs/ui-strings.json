@@ -341,6 +341,16 @@
       "description": "Distance boundary between STC range bands"
     },
     {
+      "id": "supply12Voltage",
+      "name": "12 V supply",
+      "description": "12 V supply rail measured inside the radar"
+    },
+    {
+      "id": "supply5Voltage",
+      "name": "5 V supply",
+      "description": "5 V supply rail measured inside the radar"
+    },
+    {
       "id": "supplyVoltage",
       "name": "Supply voltage",
       "description": "DC supply voltage at the radar"

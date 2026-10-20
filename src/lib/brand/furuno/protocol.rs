@@ -390,6 +390,12 @@ impl RadarModel {
         }
     }
 
+    /// Whether `$N7D` carries this radar's signal-present bits. The DRS4W
+    /// sends `$N7D,0,0,0,0` while transmitting, so it reports none.
+    pub(crate) fn reports_signal_alarms(&self) -> bool {
+        !matches!(self, RadarModel::DRS4W | RadarModel::Unknown)
+    }
+
     /// Whether this is a low-power radar (DRS4W 2.2 kW, DRS) that needs
     /// an aggressive gamma curve for the echo palette mapping.
     pub(crate) fn is_low_power(&self) -> bool {
@@ -498,8 +504,9 @@ pub(crate) enum CommandId {
     TuneIndicator = 0x76,
     /// `0x77` — No-transmit sector (sector blanking).
     BlindSector = 0x77,
-    /// `0x7D` — Radar alarm: `$N7D,<type>,<d1>,<d2>,<d3>`.
-    /// Generic across all Furuno models; idle = `$N7D,0,0,0,0`.
+    /// `0x7D` — Radar alarm: `$N7D,<status>,<d1>,<d2>,<d3>`. The low four
+    /// status bits flag the heading line, azimuth, trigger and video signals
+    /// as present; `$N7D,15` is a healthy transmitting radar.
     Alarm = 0x7D,
 
     /// `0x80` — Attenuation.
@@ -581,7 +588,8 @@ pub(crate) enum CommandId {
     TargetAnalyzer = 0xEF,
     /// `0xF0` — Auto acquire.
     AutoAcquire = 0xF0,
-    /// `0xF5` — NN3 hardware diagnostics (frequent, read-only).
+    /// `0xF5` — NN3 hardware diagnostics (frequent, read-only):
+    /// `$NF5,<sub>,<p1>,<p2>,<p3>,<p4>`; subs 3 and 4 are the 12 V and 5 V rails.
     NN3Command = 0xF5,
     /// `0xFE` — Range select (24-arg form).
     RangeSelect = 0xFE,
@@ -910,6 +918,16 @@ mod tests {
             RadarModel::from_part_number("0359421").as_announced(RadarModel::DRS4DNXT),
             RadarModel::DRS6ANXT
         );
+    }
+
+    /// The DRS4W sends `$N7D,0,0,0,0` while it transmits, so its zero bits
+    /// are no lost signals; a model mayara does not know yet is not trusted.
+    #[test]
+    fn the_drs4w_reports_no_signal_alarms() {
+        assert!(!RadarModel::DRS4W.reports_signal_alarms());
+        assert!(!RadarModel::Unknown.reports_signal_alarms());
+        assert!(RadarModel::DRS4DNXT.reports_signal_alarms());
+        assert!(RadarModel::FAR21x7.reports_signal_alarms());
     }
 
     /// The packets mayara sends are built from declarations now rather than
