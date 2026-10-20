@@ -756,14 +756,7 @@ mod tests {
         info.controls.set_user_name(info.key());
         settings::update_when_model_known(&mut info, model, "1.00");
 
-        let has_dual_range = matches!(
-            model,
-            RadarModel::DRS4DNXT
-                | RadarModel::DRS6ANXT
-                | RadarModel::DRS12ANXT
-                | RadarModel::DRS25ANXT
-        );
-        let mut command = Command::new(&info, has_dual_range);
+        let mut command = Command::new(&info, model.is_nxt());
         let wire = Wire::default();
         command.set_writer(wire.clone());
         (command, info, wire)

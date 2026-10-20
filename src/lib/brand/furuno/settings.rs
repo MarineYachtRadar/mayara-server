@@ -77,7 +77,8 @@ struct Capabilities {
 fn capabilities(model: &RadarModel) -> Capabilities {
     match model {
         // NXT series: full feature set
-        RadarModel::DRS4DNXT
+        RadarModel::DRS2DNXT
+        | RadarModel::DRS4DNXT
         | RadarModel::DRS6ANXT
         | RadarModel::DRS12ANXT
         | RadarModel::DRS25ANXT => Capabilities {
@@ -674,7 +675,7 @@ fn get_ranges_by_model(model: &RadarModel) -> Vec<i32> {
         ),
 
         // DRS-NXT series (standard)
-        RadarModel::DRS4DNXT | RadarModel::DRS6ANXT => {
+        RadarModel::DRS2DNXT | RadarModel::DRS4DNXT | RadarModel::DRS6ANXT => {
             (RANGE_TABLE_DRS_NXT, RANGE_TABLE_DRS_NXT_KM)
         }
 

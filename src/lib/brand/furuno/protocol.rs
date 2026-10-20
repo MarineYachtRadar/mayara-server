@@ -278,6 +278,7 @@ pub(crate) enum RadarModel {
     FAR14x7,
     DRS4DL,
     FAR3000,
+    DRS2DNXT,
     DRS4DNXT,
     DRS6ANXT,
     DRS6AXCLASS,
@@ -297,6 +298,7 @@ impl Display for RadarModel {
             RadarModel::FAR14x7 => "FAR14x7",
             RadarModel::DRS4DL => "DRS4DL",
             RadarModel::FAR3000 => "FAR3000",
+            RadarModel::DRS2DNXT => "DRS2DNXT",
             RadarModel::DRS4DNXT => "DRS4DNXT",
             RadarModel::DRS6ANXT => "DRS6ANXT",
             RadarModel::DRS6AXCLASS => "DRS6AXCLASS",
@@ -342,7 +344,9 @@ impl RadarModel {
     /// to a [`RadarModel`]. Matches on substrings to handle variations like
     /// "DRS4D-NXT" vs "DRS4DNXT".
     pub(crate) fn from_model_name(name: &str) -> RadarModel {
-        if name.contains("DRS4D-NXT") || name.contains("DRS4DNXT") {
+        if name.contains("DRS2D-NXT") || name.contains("DRS2DNXT") {
+            RadarModel::DRS2DNXT
+        } else if name.contains("DRS4D-NXT") || name.contains("DRS4DNXT") {
             RadarModel::DRS4DNXT
         } else if name.contains("DRS6A-NXT") || name.contains("DRS6ANXT") {
             RadarModel::DRS6ANXT
@@ -373,6 +377,16 @@ impl RadarModel {
         }
     }
 
+    /// The model a `$N96` part number names, told apart by the model the
+    /// radar announces where the part number cannot: the DRS2D-NXT and
+    /// DRS4D-NXT run the same firmware, so they share its part number.
+    pub(crate) fn as_announced(self, announced: RadarModel) -> RadarModel {
+        match (self, announced) {
+            (RadarModel::DRS4DNXT, RadarModel::DRS2DNXT) => RadarModel::DRS2DNXT,
+            (model, _) => model,
+        }
+    }
+
     /// Whether this is a low-power radar (DRS4W 2.2 kW, DRS) that needs
     /// an aggressive gamma curve for the echo palette mapping.
     pub(crate) fn is_low_power(&self) -> bool {
@@ -384,7 +398,8 @@ impl RadarModel {
     pub(crate) fn is_nxt(&self) -> bool {
         matches!(
             self,
-            RadarModel::DRS4DNXT
+            RadarModel::DRS2DNXT
+                | RadarModel::DRS4DNXT
                 | RadarModel::DRS6ANXT
                 | RadarModel::DRS12ANXT
                 | RadarModel::DRS25ANXT
@@ -860,6 +875,21 @@ pub(crate) const TX_CHANNEL_MAX: i32 = 3;
 mod tests {
     use super::*;
     use crate::util::decode_head;
+
+    /// The beacon names a DRS2D-NXT as one, not as the DRS before the NXT
+    /// generation that a bare "DRS" prefix would make it.
+    #[test]
+    fn a_drs2d_nxt_beacon_names_an_nxt() {
+        for name in ["DRS2D-NXT", "DRS2DNXT"] {
+            let model = RadarModel::from_model_name(name);
+            assert_eq!(model, RadarModel::DRS2DNXT, "{name}");
+            assert!(model.is_nxt(), "{name}");
+        }
+        assert_eq!(
+            RadarModel::from_model_name("DRS4D-NXT"),
+            RadarModel::DRS4DNXT
+        );
+    }
 
     /// The packets mayara sends are built from declarations now rather than
     /// written out by hand. These are the bytes that went out before, kept

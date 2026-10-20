@@ -216,10 +216,11 @@ impl FurunoLocator {
 
             info.start_forwarding_radar_messages_to_stdout(subsys);
 
-            // In replay mode, detect model from the original beacon string
-            // (not from controls which persistence may have overwritten).
+            // The model from the original beacon string, not from controls,
+            // which persistence may have overwritten.
+            let announced_model = RadarModel::from_model_name(beacon_model);
             let replay_model = if self.args.is_replay() {
-                let model = RadarModel::from_model_name(beacon_model);
+                let model = announced_model;
                 log::info!(
                     "{}: Radar model {} detected for replay mode (from beacon {:?})",
                     info.key(),
@@ -247,8 +248,12 @@ impl FurunoLocator {
                 }
             }
 
-            let mut report_receiver =
-                report::FurunoReportReceiver::new(&self.args, radars.clone(), info);
+            let mut report_receiver = report::FurunoReportReceiver::new(
+                &self.args,
+                radars.clone(),
+                info,
+                announced_model,
+            );
             if let Some(ib) = info_b {
                 report_receiver.set_range_b(&self.args, radars, ib);
             }
