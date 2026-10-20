@@ -379,10 +379,13 @@ impl RadarModel {
 
     /// The model a `$N96` part number names, told apart by the model the
     /// radar announces where the part number cannot: the DRS2D-NXT and
-    /// DRS4D-NXT run the same firmware, so they share its part number.
+    /// DRS4D-NXT run the same firmware, so they share its part number. A part
+    /// number mayara has no entry for, such as a DRS12A-NXT's, keeps the
+    /// announced model rather than discarding it.
     pub(crate) fn as_announced(self, announced: RadarModel) -> RadarModel {
         match (self, announced) {
             (RadarModel::DRS4DNXT, RadarModel::DRS2DNXT) => RadarModel::DRS2DNXT,
+            (RadarModel::Unknown, announced) => announced,
             (model, _) => model,
         }
     }
@@ -888,6 +891,24 @@ mod tests {
         assert_eq!(
             RadarModel::from_model_name("DRS4D-NXT"),
             RadarModel::DRS4DNXT
+        );
+    }
+
+    /// An unrecognised `$N96` part number leaves the model the beacon
+    /// announced in place, and a recognised one still wins.
+    #[test]
+    fn an_unknown_part_number_keeps_the_announced_model() {
+        assert_eq!(
+            RadarModel::from_part_number("0000000").as_announced(RadarModel::DRS12ANXT),
+            RadarModel::DRS12ANXT
+        );
+        assert_eq!(
+            RadarModel::from_part_number("0359360").as_announced(RadarModel::DRS2DNXT),
+            RadarModel::DRS2DNXT
+        );
+        assert_eq!(
+            RadarModel::from_part_number("0359421").as_announced(RadarModel::DRS4DNXT),
+            RadarModel::DRS6ANXT
         );
     }
 
