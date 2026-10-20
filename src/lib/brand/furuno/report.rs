@@ -170,8 +170,17 @@ impl FurunoReportReceiver {
             Some(Command::new(&info, false))
         };
 
-        // In live mode `$N96` identifies the model later.
-        let model = announced;
+        // A beacon name mayara does not recognise falls back to the model a
+        // previous run saved; in live mode `$N96` identifies it later.
+        let model = match announced {
+            RadarModel::Unknown => info
+                .controls
+                .model_name()
+                .as_deref()
+                .map(RadarModel::from_model_name)
+                .unwrap_or(RadarModel::Unknown),
+            announced => announced,
+        };
         let low_power = model.is_low_power();
         let initial_lut = Self::wire_to_legend(&info.get_legend(), DopplerWireMode::Off, low_power);
         let wire_to_legend = [initial_lut, initial_lut];
@@ -2356,6 +2365,18 @@ mod tests {
                 Some(expected)
             );
         }
+    }
+
+    /// A beacon naming a model mayara does not recognise leaves the model
+    /// saved settings name in place until `$N96` arrives.
+    #[test]
+    fn an_unknown_announced_model_keeps_the_saved_one() {
+        let radars = SharedRadars::new();
+        let args = Cli::parse_from(["mayara-server"]);
+        let info = nxt_info(&radars, &args, None);
+        let receiver = FurunoReportReceiver::new(&args, radars, info, RadarModel::Unknown);
+
+        assert_eq!(receiver.model, RadarModel::DRS4DNXT);
     }
 
     /// The alignment comes back in tenths of a degree, 0 to 3599, and one past
