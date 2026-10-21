@@ -1242,9 +1242,8 @@ impl FurunoReportReceiver {
             CommandId::Alarm => {
                 // $N7D,<status>,<d1>,<d2>,<d3> — status bits flag the signals
                 // the radar sees; see SIGNAL_ALARMS.
-                if let Some(&status) = numbers.first()
-                    && self.model.reports_signal_alarms()
-                {
+                if self.model.reports_signal_alarms() {
+                    let status = first_field(&strings, "Alarm")?;
                     let transmitting =
                         self.common.info.controls.get_status() == Some(Power::Transmit);
                     self.set_missing_signals(missing_signals(
@@ -1292,17 +1291,19 @@ impl FurunoReportReceiver {
             }
 
             CommandId::NN3Command => {
-                // $NF5,<sub>,<p1>,<p2>,<p3>,<p4>
-                if numbers.len() >= 2 {
-                    let control_id = match numbers[0] as u32 {
-                        NN3_SUPPLY_12V => Some(ControlId::Supply12Voltage),
-                        NN3_SUPPLY_5V => Some(ControlId::Supply5Voltage),
-                        _ => None,
-                    };
-                    if let Some(control_id) = control_id
-                        && self.common.info.controls.contains_key(&control_id)
-                    {
-                        self.common.set_value(&control_id, numbers[1]);
+                // $NF5,<sub>,<p1>,<p2>,<p3>,<p4>. The rails belong to the
+                // antenna, so both ranges show them.
+                let control_id = match first_field(&strings, "NN3Command")? as u32 {
+                    NN3_SUPPLY_12V => Some(ControlId::Supply12Voltage),
+                    NN3_SUPPLY_5V => Some(ControlId::Supply5Voltage),
+                    _ => None,
+                };
+                if let Some(control_id) = control_id
+                    && self.common.info.controls.contains_key(&control_id)
+                {
+                    let centivolts = field(&strings, 1, "NN3Command")?;
+                    for common in self.both_ranges() {
+                        common.set_value(&control_id, centivolts);
                     }
                 }
             }
@@ -2659,6 +2660,38 @@ mod tests {
 
         receiver.process_report("$N7D,1,0,0,0").unwrap();
         assert_eq!(receiver.missing_signals, 0, "heading back");
+    }
+
+    /// A status that is not a number is refused rather than read as 0, which
+    /// on a transmitting radar would raise all four lost signals.
+    #[tokio::test]
+    async fn a_malformed_signal_status_is_refused() {
+        let mut receiver = nxt_receiver();
+        receiver.process_report("$N69,2,0,0,60,300,0").unwrap();
+
+        for report in ["$N7D", "$N7D,", "$N7D,x,0,0,0"] {
+            assert!(receiver.process_report(report).is_err(), "{report}");
+        }
+        assert_eq!(receiver.missing_signals, 0);
+    }
+
+    /// The rails belong to the antenna, so a dual-range NXT shows them on
+    /// both ranges, and a reading that is not a number is refused.
+    #[tokio::test]
+    async fn the_supply_rails_show_on_both_ranges() {
+        let mut receiver = dual_range_receiver();
+
+        receiver.process_report("$NF5,3,1206,0,0,0").unwrap();
+        assert!(receiver.process_report("$NF5,3,x,0,0,0").is_err());
+
+        for common in [&receiver.common, receiver.common_b.as_ref().unwrap()] {
+            let control = common
+                .info
+                .controls
+                .get(&ControlId::Supply12Voltage)
+                .unwrap();
+            assert_eq!(control.value, Some(12.06));
+        }
     }
 
     /// `$NF5` subs 3 and 4 are the 12 V and 5 V rails in hundredths of a
