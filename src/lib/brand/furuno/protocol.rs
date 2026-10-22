@@ -212,6 +212,11 @@ pub(crate) static LOGIN_MESSAGE: LazyLock<Vec<u8>> = LazyLock::new(|| {
 /// The 4 bytes following this header contain the big-endian port offset.
 pub(crate) const LOGIN_EXPECTED_HEADER: [u8; 8] = [0x9, 0x1, 0x0, 0xc, 0x1, 0x0, 0x0, 0x0];
 
+/// The keep-alive a radar and a chartplotter both send every 30 s on the
+/// report connection. It carries no line ending, so it arrives ahead of the
+/// next `$` report.
+pub(crate) const KEEP_ALIVE: &str = "\0\0\0\u{8}\0\0\0\0";
+
 // =============================================================================
 // Wire-format report structures
 // =============================================================================
@@ -414,6 +419,12 @@ impl RadarModel {
                 | RadarModel::DRS25ANXT
         )
     }
+
+    /// Whether this model runs the DRS4D-NXT's firmware, whose control
+    /// limits were read from that firmware and checked on a DRS2D-NXT.
+    pub(crate) fn runs_drs4d_nxt_firmware(&self) -> bool {
+        matches!(self, RadarModel::DRS2DNXT | RadarModel::DRS4DNXT)
+    }
 }
 
 // =============================================================================
@@ -502,7 +513,9 @@ pub(crate) enum CommandId {
     Tune = 0x75,
     /// `0x76` — Tune indicator feedback (read-only).
     TuneIndicator = 0x76,
-    /// `0x77` — No-transmit sector (sector blanking).
+    /// `0x77` — No-transmit sector (sector blanking):
+    /// `$S77,<x>,<start1>,<width1>,<start2>,<width2>` in degrees. A sector
+    /// blanks whenever its width is not zero; the radar ignores `x`.
     BlindSector = 0x77,
     /// `0x7D` — Radar alarm: `$N7D,<status>,<d1>,<d2>,<d3>`. The low four
     /// status bits flag the heading line, azimuth, trigger and video signals

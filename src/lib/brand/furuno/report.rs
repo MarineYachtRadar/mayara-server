@@ -15,7 +15,7 @@ use super::command::Command;
 use super::protocol::{
     CommandId, DATA_BROADCAST_ADDRESS, ECHO_FLOOR, ENCODING_1_REPEAT_DEFAULT,
     ENCODING_3_REPEAT_DEFAULT, FurunoImoFrameHeader, FurunoTileFrameHeader,
-    HEADING_ADJUST_FULL_TURN, PIXEL_VALUES, RadarModel, SPOKE_ALIGNMENT_MASK,
+    HEADING_ADJUST_FULL_TURN, KEEP_ALIVE, PIXEL_VALUES, RadarModel, SPOKE_ALIGNMENT_MASK,
     SPOKE_ANGLE_HIGH_MASK, SPOKE_LEN, SPOKES, TILE_MAGIC, TILE_REPEAT_DEFAULT, TILE_SCALE,
     TX_CHANNEL_AUTO, WIRE_UNIT_KM, WIRE_UNIT_NM, wire_index_to_meters_for_unit,
 };
@@ -710,6 +710,7 @@ impl FurunoReportReceiver {
     ///   Rain:   $N65,{auto},{val},0,{drid},0,0                  — index 3
     ///   Range:  $N62,{wire_idx},{unit},{drid}                    — index 2
     ///   Tune:   $N75,{auto},{value},{drid}                       — index 2
+    ///   RezBoost / BirdMode: $NEE,{level},{drid}                  — index 1
     fn extract_drid(&self, command_id: &CommandId, numbers: &[f64]) -> u8 {
         if self.common_b.is_none() {
             return 0;
@@ -726,6 +727,11 @@ impl FurunoReportReceiver {
                 // $NEF,{enabled},{mode},{screen}
                 numbers.get(2).copied().unwrap_or(0.0)
             }
+            CommandId::RezBoost | CommandId::BirdMode => {
+                // $NEE,{level},{drid}
+                // $NED,{level},{drid}
+                numbers.get(1).copied().unwrap_or(0.0)
+            }
             CommandId::Sea | CommandId::Rain => {
                 // $N64,{auto},{val},{auto_val},{drid},0,0
                 // $N65,{auto},{val},0,{drid},0,0
@@ -740,6 +746,7 @@ impl FurunoReportReceiver {
     }
 
     fn process_report(&mut self, line: &str) -> Result<(), Error> {
+        let line = line.strip_prefix(KEEP_ALIVE).unwrap_or(line);
         let line = match line.find('$') {
             Some(pos) => {
                 if pos > 0 {
@@ -929,17 +936,20 @@ impl FurunoReportReceiver {
                     );
                 }
                 let mode = numbers[0];
-                self.common.set_value(&ControlId::ScanSpeed, mode);
+                for common in self.both_ranges() {
+                    common.set_value(&ControlId::ScanSpeed, mode);
+                }
             }
             CommandId::BlindSector => {
-                // Response format: $N77,{s2_enable},{s1_start},{s1_width},{s2_start},{s2_width}
+                // Response format: $N77,{x},{s1_start},{s1_width},{s2_start},{s2_width}
+                // A sector blanks whenever its width is not zero, whatever x
+                // says. The antenna blanks both ranges alike.
                 if numbers.len() < 5 {
                     bail!(
                         "Insufficient ({}) arguments for BlindSector command",
                         numbers.len()
                     );
                 }
-                let s2_enable = numbers[0] != 0.0;
                 let s1_start = numbers[1];
                 let s1_width = numbers[2];
                 let s2_start = numbers[3];
@@ -949,38 +959,23 @@ impl FurunoReportReceiver {
                 let s1_end = (s1_start + s1_width) % 360.0;
                 let s2_end = (s2_start + s2_width) % 360.0;
 
-                // Zone 1 is enabled if width is non-zero
                 let s1_enable = s1_width != 0.0;
+                let s2_enable = s2_width != 0.0;
 
                 // Wire format always includes blind-sector fields, but models
                 // without sector_blanking (DRS, DRS4W) never registered the
                 // controls — skip the set_sector to avoid spamming "not
                 // supported" errors on every report.
-                if self
-                    .common
-                    .info
-                    .controls
-                    .contains_key(&ControlId::NoTransmitSector1)
-                {
-                    self.common.set_sector(
-                        &ControlId::NoTransmitSector1,
-                        s1_start,
-                        s1_end,
-                        Some(s1_enable),
-                    );
-                }
-                if self
-                    .common
-                    .info
-                    .controls
-                    .contains_key(&ControlId::NoTransmitSector2)
-                {
-                    self.common.set_sector(
-                        &ControlId::NoTransmitSector2,
-                        s2_start,
-                        s2_end,
-                        Some(s2_enable),
-                    );
+                let sectors = [
+                    (ControlId::NoTransmitSector1, s1_start, s1_end, s1_enable),
+                    (ControlId::NoTransmitSector2, s2_start, s2_end, s2_enable),
+                ];
+                for common in self.both_ranges() {
+                    for (control_id, start, end, enabled) in &sectors {
+                        if common.info.controls.contains_key(control_id) {
+                            common.set_sector(control_id, *start, *end, Some(*enabled));
+                        }
+                    }
                 }
             }
             CommandId::Range => {
@@ -1013,11 +1008,15 @@ impl FurunoReportReceiver {
             }
             CommandId::OnTime => {
                 let seconds = first_number(&numbers, "OnTime")?;
-                self.common.set_value(&ControlId::OperatingTime, seconds);
+                for common in self.both_ranges() {
+                    common.set_value(&ControlId::OperatingTime, seconds);
+                }
             }
             CommandId::TxTime => {
                 let seconds = first_number(&numbers, "TxTime")?;
-                self.common.set_value(&ControlId::TransmitTime, seconds);
+                for common in self.both_ranges() {
+                    common.set_value(&ControlId::TransmitTime, seconds);
+                }
             }
             CommandId::MainBangSize => {
                 // Response format: $N83,{value},0
@@ -1030,8 +1029,9 @@ impl FurunoReportReceiver {
                 }
                 // Convert 0-255 to 0-100%
                 let percent = (numbers[0] as i32 * 100) / 255;
-                self.common
-                    .set_value(&ControlId::MainBangSuppression, percent as f64);
+                for common in self.both_ranges() {
+                    common.set_value(&ControlId::MainBangSuppression, percent as f64);
+                }
             }
             CommandId::AntennaHeight => {
                 // Response format: $N84,0,{meters},0
@@ -1071,16 +1071,18 @@ impl FurunoReportReceiver {
             // NXT-specific features
             CommandId::SignalProcessing => {
                 // Response format (varies):
-                // - From SET echo: $N67,0,{feature},{value},{screen} (4 args)
-                // - From REQUEST: $N67,{feature},{value},{screen} (3 args)
-                // feature 0: Interference Rejection (0=OFF, 2=ON)
+                // - From SET echo: $N67,0,{feature},{value},{drid} (4 args)
+                // - From REQUEST: $N67,{feature},{value},{drid} (3 args)
+                // feature 0: Interference Rejection (0=OFF, else ON; the
+                //   radar keeps any ON as 1, and sets it on both ranges)
                 // feature 3: Noise Reduction (0=OFF, 1=ON)
-                let (feature, value) = if numbers.len() >= 4 && numbers[0] == 0.0 {
+                let (feature, value, drid) = if numbers.len() >= 4 && numbers[0] == 0.0 {
                     // SET echo format
-                    (numbers[1] as i32, numbers[2] as i32)
+                    (numbers[1] as i32, numbers[2] as i32, numbers[3])
                 } else if numbers.len() >= 2 {
                     // REQUEST response format
-                    (numbers[0] as i32, numbers[1] as i32)
+                    let drid = numbers.get(2).copied().unwrap_or(0.0);
+                    (numbers[0] as i32, numbers[1] as i32, drid)
                 } else {
                     bail!(
                         "Insufficient ({}) arguments for SignalProcessing command",
@@ -1090,15 +1092,20 @@ impl FurunoReportReceiver {
 
                 match feature {
                     0 => {
-                        // Interference Rejection: value 2=ON, 0=OFF
-                        let enabled = if value == 2 { 1.0 } else { 0.0 };
-                        self.common
+                        let enabled = if value != 0 { 1.0 } else { 0.0 };
+                        self.common_for_range(drid as u8)
                             .set_value(&ControlId::InterferenceRejection, enabled);
                     }
                     3 => {
-                        // Noise Reduction: value 1=ON, 0=OFF
                         let enabled = if value == 1 { 1.0 } else { 0.0 };
-                        self.common.set_value(&ControlId::NoiseRejection, enabled);
+                        let common = self.common_for_range(drid as u8);
+                        if common
+                            .info
+                            .controls
+                            .contains_key(&ControlId::NoiseRejection)
+                        {
+                            common.set_value(&ControlId::NoiseRejection, enabled);
+                        }
                     }
                     _ => {
                         log::debug!(
@@ -1110,7 +1117,7 @@ impl FurunoReportReceiver {
                 }
             }
             CommandId::RezBoost => {
-                // Response format: $NEE,{level},{screen}
+                // Response format: $NEE,{level},{drid}
                 // level: 0=OFF, 1=Low, 2=Medium, 3=High
                 if numbers.is_empty() {
                     bail!(
@@ -1118,11 +1125,12 @@ impl FurunoReportReceiver {
                         numbers.len()
                     );
                 }
-                self.common
+                let drid = self.extract_drid(&command_id, &numbers);
+                self.common_for_range(drid)
                     .set_value(&ControlId::TargetSeparation, numbers[0]);
             }
             CommandId::BirdMode => {
-                // Response format: $NED,{level},{screen}
+                // Response format: $NED,{level},{drid}
                 // level: 0=OFF, 1=Low, 2=Medium, 3=High
                 if numbers.is_empty() {
                     bail!(
@@ -1130,7 +1138,9 @@ impl FurunoReportReceiver {
                         numbers.len()
                     );
                 }
-                self.common.set_value(&ControlId::BirdMode, numbers[0]);
+                let drid = self.extract_drid(&command_id, &numbers);
+                self.common_for_range(drid)
+                    .set_value(&ControlId::BirdMode, numbers[0]);
             }
             CommandId::JammingAble => {
                 if numbers.is_empty() {
@@ -1139,7 +1149,9 @@ impl FurunoReportReceiver {
                         numbers.len()
                     );
                 }
-                self.common.set_value(&ControlId::AntiJamming, numbers[0]);
+                for common in self.both_ranges() {
+                    common.set_value(&ControlId::AntiJamming, numbers[0]);
+                }
             }
             CommandId::TargetAnalyzer => {
                 // Response format: $NEF,{enabled},{mode},{screen}
@@ -1309,21 +1321,17 @@ impl FurunoReportReceiver {
             }
 
             CommandId::NearSTC | CommandId::MiddleSTC | CommandId::FarSTC | CommandId::STCRange => {
+                // $N85,{curve}: one curve for the antenna, so both ranges.
                 if let Some(&value) = numbers.first() {
-                    // Single-field responses ($N85,2) have no drid — default to range A.
-                    // Multi-field responses include drid as the last field.
-                    let drid = if numbers.len() > 1 {
-                        self.extract_drid(&command_id, &numbers)
-                    } else {
-                        0
-                    };
                     let control_id = match command_id {
                         CommandId::NearSTC => ControlId::NearStcCurve,
                         CommandId::MiddleSTC => ControlId::MiddleStcCurve,
                         CommandId::FarSTC => ControlId::FarStcCurve,
                         _ => ControlId::StcRange,
                     };
-                    self.common_for_range(drid).set_value(&control_id, value);
+                    for common in self.both_ranges() {
+                        common.set_value(&control_id, value);
+                    }
                 }
             }
 
@@ -2692,6 +2700,107 @@ mod tests {
                 .unwrap();
             assert_eq!(control.value, Some(12.06));
         }
+    }
+
+    /// The value a range shows for a control.
+    fn value_on(receiver: &FurunoReportReceiver, range_b: bool, id: &ControlId) -> Option<f64> {
+        let common = if range_b {
+            receiver.common_b.as_ref().unwrap()
+        } else {
+            &receiver.common
+        };
+        common.info.controls.get(id).unwrap().value
+    }
+
+    /// The antenna has one STC curve per band, reported without a range, so
+    /// both ranges show it, and far curve 3 is the DRS4D-NXT's own default:
+    /// refusing it filled the log every five seconds.
+    #[tokio::test]
+    async fn an_stc_curve_shows_on_both_ranges() {
+        let mut receiver = dual_range_receiver();
+
+        receiver.process_report("$N87,3").unwrap();
+        receiver.process_report("$N85,5").unwrap();
+
+        for range_b in [false, true] {
+            assert_eq!(
+                value_on(&receiver, range_b, &ControlId::FarStcCurve),
+                Some(3.)
+            );
+            assert_eq!(
+                value_on(&receiver, range_b, &ControlId::NearStcCurve),
+                Some(5.)
+            );
+        }
+    }
+
+    /// A sector blanks whenever it has a width: a chartplotter sends the
+    /// first field as 0 or 1 for the same sector. Both ranges blank alike.
+    #[tokio::test]
+    async fn a_sector_is_on_when_it_has_a_width() {
+        let mut receiver = dual_range_receiver();
+
+        for report in ["$N77,0,124,144,0,0", "$N77,1,124,144,0,0"] {
+            receiver.process_report(report).unwrap();
+
+            for common in [&receiver.common, receiver.common_b.as_ref().unwrap()] {
+                let controls = &common.info.controls;
+                let first = controls.get(&ControlId::NoTransmitSector1).unwrap();
+                let second = controls.get(&ControlId::NoTransmitSector2).unwrap();
+                assert_eq!(first.enabled, Some(true), "{report}");
+                assert_eq!(second.enabled, Some(false), "{report}");
+            }
+        }
+    }
+
+    /// Target separation and bird mode are kept per range and say which one.
+    #[tokio::test]
+    async fn target_separation_and_bird_mode_land_on_the_range_they_name() {
+        let mut receiver = dual_range_receiver();
+
+        receiver.process_report("$NEE,2,1").unwrap();
+        receiver.process_report("$NED,3,0").unwrap();
+
+        assert_eq!(
+            value_on(&receiver, true, &ControlId::TargetSeparation),
+            Some(2.)
+        );
+        assert_eq!(
+            value_on(&receiver, false, &ControlId::TargetSeparation),
+            Some(0.)
+        );
+        assert_eq!(value_on(&receiver, false, &ControlId::BirdMode), Some(3.));
+        assert_eq!(value_on(&receiver, true, &ControlId::BirdMode), Some(0.));
+    }
+
+    /// The radar keeps interference rejection on as 1, whatever it was sent,
+    /// and reports it once per range.
+    #[tokio::test]
+    async fn interference_rejection_reported_as_1_is_on() {
+        let mut receiver = dual_range_receiver();
+
+        receiver.process_report("$N67,0,0,1,1").unwrap();
+        receiver.process_report("$N67,0,0,0,0").unwrap();
+
+        let ir = ControlId::InterferenceRejection;
+        assert_eq!(value_on(&receiver, true, &ir), Some(1.));
+        assert_eq!(value_on(&receiver, false, &ir), Some(0.));
+    }
+
+    /// The keep-alive frame the radar sends every 30 s has no line ending of
+    /// its own, so it arrives in front of the next report.
+    #[tokio::test]
+    async fn a_report_behind_the_keep_alive_is_read() {
+        let mut receiver = nxt_receiver();
+
+        receiver
+            .process_report(&format!("{KEEP_ALIVE}$N86,1"))
+            .unwrap();
+
+        assert_eq!(
+            value_on(&receiver, false, &ControlId::MiddleStcCurve),
+            Some(1.)
+        );
     }
 
     /// `$NF5` subs 3 and 4 are the 12 V and 5 V rails in hundredths of a

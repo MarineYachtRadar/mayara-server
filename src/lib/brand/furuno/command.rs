@@ -14,6 +14,12 @@ use crate::radar::range::Ranges;
 use crate::radar::settings::{ControlId, ControlValue, SharedControls};
 use crate::radar::{Power, RadarError, RadarInfo};
 
+/// A sector's start and width on the wire wrap at a full circle of degrees.
+const FULL_CIRCLE_DEGREES: i32 = 360;
+
+/// The dual range id of Range B.
+const RANGE_B: i32 = 1;
+
 pub(crate) struct Command {
     key: String,
     write: Option<Box<dyn AsyncWrite + Send + Unpin>>,
@@ -142,41 +148,31 @@ impl Command {
         (0, 0, false)
     }
 
+    /// The `$S77` fields for both sectors. The radar blanks a sector whenever
+    /// its width is not zero, so a disabled sector goes out as start 0 and
+    /// width 0, as a chartplotter sends it.
     fn fill_blind_sector(
-        &mut self,
+        &self,
         zone1: Option<(i32, i32, bool)>,
         zone2: Option<(i32, i32, bool)>,
     ) -> Vec<i32> {
-        let mut cmd = Vec::with_capacity(5);
-
-        // Get current values from zone controls
-        let (s1_start, s1_end, _s1_enabled) =
-            zone1.unwrap_or_else(|| self.get_zone_values(&ControlId::NoTransmitSector1));
-        let (s2_start, s2_end, s2_enabled) =
-            zone2.unwrap_or_else(|| self.get_zone_values(&ControlId::NoTransmitSector2));
-
-        // Calculate widths from start/end angles
-        let s1_width = if s1_end >= s1_start {
-            s1_end - s1_start
-        } else {
-            360 + s1_end - s1_start
+        let sector = |zone: Option<(i32, i32, bool)>, control_id| {
+            let (start, end, enabled) = zone.unwrap_or_else(|| self.get_zone_values(control_id));
+            // A control keeps angles within ±180°; the radar takes 0..359.
+            if enabled {
+                [
+                    start.rem_euclid(FULL_CIRCLE_DEGREES),
+                    (end - start).rem_euclid(FULL_CIRCLE_DEGREES),
+                ]
+            } else {
+                [0, 0]
+            }
         };
+        let [s1_start, s1_width] = sector(zone1, &ControlId::NoTransmitSector1);
+        let [s2_start, s2_width] = sector(zone2, &ControlId::NoTransmitSector2);
 
-        let s2_width = if s2_end >= s2_start {
-            s2_end - s2_start
-        } else {
-            360 + s2_end - s2_start
-        };
-
-        // Format: $S77,{s2_enable},{s1_start},{s1_width},{s2_start},{s2_width}
-        let s2_enable = if s2_enabled && s2_width > 0 { 1 } else { 0 };
-        cmd.push(s2_enable);
-        cmd.push(s1_start);
-        cmd.push(s1_width);
-        cmd.push(s2_start);
-        cmd.push(s2_width);
-
-        cmd
+        // The radar ignores the first field.
+        vec![0, s1_start, s1_width, s2_start, s2_width]
     }
 
     pub(crate) async fn init(&mut self) -> Result<(), RadarError> {
@@ -257,11 +253,12 @@ impl Command {
                 .await?; // $R87
         }
 
-        if self.controls.contains_key(&ControlId::BirdMode) {
-            // NXT-specific features (query signal processing features)
+        if self.controls.contains_key(&ControlId::NoiseRejection) {
             self.send(CommandMode::Request, CommandId::SignalProcessing, &[0, 3])
                 .await?; // $R67,0,3 - Noise Reduction
-
+        }
+        if self.controls.contains_key(&ControlId::BirdMode) {
+            // NXT-specific features (query signal processing features)
             self.send(CommandMode::Request, CommandId::SignalProcessing, &[0, 0])
                 .await?; // $R67,0,0 - Interference Rejection
 
@@ -275,10 +272,42 @@ impl Command {
                 .await?; // $REF - Target Analyzer (Doppler)
         }
 
+        if self.has_dual_range {
+            self.request_range_b().await?;
+        }
+
         // Note: dual range is NOT activated automatically. The radar only starts
         // sending Range B spokes after receiving a Range command with drid=1.
         // This happens when the user sets a range on Range B via the GUI.
 
+        Ok(())
+    }
+
+    /// Range B's own settings. A request without a range answers for Range
+    /// A, so each of these names Range B in the field its report carries the
+    /// range in. Its power status is left out: mayara gives both ranges the
+    /// one transmitter's state, and Range B reports standby while Range A
+    /// transmits.
+    async fn request_range_b(&mut self) -> Result<(), RadarError> {
+        let mut requests: Vec<(CommandId, &[i32])> = vec![
+            (CommandId::Range, &[0, 0, RANGE_B]),   // $R62,0,0,1
+            (CommandId::Gain, &[0, 0, RANGE_B]),    // $R63,0,0,1
+            (CommandId::Sea, &[0, 0, 0, RANGE_B]),  // $R64,0,0,0,1
+            (CommandId::Rain, &[0, 0, 0, RANGE_B]), // $R65,0,0,0,1
+        ];
+        if self.controls.contains_key(&ControlId::Tune) {
+            requests.push((CommandId::Tune, &[0, 0, RANGE_B])); // $R75,0,0,1
+        }
+        if self.controls.contains_key(&ControlId::BirdMode) {
+            requests.extend([
+                (CommandId::SignalProcessing, &[0, 0, 0, RANGE_B][..]), // $R67,0,0,0,1
+                (CommandId::RezBoost, &[0, RANGE_B]),                   // $REE,0,1
+                (CommandId::BirdMode, &[0, RANGE_B]),                   // $RED,0,1
+            ]);
+        }
+        for (command_id, args) in requests {
+            self.send(CommandMode::Request, command_id, args).await?;
+        }
         Ok(())
     }
 
@@ -540,17 +569,17 @@ impl CommandSender for Command {
                 CommandId::SignalProcessing
             }
             ControlId::TargetSeparation => {
-                // Format: $SEE,{level},0
+                // Per-range: $SEE,{level},{drid}
                 // RezBoost (beam sharpening): 0=OFF, 1=Low, 2=Medium, 3=High
                 cmd.push(value);
-                cmd.push(0); // screen: 0=Primary
+                cmd.push(self.dual_range_id);
                 CommandId::RezBoost
             }
             ControlId::BirdMode => {
-                // Format: $SED,{level},0
+                // Per-range: $SED,{level},{drid}
                 // BirdMode: 0=OFF, 1=Low, 2=Medium, 3=High
                 cmd.push(value);
-                cmd.push(0); // screen: 0=Primary
+                cmd.push(self.dual_range_id);
                 CommandId::BirdMode
             }
             ControlId::AntiJamming => {
@@ -563,7 +592,7 @@ impl CommandSender for Command {
                 CommandId::ImoEchoSwitch
             }
             ControlId::Doppler => {
-                // Format: $SEF,{enabled},{mode},0
+                // Format: $SEF,{enabled},{mode},0,1
                 // Target Analyzer: value 0=Off, 1=Target, 2=Rain
                 // Wire format: enabled=0/1, mode=0(Target)/1(Rain)
                 let (enabled, mode) = match value {
@@ -575,6 +604,9 @@ impl CommandSender for Command {
                 cmd.push(enabled);
                 cmd.push(mode);
                 cmd.push(0); // screen: 0=Primary
+                // A chartplotter sends 1 here. Left out, the radar reads
+                // 999 and reports that before putting the 1 back.
+                cmd.push(1);
                 CommandId::TargetAnalyzer
             }
 
@@ -1053,9 +1085,8 @@ mod tests {
 
         set(&mut command, &info, value).await;
 
-        // The second sector rides along at the angles its control was built
-        // with, cleared by the enable flag rather than by its width.
-        assert_eq!(wire.first(), "$S77,0,350,20,-180,180");
+        // The second sector, never enabled, rides along without a width.
+        assert_eq!(wire.first(), "$S77,0,350,20,0,0");
     }
 
     /// Both sectors travel in one sentence, so setting the second one carries
@@ -1074,21 +1105,49 @@ mod tests {
         second.enabled = Some(true);
         set(&mut command, &info, second).await;
 
-        assert_eq!(wire.first(), "$S77,1,100,30,200,60");
+        assert_eq!(wire.first(), "$S77,0,100,30,200,60");
     }
 
-    /// Only the second sector has an enable flag on the wire. The first is
-    /// turned off by having no width.
+    /// The radar blanks a sector whenever it has a width, whatever the first
+    /// field says: this one used to keep blanking after it was switched off.
+    /// A disabled sector goes out as a chartplotter sends it, with start and
+    /// width both 0.
     #[tokio::test]
-    async fn a_disabled_second_sector_clears_the_only_enable_flag_there_is() {
+    async fn a_disabled_sector_goes_out_without_a_width() {
         let (mut command, info, wire) = nxt();
-        let mut value = cv(ControlId::NoTransmitSector2, json!(200));
-        value.end_value = Some(260.);
+        info.controls
+            .set_sector(&ControlId::NoTransmitSector2, 200., 260., Some(true))
+            .expect("sector 2 as the radar reported it");
+        let mut value = cv(ControlId::NoTransmitSector1, json!(124));
+        value.end_value = Some(268.);
         value.enabled = Some(false);
 
         set(&mut command, &info, value).await;
 
-        assert_eq!(wire.first(), "$S77,0,-180,180,200,60");
+        assert_eq!(wire.first(), "$S77,0,0,0,200,60");
+    }
+
+    // ----- NXT features -----
+
+    /// Target separation and bird mode are kept per range, so Range B's
+    /// setting must not land on Range A.
+    #[tokio::test]
+    async fn a_range_b_target_separation_and_bird_mode_name_range_b() {
+        let (mut command, info, wire) = nxt();
+        command.dual_range_id = 1;
+
+        set(
+            &mut command,
+            &info,
+            cv(ControlId::TargetSeparation, json!(2)),
+        )
+        .await;
+        set(&mut command, &info, cv(ControlId::BirdMode, json!(3))).await;
+
+        let sent = wire.sentences();
+        for expected in ["$SEE,2,1", "$SED,3,1"] {
+            assert!(sent.iter().any(|s| s == expected), "{expected} in {sent:?}");
+        }
     }
 
     // ----- Installation -----
@@ -1213,10 +1272,10 @@ mod tests {
     #[tokio::test]
     async fn doppler_splits_into_an_enable_and_a_mode() {
         let cases = [
-            (0, "$SEF,0,0,0"),
-            (1, "$SEF,1,0,0"),
-            (2, "$SEF,1,1,0"),
-            (7, "$SEF,0,0,0"),
+            (0, "$SEF,0,0,0,1"),
+            (1, "$SEF,1,0,0,1"),
+            (2, "$SEF,1,1,0,1"),
+            (7, "$SEF,0,0,0,1"),
         ];
 
         for (value, expected) in cases {
@@ -1371,7 +1430,8 @@ mod tests {
 
     /// What mayara asks a radar at startup. The list is the whole reason a
     /// freshly discovered radar arrives in the GUI with its controls filled
-    /// in, and every entry is a control the model actually has.
+    /// in, and every entry is a control the model actually has: the
+    /// DRS4D-NXT's noise rejection does nothing, so it is not asked about.
     #[tokio::test]
     async fn the_startup_queries_cover_the_models_controls() {
         let (mut command, _info, wire) = nxt();
@@ -1402,11 +1462,19 @@ mod tests {
                 "$R85",       // near STC curve
                 "$R86",       // middle STC curve
                 "$R87",       // far STC curve
-                "$R67,0,3",   // noise reduction
                 "$R67,0,0",   // interference rejection
                 "$REE",       // target separation
                 "$RED",       // bird mode
                 "$REF",       // target analyzer
+                // Range B, which answers only when asked by name
+                "$R62,0,0,1",
+                "$R63,0,0,1",
+                "$R64,0,0,0,1",
+                "$R65,0,0,0,1",
+                "$R75,0,0,1",
+                "$R67,0,0,0,1",
+                "$REE,0,1",
+                "$RED,0,1",
             ]
         );
     }

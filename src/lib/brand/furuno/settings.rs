@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use crate::{
     Cli,
     radar::settings::{
-        ControlId, HAS_AUTO_NOT_ADJUSTABLE, SharedControls, new_auto, new_auto_standby, new_list,
-        new_numeric, new_sector, new_string,
+        ControlBuilder, ControlId, HAS_AUTO_NOT_ADJUSTABLE, SharedControls, new_auto,
+        new_auto_standby, new_list, new_numeric, new_sector, new_string,
     },
     radar::{
         FRAC_NM_2, FRAC_NM_4, FRAC_NM_8, FRAC_NM_16, NM, RadarInfo, range::Ranges, units::Units,
@@ -52,6 +52,36 @@ pub(crate) fn new(
     new_auto_standby().build(&mut controls);
 
     SharedControls::new(radar_id, sk_client_tx, args, controls)
+}
+
+/// The curves each STC band takes, by wire value.
+struct StcCurves {
+    near: &'static [i32],
+    middle: &'static [i32],
+    far: &'static [i32],
+}
+
+/// The curves TimeZero offers.
+const STC_CURVES: StcCurves = StcCurves {
+    near: &[0, 1, 2, 3, 4],
+    middle: &[0, 1, 2, 3],
+    far: &[0, 1, 2],
+};
+
+/// The curves the DRS4D-NXT firmware applies; it echoes any other value,
+/// then reports the curve it kept. Its default far curve is 3.
+const DRS4D_NXT_STC_CURVES: StcCurves = StcCurves {
+    near: &[2, 3, 4, 5],
+    middle: &[0, 1],
+    far: &[1, 3],
+};
+
+/// An STC band offering only `curves`, each named by its wire value.
+fn stc_curve(control_id: ControlId, curves: &[i32]) -> ControlBuilder {
+    let highest = *curves.last().expect("an STC band has curves");
+    let names: Vec<String> = (0..=highest).map(|curve| curve.to_string()).collect();
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+    new_list(control_id, &names).set_valid_values(curves.to_vec())
 }
 
 /// Per-model capability flags, derived from MaxSea.Radar.dll capability table.
@@ -311,14 +341,18 @@ pub(crate) fn update_when_model_known(info: &mut RadarInfo, model: RadarModel, v
     }
 
     // STC (Sensitivity Time Control) — all models support this
-    info.controls.add(new_list(
-        ControlId::NearStcCurve,
-        &["0", "1", "2", "3", "4"],
-    ));
-    info.controls
-        .add(new_list(ControlId::MiddleStcCurve, &["0", "1", "2", "3"]));
-    info.controls
-        .add(new_list(ControlId::FarStcCurve, &["0", "1", "2"]));
+    let stc = if model.runs_drs4d_nxt_firmware() {
+        &DRS4D_NXT_STC_CURVES
+    } else {
+        &STC_CURVES
+    };
+    for (control_id, curves) in [
+        (ControlId::NearStcCurve, stc.near),
+        (ControlId::MiddleStcCurve, stc.middle),
+        (ControlId::FarStcCurve, stc.far),
+    ] {
+        info.controls.add(stc_curve(control_id, curves));
+    }
     // StcRange ($RD2) is not registered: DRS4D-NXT does not respond to $RD2.
     // Re-enable when a model that supports it is available for testing.
 
@@ -395,8 +429,9 @@ pub(crate) fn update_when_model_known(info: &mut RadarInfo, model: RadarModel, v
         _ => {}
     }
 
-    // NXT-specific per-range features
-    if cap.noise_rejection {
+    // NXT-specific per-range features. The DRS4D-NXT firmware stores a
+    // noise rejection setting but nothing acts on it.
+    if cap.noise_rejection && !model.runs_drs4d_nxt_firmware() {
         info.controls
             .add(new_list(ControlId::NoiseRejection, &["Off", "On"]));
     }
@@ -744,6 +779,44 @@ mod tests {
     use clap::Parser;
     use std::net::{Ipv4Addr, SocketAddrV4};
     use std::time::Duration;
+
+    /// The controls a radar of `model` gets once its model is known.
+    fn controls_of(model: RadarModel) -> SharedControls {
+        let args = Cli::parse_from(["mayara-server"]);
+        let mut info =
+            crate::radar::ui_strings::radar_info(crate::Brand::Furuno, &args, |id, tx| {
+                new(id, tx, &args)
+            });
+        update_when_model_known(&mut info, model, "1.00");
+        info.controls
+    }
+
+    /// The DRS4D-NXT firmware applies only some STC curves and quietly puts
+    /// the old one back for the rest, so only those are offered. Its noise
+    /// rejection is stored but drives nothing, so it is not offered at all.
+    #[test]
+    fn a_drs_nxt_offers_only_what_its_firmware_applies() {
+        for model in [RadarModel::DRS2DNXT, RadarModel::DRS4DNXT] {
+            let controls = controls_of(model);
+            let curves = |id| controls.get(&id).unwrap().item().valid_values.clone();
+
+            assert_eq!(curves(ControlId::NearStcCurve), Some(vec![2, 3, 4, 5]));
+            assert_eq!(curves(ControlId::MiddleStcCurve), Some(vec![0, 1]));
+            assert_eq!(curves(ControlId::FarStcCurve), Some(vec![1, 3]));
+            assert!(!controls.contains_key(&ControlId::NoiseRejection));
+        }
+
+        let other = controls_of(RadarModel::DRS12ANXT);
+        assert_eq!(
+            other
+                .get(&ControlId::FarStcCurve)
+                .unwrap()
+                .item()
+                .valid_values,
+            Some(vec![0, 1, 2])
+        );
+        assert!(other.contains_key(&ControlId::NoiseRejection));
+    }
 
     /// A sector control holds radians, and rounds to the step it was built
     /// with. Without a step of its own it would round to whole radians, and
