@@ -838,12 +838,12 @@ impl FurunoReportReceiver {
                 let is_standby = matches!(generic_state, Power::Standby);
                 let power_value = generic_state as i32 as f64;
                 let drid = self.extract_drid(&command_id, &numbers);
-                // Both ranges share the transmitter (see the coupled-transmit
-                // propagation below), so any range leaving Transmit ends our
-                // claim on it.
-                if generic_state != Power::Transmit {
+                if self.transmit_is_ours == Some(drid as i32) && generic_state != Power::Transmit {
                     self.transmit_is_ours = None;
                 }
+                // Range B transmits only alongside Range A, and the radar
+                // reports every range a power change moves, so each range
+                // takes only its own report.
                 let target = self.common_for_range(drid);
                 target.set_value(&ControlId::Power, power_value);
 
@@ -870,20 +870,6 @@ impl FurunoReportReceiver {
                     }
                     if target.info.controls.contains_key(&ControlId::TimedRun) {
                         target.set_value(&ControlId::TimedRun, w_send);
-                    }
-                }
-
-                // Coupled transmit: on DRS models both ranges share TX state.
-                // Propagate power to the other range.
-                if let Some(common_b) = self.common_b.as_mut() {
-                    let other = if drid == 1 {
-                        &mut self.common
-                    } else {
-                        common_b
-                    };
-                    other.set_value(&ControlId::Power, power_value);
-                    if !is_standby {
-                        other.info.wake_up();
                     }
                 }
             }
@@ -2681,6 +2667,33 @@ mod tests {
             assert!(receiver.process_report(report).is_err(), "{report}");
         }
         assert_eq!(receiver.missing_signals, 0);
+    }
+
+    /// The power reports a DRS2D-NXT sent as each range was switched: A
+    /// transmits alone, B transmitting takes A along, and either range
+    /// standing by from both transmitting takes the other along.
+    #[tokio::test]
+    async fn each_range_takes_only_its_own_power_report() {
+        let mut receiver = dual_range_receiver();
+        let power = |receiver: &FurunoReportReceiver| {
+            [false, true].map(|b| value_on(receiver, b, &ControlId::Power))
+        };
+        let (transmit, standby) = (
+            Some(Power::Transmit as i32 as f64),
+            Some(Power::Standby as i32 as f64),
+        );
+
+        receiver.process_report("$N69,2,0,0,60,540,0").unwrap();
+        receiver.process_report("$N69,1,1,0,60,540,0").unwrap();
+        assert_eq!(power(&receiver), [transmit, standby], "A alone");
+
+        receiver.process_report("$N69,2,1,0,60,540,0").unwrap();
+        receiver.process_report("$N69,2,0,0,60,540,0").unwrap();
+        assert_eq!(power(&receiver), [transmit, transmit], "B takes A along");
+
+        receiver.process_report("$N69,1,1,0,60,540,0").unwrap();
+        receiver.process_report("$N69,1,0,0,60,540,0").unwrap();
+        assert_eq!(power(&receiver), [standby, standby], "B takes A down");
     }
 
     /// The rails belong to the antenna, so a dual-range NXT shows them on

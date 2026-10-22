@@ -291,6 +291,7 @@ impl Command {
     /// transmits.
     async fn request_range_b(&mut self) -> Result<(), RadarError> {
         let mut requests: Vec<(CommandId, &[i32])> = vec![
+            (CommandId::Status, &[0, RANGE_B]),     // $R69,0,1
             (CommandId::Range, &[0, 0, RANGE_B]),   // $R62,0,0,1
             (CommandId::Gain, &[0, 0, RANGE_B]),    // $R63,0,0,1
             (CommandId::Sea, &[0, 0, 0, RANGE_B]),  // $R64,0,0,0,1
@@ -1488,6 +1489,7 @@ mod tests {
                 "$RED",       // bird mode
                 "$REF",       // target analyzer
                 // Range B, which answers only when asked by name
+                "$R69,0,1",
                 "$R62,0,0,1",
                 "$R63,0,0,1",
                 "$R64,0,0,0,1",
