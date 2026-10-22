@@ -54,7 +54,8 @@ pub(crate) fn new(
     SharedControls::new(radar_id, sk_client_tx, args, controls)
 }
 
-/// The curves each STC band takes, by wire value.
+/// The curves each STC band takes, by wire value. A band without curves
+/// does nothing on that radar, so it is not offered.
 struct StcCurves {
     near: &'static [i32],
     middle: &'static [i32],
@@ -77,15 +78,49 @@ const NXT_STC_CURVES: StcCurves = StcCurves {
     far: &[1, 3],
 };
 
+/// The X-Class firmware applies only the near band; it echoes the middle
+/// and far curves but registers nothing that acts on them.
+const X_CLASS_STC_CURVES: StcCurves = StcCurves {
+    near: &[2, 3, 4, 5],
+    middle: &[],
+    far: &[],
+};
+
+/// The classic DRS has no STC commands, and the DRS4DL only echoes them.
+const NO_STC_CURVES: StcCurves = StcCurves {
+    near: &[],
+    middle: &[],
+    far: &[],
+};
+
+/// The manual tune range TimeZero offers.
+const TUNE_MAX: f64 = 2000.;
+/// The manual tune range the classic DRS and X-Class firmware apply, around
+/// a centre of 1475.
+const TUNE_MAX_2950: f64 = 2950.;
+/// The manual tune range the DRS4DL firmware applies.
+const TUNE_MAX_4096: f64 = 4096.;
+
 /// An STC band offering only `curves`, each named by its wire value.
 fn stc_curve(control_id: ControlId, curves: &[i32]) -> ControlBuilder {
-    let highest = *curves.last().expect("an STC band has curves");
+    let highest = *curves.last().expect("an offered STC band has curves");
     let names: Vec<String> = (0..=highest).map(|curve| curve.to_string()).collect();
     let names: Vec<&str> = names.iter().map(String::as_str).collect();
     new_list(control_id, &names).set_valid_values(curves.to_vec())
 }
 
-/// Per-model capability flags, derived from MaxSea.Radar.dll capability table.
+/// The names of a rejection control's levels, which go out as their index.
+fn rejection_levels(levels: u8) -> Option<&'static [&'static str]> {
+    match levels {
+        2 => Some(&["Off", "On"]),
+        3 => Some(&["Off", "Low", "High"]),
+        4 => Some(&["Off", "Low", "Medium", "High"]),
+        _ => None,
+    }
+}
+
+/// Per-model capability flags, derived from MaxSea.Radar.dll capability
+/// table and corrected from each model's firmware.
 #[allow(dead_code)]
 struct Capabilities {
     auto_gain: bool,
@@ -99,9 +134,12 @@ struct Capabilities {
     bird_mode: bool,
     target_analyzer: bool, // Doppler
     target_analyzer_rain: bool,
-    noise_rejection: bool,
-    interference_rejection_levels: u8, // 0=none, 2=off/on, 4=off/low/med/high
+    noise_rejection_levels: u8,        // 0=none, 2=off/on, 3=off/low/high
+    interference_rejection_levels: u8, // 0=none, 2=off/on, 3=off/low/high, 4=off/low/med/high
+    stc: &'static StcCurves,
+    anti_jamming: bool,
     tune: bool,
+    tune_max: f64,
     antenna_height: bool,
     tx_channel: bool,
     watchman: bool,
@@ -110,7 +148,8 @@ struct Capabilities {
 
 fn capabilities(model: &RadarModel) -> Capabilities {
     match model {
-        // NXT series: full feature set
+        // NXT series: full feature set. Both NXT firmware images store a
+        // noise rejection setting that nothing acts on.
         RadarModel::DRS2DNXT
         | RadarModel::DRS4DNXT
         | RadarModel::DRS6ANXT
@@ -127,58 +166,94 @@ fn capabilities(model: &RadarModel) -> Capabilities {
             bird_mode: true,
             target_analyzer: true,
             target_analyzer_rain: true,
-            noise_rejection: true,
+            noise_rejection_levels: 0,
             interference_rejection_levels: 2,
+            stc: &NXT_STC_CURVES,
+            anti_jamming: true,
             tune: true,
+            tune_max: TUNE_MAX,
             antenna_height: true,
             tx_channel: true,
             watchman: true,
             pulse_width: false, // solid-state, no selectable pulse
         },
-        // DRS6A X-Class: DRS + bird mode
+        // X-Class (DRS6A/12A/25A share one image): the NXT code base without
+        // its solid-state features
         RadarModel::DRS6AXCLASS => Capabilities {
             auto_gain: true,
             auto_sea: true,
             auto_rain: true,
             dual_range: false,
-            scan_speed: false,
-            sector_blanking: false,
-            main_bang_suppression: false,
+            scan_speed: true,
+            sector_blanking: true,
+            main_bang_suppression: true,
             rez_boost: false,
             bird_mode: true,
             target_analyzer: false,
             target_analyzer_rain: false,
-            noise_rejection: false,
-            interference_rejection_levels: 0,
+            noise_rejection_levels: 0,
+            interference_rejection_levels: 4,
+            stc: &X_CLASS_STC_CURVES,
+            anti_jamming: true,
             tune: true,
-            antenna_height: false,
+            tune_max: TUNE_MAX_2950,
+            antenna_height: true,
             tx_channel: false,
             watchman: false,
             pulse_width: true,
         },
-        // DRS4DL: limited (no auto gain, no scan speed, no dual range)
+        // DRS4DL / DRS4DL+: single range; scan speed is stored but drives
+        // nothing, and there is no bird mode or antenna height
         RadarModel::DRS4DL => Capabilities {
-            auto_gain: false,
+            auto_gain: true,
             auto_sea: true,
             auto_rain: true,
             dual_range: false,
             scan_speed: false,
-            sector_blanking: false,
-            main_bang_suppression: false,
+            sector_blanking: true,
+            main_bang_suppression: true,
             rez_boost: false,
             bird_mode: false,
             target_analyzer: false,
             target_analyzer_rain: false,
-            noise_rejection: false,
-            interference_rejection_levels: 2,
+            noise_rejection_levels: 3,
+            interference_rejection_levels: 3,
+            stc: &NO_STC_CURVES,
+            anti_jamming: true,
             tune: true,
+            tune_max: TUNE_MAX_4096,
             antenna_height: false,
             tx_channel: false,
             watchman: false,
             pulse_width: true,
         },
-        // Standard DRS
-        RadarModel::DRS | RadarModel::DRS4W => Capabilities {
+        // Classic NavNet 3D DRS, open and radome alike. Its antenna height
+        // command takes a height class rather than metres, so it is not
+        // offered; it has no STC or anti-jamming commands.
+        RadarModel::DRS => Capabilities {
+            auto_gain: true,
+            auto_sea: true,
+            auto_rain: true,
+            dual_range: false,
+            scan_speed: true,
+            sector_blanking: true,
+            main_bang_suppression: true,
+            rez_boost: false,
+            bird_mode: true,
+            target_analyzer: false,
+            target_analyzer_rain: false,
+            noise_rejection_levels: 0,
+            interference_rejection_levels: 2,
+            stc: &NO_STC_CURVES,
+            anti_jamming: false,
+            tune: true,
+            tune_max: TUNE_MAX_2950,
+            antenna_height: false,
+            tx_channel: false,
+            watchman: false,
+            pulse_width: true,
+        },
+        RadarModel::DRS4W => Capabilities {
             auto_gain: true,
             auto_sea: true,
             auto_rain: true,
@@ -190,9 +265,12 @@ fn capabilities(model: &RadarModel) -> Capabilities {
             bird_mode: false,
             target_analyzer: false,
             target_analyzer_rain: false,
-            noise_rejection: false,
+            noise_rejection_levels: 0,
             interference_rejection_levels: 0,
+            stc: &STC_CURVES,
+            anti_jamming: true,
             tune: true,
+            tune_max: TUNE_MAX,
             antenna_height: false,
             tx_channel: false,
             watchman: false,
@@ -211,9 +289,12 @@ fn capabilities(model: &RadarModel) -> Capabilities {
             bird_mode: false,
             target_analyzer: false,
             target_analyzer_rain: false,
-            noise_rejection: false,
+            noise_rejection_levels: 0,
             interference_rejection_levels: 4,
+            stc: &STC_CURVES,
+            anti_jamming: true,
             tune: true,
+            tune_max: TUNE_MAX,
             antenna_height: false,
             tx_channel: false,
             watchman: false,
@@ -232,9 +313,12 @@ fn capabilities(model: &RadarModel) -> Capabilities {
             bird_mode: false,
             target_analyzer: false,
             target_analyzer_rain: false,
-            noise_rejection: true,
+            noise_rejection_levels: 2,
             interference_rejection_levels: 4,
+            stc: &STC_CURVES,
+            anti_jamming: true,
             tune: true,
+            tune_max: TUNE_MAX,
             antenna_height: false,
             tx_channel: false,
             watchman: false,
@@ -253,9 +337,12 @@ fn capabilities(model: &RadarModel) -> Capabilities {
             bird_mode: false,
             target_analyzer: false,
             target_analyzer_rain: false,
-            noise_rejection: false,
+            noise_rejection_levels: 0,
             interference_rejection_levels: 0,
+            stc: &STC_CURVES,
+            anti_jamming: true,
             tune: true,
+            tune_max: TUNE_MAX,
             antenna_height: false,
             tx_channel: false,
             watchman: false,
@@ -341,31 +428,30 @@ pub(crate) fn update_when_model_known(info: &mut RadarInfo, model: RadarModel, v
         info.controls.add(new_string(ControlId::PulseWidth));
     }
 
-    // STC (Sensitivity Time Control) — all models support this
-    let stc = if model.is_nxt() {
-        &NXT_STC_CURVES
-    } else {
-        &STC_CURVES
-    };
+    // STC (Sensitivity Time Control), for the bands the model applies
     for (control_id, curves) in [
-        (ControlId::NearStcCurve, stc.near),
-        (ControlId::MiddleStcCurve, stc.middle),
-        (ControlId::FarStcCurve, stc.far),
+        (ControlId::NearStcCurve, cap.stc.near),
+        (ControlId::MiddleStcCurve, cap.stc.middle),
+        (ControlId::FarStcCurve, cap.stc.far),
     ] {
-        info.controls.add(stc_curve(control_id, curves));
+        if !curves.is_empty() {
+            info.controls.add(stc_curve(control_id, curves));
+        }
     }
     // StcRange ($RD2) is not registered: DRS4D-NXT does not respond to $RD2.
     // Re-enable when a model that supports it is available for testing.
 
-    info.controls
-        .add(new_list(ControlId::AntiJamming, &["Off", "On"]));
+    if cap.anti_jamming {
+        info.controls
+            .add(new_list(ControlId::AntiJamming, &["Off", "On"]));
+    }
 
     // Tuning
     if cap.tune {
         info.controls.add(new_auto(
             ControlId::Tune,
             0.,
-            2000.,
+            cap.tune_max,
             HAS_AUTO_NOT_ADJUSTABLE,
         ));
     }
@@ -415,27 +501,20 @@ pub(crate) fn update_when_model_known(info: &mut RadarInfo, model: RadarModel, v
         ));
     }
 
-    // Interference rejection (model-dependent levels)
-    match cap.interference_rejection_levels {
-        2 => {
-            info.controls
-                .add(new_list(ControlId::InterferenceRejection, &["Off", "On"]));
+    // Interference and noise rejection (model-dependent levels)
+    for (control_id, levels) in [
+        (
+            ControlId::InterferenceRejection,
+            cap.interference_rejection_levels,
+        ),
+        (ControlId::NoiseRejection, cap.noise_rejection_levels),
+    ] {
+        if let Some(names) = rejection_levels(levels) {
+            info.controls.add(new_list(control_id, names));
         }
-        4 => {
-            info.controls.add(new_list(
-                ControlId::InterferenceRejection,
-                &["Off", "Low", "Medium", "High"],
-            ));
-        }
-        _ => {}
     }
 
-    // NXT-specific per-range features. The NXT firmware stores a noise
-    // rejection setting but nothing acts on it.
-    if cap.noise_rejection && !model.is_nxt() {
-        info.controls
-            .add(new_list(ControlId::NoiseRejection, &["Off", "On"]));
-    }
+    // NXT-specific per-range features
     if cap.rez_boost {
         info.controls.add(new_list(
             ControlId::TargetSeparation,
@@ -823,6 +902,71 @@ mod tests {
             .clone();
         assert_eq!(curves, Some(vec![0, 1, 2]));
         assert!(other.contains_key(&ControlId::NoiseRejection));
+    }
+
+    /// What each radar before the NXT offers, from its firmware: a control
+    /// whose command the radar lacks or ignores is not offered, and one it
+    /// applies is.
+    #[test]
+    fn a_drs_before_the_nxt_offers_what_its_firmware_applies() {
+        let has = |controls: &SharedControls, id| controls.contains_key(&id);
+        let levels = |controls: &SharedControls, id| {
+            controls
+                .get(&id)
+                .map(|c| c.item().max_value.unwrap() as i32 + 1)
+        };
+        let highest =
+            |controls: &SharedControls, id| controls.get(&id).and_then(|c| c.item().max_value);
+        let stc = [
+            ControlId::NearStcCurve,
+            ControlId::MiddleStcCurve,
+            ControlId::FarStcCurve,
+        ];
+        let blanking = [
+            ControlId::NoTransmitSector1,
+            ControlId::NoTransmitSector2,
+            ControlId::MainBangSuppression,
+        ];
+
+        // Classic NavNet 3D DRS: no STC or anti-jamming command at all
+        let classic = controls_of(RadarModel::DRS);
+        assert!(stc.iter().all(|id| !has(&classic, *id)));
+        assert!(!has(&classic, ControlId::AntiJamming));
+        assert!(blanking.iter().all(|id| has(&classic, *id)));
+        assert!(has(&classic, ControlId::ScanSpeed));
+        assert!(has(&classic, ControlId::BirdMode));
+        assert!(!has(&classic, ControlId::AntennaHeight));
+        assert_eq!(levels(&classic, ControlId::InterferenceRejection), Some(2));
+        assert_eq!(highest(&classic, ControlId::Tune), Some(2950.));
+
+        // DRS4DL: STC is only echoed; three levels of each rejection
+        let dl = controls_of(RadarModel::DRS4DL);
+        assert!(stc.iter().all(|id| !has(&dl, *id)));
+        assert!(blanking.iter().all(|id| has(&dl, *id)));
+        assert!(!has(&dl, ControlId::ScanSpeed));
+        let gain = serde_json::to_value(dl.get(&ControlId::Gain).unwrap().item()).unwrap();
+        assert_eq!(gain["hasAuto"], true, "{gain}");
+        assert_eq!(levels(&dl, ControlId::InterferenceRejection), Some(3));
+        assert_eq!(levels(&dl, ControlId::NoiseRejection), Some(3));
+        assert_eq!(highest(&dl, ControlId::Tune), Some(4096.));
+
+        // X-Class: only the near STC band does anything
+        let x_class = controls_of(RadarModel::DRS6AXCLASS);
+        assert_eq!(
+            x_class
+                .get(&ControlId::NearStcCurve)
+                .unwrap()
+                .item()
+                .valid_values,
+            Some(vec![2, 3, 4, 5])
+        );
+        assert!(!has(&x_class, ControlId::MiddleStcCurve));
+        assert!(!has(&x_class, ControlId::FarStcCurve));
+        assert!(blanking.iter().all(|id| has(&x_class, *id)));
+        assert!(has(&x_class, ControlId::ScanSpeed));
+        assert!(has(&x_class, ControlId::AntennaHeight));
+        assert_eq!(levels(&x_class, ControlId::InterferenceRejection), Some(4));
+        assert!(!has(&x_class, ControlId::NoiseRejection));
     }
 
     /// A sector control holds radians, and rounds to the step it was built

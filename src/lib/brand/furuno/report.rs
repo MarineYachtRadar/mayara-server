@@ -1117,9 +1117,11 @@ impl FurunoReportReceiver {
                 // Response format (varies):
                 // - From SET echo: $N67,0,{feature},{value},{drid} (4 args)
                 // - From REQUEST: $N67,{feature},{value},{drid} (3 args)
-                // feature 0: Interference Rejection (0=OFF, else ON; the
-                //   radar keeps any ON as 1, and sets it on both ranges)
-                // feature 3: Noise Reduction (0=OFF, 1=ON)
+                // feature 0: Interference Rejection; the NXT keeps any ON as
+                //   1 and sets it on both ranges, the classic DRS reports 2
+                // feature 3: Noise Reduction
+                // A level above the control's highest is that highest level:
+                // on, for a radar with only off and on.
                 let (feature, value, drid) = if numbers.len() >= 4 && numbers[0] == 0.0 {
                     // SET echo format
                     (numbers[1] as i32, numbers[2] as i32, numbers[3])
@@ -1135,20 +1137,16 @@ impl FurunoReportReceiver {
                 };
 
                 match feature {
-                    0 => {
-                        let enabled = if value != 0 { 1.0 } else { 0.0 };
-                        self.common_for_range(drid as u8)
-                            .set_value(&ControlId::InterferenceRejection, enabled);
-                    }
-                    3 => {
-                        let enabled = if value == 1 { 1.0 } else { 0.0 };
+                    0 | 3 => {
+                        let control_id = if feature == 0 {
+                            ControlId::InterferenceRejection
+                        } else {
+                            ControlId::NoiseRejection
+                        };
                         let common = self.common_for_range(drid as u8);
-                        if common
-                            .info
-                            .controls
-                            .contains_key(&ControlId::NoiseRejection)
-                        {
-                            common.set_value(&ControlId::NoiseRejection, enabled);
+                        if let Some(control) = common.info.controls.get(&control_id) {
+                            let highest = control.item().max_value.unwrap_or(1.);
+                            common.set_value(&control_id, (value as f64).min(highest));
                         }
                     }
                     _ => {
@@ -2449,6 +2447,16 @@ mod tests {
 
     /// An NXT's radar info with its model known; `dual` names its range.
     fn nxt_info(radars: &SharedRadars, args: &Cli, dual: Option<&str>) -> RadarInfo {
+        model_info(radars, args, dual, RadarModel::DRS4DNXT)
+    }
+
+    /// The radar info of a `model` with its model known.
+    fn model_info(
+        radars: &SharedRadars,
+        args: &Cli,
+        dual: Option<&str>,
+        model: RadarModel,
+    ) -> RadarInfo {
         let addr = SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 2), 10000);
         let mut info = RadarInfo::new(
             radars,
@@ -2470,7 +2478,7 @@ mod tests {
             true,
         );
         info.controls.set_user_name(info.key());
-        settings::update_when_model_known(&mut info, RadarModel::DRS4DNXT, "1.00");
+        settings::update_when_model_known(&mut info, model, "1.00");
         info
     }
 
@@ -2978,6 +2986,37 @@ mod tests {
         let ir = ControlId::InterferenceRejection;
         assert_eq!(value_on(&receiver, true, &ir), Some(1.));
         assert_eq!(value_on(&receiver, false, &ir), Some(0.));
+    }
+
+    /// A rejection level above the control's highest is read as that
+    /// highest level: the classic DRS reports interference rejection on as
+    /// 2, which on its off/on control is on. The DRS4DL has three levels of
+    /// noise rejection, so its 2 stays 2.
+    #[tokio::test]
+    async fn a_rejection_level_beyond_the_control_is_its_highest() {
+        for (model, report, id, expected) in [
+            (
+                RadarModel::DRS,
+                "$N67,0,0,2,0",
+                ControlId::InterferenceRejection,
+                1.,
+            ),
+            (
+                RadarModel::DRS4DL,
+                "$N67,0,3,2,0",
+                ControlId::NoiseRejection,
+                2.,
+            ),
+        ] {
+            let radars = SharedRadars::new();
+            let args = Cli::parse_from(["mayara-server"]);
+            let info = model_info(&radars, &args, None, model);
+            let mut receiver = FurunoReportReceiver::new(&args, radars, info, model);
+
+            receiver.process_report(report).unwrap();
+
+            assert_eq!(value_on(&receiver, false, &id), Some(expected), "{model}");
+        }
     }
 
     /// The keep-alive frame the radar sends every 30 s has no line ending of

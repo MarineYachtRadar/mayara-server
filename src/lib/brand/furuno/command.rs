@@ -17,6 +17,11 @@ use crate::radar::{Power, RadarError, RadarInfo};
 /// A sector's start and width on the wire wrap at a full circle of degrees.
 const FULL_CIRCLE_DEGREES: i32 = 360;
 
+/// The auto sea level sent along with sea. The NXT and X-Class firmware
+/// take 0..20 and keep their previous level for anything above; X-Class
+/// then does not switch to auto at all. A DRS2D-NXT came up at 10.
+const SEA_AUTO_LEVEL: i32 = 10;
+
 /// The dual range id of Range B.
 const RANGE_B: i32 = 1;
 
@@ -237,40 +242,46 @@ impl Command {
         self.send(CommandMode::Request, CommandId::BlindSector, &[])
             .await?; // $R77
 
-        self.send(CommandMode::Request, CommandId::JammingAble, &[])
-            .await?; // $RE8
+        if self.controls.contains_key(&ControlId::AntiJamming) {
+            self.send(CommandMode::Request, CommandId::JammingAble, &[])
+                .await?; // $RE8
+        }
 
         // The radar sends $N7D only when a signal bit changes, so ask.
         self.send(CommandMode::Request, CommandId::Alarm, &[])
             .await?; // $R7D
 
-        // STC (Sensitivity Time Control) curves
-        if self.controls.contains_key(&ControlId::NearStcCurve) {
-            self.send(CommandMode::Request, CommandId::NearSTC, &[])
-                .await?; // $R85
-            self.send(CommandMode::Request, CommandId::MiddleSTC, &[])
-                .await?; // $R86
-            self.send(CommandMode::Request, CommandId::FarSTC, &[])
-                .await?; // $R87
+        // STC (Sensitivity Time Control) curves, for the bands the model has
+        for (control_id, command_id) in [
+            (ControlId::NearStcCurve, CommandId::NearSTC), // $R85
+            (ControlId::MiddleStcCurve, CommandId::MiddleSTC), // $R86
+            (ControlId::FarStcCurve, CommandId::FarSTC),   // $R87
+        ] {
+            if self.controls.contains_key(&control_id) {
+                self.send(CommandMode::Request, command_id, &[]).await?;
+            }
         }
 
-        if self.controls.contains_key(&ControlId::NoiseRejection) {
-            self.send(CommandMode::Request, CommandId::SignalProcessing, &[0, 3])
-                .await?; // $R67,0,3 - Noise Reduction
-        }
-        if self.controls.contains_key(&ControlId::BirdMode) {
-            // NXT-specific features (query signal processing features)
-            self.send(CommandMode::Request, CommandId::SignalProcessing, &[0, 0])
-                .await?; // $R67,0,0 - Interference Rejection
-
-            self.send(CommandMode::Request, CommandId::RezBoost, &[])
-                .await?; // $REE - Beam sharpening (Target Separation)
-
-            self.send(CommandMode::Request, CommandId::BirdMode, &[])
-                .await?; // $RED - Bird mode
-
-            self.send(CommandMode::Request, CommandId::TargetAnalyzer, &[])
-                .await?; // $REF - Target Analyzer (Doppler)
+        // Signal processing and the NXT features, for the controls the model has
+        let requests: [(ControlId, CommandId, &[i32]); 5] = [
+            (
+                ControlId::NoiseRejection,
+                CommandId::SignalProcessing,
+                &[0, 3],
+            ), // $R67,0,3
+            (
+                ControlId::InterferenceRejection,
+                CommandId::SignalProcessing,
+                &[0, 0],
+            ), // $R67,0,0
+            (ControlId::TargetSeparation, CommandId::RezBoost, &[]), // $REE
+            (ControlId::BirdMode, CommandId::BirdMode, &[]),         // $RED
+            (ControlId::Doppler, CommandId::TargetAnalyzer, &[]),    // $REF
+        ];
+        for (control_id, command_id, args) in requests {
+            if self.controls.contains_key(&control_id) {
+                self.send(CommandMode::Request, command_id, args).await?;
+            }
         }
 
         if self.has_dual_range {
@@ -469,7 +480,7 @@ impl CommandSender for Command {
                 // Per-range: $S64,{auto},{value},{auto_val},{drid},0,0
                 cmd.push(auto);
                 cmd.push(value);
-                cmd.push(50);
+                cmd.push(SEA_AUTO_LEVEL);
                 cmd.push(self.dual_range_id);
                 cmd.push(0);
                 cmd.push(0);
@@ -549,23 +560,21 @@ impl CommandSender for Command {
 
             // NXT-specific features
             ControlId::NoiseRejection => {
-                // Format: $S67,0,3,{enabled},0
+                // Format: $S67,0,3,{level},0
                 // Feature 3 = Noise Reduction
-                let enabled = if value > 0 { 1 } else { 0 };
                 cmd.push(0);
                 cmd.push(3);
-                cmd.push(enabled);
+                cmd.push(value);
                 cmd.push(0);
                 CommandId::SignalProcessing
             }
             ControlId::InterferenceRejection => {
-                // Format: $S67,0,0,{enabled},0
-                // Feature 0 = Interference Rejection
-                // Note: enabled=2 (not 1) per protocol spec
-                let enabled = if value > 0 { 2 } else { 0 };
+                // Format: $S67,0,0,{level},0
+                // Feature 0 = Interference Rejection. A radar with only off
+                // and on takes any level above 0 as on.
                 cmd.push(0);
                 cmd.push(0);
-                cmd.push(enabled);
+                cmd.push(value);
                 cmd.push(0);
                 CommandId::SignalProcessing
             }
@@ -1026,7 +1035,7 @@ mod tests {
     async fn the_clutter_controls_each_order_their_arguments_differently() {
         let cases = [
             (ControlId::Gain, "$S63,0,80,0,80,0"),
-            (ControlId::Sea, "$S64,0,80,50,0,0,0"),
+            (ControlId::Sea, "$S64,0,80,10,0,0,0"),
             (ControlId::Rain, "$S65,0,80,0,0,0,0"),
         ];
 
@@ -1250,26 +1259,21 @@ mod tests {
     }
 
     /// Noise reduction and interference rejection are the same command with a
-    /// different feature number -- and interference rejection is switched on
-    /// with a 2, not the 1 that every other flag uses.
+    /// different feature number, and each goes out as its level: the DRS4DL
+    /// has three of each, and a radar with only off and on takes any level
+    /// above 0 as on.
     #[tokio::test]
-    async fn the_two_signal_processing_features_differ_in_more_than_their_number() {
-        let (mut command, info, wire) = nxt();
+    async fn the_two_signal_processing_features_send_their_level() {
+        let (mut command, info, wire) = radar(RadarModel::DRS4DL);
 
-        set(&mut command, &info, cv(ControlId::NoiseRejection, json!(1))).await;
-        set(
-            &mut command,
-            &info,
-            cv(ControlId::InterferenceRejection, json!(1)),
-        )
-        .await;
-        set(&mut command, &info, cv(ControlId::NoiseRejection, json!(0))).await;
-        set(
-            &mut command,
-            &info,
-            cv(ControlId::InterferenceRejection, json!(0)),
-        )
-        .await;
+        for (control_id, level) in [
+            (ControlId::NoiseRejection, 2),
+            (ControlId::InterferenceRejection, 1),
+            (ControlId::NoiseRejection, 0),
+            (ControlId::InterferenceRejection, 2),
+        ] {
+            set(&mut command, &info, cv(control_id, json!(level))).await;
+        }
 
         let sent: Vec<String> = wire
             .sentences()
@@ -1279,10 +1283,10 @@ mod tests {
         assert_eq!(
             sent,
             [
-                "$S67,0,3,1,0",
-                "$S67,0,0,2,0",
+                "$S67,0,3,2,0",
+                "$S67,0,0,1,0",
                 "$S67,0,3,0,0",
-                "$S67,0,0,0,0"
+                "$S67,0,0,2,0"
             ]
         );
     }
@@ -1503,28 +1507,40 @@ mod tests {
 
     /// A radar without the NXT signal processing, transmit channel or antenna
     /// height is not asked about them: a query for a control it does not have
-    /// draws an error reply.
+    /// draws an error reply. The classic DRS has no STC or anti-jamming
+    /// command at all.
     #[tokio::test]
     async fn a_radar_is_not_asked_about_controls_it_does_not_have() {
-        let (mut command, _info, wire) = radar(RadarModel::DRS4DL);
-
-        command.send_report_requests().await.unwrap();
-
-        let sentences = wire.sentences();
-        for absent in [
-            "$REE",
-            "$RED",
-            "$REF",
-            "$R67,0,3",
-            "$R67,0,0",
-            "$REC",
-            "$R84,0,0,0",
+        for (model, absent) in [
+            (
+                RadarModel::DRS4W,
+                &[
+                    "$REE",
+                    "$RED",
+                    "$REF",
+                    "$R67,0,3",
+                    "$R67,0,0",
+                    "$REC",
+                    "$R84,0,0,0",
+                ][..],
+            ),
+            (
+                RadarModel::DRS,
+                &["$R85", "$R86", "$R87", "$RE8", "$REE", "$REF"],
+            ),
         ] {
-            assert!(
-                !sentences.contains(&absent.to_string()),
-                "{absent} went out anyway: {sentences:?}"
-            );
+            let (mut command, _info, wire) = radar(model);
+
+            command.send_report_requests().await.unwrap();
+
+            let sentences = wire.sentences();
+            for absent in absent {
+                assert!(
+                    !sentences.contains(&absent.to_string()),
+                    "{model}: {absent} went out anyway: {sentences:?}"
+                );
+            }
+            assert!(sentences.contains(&"$R69".to_string()), "{sentences:?}");
         }
-        assert!(sentences.contains(&"$R69".to_string()), "{sentences:?}");
     }
 }
