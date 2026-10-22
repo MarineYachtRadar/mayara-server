@@ -68,9 +68,10 @@ const STC_CURVES: StcCurves = StcCurves {
     far: &[0, 1, 2],
 };
 
-/// The curves the DRS4D-NXT firmware applies; it echoes any other value,
-/// then reports the curve it kept. Its default far curve is 3.
-const DRS4D_NXT_STC_CURVES: StcCurves = StcCurves {
+/// The curves the NXT firmware applies, read from both the DRS4D-NXT and
+/// the DRS6A/12A/25A-NXT images; it echoes any other value, then reports
+/// the curve it kept. Its default far curve is 3.
+const NXT_STC_CURVES: StcCurves = StcCurves {
     near: &[2, 3, 4, 5],
     middle: &[0, 1],
     far: &[1, 3],
@@ -341,8 +342,8 @@ pub(crate) fn update_when_model_known(info: &mut RadarInfo, model: RadarModel, v
     }
 
     // STC (Sensitivity Time Control) — all models support this
-    let stc = if model.runs_drs4d_nxt_firmware() {
-        &DRS4D_NXT_STC_CURVES
+    let stc = if model.is_nxt() {
+        &NXT_STC_CURVES
     } else {
         &STC_CURVES
     };
@@ -429,9 +430,9 @@ pub(crate) fn update_when_model_known(info: &mut RadarInfo, model: RadarModel, v
         _ => {}
     }
 
-    // NXT-specific per-range features. The DRS4D-NXT firmware stores a
-    // noise rejection setting but nothing acts on it.
-    if cap.noise_rejection && !model.runs_drs4d_nxt_firmware() {
+    // NXT-specific per-range features. The NXT firmware stores a noise
+    // rejection setting but nothing acts on it.
+    if cap.noise_rejection && !model.is_nxt() {
         info.controls
             .add(new_list(ControlId::NoiseRejection, &["Off", "On"]));
     }
@@ -791,12 +792,19 @@ mod tests {
         info.controls
     }
 
-    /// The DRS4D-NXT firmware applies only some STC curves and quietly puts
-    /// the old one back for the rest, so only those are offered. Its noise
+    /// The NXT firmware applies only some STC curves and quietly puts the
+    /// old one back for the rest, so only those are offered. Its noise
     /// rejection is stored but drives nothing, so it is not offered at all.
+    /// The two NXT firmware images read agree on both.
     #[test]
     fn a_drs_nxt_offers_only_what_its_firmware_applies() {
-        for model in [RadarModel::DRS2DNXT, RadarModel::DRS4DNXT] {
+        for model in [
+            RadarModel::DRS2DNXT,
+            RadarModel::DRS4DNXT,
+            RadarModel::DRS6ANXT,
+            RadarModel::DRS12ANXT,
+            RadarModel::DRS25ANXT,
+        ] {
             let controls = controls_of(model);
             let curves = |id| controls.get(&id).unwrap().item().valid_values.clone();
 
@@ -806,15 +814,14 @@ mod tests {
             assert!(!controls.contains_key(&ControlId::NoiseRejection));
         }
 
-        let other = controls_of(RadarModel::DRS12ANXT);
-        assert_eq!(
-            other
-                .get(&ControlId::FarStcCurve)
-                .unwrap()
-                .item()
-                .valid_values,
-            Some(vec![0, 1, 2])
-        );
+        let other = controls_of(RadarModel::FAR15x3);
+        let curves = other
+            .get(&ControlId::FarStcCurve)
+            .unwrap()
+            .item()
+            .valid_values
+            .clone();
+        assert_eq!(curves, Some(vec![0, 1, 2]));
         assert!(other.contains_key(&ControlId::NoiseRejection));
     }
 

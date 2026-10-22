@@ -1431,7 +1431,7 @@ mod tests {
     /// What mayara asks a radar at startup. The list is the whole reason a
     /// freshly discovered radar arrives in the GUI with its controls filled
     /// in, and every entry is a control the model actually has: the
-    /// DRS4D-NXT's noise rejection does nothing, so it is not asked about.
+    /// NXT's noise rejection does nothing, so it is not asked about.
     #[tokio::test]
     async fn the_startup_queries_cover_the_models_controls() {
         let (mut command, _info, wire) = nxt();

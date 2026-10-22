@@ -419,12 +419,6 @@ impl RadarModel {
                 | RadarModel::DRS25ANXT
         )
     }
-
-    /// Whether this model runs the DRS4D-NXT's firmware, whose control
-    /// limits were read from that firmware and checked on a DRS2D-NXT.
-    pub(crate) fn runs_drs4d_nxt_firmware(&self) -> bool {
-        matches!(self, RadarModel::DRS2DNXT | RadarModel::DRS4DNXT)
-    }
 }
 
 // =============================================================================
