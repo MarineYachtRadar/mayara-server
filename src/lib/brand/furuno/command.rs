@@ -129,8 +129,8 @@ impl Command {
         (600 - transmit).max(60)
     }
 
-    fn get_zone_values(&self, control_id: &ControlId) -> (i32, i32, bool) {
-        if let Some(control) = self.controls.get(control_id) {
+    fn get_zone_values(controls: &SharedControls, control_id: &ControlId) -> (i32, i32, bool) {
+        if let Some(control) = controls.get(control_id) {
             // A control holds SI, which for a sector angle is radians. The
             // radar wants the degrees its own report arrived in.
             let to_wire = |v: f64| {
@@ -152,12 +152,13 @@ impl Command {
     /// its width is not zero, so a disabled sector goes out as start 0 and
     /// width 0, as a chartplotter sends it.
     fn fill_blind_sector(
-        &self,
+        controls: &SharedControls,
         zone1: Option<(i32, i32, bool)>,
         zone2: Option<(i32, i32, bool)>,
     ) -> Vec<i32> {
         let sector = |zone: Option<(i32, i32, bool)>, control_id| {
-            let (start, end, enabled) = zone.unwrap_or_else(|| self.get_zone_values(control_id));
+            let (start, end, enabled) =
+                zone.unwrap_or_else(|| Self::get_zone_values(controls, control_id));
             // A control keeps angles within ±180°; the radar takes 0..359.
             if enabled {
                 [
@@ -488,14 +489,14 @@ impl CommandSender for Command {
             ControlId::NoTransmitSector1 => {
                 let end_value = cv.end_as_f64().map(|v| v as i32).unwrap_or(0);
                 let enabled = cv.enabled.unwrap_or(false);
-                cmd = self.fill_blind_sector(Some((value, end_value, enabled)), None);
+                cmd = Self::fill_blind_sector(controls, Some((value, end_value, enabled)), None);
 
                 CommandId::BlindSector
             }
             ControlId::NoTransmitSector2 => {
                 let end_value = cv.end_as_f64().map(|v| v as i32).unwrap_or(0);
                 let enabled = cv.enabled.unwrap_or(false);
-                cmd = self.fill_blind_sector(None, Some((value, end_value, enabled)));
+                cmd = Self::fill_blind_sector(controls, None, Some((value, end_value, enabled)));
 
                 CommandId::BlindSector
             }
@@ -1104,6 +1105,26 @@ mod tests {
         second.end_value = Some(260.);
         second.enabled = Some(true);
         set(&mut command, &info, second).await;
+
+        assert_eq!(wire.first(), "$S77,0,100,30,200,60");
+    }
+
+    /// A sector set on Range B carries the other sector along as Range B
+    /// holds it, not Range A, which may not have caught up yet.
+    #[tokio::test]
+    async fn a_range_b_sector_carries_range_b_s_other_sector() {
+        let (mut command, _, wire) = nxt();
+        let (_, range_b, _) = nxt();
+        range_b
+            .controls
+            .set_sector(&ControlId::NoTransmitSector1, 100., 130., Some(true))
+            .expect("sector 1 as Range B holds it");
+        command.dual_range_id = 1;
+
+        let mut second = cv(ControlId::NoTransmitSector2, json!(200));
+        second.end_value = Some(260.);
+        second.enabled = Some(true);
+        set(&mut command, &range_b, second).await;
 
         assert_eq!(wire.first(), "$S77,0,100,30,200,60");
     }
