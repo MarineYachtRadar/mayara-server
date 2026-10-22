@@ -953,6 +953,9 @@ impl FurunoReportReceiver {
                 let auto = numbers[0] as u8;
                 let sea = numbers[1];
                 let drid = self.extract_drid(&command_id, &numbers);
+                if let (Some(&level), Some(cs)) = (numbers.get(2), &mut self.command_sender) {
+                    cs.set_sea_auto_level(drid, level as i32);
+                }
                 self.common_for_range(drid)
                     .set_value_auto(&ControlId::Sea, sea, auto);
             }

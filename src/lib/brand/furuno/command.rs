@@ -17,9 +17,10 @@ use crate::radar::{Power, RadarError, RadarInfo};
 /// A sector's start and width on the wire wrap at a full circle of degrees.
 const FULL_CIRCLE_DEGREES: i32 = 360;
 
-/// The auto sea level sent along with sea. The NXT and X-Class firmware
-/// take 0..20 and keep their previous level for anything above; X-Class
-/// then does not switch to auto at all. A DRS2D-NXT came up at 10.
+/// The auto sea level sent along with sea until the radar reports its own.
+/// The NXT and X-Class firmware take 0..20 and keep their previous level
+/// for anything above; X-Class then does not switch to auto at all. A
+/// DRS2D-NXT came up at 10.
 const SEA_AUTO_LEVEL: i32 = 10;
 
 /// The dual range id of Range B.
@@ -35,6 +36,9 @@ pub(crate) struct Command {
     pub dual_range_id: i32,
     /// Whether this radar supports dual range (NXT models).
     pub has_dual_range: bool,
+    /// The auto sea level each range last reported, sent back with sea so
+    /// that mayara keeps the level set on the plotter.
+    sea_auto_levels: [i32; 2],
 }
 
 impl Command {
@@ -46,6 +50,13 @@ impl Command {
             ranges: info.ranges.clone(),
             dual_range_id: 0,
             has_dual_range,
+            sea_auto_levels: [SEA_AUTO_LEVEL; 2],
+        }
+    }
+
+    pub(crate) fn set_sea_auto_level(&mut self, drid: u8, level: i32) {
+        if let Some(slot) = self.sea_auto_levels.get_mut(drid as usize) {
+            *slot = level;
         }
     }
 
@@ -480,7 +491,7 @@ impl CommandSender for Command {
                 // Per-range: $S64,{auto},{value},{auto_val},{drid},0,0
                 cmd.push(auto);
                 cmd.push(value);
-                cmd.push(SEA_AUTO_LEVEL);
+                cmd.push(self.sea_auto_levels[self.dual_range_id as usize]);
                 cmd.push(self.dual_range_id);
                 cmd.push(0);
                 cmd.push(0);
@@ -1026,6 +1037,20 @@ mod tests {
     }
 
     // ----- Gain, sea, rain -----
+
+    /// Switching sea to auto must not overwrite the auto level the plotter
+    /// set, so each range sends back the level it last reported.
+    #[tokio::test]
+    async fn sea_sends_back_the_auto_level_its_range_reported() {
+        let (mut command, info, wire) = nxt();
+        command.set_sea_auto_level(0, 4);
+        command.set_sea_auto_level(1, 7);
+        command.dual_range_id = 1;
+
+        set(&mut command, &info, cv(ControlId::Sea, json!(30))).await;
+
+        assert_eq!(wire.first(), "$S64,0,30,7,1,0,0");
+    }
 
     /// Gain, sea and rain each put the dual range id in a different place, and
     /// each carries a fixed auto value the radar expects but mayara does not
