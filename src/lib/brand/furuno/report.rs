@@ -481,14 +481,26 @@ impl FurunoReportReceiver {
                                 cs.dual_range_id = DUAL_RANGE_B;
                             }
                             let claim = transmit_claim_after_request(self.transmit_is_ours, DUAL_RANGE_B, &cv.control_value);
-                            let a_transmits = self.common.info.controls.get(&ControlId::Power).and_then(|c| c.value)
-                                == Some(Power::Transmit as i32 as f64);
+                            let a_transmits = transmits(&self.common);
+                            let restore_a = restores_range_a(
+                                &cv.control_value,
+                                a_transmits,
+                                self.common_b.as_ref().is_some_and(transmits),
+                            );
+                            let a_is_ours = self.transmit_is_ours == Some(DUAL_RANGE_A)
+                                || (self.transmit_is_ours == Some(DUAL_RANGE_B) && !self.range_a_is_theirs);
                             self.range_a_is_theirs = range_a_is_theirs(self.transmit_is_ours, claim, self.range_a_is_theirs, a_transmits);
                             if let Some(ref mut cb) = self.common_b
                                 && let Err(e) = cb.process_control_update(cv, &mut self.command_sender).await {
                                     return Err(e);
                                 }
                             self.transmit_is_ours = claim;
+                            if restore_a {
+                                self.switch_range_a_back_on().await?;
+                                if a_is_ours {
+                                    self.transmit_is_ours = Some(DUAL_RANGE_A);
+                                }
+                            }
                         },
                     }
                 },
@@ -646,18 +658,26 @@ impl FurunoReportReceiver {
         cs.dual_range_id = range;
         let standby = ControlValue::new(ControlId::Power, Value::from(Power::Standby as i32));
         cs.set_control(&standby, &target.info.controls).await?;
-        if range == DUAL_RANGE_B && self.range_a_is_theirs {
-            log::info!(
-                "{}: Range A transmitted before we did, switching it back on",
-                self.common.key
-            );
-            cs.dual_range_id = DUAL_RANGE_A;
-            let transmit = ControlValue::new(ControlId::Power, Value::from(Power::Transmit as i32));
-            cs.set_control(&transmit, &self.common.info.controls)
-                .await?;
-        }
         self.transmit_is_ours = None;
+        if range == DUAL_RANGE_B && self.range_a_is_theirs {
+            self.switch_range_a_back_on().await?;
+        }
         Ok(())
+    }
+
+    /// Range B standing down takes Range A down too; this puts A straight
+    /// back on, for whoever was using it.
+    async fn switch_range_a_back_on(&mut self) -> Result<(), RadarError> {
+        let Some(cs) = &mut self.command_sender else {
+            return Ok(());
+        };
+        log::info!(
+            "{}: Range B stood down, switching Range A back on",
+            self.common.key
+        );
+        cs.dual_range_id = DUAL_RANGE_A;
+        let transmit = ControlValue::new(ControlId::Power, Value::from(Power::Transmit as i32));
+        cs.set_control(&transmit, &self.common.info.controls).await
     }
 
     fn login_to_radar(&mut self) -> Result<(), RadarError> {
@@ -2329,6 +2349,29 @@ async fn conditional_read(
 /// The first argument of a report that needs one. A radar is free to send
 /// `$N8E` with nothing after it -- and mayara asks for exactly that with
 /// `$R8E,0` -- so the absence has to be an error rather than an index.
+fn transmits(common: &CommonRadar) -> bool {
+    common
+        .info
+        .controls
+        .get(&ControlId::Power)
+        .and_then(|c| c.value)
+        == Some(Power::Transmit as i32 as f64)
+}
+
+/// Whether a request to Range B must be followed by switching Range A back
+/// on: standing B down while both transmit takes A down too, and only B
+/// was asked for.
+fn restores_range_a(cv: &ControlValue, a_transmits: bool, b_transmits: bool) -> bool {
+    cv.id == ControlId::Power
+        && a_transmits
+        && b_transmits
+        && cv
+            .as_value()
+            .ok()
+            .and_then(|v| Power::from_value(&v).ok())
+            .is_some_and(|power| power != Power::Transmit)
+}
+
 /// Whether Range A transmitted for someone else before we claimed Range B,
 /// worked out when a request moves our claim. Range B transmits only
 /// alongside Range A, so switching B on finds A already transmitting
@@ -2748,6 +2791,26 @@ mod tests {
         assert!(!range_a_is_theirs(a, b, false, true), "A was ours");
         assert!(range_a_is_theirs(b, b, true, true), "B asked again");
         assert!(!range_a_is_theirs(b, None, true, true), "B standby");
+    }
+
+    /// Range B asked to stand down while both ranges transmit takes Range A
+    /// down too, so A goes back on; any other request leaves A alone.
+    #[test]
+    fn standing_range_b_down_puts_range_a_back_on() {
+        let power = |p: Power| ControlValue::new(ControlId::Power, Value::from(p as i32));
+        let standby = power(Power::Standby);
+        assert!(restores_range_a(&standby, true, true), "both transmit");
+        assert!(
+            !restores_range_a(&standby, true, false),
+            "B already standby"
+        );
+        assert!(!restores_range_a(&standby, false, false), "both standby");
+        assert!(
+            !restores_range_a(&power(Power::Transmit), true, true),
+            "transmit"
+        );
+        let gain = ControlValue::new(ControlId::Gain, Value::from(1));
+        assert!(!restores_range_a(&gain, true, true), "not power");
     }
 
     /// Range B switched on by someone else next to our Range A ends our claim:

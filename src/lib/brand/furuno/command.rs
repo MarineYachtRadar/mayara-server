@@ -286,9 +286,8 @@ impl Command {
 
     /// Range B's own settings. A request without a range answers for Range
     /// A, so each of these names Range B in the field its report carries the
-    /// range in. Its power status is left out: mayara gives both ranges the
-    /// one transmitter's state, and Range B reports standby while Range A
-    /// transmits.
+    /// range in, its power status included: Range B reports standby while
+    /// Range A transmits alone.
     async fn request_range_b(&mut self) -> Result<(), RadarError> {
         let mut requests: Vec<(CommandId, &[i32])> = vec![
             (CommandId::Status, &[0, RANGE_B]),     // $R69,0,1
