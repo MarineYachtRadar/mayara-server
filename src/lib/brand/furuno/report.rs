@@ -151,6 +151,9 @@ pub(crate) struct FurunoReportReceiver {
     /// Standby through mayara; only recorded once the request reached the
     /// radar.
     transmit_is_ours: Option<i32>,
+    /// Range A already transmitted for someone else when we switched Range
+    /// B on. Standing B down takes A down too, so A goes straight back on.
+    range_a_is_theirs: bool,
     model_known: bool,
     model: RadarModel,
 
@@ -252,6 +255,7 @@ impl FurunoReportReceiver {
             broadcast_socket: None,
             prev_spoke: [Vec::new(), Vec::new()],
             transmit_is_ours: None,
+            range_a_is_theirs: false,
             prev_angle: [0, 0],
             guard_zone_alarm: [false, false],
             missing_signals: 0,
@@ -477,6 +481,9 @@ impl FurunoReportReceiver {
                                 cs.dual_range_id = DUAL_RANGE_B;
                             }
                             let claim = transmit_claim_after_request(self.transmit_is_ours, DUAL_RANGE_B, &cv.control_value);
+                            let a_transmits = self.common.info.controls.get(&ControlId::Power).and_then(|c| c.value)
+                                == Some(Power::Transmit as i32 as f64);
+                            self.range_a_is_theirs = range_a_is_theirs(self.transmit_is_ours, claim, self.range_a_is_theirs, a_transmits);
                             if let Some(ref mut cb) = self.common_b
                                 && let Err(e) = cb.process_control_update(cv, &mut self.command_sender).await {
                                     return Err(e);
@@ -639,6 +646,16 @@ impl FurunoReportReceiver {
         cs.dual_range_id = range;
         let standby = ControlValue::new(ControlId::Power, Value::from(Power::Standby as i32));
         cs.set_control(&standby, &target.info.controls).await?;
+        if range == DUAL_RANGE_B && self.range_a_is_theirs {
+            log::info!(
+                "{}: Range A transmitted before we did, switching it back on",
+                self.common.key
+            );
+            cs.dual_range_id = DUAL_RANGE_A;
+            let transmit = ControlValue::new(ControlId::Power, Value::from(Power::Transmit as i32));
+            cs.set_control(&transmit, &self.common.info.controls)
+                .await?;
+        }
         self.transmit_is_ours = None;
         Ok(())
     }
@@ -839,6 +856,14 @@ impl FurunoReportReceiver {
                 let power_value = generic_state as i32 as f64;
                 let drid = self.extract_drid(&command_id, &numbers);
                 if self.transmit_is_ours == Some(drid as i32) && generic_state != Power::Transmit {
+                    self.transmit_is_ours = None;
+                }
+                // Someone else switched Range B on next to our Range A, and
+                // standing A down would take B down with it.
+                if drid as i32 == DUAL_RANGE_B
+                    && generic_state == Power::Transmit
+                    && self.transmit_is_ours == Some(DUAL_RANGE_A)
+                {
                     self.transmit_is_ours = None;
                 }
                 // Range B transmits only alongside Range A, and the radar
@@ -2304,6 +2329,23 @@ async fn conditional_read(
 /// The first argument of a report that needs one. A radar is free to send
 /// `$N8E` with nothing after it -- and mayara asks for exactly that with
 /// `$R8E,0` -- so the absence has to be an error rather than an index.
+/// Whether Range A transmitted for someone else before we claimed Range B,
+/// worked out when a request moves our claim. Range B transmits only
+/// alongside Range A, so switching B on finds A already transmitting
+/// unless we started both.
+fn range_a_is_theirs(
+    current: Option<i32>,
+    claim: Option<i32>,
+    a_is_theirs: bool,
+    a_transmits: bool,
+) -> bool {
+    match (current, claim) {
+        (None, Some(DUAL_RANGE_B)) => a_transmits,
+        (Some(DUAL_RANGE_B), Some(DUAL_RANGE_B)) => a_is_theirs,
+        _ => false,
+    }
+}
+
 fn first_number(numbers: &[f64], command: &str) -> Result<f64, Error> {
     match numbers.first() {
         Some(value) => Ok(*value),
@@ -2694,6 +2736,32 @@ mod tests {
         receiver.process_report("$N69,1,1,0,60,540,0").unwrap();
         receiver.process_report("$N69,1,0,0,60,540,0").unwrap();
         assert_eq!(power(&receiver), [standby, standby], "B takes A down");
+    }
+
+    /// Standing Range B down takes Range A down too, so mayara remembers
+    /// whether A already transmitted for someone else when it claimed B.
+    #[test]
+    fn range_a_is_theirs_when_it_transmitted_before_our_range_b() {
+        let (a, b) = (Some(DUAL_RANGE_A), Some(DUAL_RANGE_B));
+        assert!(range_a_is_theirs(None, b, false, true), "plotter's A");
+        assert!(!range_a_is_theirs(None, b, false, false), "we start both");
+        assert!(!range_a_is_theirs(a, b, false, true), "A was ours");
+        assert!(range_a_is_theirs(b, b, true, true), "B asked again");
+        assert!(!range_a_is_theirs(b, None, true, true), "B standby");
+    }
+
+    /// Range B switched on by someone else next to our Range A ends our claim:
+    /// standing A down would take their B down too.
+    #[tokio::test]
+    async fn someone_else_s_range_b_ends_our_claim_on_range_a() {
+        let mut receiver = dual_range_receiver();
+        receiver.transmit_is_ours = Some(DUAL_RANGE_A);
+
+        receiver.process_report("$N69,2,0,0,60,540,0").unwrap();
+        assert_eq!(receiver.transmit_is_ours, Some(DUAL_RANGE_A));
+
+        receiver.process_report("$N69,2,1,0,60,540,0").unwrap();
+        assert_eq!(receiver.transmit_is_ours, None);
     }
 
     /// The rails belong to the antenna, so a dual-range NXT shows them on
