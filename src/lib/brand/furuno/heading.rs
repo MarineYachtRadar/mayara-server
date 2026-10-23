@@ -100,7 +100,7 @@ async fn relay(subsys: &mut SubsystemHandle, nic_addr: Ipv4Addr) -> Result<(), R
                     && let Some(heading) = get_heading_true()
                 {
                     let ticks = ((deadline - start).as_millis() / TICK.as_millis()) as u32;
-                    let _ = socket.send(&sensor_frame(sequence, ticks, hdt_sentence(heading))).await;
+                    socket.send(&sensor_frame(sequence, ticks, hdt_sentence(heading))).await?;
                     sequence = sequence.wrapping_add(1);
                 }
                 deadline += HEADING_INTERVAL;
