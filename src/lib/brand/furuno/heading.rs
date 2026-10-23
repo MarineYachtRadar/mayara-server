@@ -88,7 +88,7 @@ pub(super) async fn run(
                     && let Some(heading) = get_heading_true()
                 {
                     let ticks = ((deadline - start).as_millis() / TICK.as_millis()) as u32;
-                    let _ = socket.send(&heading_frame(sequence, ticks, heading)).await;
+                    let _ = socket.send(&sensor_frame(sequence, ticks, hdt_sentence(heading))).await;
                     sequence = sequence.wrapping_add(1);
                 }
                 deadline += HEADING_INTERVAL;
@@ -126,8 +126,7 @@ impl DisplayWatch {
     }
 }
 
-fn heading_frame(sequence: u8, ticks: u32, heading: f64) -> Vec<u8> {
-    let sentence = hdt_sentence(heading);
+fn sensor_frame(sequence: u8, ticks: u32, sentence: Vec<u8>) -> Vec<u8> {
     encode(&SensorFrame {
         sequence,
         length: sentence.len() as u16,
@@ -137,11 +136,11 @@ fn heading_frame(sequence: u8, ticks: u32, heading: f64) -> Vec<u8> {
     })
 }
 
-/// `$GPHDT` for a true heading in radians, with the talker a display
-/// relaying a satellite compass uses.
+/// `$IIHDT` for a true heading in radians. The radar prefers a heading by
+/// its talker, and ranks `II` lowest, so a heading sensor's relay wins.
 fn hdt_sentence(heading: f64) -> Vec<u8> {
     let tenths = (heading.to_degrees() * 10.).round().rem_euclid(3600.);
-    let body = format!("GPHDT,{:.1},T", tenths / 10.);
+    let body = format!("IIHDT,{:.1},T", tenths / 10.);
     let checksum = body.bytes().fold(0, |sum, b| sum ^ b);
     format!("${body}*{checksum:02X}\r\n").into_bytes()
 }
@@ -151,7 +150,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_heading_frame_matches_what_a_display_sends() {
+    fn a_frame_matches_what_a_display_sends() {
         // A TZtouch relaying an SCX-20, captured on UDP 10036.
         let captured = [
             &[0x01, 0xc3, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x13][..],
@@ -160,7 +159,7 @@ mod tests {
         ]
         .concat();
         assert_eq!(
-            heading_frame(0xc3, 0x0a2a, 232.6_f64.to_radians()),
+            sensor_frame(0xc3, 0x0a2a, b"$GPHDT,232.6,T*30\r\n".to_vec()),
             captured
         );
     }
@@ -186,11 +185,11 @@ mod tests {
     fn a_heading_rounds_to_within_one_turn() {
         assert_eq!(
             hdt_sentence(359.96_f64.to_radians()),
-            b"$GPHDT,0.0,T*35\r\n"
+            b"$IIHDT,0.0,T*22\r\n"
         );
         assert_eq!(
             hdt_sentence((-90.0_f64).to_radians()),
-            b"$GPHDT,270.0,T*30\r\n"
+            b"$IIHDT,270.0,T*27\r\n"
         );
     }
 }
