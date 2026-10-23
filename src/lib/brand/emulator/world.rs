@@ -261,17 +261,56 @@ impl LandArea {
 }
 
 /// Cached local coordinates for efficient per-spoke lookups
+/// A boat in local coords (x east, y north, in meters) with its velocity
+/// over ground in m/s.
+struct LocalBoat {
+    x: f64,
+    y: f64,
+    vx: f64,
+    vy: f64,
+}
+
+impl LocalBoat {
+    /// How fast the boat closes on own ship over ground, in m/s; negative
+    /// when it moves away.
+    fn closing_speed(&self) -> f64 {
+        let distance = self.x.hypot(self.y);
+        if distance == 0.0 {
+            return 0.0;
+        }
+        -(self.vx * self.x + self.vy * self.y) / distance
+    }
+}
+
+/// What the radar sees at one point.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Echo {
+    /// 0 = no return, 15 = strongest
+    pub intensity: u8,
+    /// Speed over ground towards own ship in m/s, as a Doppler radar
+    /// measures it; negative when moving away, 0 for anything fixed.
+    pub closing_speed: f64,
+}
+
+impl Echo {
+    const NONE: Echo = Echo {
+        intensity: 0,
+        closing_speed: 0.0,
+    };
+
+    fn fixed(intensity: u8) -> Echo {
+        Echo {
+            intensity,
+            closing_speed: 0.0,
+        }
+    }
+}
+
 pub(crate) struct LocalCache {
     /// Land center in local coords
     land_center: (f64, f64),
-    /// Target positions in local coords
-    targets: Vec<(f64, f64)>,
-    /// Crossing target positions in local coords
-    crossing_targets: Vec<(f64, f64)>,
-    /// Fast target positions in local coords
-    fast_targets: Vec<(f64, f64)>,
-    /// Circling target position in local coords
-    circling_target: (f64, f64),
+    /// Every moving boat, in local coords
+    boats: Vec<LocalBoat>,
     /// Buoy positions in local coords (with radius squared)
     buoys: Vec<(f64, f64, f64)>,
 }
@@ -477,20 +516,33 @@ impl EmulatorWorld {
             )
         };
 
+        let boat = |position: &GeoPosition, heading: f64, speed: f64| {
+            let (x, y) = to_local(position);
+            let heading = heading * DEG_TO_RAD;
+            LocalBoat {
+                x,
+                y,
+                vx: speed * heading.sin(),
+                vy: speed * heading.cos(),
+            }
+        };
+        let circling = &self.circling_target;
+        let boats = self
+            .targets
+            .iter()
+            .chain(&self.crossing_targets)
+            .chain(&self.fast_targets)
+            .map(|t| boat(&t.position, t.heading, t.speed))
+            .chain(std::iter::once(boat(
+                &circling.position,
+                circling.heading,
+                circling.angular_velocity * circling.radius,
+            )))
+            .collect();
+
         self.cache = Some(LocalCache {
             land_center: to_local(&self.land.center),
-            targets: self.targets.iter().map(|t| to_local(&t.position)).collect(),
-            crossing_targets: self
-                .crossing_targets
-                .iter()
-                .map(|t| to_local(&t.position))
-                .collect(),
-            fast_targets: self
-                .fast_targets
-                .iter()
-                .map(|t| to_local(&t.position))
-                .collect(),
-            circling_target: to_local(&self.circling_target.position),
+            boats,
             buoys: self
                 .buoys
                 .iter()
@@ -502,15 +554,14 @@ impl EmulatorWorld {
         });
     }
 
-    /// Get the radar return intensity at a given position
+    /// Get the radar return at a given position
     /// Uses cached local coordinates for efficiency
     /// sin_b, cos_b are precomputed sin/cos of bearing
-    /// Returns 0-15 intensity value (0 = no return, 15 = strongest)
     #[inline]
-    pub(crate) fn get_intensity_fast(&self, sin_b: f64, cos_b: f64, distance: f64) -> u8 {
+    pub(crate) fn echo_fast(&self, sin_b: f64, cos_b: f64, distance: f64) -> Echo {
         let cache = match &self.cache {
             Some(c) => c,
-            None => return 0,
+            None => return Echo::NONE,
         };
 
         // Calculate point in local Cartesian coords (x=east, y=north)
@@ -526,7 +577,7 @@ impl EmulatorWorld {
             let local_x = dx * cos_o - dy * sin_o;
             let local_y = dx * sin_o + dy * cos_o;
             if local_x.abs() <= self.land.half_width && local_y.abs() <= self.land.half_length {
-                return 14;
+                return Echo::fixed(14);
             }
         }
 
@@ -534,43 +585,16 @@ impl EmulatorWorld {
         const TARGET_RADIUS: f64 = 30.0;
         const TARGET_RADIUS_SQ: f64 = TARGET_RADIUS * TARGET_RADIUS;
 
-        for &(tx, ty) in &cache.targets {
-            let dx = point_x - tx;
-            let dy = point_y - ty;
+        for boat in &cache.boats {
+            let dx = point_x - boat.x;
+            let dy = point_y - boat.y;
             let dist_sq = dx * dx + dy * dy;
             if dist_sq < TARGET_RADIUS_SQ {
                 let intensity = 15.0 - (dist_sq.sqrt() / TARGET_RADIUS) * 5.0;
-                return intensity.max(13.0) as u8;
-            }
-        }
-
-        for &(tx, ty) in &cache.crossing_targets {
-            let dx = point_x - tx;
-            let dy = point_y - ty;
-            let dist_sq = dx * dx + dy * dy;
-            if dist_sq < TARGET_RADIUS_SQ {
-                let intensity = 15.0 - (dist_sq.sqrt() / TARGET_RADIUS) * 5.0;
-                return intensity.max(13.0) as u8;
-            }
-        }
-
-        for &(tx, ty) in &cache.fast_targets {
-            let dx = point_x - tx;
-            let dy = point_y - ty;
-            let dist_sq = dx * dx + dy * dy;
-            if dist_sq < TARGET_RADIUS_SQ {
-                let intensity = 15.0 - (dist_sq.sqrt() / TARGET_RADIUS) * 5.0;
-                return intensity.max(13.0) as u8;
-            }
-        }
-
-        {
-            let dx = point_x - cache.circling_target.0;
-            let dy = point_y - cache.circling_target.1;
-            let dist_sq = dx * dx + dy * dy;
-            if dist_sq < TARGET_RADIUS_SQ {
-                let intensity = 15.0 - (dist_sq.sqrt() / TARGET_RADIUS) * 5.0;
-                return intensity.max(13.0) as u8;
+                return Echo {
+                    intensity: intensity.max(13.0) as u8,
+                    closing_speed: boat.closing_speed(),
+                };
             }
         }
 
@@ -579,11 +603,11 @@ impl EmulatorWorld {
             let dy = point_y - by;
             let dist_sq = dx * dx + dy * dy;
             if dist_sq < radius_sq {
-                return 10;
+                return Echo::fixed(10);
             }
         }
 
-        0
+        Echo::NONE
     }
 
     /// Get the radar return intensity at a given position (legacy method)
@@ -594,7 +618,8 @@ impl EmulatorWorld {
         bearing_rad: f64,
         distance: f64,
     ) -> u8 {
-        self.get_intensity_fast(bearing_rad.sin(), bearing_rad.cos(), distance)
+        self.echo_fast(bearing_rad.sin(), bearing_rad.cos(), distance)
+            .intensity
     }
 }
 
@@ -661,6 +686,36 @@ mod tests {
 
         // Longitude should increase (moving East)
         assert!(target.position.lon() > 5.0);
+    }
+
+    /// A Doppler radar sees a boat's speed along the line of sight: a boat
+    /// heading for own ship closes at its full speed, one moving away
+    /// recedes, and one crossing does neither.
+    #[test]
+    fn a_boat_closes_at_its_speed_along_the_line_of_sight() {
+        let speed = 5.0;
+        let north_heading_south = LocalBoat {
+            x: 0.0,
+            y: 500.0,
+            vx: 0.0,
+            vy: -speed,
+        };
+        let north_heading_north = LocalBoat {
+            x: 0.0,
+            y: 500.0,
+            vx: 0.0,
+            vy: speed,
+        };
+        let north_heading_east = LocalBoat {
+            x: 0.0,
+            y: 500.0,
+            vx: speed,
+            vy: 0.0,
+        };
+
+        assert!((north_heading_south.closing_speed() - speed).abs() < 1e-9);
+        assert!((north_heading_north.closing_speed() + speed).abs() < 1e-9);
+        assert!(north_heading_east.closing_speed().abs() < 1e-9);
     }
 
     #[test]
