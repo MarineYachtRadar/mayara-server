@@ -561,6 +561,7 @@ impl TrackerManager {
             }
             self.broadcast_deletion(id, radar_key);
         }
+        self.refresh_guard_zone_alarms();
     }
 
     /// Delete a target by ID (cancel tracking)
@@ -581,6 +582,7 @@ impl TrackerManager {
 
         if deleted {
             self.broadcast_deletion(target_id, radar_key);
+            self.refresh_guard_zone_alarms();
         }
 
         deleted
@@ -1479,7 +1481,6 @@ mod tests {
         feed_guard_zone_target(&mut manager, "nav1", 1024, 1, 4);
         let intruder = last_target_id(&manager, "nav1");
         assert!(manager.delete_target("nav1", intruder));
-        manager.check_all_timeouts();
 
         assert_eq!(
             notifications(&drain_sk_deltas(rx)),
@@ -1614,7 +1615,6 @@ mod tests {
 
         let target_id = first_target_id(&manager, "nav1");
         assert!(manager.delete_target("nav1", target_id));
-        manager.check_all_timeouts();
 
         assert_eq!(
             notifications(&drain_sk_deltas(rx)),
@@ -1639,7 +1639,6 @@ mod tests {
 
         let target_id = first_target_id(&manager, "nav1");
         manager.delete_target("nav1", target_id);
-        manager.check_all_timeouts();
 
         // One of two targets gone: both alerts stand and no clear follows.
         let states = notifications(&drain_sk_deltas(rx));
@@ -1662,9 +1661,9 @@ mod tests {
         feed_guard_zone_target(&mut manager, "nav1", 0, 1, 4);
 
         // Clearing a radar's targets removes them without any Lost
-        // transition; the next sweep must still release the alarm.
+        // transition; the alarm must still be released, without waiting
+        // for a sweep that a stopped radar never sends.
         manager.clear_all_targets("nav1");
-        manager.check_all_timeouts();
 
         let states = notifications(&drain_sk_deltas(rx));
         assert_eq!(
@@ -1688,7 +1687,6 @@ mod tests {
 
         let target_id = first_target_id(&manager, "nav1");
         assert!(manager.delete_target("nav1", target_id));
-        manager.check_all_timeouts();
 
         assert_eq!(
             notifications(&drain_sk_deltas(rx)),
