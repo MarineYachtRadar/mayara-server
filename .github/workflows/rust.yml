@@ -103,8 +103,11 @@ jobs:
     steps:
     - uses: actions/checkout@v7
     - uses: swatinem/rust-cache@v2
+    - uses: taiki-e/install-action@v2.87.28
+      with:
+        tool: nextest
     - name: Run tests
-      run: cargo test --features pcap-replay --release
+      run: cargo nextest run --features pcap-replay
     - name: Build
       run: cargo build --release
     - name: Upload artifacts
@@ -112,6 +115,22 @@ jobs:
       with:
         name: Mayara Windows x86_64
         path: target/release/mayara-server.exe
+
+  linux:
+    name: Test Linux
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        persist-credentials: false
+    - uses: swatinem/rust-cache@v2
+    - uses: taiki-e/install-action@v2.87.28
+      with:
+        tool: nextest
+    - name: Run tests
+      run: cargo nextest run --features pcap-replay
 
   macos:
     name: Build macOS
