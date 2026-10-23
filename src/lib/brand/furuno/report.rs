@@ -154,6 +154,10 @@ pub(crate) struct FurunoReportReceiver {
     /// Range A already transmitted for someone else when we switched Range
     /// B on. Standing B down takes A down too, so A goes straight back on.
     range_a_is_theirs: bool,
+    /// We switched our Range A back on after Range B stood down, and the
+    /// radar has not yet reported A transmitting again: the standby it
+    /// reports for A meanwhile does not end our claim.
+    range_a_restoring: bool,
     model_known: bool,
     model: RadarModel,
 
@@ -256,6 +260,7 @@ impl FurunoReportReceiver {
             prev_spoke: [Vec::new(), Vec::new()],
             transmit_is_ours: None,
             range_a_is_theirs: false,
+            range_a_restoring: false,
             prev_angle: [0, 0],
             guard_zone_alarm: [false, false],
             missing_signals: 0,
@@ -499,6 +504,7 @@ impl FurunoReportReceiver {
                                 self.switch_range_a_back_on().await?;
                                 if a_is_ours {
                                     self.transmit_is_ours = Some(DUAL_RANGE_A);
+                                    self.range_a_restoring = true;
                                 }
                             }
                         },
@@ -875,7 +881,14 @@ impl FurunoReportReceiver {
                 let is_standby = matches!(generic_state, Power::Standby);
                 let power_value = generic_state as i32 as f64;
                 let drid = self.extract_drid(&command_id, &numbers);
-                if self.transmit_is_ours == Some(drid as i32) && generic_state != Power::Transmit {
+                if drid as i32 == DUAL_RANGE_A && self.range_a_restoring {
+                    self.range_a_restoring = !matches!(generic_state, Power::Transmit | Power::Off);
+                    if generic_state == Power::Off {
+                        self.transmit_is_ours = None;
+                    }
+                } else if self.transmit_is_ours == Some(drid as i32)
+                    && generic_state != Power::Transmit
+                {
                     self.transmit_is_ours = None;
                 }
                 // Someone else switched Range B on next to our Range A, and
@@ -2811,6 +2824,42 @@ mod tests {
         );
         let gain = ControlValue::new(ControlId::Gain, Value::from(1));
         assert!(!restores_range_a(&gain, true, true), "not power");
+    }
+
+    /// Range B standing down takes our Range A through standby before it
+    /// transmits again; that standby must not end our claim on A, or mayara
+    /// would never stand A down.
+    #[tokio::test]
+    async fn our_range_a_stays_ours_while_it_comes_back_on() {
+        let mut receiver = dual_range_receiver();
+        receiver.transmit_is_ours = Some(DUAL_RANGE_A);
+        receiver.range_a_restoring = true;
+
+        for report in [
+            "$N69,1,1,0,60,540,0",
+            "$N69,1,0,0,60,540,0",
+            "$N69,2,0,0,60,540,0",
+        ] {
+            receiver.process_report(report).unwrap();
+            assert_eq!(receiver.transmit_is_ours, Some(DUAL_RANGE_A), "{report}");
+        }
+        assert!(!receiver.range_a_restoring);
+
+        receiver.process_report("$N69,1,0,0,60,540,0").unwrap();
+        assert_eq!(receiver.transmit_is_ours, None, "a later standby ends it");
+    }
+
+    /// A radar that goes off while A comes back on ends our claim.
+    #[tokio::test]
+    async fn range_a_going_off_while_it_comes_back_on_ends_our_claim() {
+        let mut receiver = dual_range_receiver();
+        receiver.transmit_is_ours = Some(DUAL_RANGE_A);
+        receiver.range_a_restoring = true;
+
+        receiver.process_report("$N69,3,0,0,60,540,0").unwrap();
+
+        assert_eq!(receiver.transmit_is_ours, None);
+        assert!(!receiver.range_a_restoring);
     }
 
     /// Range B switched on by someone else next to our Range A ends our claim:
