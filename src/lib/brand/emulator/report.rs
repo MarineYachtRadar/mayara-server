@@ -1,22 +1,32 @@
 use std::f64::consts::PI;
 use std::time::Duration;
 
+use num_traits::FromPrimitive;
 use tokio::time::{Instant, interval};
 use tokio_graceful_shutdown::SubsystemHandle;
 
 use super::command::Command;
-use super::world::{EmulatorWorld, TURN_RADIUS, TurnProgress};
+use super::world::{Echo, EmulatorWorld, TURN_RADIUS, TurnProgress};
 use super::{EMULATOR_SPOKE_LEN, EMULATOR_SPOKES, get_initial_position, spoke_step};
 use crate::Cli;
 use crate::radar::settings::{ControlId, ControlUpdate};
 use crate::radar::spoke::GenericSpoke;
 use crate::radar::{
-    CommonRadar, FRAC_NM_2, GeoPosition, KN_TO_MS, Power, RadarError, RadarInfo, SharedRadars,
+    CommonRadar, DopplerMode, FRAC_NM_2, GeoPosition, KN_TO_MS, Power, RadarError, RadarInfo,
+    SharedRadars,
 };
 
 // Rotation speed: ~24 RPM = 2.5 seconds per rotation
 const ROTATION_TIME_MS: u64 = 2500;
 const SPOKES_PER_BATCH: usize = 32; // Like Navico
+
+/// Doppler speed threshold until a client sets one, in m/s (about 2 kn).
+const DEFAULT_DOPPLER_THRESHOLD: f64 = 1.0;
+/// Echo strength occupies the low nibble of a pixel; the legend's
+/// Doppler colours sit above it.
+const INTENSITY_MASK: u8 = 0x0f;
+/// The speed threshold control's wire unit is cm/s.
+const CM_PER_M: f64 = 100.0;
 
 // Conversion constants
 const DEG_TO_RAD: f64 = PI / 180.0;
@@ -40,6 +50,8 @@ pub(crate) struct EmulatorReportReceiver {
     // Spoke generation state
     current_spoke: u16,
     spoke_step: u16,
+    doppler_mode: DopplerMode,
+    doppler_threshold: f64, // m/s
     last_update: Instant,
     rotation_count: u32,
 }
@@ -78,6 +90,8 @@ impl EmulatorReportReceiver {
             initial_lon: initial_pos.lon(),
             current_spoke: 0,
             spoke_step: spoke_step(args),
+            doppler_mode: DopplerMode::None,
+            doppler_threshold: DEFAULT_DOPPLER_THRESHOLD,
             last_update: Instant::now(),
             rotation_count: 0,
         }
@@ -92,6 +106,12 @@ impl EmulatorReportReceiver {
         // Set initial range value in controls
         self.common
             .set_value(&ControlId::Range, self.current_range as f64);
+        self.common
+            .set_value(&ControlId::Doppler, self.doppler_mode as i32 as f64);
+        self.common.set_value(
+            &ControlId::DopplerSpeedThreshold,
+            self.doppler_threshold * CM_PER_M,
+        );
 
         // Calculate interval for spoke batches
         // 2048 spokes / 32 per batch = 64 batches per rotation
@@ -166,6 +186,21 @@ impl EmulatorReportReceiver {
                     log::debug!("{}: Range changed to {} m", self.common.key, range);
                     self.current_range = range;
                     self.common.set_value(&ControlId::Range, range as f64);
+                }
+            }
+            ControlId::Doppler => {
+                if let Some(mode) = cv.value.as_ref().and_then(|v| v.as_f64()) {
+                    self.doppler_mode =
+                        DopplerMode::from_i32(mode as i32).unwrap_or(DopplerMode::None);
+                    self.common
+                        .set_value(&ControlId::Doppler, self.doppler_mode as i32 as f64);
+                }
+            }
+            ControlId::DopplerSpeedThreshold => {
+                if let Some(threshold) = cv.value.as_ref().and_then(|v| v.as_f64()) {
+                    self.doppler_threshold = threshold;
+                    self.common
+                        .set_value(&ControlId::DopplerSpeedThreshold, threshold * CM_PER_M);
                 }
             }
             _ => {
@@ -309,9 +344,16 @@ impl EmulatorReportReceiver {
 
         // Update the world's local coordinate cache once per batch
         self.world.update_cache(&self.boat_position);
+        let legend = self.common.info.get_legend();
+        let doppler = DopplerColors::new(
+            legend.doppler_approaching,
+            legend.doppler_receding,
+            self.doppler_mode,
+            self.doppler_threshold,
+        );
 
         for _ in 0..SPOKES_PER_BATCH {
-            let spoke_data = self.generate_spoke(self.current_spoke);
+            let spoke_data = self.generate_spoke(self.current_spoke, &doppler);
 
             // Heading in `EMULATOR_SPOKES`-units, matching the convention
             // every brand's normalized `add_spoke` heading uses now.
@@ -336,7 +378,7 @@ impl EmulatorReportReceiver {
         self.common.send_spoke_message();
     }
 
-    fn generate_spoke(&self, spoke_angle: u16) -> GenericSpoke {
+    fn generate_spoke(&self, spoke_angle: u16, doppler: &DopplerColors) -> GenericSpoke {
         // Convert spoke angle to world bearing
         // Spoke 0 = boat heading, increases clockwise
         let spoke_angle_deg = (spoke_angle as f64 / EMULATOR_SPOKES as f64) * 360.0;
@@ -355,8 +397,7 @@ impl EmulatorReportReceiver {
 
         for pixel in 0..EMULATOR_SPOKE_LEN {
             let distance = pixel as f64 * meters_per_pixel;
-            let intensity = self.world.get_intensity_fast(sin_b, cos_b, distance);
-            data.push(intensity & 0x0f);
+            data.push(doppler.pixel(self.world.echo_fast(sin_b, cos_b, distance)));
         }
 
         data
@@ -365,6 +406,49 @@ impl EmulatorReportReceiver {
 
 fn next_spoke(spoke: u16, step: u16) -> u16 {
     (spoke + step) % EMULATOR_SPOKES as u16
+}
+
+/// The legend colours a spoke uses for echoes moving faster than the
+/// Doppler speed threshold, as the Doppler mode selects them.
+struct DopplerColors {
+    approaching: Option<u8>,
+    receding: Option<u8>,
+    threshold: f64,
+}
+
+impl DopplerColors {
+    /// `approaching` and `receding` are the legend's `(first_index, count)`.
+    fn new(
+        approaching: Option<(u8, u8)>,
+        receding: Option<(u8, u8)>,
+        mode: DopplerMode,
+        threshold: f64,
+    ) -> Self {
+        let first = |range: Option<(u8, u8)>| range.map(|(index, _)| index);
+        DopplerColors {
+            approaching: match mode {
+                DopplerMode::None => None,
+                DopplerMode::Both | DopplerMode::Approaching => first(approaching),
+            },
+            receding: match mode {
+                DopplerMode::Both => first(receding),
+                DopplerMode::None | DopplerMode::Approaching => None,
+            },
+            threshold,
+        }
+    }
+
+    fn pixel(&self, echo: Echo) -> u8 {
+        let intensity = echo.intensity & INTENSITY_MASK;
+        if intensity == 0 {
+            return 0;
+        }
+        match (self.approaching, self.receding) {
+            (Some(index), _) if echo.closing_speed > self.threshold => index,
+            (_, Some(index)) if echo.closing_speed < -self.threshold => index,
+            _ => intensity,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -388,5 +472,42 @@ mod tests {
         assert_eq!(sent.len(), EMULATOR_SPOKES / 4);
         assert!(sent.iter().all(|spoke| spoke % 4 == 0));
         assert_eq!(one_rotation(1).len(), EMULATOR_SPOKES);
+    }
+
+    fn echo(closing_speed: f64) -> Echo {
+        Echo {
+            intensity: 14,
+            closing_speed,
+        }
+    }
+
+    fn colors(mode: DopplerMode) -> DopplerColors {
+        DopplerColors::new(Some((40, 1)), Some((41, 1)), mode, 1.0)
+    }
+
+    /// An echo moving faster than the threshold takes the Doppler colour
+    /// the mode asks for; slower ones, and every echo with Doppler off,
+    /// keep their intensity.
+    #[test]
+    fn an_echo_faster_than_the_threshold_takes_its_doppler_colour() {
+        let both = colors(DopplerMode::Both);
+        assert_eq!(both.pixel(echo(2.0)), 40, "approaching");
+        assert_eq!(both.pixel(echo(-2.0)), 41, "receding");
+        assert_eq!(both.pixel(echo(0.5)), 14, "below the threshold");
+
+        let approaching = colors(DopplerMode::Approaching);
+        assert_eq!(approaching.pixel(echo(2.0)), 40);
+        assert_eq!(approaching.pixel(echo(-2.0)), 14, "receding not shown");
+
+        let off = colors(DopplerMode::None);
+        assert_eq!(off.pixel(echo(2.0)), 14);
+        assert_eq!(
+            off.pixel(Echo {
+                intensity: 0,
+                closing_speed: 5.0
+            }),
+            0,
+            "no echo"
+        );
     }
 }
