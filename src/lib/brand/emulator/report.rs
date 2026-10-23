@@ -1,6 +1,7 @@
 use std::f64::consts::PI;
 use std::time::Duration;
 
+use num_traits::FromPrimitive;
 use tokio::time::{Instant, interval};
 use tokio_graceful_shutdown::SubsystemHandle;
 
@@ -21,6 +22,9 @@ const SPOKES_PER_BATCH: usize = 32; // Like Navico
 
 /// Doppler speed threshold until a client sets one, in m/s (about 2 kn).
 const DEFAULT_DOPPLER_THRESHOLD: f64 = 1.0;
+/// Echo strength occupies the low nibble of a pixel; the legend's
+/// Doppler colours sit above it.
+const INTENSITY_MASK: u8 = 0x0f;
 /// The speed threshold control's wire unit is cm/s.
 const CM_PER_M: f64 = 100.0;
 
@@ -186,11 +190,8 @@ impl EmulatorReportReceiver {
             }
             ControlId::Doppler => {
                 if let Some(mode) = cv.value.as_ref().and_then(|v| v.as_f64()) {
-                    self.doppler_mode = match mode as i32 {
-                        1 => DopplerMode::Both,
-                        2 => DopplerMode::Approaching,
-                        _ => DopplerMode::None,
-                    };
+                    self.doppler_mode =
+                        DopplerMode::from_i32(mode as i32).unwrap_or(DopplerMode::None);
                     self.common
                         .set_value(&ControlId::Doppler, self.doppler_mode as i32 as f64);
                 }
@@ -438,7 +439,7 @@ impl DopplerColors {
     }
 
     fn pixel(&self, echo: Echo) -> u8 {
-        let intensity = echo.intensity & 0x0f;
+        let intensity = echo.intensity & INTENSITY_MASK;
         if intensity == 0 {
             return 0;
         }
