@@ -160,6 +160,44 @@ fn hdt_sentence(heading: f64) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio_graceful_shutdown::{SubsystemBuilder, Toplevel};
+
+    /// TEST-NET-1: no interface holds it, so binding a relay to it fails.
+    const NO_SUCH_NIC: Ipv4Addr = Ipv4Addr::new(192, 0, 2, 1);
+
+    /// Long enough for the failed relay to reach its retry delay.
+    const SETTLE: Duration = Duration::from_millis(200);
+
+    #[tokio::test]
+    async fn a_failing_relay_stops_at_shutdown_while_it_waits_to_retry() {
+        assert!(
+            create_broadcast_send(&HEADING_ADDRESS, &NO_SUCH_NIC).is_err(),
+            "the relay must fail for this test to reach its retry delay"
+        );
+        Toplevel::new(async |subsys: &mut SubsystemHandle| {
+            let (done, stopped) = tokio::sync::oneshot::channel();
+            subsys.start(SubsystemBuilder::new(
+                "heading",
+                async move |s: &mut SubsystemHandle| {
+                    run(s, NO_SUCH_NIC).await;
+                    let _ = done.send(());
+                    Ok::<(), anyhow::Error>(())
+                },
+            ));
+            tokio::time::sleep(SETTLE).await;
+
+            subsys.request_shutdown();
+
+            let stopped_in_time = tokio::time::timeout(RETRY_DELAY / 2, stopped).await;
+            assert!(
+                stopped_in_time.is_ok_and(|r| r.is_ok()),
+                "the relay outlived shutdown"
+            );
+        })
+        .handle_shutdown_requests(Duration::from_secs(1))
+        .await
+        .unwrap();
+    }
 
     #[test]
     fn a_frame_matches_what_a_display_sends() {
