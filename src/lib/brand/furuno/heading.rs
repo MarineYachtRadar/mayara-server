@@ -13,7 +13,7 @@
 use deku::DekuWrite;
 use std::net::{IpAddr, Ipv4Addr};
 use std::time::Duration;
-use tokio::time::{Instant, sleep_until};
+use tokio::time::{Instant, sleep, sleep_until};
 use tokio_graceful_shutdown::SubsystemHandle;
 
 use super::protocol::HEADING_ADDRESS;
@@ -35,6 +35,10 @@ const MAX_FRAME: usize = 1500;
 /// The unit of [`SensorFrame::ticks`].
 const TICK: Duration = Duration::from_millis(10);
 
+/// How long to wait before relaying again after the relay failed, such as
+/// while the interface is down.
+const RETRY_DELAY: Duration = Duration::from_secs(5);
+
 /// One relayed sentence, as a NavNet display broadcasts it. The radar checks
 /// only the 0x01 every NavNet packet opens with, and parses the sentence
 /// after the header; the fields between are sent as a display sends them.
@@ -55,11 +59,19 @@ struct SensorFrame {
 
 /// Sends the vessel's heading out of `nic_addr` for as long as the subsystem
 /// is alive, and nothing while mayara has no heading or a display is
-/// relaying one.
-pub(super) async fn run(
-    subsys: &mut SubsystemHandle,
-    nic_addr: Ipv4Addr,
-) -> Result<(), RadarError> {
+/// relaying one. A failed relay starts again after [`RETRY_DELAY`], since
+/// nothing else restarts it while its radars stay registered.
+pub(super) async fn run(subsys: &mut SubsystemHandle, nic_addr: Ipv4Addr) {
+    while let Err(e) = relay(subsys, nic_addr).await {
+        log::warn!("{}: Unable to relay the heading: {}", nic_addr, e);
+        tokio::select! {
+            _ = subsys.on_shutdown_requested() => return,
+            _ = sleep(RETRY_DELAY) => {}
+        }
+    }
+}
+
+async fn relay(subsys: &mut SubsystemHandle, nic_addr: Ipv4Addr) -> Result<(), RadarError> {
     let socket = create_broadcast_send(&HEADING_ADDRESS, &nic_addr)?;
     let mut listener = create_udp_listen(&HEADING_ADDRESS, &nic_addr, SocketType::Broadcast)?;
     let mut buf = Vec::with_capacity(MAX_FRAME);

@@ -197,11 +197,8 @@ impl FurunoLocator {
         subsys.start(SubsystemBuilder::new(
             format!("{}-heading", nic_addr),
             async move |s: &mut SubsystemHandle| {
-                let result = heading::run(s, nic_addr).await;
+                heading::run(s, nic_addr).await;
                 senders.lock().unwrap().remove(&nic_addr);
-                if let Err(e) = result {
-                    log::warn!("{}: Unable to relay the heading: {}", nic_addr, e);
-                }
                 Ok::<(), anyhow::Error>(())
             },
         ));
