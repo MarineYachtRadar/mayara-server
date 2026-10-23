@@ -109,6 +109,8 @@ impl EmulatorReportReceiver {
                 }
 
                 _ = spoke_interval.tick() => {
+                    // The emulator is its own radar, so it is never silent.
+                    self.common.info.mark_input();
                     if self.transmitting {
                         self.generate_spoke_batch();
                     }
