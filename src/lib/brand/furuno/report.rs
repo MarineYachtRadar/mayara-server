@@ -2271,14 +2271,15 @@ impl FurunoReportReceiver {
         //   [9]    bit 0: spoke_data_len high bit; bits 1-7: spoke_count
         //   [10]   sample_count low byte
         //   [11]   bits 0-2: sample_count high; bits 3-4: encoding;
-        //          bit 5: heading_valid; bits 6-7: unknown (observed as 0b11)
+        //          bits 5-7: unknown (0b110 from a DRS-NXT, 0b001 from a DRS2D)
         //
         // Bytes 12-15: Range and status
         //   [12]   bits 0-5: range wire index; bits 6-7: range_status
         //   [13]   range resolution metadata
         //   [14]   range_value low byte
         //   [15]   bits 0-2: range_value high; bit 3: flag;
-        //          bits 4-5: echo_type; bit 6: dual_range_id (0=A, 1=B);
+        //          bits 4-5: heading_state (1 = the spokes carry the
+        //          radar's heading); bit 6: dual_range_id (0=A, 1=B);
         //          bit 7: unknown
 
         let header = decode_head::<FurunoImoFrameHeader>(data).ok()?;
