@@ -2517,6 +2517,22 @@ mod tests {
         }
     }
 
+    /// A spoke frame's range is read in the unit the frame names, even
+    /// while the RangeUnits control has not been set, as in a replay. A
+    /// DRS2D-NXT on wire index 6 is 2 km or 2 NM.
+    #[test]
+    fn a_spoke_frame_is_ranged_in_the_unit_it_names() {
+        let receiver = nxt_receiver();
+        let mut frame = [
+            2, 186, 0, 1, 0, 0, 0, 0, 33, 8, 100, 219, 0x46, 0, 240, 0x19,
+        ];
+        let range = |frame: &[u8]| receiver.parse_metadata_header(frame).unwrap().range;
+
+        assert_eq!(range(&frame), 2000);
+        frame[12] = 0x06;
+        assert_eq!(range(&frame), 2 * 1852);
+    }
+
     /// A beacon naming a model mayara does not recognise leaves the model
     /// saved settings name in place until `$N96` arrives.
     #[test]
