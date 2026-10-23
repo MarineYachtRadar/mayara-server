@@ -144,7 +144,15 @@ struct Capabilities {
     tx_channel: bool,
     watchman: bool,
     pulse_width: bool,
+    sea_modes: &'static [&'static str], // auto sea modes, empty when none
+    echo_average: bool,                 // scan-to-scan echo averaging
 }
+
+/// Auto sea modes, in the order of the sea command's mode field.
+const SEA_MODES: &[&str] = &["Adaptive", "Coastal", "Channel"];
+/// The classic DRS only tells Coastal from the rest; Channel acts as
+/// Adaptive there.
+const CLASSIC_SEA_MODES: &[&str] = &["Adaptive", "Coastal"];
 
 fn capabilities(model: &RadarModel) -> Capabilities {
     match model {
@@ -176,6 +184,8 @@ fn capabilities(model: &RadarModel) -> Capabilities {
             tx_channel: true,
             watchman: true,
             pulse_width: false, // solid-state, no selectable pulse
+            sea_modes: SEA_MODES,
+            echo_average: true,
         },
         // X-Class (DRS6A/12A/25A share one image): the NXT code base without
         // its solid-state features
@@ -201,6 +211,8 @@ fn capabilities(model: &RadarModel) -> Capabilities {
             tx_channel: false,
             watchman: false,
             pulse_width: true,
+            sea_modes: SEA_MODES,
+            echo_average: false,
         },
         // DRS4DL / DRS4DL+: single range; scan speed is stored but drives
         // nothing, and there is no bird mode or antenna height
@@ -226,6 +238,8 @@ fn capabilities(model: &RadarModel) -> Capabilities {
             tx_channel: false,
             watchman: false,
             pulse_width: true,
+            sea_modes: SEA_MODES,
+            echo_average: false,
         },
         // Classic NavNet 3D DRS, open and radome alike. Its antenna height
         // command takes a height class rather than metres, so it is not
@@ -252,6 +266,8 @@ fn capabilities(model: &RadarModel) -> Capabilities {
             tx_channel: false,
             watchman: false,
             pulse_width: true,
+            sea_modes: CLASSIC_SEA_MODES,
+            echo_average: false,
         },
         RadarModel::DRS4W => Capabilities {
             auto_gain: true,
@@ -275,6 +291,8 @@ fn capabilities(model: &RadarModel) -> Capabilities {
             tx_channel: false,
             watchman: false,
             pulse_width: false, // DRS4W firmware disables pulse width
+            sea_modes: &[],
+            echo_average: false,
         },
         // FAR series: commercial, 4-level IR, no NXT features
         RadarModel::FAR21x7 | RadarModel::FAR14x7 | RadarModel::FAR14x6 => Capabilities {
@@ -299,6 +317,8 @@ fn capabilities(model: &RadarModel) -> Capabilities {
             tx_channel: false,
             watchman: false,
             pulse_width: true,
+            sea_modes: &[],
+            echo_average: false,
         },
         // FAR-15x3 / FAR-3000: auto sea/rain, noise rejection
         RadarModel::FAR15x3 | RadarModel::FAR3000 => Capabilities {
@@ -323,6 +343,8 @@ fn capabilities(model: &RadarModel) -> Capabilities {
             tx_channel: false,
             watchman: false,
             pulse_width: true,
+            sea_modes: &[],
+            echo_average: false,
         },
         // Unknown: basic capabilities
         RadarModel::Unknown => Capabilities {
@@ -347,6 +369,8 @@ fn capabilities(model: &RadarModel) -> Capabilities {
             tx_channel: false,
             watchman: false,
             pulse_width: false,
+            sea_modes: &[],
+            echo_average: false,
         },
     }
 }
@@ -542,6 +566,16 @@ pub(crate) fn update_when_model_known(info: &mut RadarInfo, model: RadarModel, v
         // Reserve 16 legend slots per direction so the UI can render an
         // intensity gradient instead of a single flat color.
         info.set_doppler_levels(16);
+    }
+    if !cap.sea_modes.is_empty() {
+        info.controls
+            .add(new_list(ControlId::SeaState, cap.sea_modes));
+    }
+    if cap.echo_average {
+        info.controls.add(new_list(
+            ControlId::ScanAverageMode,
+            &["Off", "Low", "Medium", "High"],
+        ));
     }
     if cap.watchman {
         info.controls
@@ -891,6 +925,9 @@ mod tests {
             assert_eq!(curves(ControlId::MiddleStcCurve), Some(vec![0, 1]));
             assert_eq!(curves(ControlId::FarStcCurve), Some(vec![1, 3]));
             assert!(!controls.contains_key(&ControlId::NoiseRejection));
+            let levels = |id| controls.get(&id).unwrap().item().max_value;
+            assert_eq!(levels(ControlId::SeaState), Some(2.), "three modes");
+            assert_eq!(levels(ControlId::ScanAverageMode), Some(3.), "four levels");
         }
 
         let other = controls_of(RadarModel::FAR15x3);
@@ -967,6 +1004,17 @@ mod tests {
         assert!(has(&x_class, ControlId::AntennaHeight));
         assert_eq!(levels(&x_class, ControlId::InterferenceRejection), Some(4));
         assert!(!has(&x_class, ControlId::NoiseRejection));
+
+        // Auto sea mode: Channel acts as Adaptive on the classic DRS. Echo
+        // averaging is stored by all three but applied by none.
+        assert_eq!(levels(&classic, ControlId::SeaState), Some(2));
+        for controls in [&dl, &x_class] {
+            assert_eq!(levels(controls, ControlId::SeaState), Some(3));
+        }
+        for controls in [&classic, &dl, &x_class] {
+            assert!(!has(controls, ControlId::ScanAverageMode));
+        }
+        assert!(!has(&controls_of(RadarModel::DRS4W), ControlId::SeaState));
     }
 
     /// A sector control holds radians, and rounds to the step it was built

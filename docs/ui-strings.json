@@ -601,8 +601,11 @@
     {
       "control": "seaState",
       "labels": [
+        "Adaptive",
         "Auto",
         "Calm",
+        "Channel",
+        "Coastal",
         "Harbor",
         "Manual",
         "Moderate",

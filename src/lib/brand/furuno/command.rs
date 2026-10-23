@@ -23,6 +23,9 @@ const FULL_CIRCLE_DEGREES: i32 = 360;
 /// DRS2D-NXT came up at 10.
 const SEA_AUTO_LEVEL: i32 = 10;
 
+/// Signal-processing (`$S67`) feature that averages echoes over scans.
+const ECHO_AVERAGE_FEATURE: i32 = 2;
+
 /// The dual range id of Range B.
 const RANGE_B: i32 = 1;
 
@@ -52,6 +55,21 @@ impl Command {
             has_dual_range,
             sea_auto_levels: [SEA_AUTO_LEVEL; 2],
         }
+    }
+
+    /// `$S64,{auto},{value},{auto level},{drid},{auto sea mode},0`
+    fn sea_args(&self, auto: i32, value: i32, mode: i32) -> Vec<i32> {
+        let level = self.sea_auto_levels[self.dual_range_id as usize];
+        vec![auto, value, level, self.dual_range_id, mode, 0]
+    }
+
+    /// The auto sea mode as the radar last reported it, so that setting sea
+    /// does not reset the mode a chartplotter chose.
+    fn sea_mode(controls: &SharedControls) -> i32 {
+        controls
+            .get(&ControlId::SeaState)
+            .and_then(|c| c.value)
+            .unwrap_or(0.) as i32
     }
 
     pub(crate) fn set_sea_auto_level(&mut self, drid: u8, level: i32) {
@@ -274,7 +292,7 @@ impl Command {
         }
 
         // Signal processing and the NXT features, for the controls the model has
-        let requests: [(ControlId, CommandId, &[i32]); 5] = [
+        let requests: [(ControlId, CommandId, &[i32]); 6] = [
             (
                 ControlId::NoiseRejection,
                 CommandId::SignalProcessing,
@@ -285,6 +303,11 @@ impl Command {
                 CommandId::SignalProcessing,
                 &[0, 0],
             ), // $R67,0,0
+            (
+                ControlId::ScanAverageMode,
+                CommandId::SignalProcessing,
+                &[0, ECHO_AVERAGE_FEATURE],
+            ), // $R67,0,2
             (ControlId::TargetSeparation, CommandId::RezBoost, &[]), // $REE
             (ControlId::BirdMode, CommandId::BirdMode, &[]),         // $RED
             (ControlId::Doppler, CommandId::TargetAnalyzer, &[]),    // $REF
@@ -327,6 +350,12 @@ impl Command {
                 (CommandId::RezBoost, &[0, RANGE_B]),                   // $REE,0,1
                 (CommandId::BirdMode, &[0, RANGE_B]),                   // $RED,0,1
             ]);
+        }
+        if self.controls.contains_key(&ControlId::ScanAverageMode) {
+            requests.push((
+                CommandId::SignalProcessing,
+                &[0, ECHO_AVERAGE_FEATURE, 0, RANGE_B],
+            )); // $R67,0,2,0,1
         }
         for (command_id, args) in requests {
             self.send(CommandMode::Request, command_id, args).await?;
@@ -488,14 +517,21 @@ impl CommandSender for Command {
                 CommandId::Gain
             }
             ControlId::Sea => {
-                // Per-range: $S64,{auto},{value},{auto_val},{drid},0,0
-                cmd.push(auto);
-                cmd.push(value);
-                cmd.push(self.sea_auto_levels[self.dual_range_id as usize]);
-                cmd.push(self.dual_range_id);
-                cmd.push(0);
-                cmd.push(0);
+                cmd = self.sea_args(auto, value, Self::sea_mode(controls));
                 CommandId::Sea
+            }
+            ControlId::SeaState => {
+                // The auto sea mode rides in the sea command, with sea as it is
+                let sea = controls.get(&ControlId::Sea);
+                let sea_auto = sea.as_ref().and_then(|c| c.auto).unwrap_or(false) as i32;
+                let sea_value = sea.and_then(|c| c.value).unwrap_or(0.) as i32;
+                cmd = self.sea_args(sea_auto, sea_value, value);
+                CommandId::Sea
+            }
+            ControlId::ScanAverageMode => {
+                // Format: $S67,0,2,{on},{drid}
+                cmd.extend([0, ECHO_AVERAGE_FEATURE, value, self.dual_range_id]);
+                CommandId::SignalProcessing
             }
             ControlId::Rain => {
                 // Per-range: $S65,{auto},{value},0,{drid},0,0
@@ -1038,6 +1074,58 @@ mod tests {
 
     // ----- Gain, sea, rain -----
 
+    /// The `$S` sentences sent, without the requests that follow them.
+    fn settings(wire: &Wire) -> Vec<String> {
+        wire.sentences()
+            .into_iter()
+            .filter(|s| s.starts_with("$S"))
+            .collect()
+    }
+
+    /// The auto sea mode (Adaptive, Coastal, Channel) rides in the sea
+    /// command: setting sea keeps the mode the radar reported, and setting
+    /// the mode keeps sea as it is.
+    #[tokio::test]
+    async fn sea_and_its_auto_mode_travel_together() {
+        let (mut command, info, wire) = nxt();
+        info.controls
+            .set_value(&ControlId::SeaState, json!(2))
+            .expect("channel, as the radar reported it");
+        info.controls
+            .set_value_auto(&ControlId::Sea, true, 30.)
+            .expect("auto sea at 30");
+
+        set(&mut command, &info, cv(ControlId::Sea, json!(40))).await;
+        set(&mut command, &info, cv(ControlId::SeaState, json!(1))).await;
+
+        assert_eq!(
+            settings(&wire),
+            ["$S64,0,40,10,0,2,0", "$S64,1,30,10,0,1,0"]
+        );
+    }
+
+    /// Echo averaging is signal-processing feature 2, set per range.
+    #[tokio::test]
+    async fn echo_averaging_names_its_range() {
+        let (mut command, info, wire) = nxt();
+
+        set(
+            &mut command,
+            &info,
+            cv(ControlId::ScanAverageMode, json!(1)),
+        )
+        .await;
+        command.dual_range_id = 1;
+        set(
+            &mut command,
+            &info,
+            cv(ControlId::ScanAverageMode, json!(0)),
+        )
+        .await;
+
+        assert_eq!(settings(&wire), ["$S67,0,2,1,0", "$S67,0,2,0,1"]);
+    }
+
     /// Switching sea to auto must not overwrite the auto level the plotter
     /// set, so each range sends back the level it last reported.
     #[tokio::test]
@@ -1513,6 +1601,7 @@ mod tests {
                 "$R86",       // middle STC curve
                 "$R87",       // far STC curve
                 "$R67,0,0",   // interference rejection
+                "$R67,0,2",   // echo averaging
                 "$REE",       // target separation
                 "$RED",       // bird mode
                 "$REF",       // target analyzer
@@ -1526,6 +1615,7 @@ mod tests {
                 "$R67,0,0,0,1",
                 "$REE,0,1",
                 "$RED,0,1",
+                "$R67,0,2,0,1",
             ]
         );
     }

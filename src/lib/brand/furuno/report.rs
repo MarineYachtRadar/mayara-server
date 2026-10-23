@@ -946,7 +946,7 @@ impl FurunoReportReceiver {
                     .set_value_auto(&ControlId::Gain, gain, auto);
             }
             CommandId::Sea => {
-                // Response format: $N64,{auto},{val},{auto_val},{screen},0,{drid}
+                // Response format: $N64,{auto},{val},{auto_val},{drid},{auto sea mode},0
                 if numbers.len() < 2 {
                     bail!("Insufficient ({}) arguments for Sea command", numbers.len());
                 }
@@ -956,8 +956,13 @@ impl FurunoReportReceiver {
                 if let (Some(&level), Some(cs)) = (numbers.get(2), &mut self.command_sender) {
                     cs.set_sea_auto_level(drid, level as i32);
                 }
-                self.common_for_range(drid)
-                    .set_value_auto(&ControlId::Sea, sea, auto);
+                let common = self.common_for_range(drid);
+                common.set_value_auto(&ControlId::Sea, sea, auto);
+                if let Some(&mode) = numbers.get(4)
+                    && common.info.controls.contains_key(&ControlId::SeaState)
+                {
+                    common.set_value(&ControlId::SeaState, mode);
+                }
             }
             CommandId::Rain => {
                 // Response format: $N65,{auto},{val},0,{screen},{drid},0
@@ -1122,6 +1127,7 @@ impl FurunoReportReceiver {
                 // - From REQUEST: $N67,{feature},{value},{drid} (3 args)
                 // feature 0: Interference Rejection; the NXT keeps any ON as
                 //   1 and sets it on both ranges, the classic DRS reports 2
+                // feature 2: Echo Averaging
                 // feature 3: Noise Reduction
                 // A level above the control's highest is that highest level:
                 // on, for a radar with only off and on.
@@ -1140,11 +1146,11 @@ impl FurunoReportReceiver {
                 };
 
                 match feature {
-                    0 | 3 => {
-                        let control_id = if feature == 0 {
-                            ControlId::InterferenceRejection
-                        } else {
-                            ControlId::NoiseRejection
+                    0 | 2 | 3 => {
+                        let control_id = match feature {
+                            0 => ControlId::InterferenceRejection,
+                            2 => ControlId::ScanAverageMode,
+                            _ => ControlId::NoiseRejection,
                         };
                         let common = self.common_for_range(drid as u8);
                         if let Some(control) = common.info.controls.get(&control_id) {
@@ -2885,6 +2891,27 @@ mod tests {
 
         receiver.process_report("$N69,2,1,0,60,540,0").unwrap();
         assert_eq!(receiver.transmit_is_ours, None);
+    }
+
+    /// The auto sea mode a chartplotter chose comes back in the sea report,
+    /// and echo averaging lands on the range it names.
+    #[tokio::test]
+    async fn auto_sea_mode_and_echo_averaging_are_read_back() {
+        let mut receiver = dual_range_receiver();
+
+        receiver.process_report("$N64,1,30,10,0,2,0").unwrap();
+        receiver.process_report("$N67,0,2,1,1").unwrap();
+
+        assert_eq!(value_on(&receiver, false, &ControlId::SeaState), Some(2.));
+        assert_eq!(
+            value_on(&receiver, true, &ControlId::ScanAverageMode),
+            Some(1.)
+        );
+        assert_eq!(
+            value_on(&receiver, false, &ControlId::ScanAverageMode),
+            Some(0.),
+            "Range A stays off"
+        );
     }
 
     /// The rails belong to the antenna, so a dual-range NXT shows them on
