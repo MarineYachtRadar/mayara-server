@@ -419,6 +419,8 @@ impl TrackerManager {
             return;
         }
         self.get_or_create_tracker(radar_key).complete_revolution();
+        // Every timeout counts revolutions, so this is when one can expire.
+        self.check_all_timeouts();
         self.broadcast_all_targets(radar_key, radar_position.as_ref());
     }
 
@@ -586,8 +588,6 @@ impl TrackerManager {
 
     /// Run the tracker manager, receiving radar input and MARPA requests
     pub async fn run(mut self, mut tracker_rx: mpsc::Receiver<TrackerInput>) {
-        use std::time::{Duration, Instant};
-
         log::info!(
             "TrackerManager started in {} mode",
             if self.merge_mode {
@@ -597,17 +597,7 @@ impl TrackerManager {
             }
         );
 
-        // Track last timeout check to ensure we check at least every second
-        let mut last_timeout_check = Instant::now();
-        let timeout_interval = Duration::from_secs(1);
-
         loop {
-            // Check timeouts if enough time has passed
-            if last_timeout_check.elapsed() >= timeout_interval {
-                self.check_all_timeouts();
-                last_timeout_check = Instant::now();
-            }
-
             tokio::select! {
                 Some(input) = tracker_rx.recv() => {
                     match input {
@@ -642,9 +632,6 @@ impl TrackerManager {
                             let _ = response_tx.send(targets);
                         }
                     }
-                }
-                _ = tokio::time::sleep(Duration::from_millis(1000)) => {
-                    // Periodic wake-up to check timeouts when idle
                 }
                 else => break,
             }
@@ -988,6 +975,7 @@ fn compute_danger(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::radar::target::tracker::LOST_REVOLUTION_COUNT;
 
     /// Isotropic 5 m measurement noise, so these tests exercise tracking
     /// logic rather than the range-dependent noise model.
@@ -1026,6 +1014,31 @@ mod tests {
             max_target_speed_ms: SpokeContext::max_speed_from_mode(0), // Normal mode
             doppler_auto_track: false,
         }
+    }
+
+    /// A track that stops being seen is lost when enough sweeps have passed,
+    /// however quickly they passed: its timeout counts revolutions, so it is
+    /// checked on each one rather than once a second of wall clock.
+    #[test]
+    fn a_track_is_lost_on_the_sweep_its_timeout_expires() {
+        let mut manager = make_test_manager(false);
+        let key = "test";
+        manager.process_blob(BlobMessage {
+            radar_key: key.to_string(),
+            blob: make_blob(0, 100, 20.0),
+            context: make_context(1000, 0),
+        });
+        let tracker = &manager.per_radar_trackers[key];
+        let id = tracker.get_active_targets().next().expect("a candidate").id;
+
+        let status =
+            |m: &TrackerManager| m.per_radar_trackers[key].get_target(id).map(|t| t.status);
+        for _ in 1..LOST_REVOLUTION_COUNT {
+            manager.process_revolution(key, None);
+        }
+        assert_ne!(status(&manager), Some(TargetStatus::Lost), "lost too soon");
+        manager.process_revolution(key, None);
+        assert_eq!(status(&manager), Some(TargetStatus::Lost));
     }
 
     #[test]

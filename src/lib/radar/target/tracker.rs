@@ -11,7 +11,7 @@ use super::{METERS_PER_DEGREE_LATITUDE, PositionCovariance, meters_per_degree_lo
 use crate::radar::GeoPosition;
 
 /// Number of revolutions without update before a target is marked as lost
-const LOST_REVOLUTION_COUNT: u64 = 3;
+pub(super) const LOST_REVOLUTION_COUNT: u64 = 3;
 
 /// Number of revolutions without update before a stationary target is marked as lost
 /// Stationary targets (buoys, anchored vessels) get extended timeout because
