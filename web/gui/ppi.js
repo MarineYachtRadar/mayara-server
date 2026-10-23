@@ -323,8 +323,9 @@ class PPI {
   /**
    * Initialize spoke data buffers
    */
-  setSpokes(spokesPerRevolution, maxspokelength) {
+  setSpokes(spokesPerRevolution, maxspokelength, sparseSpokes) {
     this.spokesPerRevolution = spokesPerRevolution;
+    this.sparseSpokes = sparseSpokes;
     this.reportedSpokesPerRevolution = spokesPerRevolution; // Store original for mode switching
     this.maxspokelength = maxspokelength;
     this.data = new Uint8Array(spokesPerRevolution * maxspokelength);
@@ -808,7 +809,8 @@ class PPI {
     this.spokeProcessor = SpokeProcessorFactory.create(
       this.processingMode,
       this.spokesPerRevolution,
-      this.legend
+      this.legend,
+      this.sparseSpokes
     );
 
     // Set up calibration callback for reduce processor

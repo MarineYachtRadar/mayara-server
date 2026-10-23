@@ -37,6 +37,7 @@ jobs:
     # The GUI is embedded into the binary at compile time, so a module a
     # browser cannot load still compiles, ships, and breaks only on the boat.
     - run: node dev/check-gui-modules.mjs
+    - run: node --test dev/spoke-processor.test.mjs
 
   clippy:
     name: cargo clippy

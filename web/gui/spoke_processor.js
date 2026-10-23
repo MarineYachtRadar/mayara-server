@@ -136,11 +136,15 @@ class CleanSpokeProcessor extends SpokeProcessor {
 
 /**
  * Fill processor - fills gaps between received spokes by repeating data
- * Used when radar reports more spokes than it actually sends
+ * Used when radar reports more spokes than it actually sends. A radar that
+ * sends every spoke leaves a gap only when a spoke message is lost (a slow
+ * client falling behind); keeping the last sweep there beats painting one
+ * spoke across it, so such a radar is drawn as Clean draws it.
  */
 class FillSpokeProcessor extends SpokeProcessor {
-  constructor(spokesPerRevolution, legend) {
+  constructor(spokesPerRevolution, legend, sparseSpokes) {
     super(spokesPerRevolution, legend);
+    this.sparseSpokes = sparseSpokes;
     this.lastProcessedAngle = -1;
   }
 
@@ -160,7 +164,7 @@ class FillSpokeProcessor extends SpokeProcessor {
     // Fill gaps by repeating spoke data for missing angles. Tracked in
     // the same (display) space the rows are written in, or the gap math
     // would fill the wrong rows in north-up mode.
-    if (this.lastProcessedAngle >= 0) {
+    if (this.sparseSpokes && this.lastProcessedAngle >= 0) {
       const gap = this.#calculateGap(
         this.lastProcessedAngle,
         angle,
@@ -668,9 +672,10 @@ class SpokeProcessorFactory {
    * @param {string} mode - SpokeProcessingMode value or "auto"
    * @param {number} spokesPerRevolution - Number of spokes per revolution
    * @param {Object} legend - Legend with strongReturn, mediumReturn, etc.
+   * @param {boolean} sparseSpokes - Radar sends fewer spokes than it reports
    * @returns {SpokeProcessor}
    */
-  static create(mode, spokesPerRevolution, legend) {
+  static create(mode, spokesPerRevolution, legend, sparseSpokes) {
     if (mode === "auto") {
       // Auto-detect: <= 2048 spokes use clean, > 2048 use smooth
       mode =
@@ -683,7 +688,7 @@ class SpokeProcessorFactory {
       case SpokeProcessingMode.CLEAN:
         return new CleanSpokeProcessor(spokesPerRevolution, legend);
       case SpokeProcessingMode.FILL:
-        return new FillSpokeProcessor(spokesPerRevolution, legend);
+        return new FillSpokeProcessor(spokesPerRevolution, legend, sparseSpokes);
       case SpokeProcessingMode.REDUCE:
         return new ReduceSpokeProcessor(spokesPerRevolution, legend);
       case SpokeProcessingMode.SMOOTH:

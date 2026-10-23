@@ -1795,7 +1795,11 @@ function radarLoaded(r) {
 
   // Initialize PPI with radar capabilities
   ppi.setLegend(capabilities.legend);
-  ppi.setSpokes(spokesPerRevolution, maxSpokeLength);
+  ppi.setSpokes(
+    spokesPerRevolution,
+    maxSpokeLength,
+    capabilities.hasSparseSpokes
+  );
 
   // Also initialize renderer with spokes (for texture sizing)
   renderer.setSpokes(spokesPerRevolution, maxSpokeLength);
