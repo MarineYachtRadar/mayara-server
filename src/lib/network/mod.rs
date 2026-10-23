@@ -316,13 +316,31 @@ pub(crate) fn create_connected_send_from_any_port(
     connected_send_from_port(addr, nic_addr, 0)
 }
 
+/// [`create_connected_send_from_any_port`] to a subnet-directed broadcast
+/// address, which the kernel refuses to connect to until broadcasting is on.
+pub(crate) fn create_broadcast_send(
+    addr: &SocketAddrV4,
+    nic_addr: &Ipv4Addr,
+) -> io::Result<UdpSocket> {
+    let socket: socket2::Socket = new_socket()?;
+    socket.set_broadcast(true)?;
+    connect_send_socket(socket, addr, nic_addr, 0)
+}
+
 fn connected_send_from_port(
     addr: &SocketAddrV4,
     nic_addr: &Ipv4Addr,
     local_port: u16,
 ) -> io::Result<UdpSocket> {
-    let socket: socket2::Socket = new_socket()?;
+    connect_send_socket(new_socket()?, addr, nic_addr, local_port)
+}
 
+fn connect_send_socket(
+    socket: socket2::Socket,
+    addr: &SocketAddrV4,
+    nic_addr: &Ipv4Addr,
+    local_port: u16,
+) -> io::Result<UdpSocket> {
     // Send multicast out of the radar's own interface. Without this the kernel
     // chooses one by route, which on a boat with both WiFi and Ethernet — or a
     // cellular dongle holding the default route — is usually not the radar's

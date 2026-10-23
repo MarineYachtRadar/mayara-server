@@ -78,6 +78,11 @@ pub(crate) const BEACON_ADDRESS: SocketAddr =
 pub(crate) const DATA_BROADCAST_ADDRESS: SocketAddrV4 =
     SocketAddrV4::new(Ipv4Addr::new(172, 31, 255, 255), DATA_PORT);
 
+/// Broadcast address a NavNet display relays the vessel's heading to
+/// (`BASE_PORT + 36`).
+pub(crate) const HEADING_ADDRESS: SocketAddrV4 =
+    SocketAddrV4::new(Ipv4Addr::new(172, 31, 255, 255), BASE_PORT + 36);
+
 /// Multicast address for spoke echo data (used by wired DRS/NXT/FAR models).
 pub(crate) const SPOKE_DATA_MULTICAST_ADDRESS: SocketAddrV4 =
     SocketAddrV4::new(Ipv4Addr::new(239, 255, 0, 2), DATA_PORT);
