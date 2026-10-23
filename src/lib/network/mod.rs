@@ -633,7 +633,10 @@ mod reachability_tests {
 
 #[cfg(test)]
 mod send_socket_tests {
-    use super::{UdpSocket, create_connected_send, create_connected_send_from_any_port};
+    use super::{
+        UdpSocket, create_broadcast_send, create_connected_send,
+        create_connected_send_from_any_port,
+    };
     use std::io;
     use std::net::{Ipv4Addr, SocketAddrV4};
 
@@ -654,6 +657,18 @@ mod send_socket_tests {
     /// — and a duplicate bind is refused even with `SO_REUSEADDR`. Tests run in
     /// parallel processes under nextest, so losing the race is reachable rather
     /// than theoretical: on a collision, simply try another port.
+    /// Nothing listens there, and a datagram needs a destination port.
+    const DISCARD_PORT: u16 = 9;
+
+    /// A subnet-directed broadcast is refused unless broadcasting is on.
+    #[tokio::test]
+    async fn a_broadcast_sender_can_send() {
+        let dst = SocketAddrV4::new(Ipv4Addr::new(127, 255, 255, 255), DISCARD_PORT);
+        let sock = create_broadcast_send(&dst, &Ipv4Addr::LOCALHOST)
+            .expect("a broadcast sender should connect");
+        assert!(socket2::SockRef::from(&sock).broadcast().unwrap());
+    }
+
     fn a_send_socket_on_some_free_port() -> UdpSocket {
         for _ in 0..PORT_ATTEMPTS {
             let port = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))

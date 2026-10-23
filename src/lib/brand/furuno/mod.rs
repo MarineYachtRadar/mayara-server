@@ -186,33 +186,25 @@ impl FurunoLocator {
         }
     }
 
-    /// Starts relaying the heading on `nic_addr` unless that already runs
-    /// for another radar on the same link.
-    fn start_heading_sender(
-        &self,
-        nic_addr: Ipv4Addr,
-        report_name: &str,
-        radars: &SharedRadars,
-        subsys: &SubsystemHandle,
-    ) {
+    /// Starts relaying the heading on `nic_addr` unless that already runs.
+    /// It serves every radar on the link, so it lives as long as the
+    /// locator rather than as long as the radar that started it.
+    fn start_heading_sender(&self, nic_addr: Ipv4Addr, subsys: &SubsystemHandle) {
         if !self.heading_senders.lock().unwrap().insert(nic_addr) {
             return;
         }
         let senders = self.heading_senders.clone();
-        radars.track_task(
-            report_name,
-            subsys.start(SubsystemBuilder::new(
-                format!("{}-heading", nic_addr),
-                async move |s: &mut SubsystemHandle| {
-                    let result = heading::run(s, nic_addr).await;
-                    senders.lock().unwrap().remove(&nic_addr);
-                    if let Err(e) = result {
-                        log::warn!("{}: Unable to relay the heading: {}", nic_addr, e);
-                    }
-                    Ok::<(), anyhow::Error>(())
-                },
-            )),
-        );
+        subsys.start(SubsystemBuilder::new(
+            format!("{}-heading", nic_addr),
+            async move |s: &mut SubsystemHandle| {
+                let result = heading::run(s, nic_addr).await;
+                senders.lock().unwrap().remove(&nic_addr);
+                if let Err(e) = result {
+                    log::warn!("{}: Unable to relay the heading: {}", nic_addr, e);
+                }
+                Ok::<(), anyhow::Error>(())
+            },
+        ));
     }
 
     fn found(
@@ -251,7 +243,7 @@ impl FurunoLocator {
             info.start_forwarding_radar_messages_to_stdout(subsys);
 
             if !self.args.is_replay() {
-                self.start_heading_sender(info.nic_addr, &report_name, radars, subsys);
+                self.start_heading_sender(info.nic_addr, subsys);
             }
 
             // The model from the original beacon string, not from controls,
