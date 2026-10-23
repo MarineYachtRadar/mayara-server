@@ -15,9 +15,10 @@ use super::command::Command;
 use super::protocol::{
     CommandId, DATA_BROADCAST_ADDRESS, ECHO_FLOOR, ENCODING_1_REPEAT_DEFAULT,
     ENCODING_3_REPEAT_DEFAULT, FurunoImoFrameHeader, FurunoTileFrameHeader,
-    HEADING_ADJUST_FULL_TURN, KEEP_ALIVE, PIXEL_VALUES, RadarModel, SPOKE_ALIGNMENT_MASK,
-    SPOKE_ANGLE_HIGH_MASK, SPOKE_LEN, SPOKES, TILE_MAGIC, TILE_REPEAT_DEFAULT, TILE_SCALE,
-    TX_CHANNEL_AUTO, WIRE_UNIT_KM, WIRE_UNIT_NM, wire_index_to_meters_for_unit,
+    HEADING_ADJUST_FULL_TURN, HEADING_STATE_VALID, KEEP_ALIVE, PIXEL_VALUES, RadarModel,
+    SPOKE_ALIGNMENT_MASK, SPOKE_ANGLE_HIGH_MASK, SPOKE_LEN, SPOKES, TILE_MAGIC,
+    TILE_REPEAT_DEFAULT, TILE_SCALE, TX_CHANNEL_AUTO, WIRE_UNIT_KM, WIRE_UNIT_NM,
+    wire_index_to_meters_for_unit,
 };
 use super::settings;
 use crate::Cli;
@@ -123,7 +124,7 @@ struct FurunoSpokeMetadata {
     sweep_count: u32,
     sweep_len: u32,
     encoding: u8,
-    have_heading: u8,
+    have_heading: bool,
     range: u32,
     radar_no: u8, // 0 = Range A, 1 = Range B (dual range)
     /// Number of samples that cover the configured display range.
@@ -1833,7 +1834,7 @@ impl FurunoReportReceiver {
                 sweep_count: 1,
                 sweep_len: pixel_count as u32,
                 encoding: 0,
-                have_heading: 1,
+                have_heading: true,
                 range,
                 radar_no,
                 scale: TILE_SCALE,
@@ -2204,7 +2205,7 @@ impl FurunoReportReceiver {
                     .set(&ControlId::Power, Power::Transmit as u32 as f64, None);
         }
 
-        let heading: Option<u16> = if metadata.have_heading > 0 {
+        let heading: Option<u16> = if metadata.have_heading {
             Some(heading)
         } else {
             let heading = crate::navdata::get_heading_true();
@@ -2335,7 +2336,7 @@ impl FurunoReportReceiver {
             sweep_count: header.sweep_count,
             sweep_len: header.sweep_len,
             encoding: header.encoding,
-            have_heading: header.have_heading,
+            have_heading: header.heading_state == HEADING_STATE_VALID,
             range,
             radar_no: header.radar_no,
             scale,

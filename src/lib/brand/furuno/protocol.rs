@@ -743,12 +743,12 @@ pub(crate) fn wire_unit_for_meters(meters: i32) -> i32 {
 //   [9]    bit 0: spoke_data_len high; bits 1-7: spoke_count
 //   [10]   sample_count low byte
 //   [11]   bits 0-2: sample_count high; bits 3-4: encoding;
-//          bit 5: heading_valid; bits 6-7: unknown
+//          bits 5-7: unknown, constant per model
 //   [12]   bits 0-5: range wire index; bits 6-7: range_status
 //   [13]   range resolution metadata
 //   [14]   scale low byte
 //   [15]   bits 0-2: scale high; bit 3: flag;
-//          bits 4-5: echo_type; bit 6: dual_range_id; bit 7: unknown
+//          bits 4-5: heading state; bit 6: dual_range_id; bit 7: unknown
 
 /// Byte 0 of every IMO echo frame must be this value.
 pub(crate) const FRAME_MAGIC: u8 = 0x02;
@@ -785,9 +785,9 @@ pub(crate) struct FurunoImoFrameHeader {
     pub sweep_len: u32,
     #[deku(bits = 2)]
     pub encoding: u8,
-    #[deku(bits = 1)]
-    pub have_heading: u8,
-    #[deku(bits = 2)]
+    /// The same for every frame from one model: 0b110 from a DRS-NXT,
+    /// 0b001 from a DRS2D.
+    #[deku(bits = 3)]
     pub _unknown1: u8,
     /// Byte 12: which range the radar is on, as an index into the wire index
     /// table rather than a distance.
@@ -797,18 +797,26 @@ pub(crate) struct FurunoImoFrameHeader {
     pub _range_status: u8,
     pub _range_resolution: u8,
     /// Bytes 14-15: how many of the `sweep_len` samples cover the configured
-    /// display range, and which of a dual range's two antennas sent this.
+    /// display range, whether the spokes carry a heading, and which of a
+    /// dual range's two antennas sent this.
     #[deku(bits = 11)]
     pub scale: u32,
     #[deku(bits = 1)]
     pub _flag: u8,
+    /// [`HEADING_STATE_VALID`] when the spokes carry the radar's heading;
+    /// without one the radar sends 0 and a heading of 0.
     #[deku(bits = 2)]
-    pub _echo_type: u8,
+    pub heading_state: u8,
     #[deku(bits = 1)]
     pub radar_no: u8,
     #[deku(bits = 1)]
     pub _unknown2: u8,
 }
+
+/// [`FurunoImoFrameHeader::heading_state`] of a frame whose spokes carry a
+/// heading. The radar firmware sets it whenever it has a valid heading, and
+/// TimeZero and the NavNet displays read only this value as one.
+pub(crate) const HEADING_STATE_VALID: u8 = 1;
 
 /// Per-spoke sub-header: bits 0–4 of angle/heading byte 1 or 3.
 pub(crate) const SPOKE_ANGLE_HIGH_MASK: u8 = 0x1F;
@@ -1013,6 +1021,19 @@ mod tests {
     /// shifts. Its fields are bit runs counted from the least significant bit
     /// up, and two of them cross a byte boundary, so this pins that the
     /// declaration lands them where the masks used to.
+    /// A DRS2D-NXT with a network heading, then with none: only the heading
+    /// state in byte 15 tells them apart.
+    #[test]
+    fn a_frame_header_says_whether_its_spokes_carry_a_heading() {
+        let mut frame = [2, 186, 0, 1, 0, 0, 0, 0, 33, 8, 100, 219, 70, 0, 240, 0x19];
+        let header: FurunoImoFrameHeader = decode_head(&frame).unwrap();
+        assert_eq!(header.heading_state, HEADING_STATE_VALID);
+
+        frame[15] = 0x09;
+        let header: FurunoImoFrameHeader = decode_head(&frame).unwrap();
+        assert_eq!(header.heading_state, 0);
+    }
+
     #[test]
     fn a_captured_imo_frame_header_reads_as_it_always_did() {
         let header: FurunoImoFrameHeader =
@@ -1021,7 +1042,7 @@ mod tests {
         assert_eq!(header.sweep_count, 8);
         assert_eq!(header.sweep_len, 884);
         assert_eq!(header.encoding, 3);
-        assert_eq!(header.have_heading, 0);
+        assert_eq!(header.heading_state, 0);
         assert_eq!(header.wire_index, 6);
         assert_eq!(header.radar_no, 0);
         assert_eq!(header.scale, 496);
