@@ -214,6 +214,11 @@ pub struct Cli {
     #[arg(long, default_value_t = false)]
     pub emulator: bool,
 
+    /// Make the emulator send only one in four of the spokes it reports, as a
+    /// radar with sparse spokes such as a Furuno does
+    #[arg(long, default_value_t = false, requires = "emulator")]
+    pub emulator_sparse_spokes: bool,
+
     /// Merge targets from multiple radars into a single shared target list
     #[arg(long, default_value_t = false)]
     pub merge_targets: bool,

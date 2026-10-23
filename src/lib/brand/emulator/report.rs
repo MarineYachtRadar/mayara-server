@@ -6,7 +6,7 @@ use tokio_graceful_shutdown::SubsystemHandle;
 
 use super::command::Command;
 use super::world::{EmulatorWorld, TURN_RADIUS, TurnProgress};
-use super::{EMULATOR_SPOKE_LEN, EMULATOR_SPOKES, get_initial_position};
+use super::{EMULATOR_SPOKE_LEN, EMULATOR_SPOKES, get_initial_position, spoke_step};
 use crate::Cli;
 use crate::radar::settings::{ControlId, ControlUpdate};
 use crate::radar::spoke::GenericSpoke;
@@ -39,6 +39,7 @@ pub(crate) struct EmulatorReportReceiver {
 
     // Spoke generation state
     current_spoke: u16,
+    spoke_step: u16,
     last_update: Instant,
     rotation_count: u32,
 }
@@ -76,6 +77,7 @@ impl EmulatorReportReceiver {
             boat_turn: None,
             initial_lon: initial_pos.lon(),
             current_spoke: 0,
+            spoke_step: spoke_step(args),
             last_update: Instant::now(),
             rotation_count: 0,
         }
@@ -93,9 +95,9 @@ impl EmulatorReportReceiver {
 
         // Calculate interval for spoke batches
         // 2048 spokes / 32 per batch = 64 batches per rotation
-        // 2500ms / 64 = ~39ms per batch
-        let batch_interval_ms =
-            ROTATION_TIME_MS / (EMULATOR_SPOKES as u64 / SPOKES_PER_BATCH as u64);
+        // 2500ms / 64 = ~39ms per batch; sparse spokes take fewer batches
+        let spokes_sent = EMULATOR_SPOKES as u64 / self.spoke_step as u64;
+        let batch_interval_ms = ROTATION_TIME_MS / (spokes_sent / SPOKES_PER_BATCH as u64);
         let mut spoke_interval = interval(Duration::from_millis(batch_interval_ms));
 
         // Update navdata with initial position
@@ -320,7 +322,7 @@ impl EmulatorReportReceiver {
                 spoke_data,
             );
 
-            let new_spoke = (self.current_spoke + 1) % EMULATOR_SPOKES as u16;
+            let new_spoke = next_spoke(self.current_spoke, self.spoke_step);
             if new_spoke < self.current_spoke {
                 // Rotation wrapped - broadcast heading to ensure GUI receives it
                 self.rotation_count += 1;
@@ -356,5 +358,33 @@ impl EmulatorReportReceiver {
         }
 
         data
+    }
+}
+
+fn next_spoke(spoke: u16, step: u16) -> u16 {
+    (spoke + step) % EMULATOR_SPOKES as u16
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    fn one_rotation(step: u16) -> BTreeSet<u16> {
+        std::iter::successors(Some(0), |&spoke| {
+            Some(next_spoke(spoke, step)).filter(|&s| s != 0)
+        })
+        .collect()
+    }
+
+    /// A sparse emulator reports 2048 spokes but sends a quarter of them,
+    /// spread evenly over the rotation, as a Furuno sends its spokes.
+    #[test]
+    fn a_sparse_emulator_sends_one_spoke_in_four() {
+        let sent = one_rotation(4);
+
+        assert_eq!(sent.len(), EMULATOR_SPOKES / 4);
+        assert!(sent.iter().all(|spoke| spoke % 4 == 0));
+        assert_eq!(one_rotation(1).len(), EMULATOR_SPOKES);
     }
 }

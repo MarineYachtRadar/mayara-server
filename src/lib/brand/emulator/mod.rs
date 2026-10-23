@@ -23,6 +23,17 @@ mod world;
 // Like HALO radar
 const EMULATOR_SPOKES: usize = 2048;
 const EMULATOR_SPOKE_LEN: usize = 1024;
+/// With `--emulator-sparse-spokes`, only every this many spokes is sent.
+const EMULATOR_SPARSE_STEP: u16 = 4;
+
+/// How far apart, in spokes, the emulator sends its spokes.
+fn spoke_step(args: &Cli) -> u16 {
+    if args.emulator_sparse_spokes {
+        EMULATOR_SPARSE_STEP
+    } else {
+        1
+    }
+}
 
 // Initial position: Sneek, Netherlands
 const EMULATOR_INITIAL_LAT: f64 = 53.18433606795611;
@@ -138,8 +149,8 @@ pub(crate) fn create_emulator_radar(args: &Cli, radars: &SharedRadars, subsys: &
         fake_addr, // report_addr (unused)
         fake_addr, // send_command_addr (unused)
         |id, tx| settings::new(id, tx, args),
-        true,  // doppler (like HALO)
-        false, // sparse_spokes
+        true, // doppler (like HALO)
+        args.emulator_sparse_spokes,
     );
 
     if let Some(mut info) = radars.add(info) {
