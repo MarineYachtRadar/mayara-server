@@ -54,7 +54,8 @@ where
         addr,
         controls_fn,
         false,
-        false,
+        // Furuno is the brand that skips spokes, as its locator registers it
+        brand == Brand::Furuno,
     );
     // As the locator does, so update_when_model_known finds a name to replace
     info.controls.set_user_name(info.key());

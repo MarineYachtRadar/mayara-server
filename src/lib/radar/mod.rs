@@ -613,6 +613,9 @@ impl RadarInfo {
 
         let sk_client_tx = radars.radars.read().unwrap().sk_client_tx.clone();
         let controls = controls_fn(key.clone(), sk_client_tx);
+        if sparse_spokes {
+            controls.add_spoke_processing();
+        }
 
         let info = RadarInfo {
             targets,
@@ -3280,6 +3283,15 @@ mod tests {
             serial: &str,
             dual: Option<&str>,
         ) -> RadarInfo {
+            radar_info_with_spokes(radars, serial, dual, false)
+        }
+
+        pub(super) fn radar_info_with_spokes(
+            radars: &SharedRadars,
+            serial: &str,
+            dual: Option<&str>,
+            sparse_spokes: bool,
+        ) -> RadarInfo {
             let args = Cli::parse_from(["mayara-server"]);
             let addr = SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 2), 6878);
             RadarInfo::new(
@@ -3303,9 +3315,24 @@ mod tests {
                     SharedControls::new(id, tx, &args, controls)
                 },
                 false,
-                false,
+                sparse_spokes,
             )
         }
+    }
+
+    /// Only a radar that skips spokes offers a way to process them; setting
+    /// it on another radar, as an old config or recording may, is ignored.
+    #[test]
+    fn only_a_radar_that_skips_spokes_offers_spoke_processing() {
+        let radars = SharedRadars::new();
+        let sparse = test_helpers::radar_info_with_spokes(&radars, "SPARSE", None, true);
+        let full = test_helpers::radar_info_with_spokes(&radars, "FULL", None, false);
+
+        sparse.controls.set_spoke_processing(2);
+        full.controls.set_spoke_processing(2);
+
+        assert_eq!(sparse.controls.spoke_processing(), 2);
+        assert!(full.controls.get(&ControlId::SpokeProcessing).is_none());
     }
 
     // ----- Power::from_value -----

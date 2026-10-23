@@ -701,12 +701,6 @@ impl Controls {
                 .build(&mut controls);
         }
 
-        new_list(
-            ControlId::SpokeProcessing,
-            &["Clean", "Fill", "Reduce", "Smooth"],
-        )
-        .build(&mut controls);
-
         if args.targets != TargetMode::None {
             new_map(
                 ControlId::TargetTrails,
@@ -1838,13 +1832,24 @@ impl SharedControls {
             .unwrap()
     }
 
+    /// Spoke processing exists for a radar that reports more spokes than it
+    /// sends; one that sends every spoke is drawn as it arrives.
+    pub(crate) fn add_spoke_processing(&self) {
+        let (id, control) = new_list(
+            ControlId::SpokeProcessing,
+            &["Clean", "Fill", "Reduce", "Smooth"],
+        )
+        .take();
+        // Straight into the map: a display setting stays settable on a replay.
+        self.controls.write().unwrap().controls.insert(id, control);
+    }
+
+    /// No-op on a radar that does not offer the control.
     pub fn set_spoke_processing(&self, value: i32) {
         let mut locked = self.controls.write().unwrap();
-        let control = locked
-            .controls
-            .get_mut(&ControlId::SpokeProcessing)
-            .unwrap();
-        let _ = control.set(value as f64, None, None, None);
+        if let Some(control) = locked.controls.get_mut(&ControlId::SpokeProcessing) {
+            let _ = control.set(value as f64, None, None, None);
+        }
     }
 
     pub fn spoke_processing(&self) -> i32 {
