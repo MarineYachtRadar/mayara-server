@@ -17,8 +17,7 @@ use super::protocol::{
     ENCODING_3_REPEAT_DEFAULT, FurunoImoFrameHeader, FurunoTileFrameHeader,
     HEADING_ADJUST_FULL_TURN, HEADING_STATE_VALID, KEEP_ALIVE, PIXEL_VALUES, RadarModel,
     SPOKE_ALIGNMENT_MASK, SPOKE_ANGLE_HIGH_MASK, SPOKE_LEN, SPOKES, TILE_MAGIC,
-    TILE_REPEAT_DEFAULT, TILE_SCALE, TX_CHANNEL_AUTO, WIRE_UNIT_KM, WIRE_UNIT_NM,
-    wire_index_to_meters_for_unit,
+    TILE_REPEAT_DEFAULT, TILE_SCALE, TX_CHANNEL_AUTO, WIRE_UNIT_KM, wire_index_to_meters_for_unit,
 };
 use super::settings;
 use crate::Cli;
@@ -2274,7 +2273,7 @@ impl FurunoReportReceiver {
         //          bits 5-7: unknown (0b110 from a DRS-NXT, 0b001 from a DRS2D)
         //
         // Bytes 12-15: Range and status
-        //   [12]   bits 0-5: range wire index; bits 6-7: range_status
+        //   [12]   bits 0-5: range wire index; bits 6-7: range unit
         //   [13]   range resolution metadata
         //   [14]   range_value low byte
         //   [15]   bits 0-2: range_value high; bit 3: flag;
@@ -2285,30 +2284,9 @@ impl FurunoReportReceiver {
         let header = decode_head::<FurunoImoFrameHeader>(data).ok()?;
         let wire_index = header.wire_index as i32;
 
-        // The radar's active range unit (NM / km) determines which wire-index
-        // table to use: the same wire index means different physical distances
-        // in nautical vs metric mode. Read RangeUnits from the controls that
-        // belong to the specific range this spoke is for — Range A and Range B
-        // can be configured with different units.
-        let range_controls = if header.radar_no == 1 {
-            self.common_b
-                .as_ref()
-                .map(|cb| &cb.info.controls)
-                .unwrap_or(&self.common.info.controls)
-        } else {
-            &self.common.info.controls
-        };
-        let wire_unit = range_controls
-            .get(&crate::radar::settings::ControlId::RangeUnits)
-            .and_then(|c| c.value)
-            .map(|v| {
-                if v as i32 == 1 {
-                    WIRE_UNIT_KM
-                } else {
-                    WIRE_UNIT_NM
-                }
-            })
-            .unwrap_or(WIRE_UNIT_NM);
+        // The same wire index means a different distance in each unit, and
+        // the frame says which unit it counts in.
+        let wire_unit = header.range_unit as i32;
         let range = wire_index_to_meters_for_unit(wire_index, wire_unit).unwrap_or_else(|| {
             log::warn!(
                 "Unknown wire index {} (unit {}) in spoke header: {:?}",

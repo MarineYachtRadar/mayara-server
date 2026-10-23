@@ -749,7 +749,7 @@ pub(crate) fn wire_unit_for_meters(meters: i32) -> i32 {
 //   [10]   sample_count low byte
 //   [11]   bits 0-2: sample_count high; bits 3-4: encoding;
 //          bits 5-7: unknown, constant per model
-//   [12]   bits 0-5: range wire index; bits 6-7: range_status
+//   [12]   bits 0-5: range wire index; bits 6-7: range unit
 //   [13]   range resolution metadata
 //   [14]   scale low byte
 //   [15]   bits 0-2: scale high; bit 3: flag;
@@ -798,8 +798,10 @@ pub(crate) struct FurunoImoFrameHeader {
     /// table rather than a distance.
     #[deku(bits = 6)]
     pub wire_index: u8,
+    /// The unit the wire index counts in: [`WIRE_UNIT_NM`], [`WIRE_UNIT_KM`],
+    /// 2 for statute miles or 3 for kiloyards.
     #[deku(bits = 2)]
-    pub _range_status: u8,
+    pub range_unit: u8,
     pub _range_resolution: u8,
     /// Bytes 14-15: how many of the `sweep_len` samples cover the configured
     /// display range, whether the spokes carry a heading, and which of a
@@ -1037,6 +1039,27 @@ mod tests {
         frame[15] = 0x09;
         let header: FurunoImoFrameHeader = decode_head(&frame).unwrap();
         assert_eq!(header.heading_state, 0);
+    }
+
+    /// A DRS2D-NXT on the same wire index, set to kilometres and then to
+    /// nautical miles.
+    #[test]
+    fn a_frame_header_names_the_unit_of_its_range() {
+        let mut frame = [
+            2, 186, 0, 1, 0, 0, 0, 0, 33, 8, 100, 219, 0x46, 0, 240, 0x19,
+        ];
+        let header: FurunoImoFrameHeader = decode_head(&frame).unwrap();
+        assert_eq!(
+            (header.wire_index, header.range_unit),
+            (6, WIRE_UNIT_KM as u8)
+        );
+
+        frame[12] = 0x06;
+        let header: FurunoImoFrameHeader = decode_head(&frame).unwrap();
+        assert_eq!(
+            (header.wire_index, header.range_unit),
+            (6, WIRE_UNIT_NM as u8)
+        );
     }
 
     #[test]
