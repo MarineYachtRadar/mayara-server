@@ -1,0 +1,15 @@
+{
+  "all.ids_broadcast": 7.0,
+  "false.track_ids": 2.0,
+  "false.track_seconds": 33.447,
+  "pair.coverage": 0.975609756097561,
+  "pair.position_error_m": 101.59239014656109,
+  "pair.settled_sog_error_ms": 0.3291746302216767,
+  "pair.sog_error_at_promotion_ms": 6.504875789242385,
+  "pair.track_ids": 4.0,
+  "sailboat.coverage": 1.0,
+  "sailboat.position_error_m": 137.2417852511036,
+  "sailboat.settled_sog_error_ms": 0.36317391462588855,
+  "sailboat.sog_error_at_promotion_ms": 2.461794063710339,
+  "sailboat.track_ids": 1.0
+}

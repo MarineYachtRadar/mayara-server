@@ -573,6 +573,19 @@ pub(crate) fn legacy_address_key(info: &RadarInfo) -> String {
     )
 }
 
+/// The time a spoke is stamped with: the wall clock, or the capture's own
+/// clock when a replay runs on it.
+fn spoke_clock_ms() -> u64 {
+    #[cfg(feature = "pcap-replay")]
+    if let Some(t) = crate::replay::capture_time_ms() {
+        return t;
+    }
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap()
+}
+
 impl RadarInfo {
     #[allow(clippy::too_many_arguments)] // every radar field comes flat from per-brand discovery; the brands are the only callers
     pub fn new<F>(
@@ -2222,10 +2235,7 @@ impl CommonRadar {
     pub fn new_spoke_message(&mut self) {
         if self.spoke_message.is_none() {
             self.spoke_message = Some(RadarMessage::new());
-            self.spoke_time = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_millis() as u64)
-                .unwrap();
+            self.spoke_time = spoke_clock_ms();
         }
     }
 
@@ -2356,7 +2366,7 @@ impl CommonRadar {
             if self.blob_detector.is_some()
                 && let Some(ref arpa_tx) = self.arpa_tx
             {
-                let (lat, lon) = crate::navdata::get_position();
+                let (lat, lon) = spoke::own_ship_position();
                 let tick = TrackerInput::Revolution {
                     radar_key: self.key.clone(),
                     radar_position: match (lat, lon) {
