@@ -674,6 +674,9 @@ impl BlobDetector {
             }
         }));
 
+        // The map hands blobs out in no fixed order; the tracker meets them
+        // oldest first, so it decides the same way on every run.
+        completed_ids.sort_unstable();
         let mut completed: Vec<CompletedBlob> = Vec::new();
         for &id in completed_ids.iter() {
             let blob = self
