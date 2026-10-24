@@ -32,6 +32,9 @@ const PAIR: &[u32] = &[538071225, 985380226];
 /// Mayara reads ranges 90–165 m short here, and a beam is ~200 m wide at
 /// 5 km.
 const ASSOCIATION_M: f64 = 300.0;
+/// A false track that never comes this close to an AIS vessel is no
+/// vessel's wake or stray echo: on this voyage, it is the coast.
+const LAND_M: f64 = 2000.0;
 /// A vessel counts as in view out to this range on the 7,408 m radar.
 const IN_VIEW_M: f64 = 7000.0;
 /// How far an AIS track is extrapolated past its last report.
@@ -374,19 +377,40 @@ fn score(
         .filter(|(_, l)| l.is_none())
         .map(|(id, _)| *id)
         .collect();
-    let false_seconds: f64 = false_ids
+    let tracking = |id: u64| samples.iter().filter(move |s| s.id == id && s.tracking);
+    let seconds = |ids: &[u64]| -> f64 {
+        ids.iter()
+            .map(|id| {
+                let ts: Vec<u64> = tracking(*id).map(|s| s.t).collect();
+                (ts.iter().max().unwrap() - ts.iter().min().unwrap()) as f64 / 1000.0
+            })
+            .fold(0.0, |a, b| a + b) // an empty `sum` is -0.0
+    };
+    let to_nearest_vessel = |s: &Sample| {
+        vessels
+            .values()
+            .filter_map(|fixes| {
+                let (n, e) = offset_m(position_at(fixes, s.t)?, (s.lat, s.lon));
+                Some(n.hypot(e))
+            })
+            .filter(|d| d.is_finite())
+            .fold(f64::INFINITY, f64::min)
+    };
+    let land_ids: Vec<u64> = false_ids
         .iter()
-        .map(|id| {
-            let ts: Vec<u64> = samples
-                .iter()
-                .filter(|s| s.id == *id && s.tracking)
-                .map(|s| s.t)
-                .collect();
-            (ts.iter().max().unwrap() - ts.iter().min().unwrap()) as f64 / 1000.0
-        })
-        .sum();
+        .copied()
+        .filter(|id| tracking(*id).all(|s| to_nearest_vessel(s) > LAND_M))
+        .collect();
+    // Land shown as a moving boat is what sets off a collision warning.
+    let land_sog = land_ids
+        .iter()
+        .flat_map(|id| tracking(*id).filter_map(|s| s.sog))
+        .fold(0.0, f64::max);
     scores.insert("false.track_ids".into(), (false_ids.len() as f64, lower));
-    scores.insert("false.track_seconds".into(), (false_seconds, lower));
+    scores.insert("false.track_seconds".into(), (seconds(&false_ids), lower));
+    scores.insert("land.track_ids".into(), (land_ids.len() as f64, lower));
+    scores.insert("land.track_seconds".into(), (seconds(&land_ids), lower));
+    scores.insert("land.max_sog_ms".into(), (land_sog, lower));
     let created: BTreeSet<u64> = samples.iter().map(|s| s.id).collect();
     scores.insert("all.ids_broadcast".into(), (created.len() as f64, lower));
     scores
@@ -397,7 +421,7 @@ fn tolerance(name: &str) -> f64 {
     match name.rsplit('.').next().unwrap() {
         "coverage" => 0.02,
         "position_error_m" => 10.0,
-        "settled_sog_error_ms" | "sog_error_at_promotion_ms" => 0.2,
+        "settled_sog_error_ms" | "sog_error_at_promotion_ms" | "max_sog_ms" => 0.2,
         "track_seconds" => 30.0,
         _ => 0.0,
     }
