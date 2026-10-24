@@ -44,6 +44,12 @@ const MAX_BLOB_PIXELS: usize = 100_000;
 /// echoes the radar itself can separate are never merged.
 const MAX_SPOKE_GAP_DEGREES: f64 = 3.0;
 
+/// Share of a blob's pixels that must show Doppler for it to be a Doppler
+/// echo. A moving vessel's echo is mostly Doppler, while a stretch of coast
+/// can show a few Doppler pixels as own ship moves past it: in the #722
+/// voyage the coast's blobs had 0.1-11%, the vessels' 26-96%.
+const MIN_DOPPLER_SHARE: f64 = 0.2;
+
 /// Minimum ship size in meters
 pub const MIN_TARGET_SIZE_M: f64 = 5.0;
 
@@ -74,9 +80,9 @@ struct BlobInProgress {
     last_spoke_with_addition: u16,
     min_pixel: usize,
     max_pixel: usize,
-    /// True if any pixel in this blob has a Doppler intensity, approaching
-    /// or receding
-    has_doppler: bool,
+    /// How many of `pixels` have a Doppler intensity, approaching or
+    /// receding
+    doppler_pixels: usize,
 }
 
 impl BlobInProgress {
@@ -87,7 +93,7 @@ impl BlobInProgress {
             min_pixel: pixel_idx,
             max_pixel: pixel_idx,
             last_spoke_with_addition: pixel.spoke,
-            has_doppler: false,
+            doppler_pixels: 0,
             pixels: vec![pixel],
         }
     }
@@ -105,7 +111,7 @@ impl BlobInProgress {
         self.min_pixel = self.min_pixel.min(other.min_pixel);
         self.max_pixel = self.max_pixel.max(other.max_pixel);
         self.last_spoke_with_addition = current_spoke;
-        self.has_doppler |= other.has_doppler;
+        self.doppler_pixels += other.doppler_pixels;
         self.pixels.extend(other.pixels);
     }
 }
@@ -212,8 +218,9 @@ pub struct CompletedBlob {
     pub size_meters: f64,
     /// Which guard zones contain this blob's center (1 and/or 2), empty if none
     pub in_guard_zones: Vec<u8>,
-    /// True if any pixel in this blob has a Doppler intensity, approaching
-    /// or receding: the echo of something moving towards or away from us.
+    /// True if enough of this blob's pixels have a Doppler intensity,
+    /// approaching or receding, for it to be the echo of something moving
+    /// towards or away from us; see [`MIN_DOPPLER_SHARE`].
     pub has_doppler: bool,
 }
 
@@ -619,7 +626,7 @@ impl BlobDetector {
                 0 => {
                     let id = self.alloc_blob_id();
                     let mut blob = BlobInProgress::new(id, pixel.clone());
-                    blob.has_doppler = is_doppler;
+                    blob.doppler_pixels = usize::from(is_doppler);
                     self.active_blobs.insert(id, blob);
                     self.set_pixel_owner(pixel.spoke, pixel.pixel, id);
                     continue;
@@ -650,7 +657,6 @@ impl BlobDetector {
                 .active_blobs
                 .get_mut(&target_id)
                 .expect("target blob must exist");
-            blob.has_doppler |= is_doppler;
             let (pxl_spoke, pxl_pixel) = (pixel.spoke, pixel.pixel);
             let cell = pxl_spoke as usize * self.current_spoke_len + pxl_pixel;
             if self.pixel_index[cell] == target_id {
@@ -661,6 +667,7 @@ impl BlobDetector {
                 // `pixels` without bound; just refresh liveness.
                 blob.last_spoke_with_addition = spoke_angle;
             } else {
+                blob.doppler_pixels += usize::from(is_doppler);
                 blob.add_pixel(pixel, spoke_angle);
                 self.pixel_index[cell] = target_id;
             }
@@ -730,7 +737,8 @@ impl BlobDetector {
                     pixel_extent: blob.max_pixel - blob.min_pixel + 1,
                     size_meters: size,
                     in_guard_zones,
-                    has_doppler: blob.has_doppler,
+                    has_doppler: blob.doppler_pixels as f64
+                        >= MIN_DOPPLER_SHARE * pixel_count as f64,
                 });
             }
             // Drop this blob's entries from the detector-level spatial index.
@@ -954,6 +962,28 @@ mod tests {
             assert_eq!(completed.len(), 1, "colour {colour}");
             assert!(completed[0].has_doppler, "colour {colour}");
         }
+    }
+
+    /// A big echo with a fleck of Doppler colour, as the coast shows when own
+    /// ship moves past it, is not the echo of something moving.
+    #[test]
+    fn a_fleck_of_doppler_on_a_big_echo_is_not_a_doppler_blob() {
+        let mut detector = BlobDetector::new(2048, STRONG_RETURN);
+        detector.set_doppler(Some((16, 1)), None);
+        let mut completed = Vec::new();
+        for angle in 100..112 {
+            let mut spoke = spoke_with(angle, 512, &[]);
+            if angle < 110 {
+                spoke.data[300..320].fill(STRONG_RETURN);
+                if angle == 105 {
+                    spoke.data[300] = 16;
+                }
+            }
+            completed.extend(detector.process_spoke(&spoke));
+        }
+
+        assert_eq!(completed.len(), 1);
+        assert!(!completed[0].has_doppler);
     }
 
     /// A radar reports its Doppler only after it has been found, so the
