@@ -1941,7 +1941,8 @@ impl CommonRadar {
                 info.spokes_per_revolution,
                 info.legend.strong_return,
                 info.legend.doppler_approaching,
-            );
+            )
+            .with_doppler_receding(info.legend.doppler_receding);
             // Initialize guard zones from current control values
             detector.set_guard_zone_1(info.controls.guard_zone(&ControlId::GuardZone1));
             detector.set_guard_zone_2(info.controls.guard_zone(&ControlId::GuardZone2));

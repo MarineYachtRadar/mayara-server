@@ -336,11 +336,12 @@ impl TrackerManager {
             _ => None,
         };
 
-        // Determine candidate source: guard zone takes priority, then Doppler auto-track,
-        // then Anywhere (matches existing targets only, no new acquisition).
+        // Determine candidate source: guard zone takes priority, then Doppler
+        // auto-track of anything approaching or receding, then Anywhere
+        // (matches existing targets only, no new acquisition).
         let source = if let Some(&zone_id) = msg.blob.in_guard_zones.first() {
             CandidateSource::GuardZone(zone_id)
-        } else if msg.blob.has_doppler_approaching && msg.context.doppler_auto_track {
+        } else if msg.blob.has_doppler && msg.context.doppler_auto_track {
             CandidateSource::Doppler
         } else {
             CandidateSource::Anywhere
@@ -999,7 +1000,7 @@ mod tests {
             pixel_extent: 1,
             size_meters,
             in_guard_zones: vec![1], // Default to guard zone 1 for tests
-            has_doppler_approaching: false,
+            has_doppler: false,
         }
     }
 

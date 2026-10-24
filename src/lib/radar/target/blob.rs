@@ -74,8 +74,9 @@ struct BlobInProgress {
     last_spoke_with_addition: u16,
     min_pixel: usize,
     max_pixel: usize,
-    /// True if any pixel in this blob has Doppler-approaching intensity
-    has_doppler_approaching: bool,
+    /// True if any pixel in this blob has a Doppler intensity, approaching
+    /// or receding
+    has_doppler: bool,
 }
 
 impl BlobInProgress {
@@ -86,7 +87,7 @@ impl BlobInProgress {
             min_pixel: pixel_idx,
             max_pixel: pixel_idx,
             last_spoke_with_addition: pixel.spoke,
-            has_doppler_approaching: false,
+            has_doppler: false,
             pixels: vec![pixel],
         }
     }
@@ -104,7 +105,7 @@ impl BlobInProgress {
         self.min_pixel = self.min_pixel.min(other.min_pixel);
         self.max_pixel = self.max_pixel.max(other.max_pixel);
         self.last_spoke_with_addition = current_spoke;
-        self.has_doppler_approaching |= other.has_doppler_approaching;
+        self.has_doppler |= other.has_doppler;
         self.pixels.extend(other.pixels);
     }
 }
@@ -211,8 +212,9 @@ pub struct CompletedBlob {
     pub size_meters: f64,
     /// Which guard zones contain this blob's center (1 and/or 2), empty if none
     pub in_guard_zones: Vec<u8>,
-    /// True if any pixel in this blob has Doppler-approaching intensity
-    pub has_doppler_approaching: bool,
+    /// True if any pixel in this blob has a Doppler intensity, approaching
+    /// or receding: the echo of something moving towards or away from us.
+    pub has_doppler: bool,
 }
 
 /// Internal representation of a guard zone in spoke/pixel coordinates
@@ -239,6 +241,12 @@ fn radians_to_spoke(angle_radians: f64, spokes_per_revolution: u16) -> u16 {
     spoke.rem_euclid(spokes_per_revolution as i32) as u16
 }
 
+/// A legend's `(start, count)` band as `(first, last)` inclusive, for O(1)
+/// range checks.
+fn inclusive(band: Option<(u8, u8)>) -> Option<(u8, u8)> {
+    band.and_then(|(start, count)| Some((start, start.checked_add(count.checked_sub(1)?)?)))
+}
+
 /// Blob detector that processes spokes and identifies targets
 pub struct BlobDetector {
     spokes_per_revolution: u16,
@@ -247,6 +255,8 @@ pub struct BlobDetector {
     /// Pixel intensity range for Doppler-approaching returns: `(first, last)`
     /// inclusive. From `legend.doppler_approaching` `(start, count)`.
     doppler_approaching_range: Option<(u8, u8)>,
+    /// The same for Doppler-receding returns, from `legend.doppler_receding`.
+    doppler_receding_range: Option<(u8, u8)>,
     next_blob_id: u32,
     /// Active blobs keyed by stable blob id so merges/removals don't invalidate references.
     active_blobs: HashMap<u32, BlobInProgress>,
@@ -291,13 +301,11 @@ impl BlobDetector {
         } else {
             DEFAULT_BLOB_THRESHOLD
         };
-        // Convert (start, count) to (start, end_inclusive) for O(1) range checks.
-        let doppler_approaching_range =
-            doppler_approaching.map(|(start, count)| (start, start + count - 1));
         BlobDetector {
             spokes_per_revolution,
             threshold,
-            doppler_approaching_range,
+            doppler_approaching_range: inclusive(doppler_approaching),
+            doppler_receding_range: None,
             next_blob_id: 1,
             active_blobs: HashMap::new(),
             pixel_index: Vec::new(),
@@ -311,6 +319,13 @@ impl BlobDetector {
             guard_zone_2: None,
             guard_zones: Vec::new(),
         }
+    }
+
+    /// Also flag the receding Doppler band, so a blob moving away from us is
+    /// as much a Doppler echo as one moving towards us.
+    pub fn with_doppler_receding(mut self, doppler_receding: Option<(u8, u8)>) -> Self {
+        self.doppler_receding_range = inclusive(doppler_receding);
+        self
     }
 
     /// Set guard zone 1 config (call when control changes)
@@ -580,12 +595,13 @@ impl BlobDetector {
 
         // Strong/Doppler pixels are detected and processed in one pass over
         // spoke.data so the hot path needs no intermediate pixel buffer.
-        let doppler_range = self.doppler_approaching_range;
+        let doppler_ranges = [self.doppler_approaching_range, self.doppler_receding_range];
         for (pixel_idx, &intensity) in spoke.data.iter().enumerate() {
-            let is_doppler_approaching = doppler_range
-                .map(|(lo, hi)| intensity >= lo && intensity <= hi)
-                .unwrap_or(false);
-            if intensity < self.threshold && !is_doppler_approaching {
+            let is_doppler = doppler_ranges
+                .iter()
+                .flatten()
+                .any(|&(lo, hi)| intensity >= lo && intensity <= hi);
+            if intensity < self.threshold && !is_doppler {
                 continue;
             }
             let pixel = BlobPixel {
@@ -600,7 +616,7 @@ impl BlobDetector {
                 0 => {
                     let id = self.alloc_blob_id();
                     let mut blob = BlobInProgress::new(id, pixel.clone());
-                    blob.has_doppler_approaching = is_doppler_approaching;
+                    blob.has_doppler = is_doppler;
                     self.active_blobs.insert(id, blob);
                     self.set_pixel_owner(pixel.spoke, pixel.pixel, id);
                     continue;
@@ -631,7 +647,7 @@ impl BlobDetector {
                 .active_blobs
                 .get_mut(&target_id)
                 .expect("target blob must exist");
-            blob.has_doppler_approaching |= is_doppler_approaching;
+            blob.has_doppler |= is_doppler;
             let (pxl_spoke, pxl_pixel) = (pixel.spoke, pixel.pixel);
             let cell = pxl_spoke as usize * self.current_spoke_len + pxl_pixel;
             if self.pixel_index[cell] == target_id {
@@ -711,7 +727,7 @@ impl BlobDetector {
                     pixel_extent: blob.max_pixel - blob.min_pixel + 1,
                     size_meters: size,
                     in_guard_zones,
-                    has_doppler_approaching: blob.has_doppler_approaching,
+                    has_doppler: blob.has_doppler,
                 });
             }
             // Drop this blob's entries from the detector-level spatial index.
@@ -902,6 +918,38 @@ mod tests {
 
         assert_eq!(completed.len(), 1, "one echo, one blob");
         assert_eq!(completed[0].all_pixels.len(), 60);
+    }
+
+    /// An echo in the receding Doppler colour is a Doppler echo as much as an
+    /// approaching one: a receding motor yacht off Fiji in #722 was never
+    /// acquired by Doppler auto-track while only approaching echoes counted.
+    #[test]
+    fn a_receding_doppler_echo_is_a_doppler_blob() {
+        const SPOKES: u16 = 2048;
+        const APPROACHING: u8 = 16;
+        const RECEDING: u8 = 17;
+        let detector = || {
+            BlobDetector::new(SPOKES, STRONG_RETURN, Some((APPROACHING, 1)))
+                .with_doppler_receding(Some((RECEDING, 1)))
+        };
+        let blobs = |colour: u8| {
+            let mut detector = detector();
+            let mut completed = Vec::new();
+            for angle in 100..112 {
+                let mut spoke = spoke_with(angle, 512, &[]);
+                if angle < 110 {
+                    spoke.data[300..306].fill(colour);
+                }
+                completed.extend(detector.process_spoke(&spoke));
+            }
+            completed
+        };
+
+        for colour in [APPROACHING, RECEDING] {
+            let completed = blobs(colour);
+            assert_eq!(completed.len(), 1, "colour {colour}");
+            assert!(completed[0].has_doppler, "colour {colour}");
+        }
     }
 
     /// Spokes a whole revolution apart, or far enough apart that the radar
