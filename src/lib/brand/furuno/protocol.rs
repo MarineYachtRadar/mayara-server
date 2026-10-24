@@ -1072,6 +1072,29 @@ mod tests {
         );
     }
 
+    /// Byte 12 bit 5 sits between the wire index and its unit, and byte 13
+    /// packs the ATF and Target Analyzer state from its lowest bit up.
+    #[test]
+    fn a_frame_header_keeps_the_bits_beside_the_wire_index_apart() {
+        let frame = [
+            2, 186, 0, 1, 0, 0, 0, 0, 33, 8, 100, 219, 0x26, 0b1101, 240, 0x19,
+        ];
+        let header: FurunoImoFrameHeader = decode_head(&frame).unwrap();
+
+        assert_eq!(
+            (header.wire_index, header._unknown, header.range_unit),
+            (6, 1, WIRE_UNIT_NM as u8)
+        );
+        assert_eq!(
+            (
+                header._atf_on,
+                header._atf_high_gain_level,
+                header._target_analyzer
+            ),
+            (1, 2, 1)
+        );
+    }
+
     /// The header a DRS-4D NXT sends, as captured in the notes above
     /// `parse_metadata_header`, which read it apart by hand with masks and
     /// shifts. Its fields are bit runs counted from the least significant bit
