@@ -815,12 +815,21 @@ fn blob_to_position(blob: &CompletedBlob, ctx: &SpokeContext) -> Option<GeoPosit
     Some(radar_pos.position_from_bearing(bearing_rad, distance_m))
 }
 
-/// How much of a blob's own extent to take as the 1-sigma error of its
-/// centre. A beam-smeared point target wanders by a fair fraction of the
+/// How much of a blob's angular extent to take as the 1-sigma error of its
+/// bearing. A beam-smeared point target wanders by a fair fraction of the
 /// beam width from sweep to sweep — the reported capture showed 1.5-3
 /// degrees against a beam of about 5 — and a physically large target has a
 /// correspondingly less certain centre. Half the extent covers both.
-const CENTROID_SIGMA_FRACTION: f64 = 0.5;
+const CROSS_SIGMA_FRACTION: f64 = 0.5;
+
+/// How much of a blob's radial depth to take as the 1-sigma error of its
+/// range. The depth is mostly the pulse length smearing the echo, and it
+/// smears it the same way every sweep, so the centre stays put: vessels
+/// at 5 km in the #722 voyage, 250 m deep, held their range to about 5 m.
+/// Half the depth, as across the beam, made the tracker distrust every
+/// fix and report a target at nearly zero speed when it first confirmed
+/// it, however fast it was going.
+const RADIAL_SIGMA_FRACTION: f64 = 0.02;
 
 /// Floor on either axis of the measurement error (meters). Keeps a
 /// single-pixel blob close in from claiming an implausibly exact position.
@@ -850,11 +859,11 @@ fn blob_to_covariance(blob: &CompletedBlob, ctx: &SpokeContext) -> PositionCovar
     } else {
         0.0
     };
-    let radial_sigma = (blob.pixel_extent as f64 * meters_per_pixel * CENTROID_SIGMA_FRACTION)
+    let radial_sigma = (blob.pixel_extent as f64 * meters_per_pixel * RADIAL_SIGMA_FRACTION)
         .max(MIN_MEASUREMENT_SIGMA_M);
 
     let angular_extent = blob.spoke_extent as f64 / ctx.spokes_per_revolution as f64 * TAU;
-    let bearing_sigma = (angular_extent * CENTROID_SIGMA_FRACTION).max(MIN_BEARING_SIGMA_RAD);
+    let bearing_sigma = (angular_extent * CROSS_SIGMA_FRACTION).max(MIN_BEARING_SIGMA_RAD);
     let cross_sigma = (distance_m * bearing_sigma).max(MIN_MEASUREMENT_SIGMA_M);
 
     PositionCovariance::from_polar(bearing_rad, radial_sigma.powi(2), cross_sigma.powi(2))
@@ -1192,6 +1201,24 @@ mod tests {
         let mut wide = make_blob(0, 500, 30.0);
         wide.spoke_extent = 28; // ~4.9 degrees at 2048 spokes
         assert!(blob_to_covariance(&wide, &ctx).ee > cov.ee);
+    }
+
+    /// The pulse smears an echo in range the same way every sweep, so a
+    /// deep blob's range is still known to metres, not to half its depth.
+    #[test]
+    fn a_deep_blob_still_knows_its_range() {
+        // 250 m deep at 5 km, on 7.4 km over 512 pixels.
+        let ctx = SpokeContext {
+            range: 7400,
+            ..make_context(1000, 0)
+        };
+        let mut blob = make_blob(0, 346, 30.0);
+        blob.pixel_extent = 17;
+
+        let cov = blob_to_covariance(&blob, &ctx);
+
+        // Dead ahead, so the range error is on the north axis.
+        assert!(cov.nn.sqrt() < 10.0, "range sigma {:.0} m", cov.nn.sqrt());
     }
 
     #[test]
