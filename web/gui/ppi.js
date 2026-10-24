@@ -8,6 +8,16 @@ import { SpokeProcessorFactory } from "./spoke_processor.js";
 const RANGE_SCALE = 0.9;
 
 const NAUTICAL_MILE = 1852.0;
+const STATUTE_MILE = 1609.344;
+const KILOYARD = 914.4;
+
+// The RangeUnits values the radar names because its metres cannot tell them.
+const RANGE_UNITS_STATUTE = 3;
+const RANGE_UNITS_KILOYARDS = 4;
+
+// A statute mile fraction within this many miles of a distance names it.
+const STATUTE_FRACTION_TOLERANCE = 0.001;
+const STATUTE_FRACTION_MAX_DENOMINATOR = 128;
 
 // Exponential-smoothing factor for the radar-derived heading. The bearing
 // field on each spoke is quantized, so the per-spoke `bearing - angle` heading
@@ -65,23 +75,50 @@ function is_metric(v) {
   return divides_near(v, 500);
 }
 
+// The unit distances are shown in: "km", "nm", "mi" or "kyd". Statute miles
+// and kiloyards cannot be told from the range in metres, so they come from the
+// radar's RangeUnits; metric and nautical ranges are told from the range.
+function displayUnits(rangeUnits, range) {
+  if (rangeUnits === RANGE_UNITS_STATUTE) return "mi";
+  if (rangeUnits === RANGE_UNITS_KILOYARDS) return "kyd";
+  return is_metric(range) ? "km" : "nm";
+}
+
 // Format a distance for a VRM/EBL readout. Unlike `formatRangeValue` (which
 // snaps to nice radar-tick fractions such as 1/4 nm), this returns a smooth
-// 2-decimal value in the unit the operator already sees: nm imperial, m/km
-// metric. Rounding to .01 nm (~18 m) or 1 m keeps the readout precise enough
-// for navigation without showing raw float noise like "0.073077... nm".
-function formatVrmDistance(metric, v) {
-  if (metric) {
+// 2-decimal value in the unit the operator already sees: nm, mi or kyd
+// imperial, m/km metric. Rounding to .01 nm (~18 m) or 1 m keeps the readout
+// precise enough for navigation without showing raw float noise like
+// "0.073077... nm".
+function formatVrmDistance(units, v) {
+  if (units === "km") {
     if (v >= 1000) {
       return (v / 1000).toFixed(2) + " km";
     }
     return Math.round(v) + " m";
   }
+  if (units === "mi") return (v / STATUTE_MILE).toFixed(2) + " mi";
+  if (units === "kyd") return (v / KILOYARD).toFixed(2) + " kyd";
   return (v / NAUTICAL_MILE).toFixed(2) + " nm";
 }
 
-function formatRangeValue(metric, v) {
-  if (metric) {
+// Statute miles as the radar's range key shows them: 1/8 mi, 1.5 mi, 2 mi.
+function formatStatuteMiles(v) {
+  const miles = v / STATUTE_MILE;
+  if (miles >= 1) return Number(miles.toFixed(2)) + " mi";
+  for (let d = 2; d <= STATUTE_FRACTION_MAX_DENOMINATOR; d *= 2) {
+    const n = Math.round(miles * d);
+    if (n > 0 && Math.abs(miles - n / d) < STATUTE_FRACTION_TOLERANCE) {
+      return n + "/" + d + " mi";
+    }
+  }
+  return Number(miles.toFixed(3)) + " mi";
+}
+
+function formatRangeValue(units, v) {
+  if (units === "mi") return formatStatuteMiles(v);
+  if (units === "kyd") return Math.round((v / KILOYARD) * 1000) / 1000 + " kyd";
+  if (units === "km") {
     v = Math.round(v);
     if (v >= 1000) {
       return v / 1000 + " km";
@@ -187,6 +224,9 @@ class PPI {
     // Power mode state
     this.powerMode = "off";
     this.onTimeSeconds = null;
+
+    // The radar's RangeUnits control value, once known
+    this.rangeUnits = null;
     this.txTimeSeconds = null;
 
     // Guard zones and no-transmit sectors
@@ -335,6 +375,11 @@ class PPI {
     if (this.legend) {
       this.#createSpokeProcessor();
     }
+  }
+
+  setRangeUnits(rangeUnits) {
+    this.rangeUnits = rangeUnits;
+    this.redrawCanvas();
   }
 
   setRange(range) {
@@ -1457,7 +1502,10 @@ class PPI {
       ctx.stroke();
 
       if (range) {
-        const text = formatRangeValue(is_metric(range), (range * i) / 4);
+        const text = formatRangeValue(
+          displayUnits(this.rangeUnits, range),
+          (range * i) / 4
+        );
         const labelX = this.center_x + radius * 0.707;
         const labelY = this.center_y - radius * 0.707;
         ctx.fillText(text, labelX + 5, labelY - 5);
@@ -1942,7 +1990,10 @@ class PPI {
       bearingText = `${((rel * 180) / Math.PI).toFixed(1)}° R`;
     }
 
-    const distanceText = formatVrmDistance(is_metric(range), marker.distance);
+    const distanceText = formatVrmDistance(
+      displayUnits(this.rangeUnits, range),
+      marker.distance
+    );
 
     const label = `VRM/EBL ${index + 1}`;
     const lines = [label, bearingText, distanceText];

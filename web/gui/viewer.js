@@ -1968,6 +1968,10 @@ function controlUpdate(controlId, value) {
     if (index >= 0 && index < 4 && ppi) {
       ppi.setNoTransmitSector(index, parseNoTransmitSector(value));
     }
+  } else if (controlId === "rangeUnits") {
+    if (ppi) {
+      ppi.setRangeUnits(Number(typeof value === "object" ? value.value : value));
+    }
   } else {
     const control = getControl(controlId);
     if (control?.name === "Range") {

@@ -60,7 +60,7 @@ pub(crate) struct Radar {
     #[serde(default)]
     pub spoke_processing: i32, // 0 = Clean, 1 = Fill, 2 = Reduce, 3 = Smooth
     #[serde(default = "default_range_units")]
-    pub range_units: i32, // 0 = Nautical, 1 = Metric, 2 = Mixed
+    pub range_units: i32, // 0 = Nautical, 1 = Metric, 2 = Mixed, 3 = Statute, 4 = Kiloyards
     #[serde(default = "default_auto_standby")]
     pub auto_standby: i32, // Index into the AutoStandby control's choices
 

@@ -2034,9 +2034,11 @@ impl SharedControls {
         let ranges = &locked.all_ranges;
 
         let filtered_ranges = match range_units {
-            0 => &ranges.nautical, // Nautical (default)
-            1 => &ranges.metric,   // Metric
-            _ => &ranges.mixed,    // Mixed
+            RANGE_UNITS_NAUTICAL => &ranges.nautical,
+            RANGE_UNITS_METRIC => &ranges.metric,
+            RANGE_UNITS_STATUTE => &ranges.statute,
+            RANGE_UNITS_KILOYARDS => &ranges.kiloyards,
+            _ => &ranges.mixed,
         }
         .clone(); // to avoid borrow mut problem
 
@@ -2777,6 +2779,18 @@ const AUTO_STANDBY_CHOICES: [(&str, Option<Duration>); 5] = [
     ("30 min", Some(Duration::from_secs(30 * 60))),
 ];
 pub(crate) const DEFAULT_AUTO_STANDBY: usize = 1;
+
+// RangeUnits values. Every brand with the control offers nautical and
+// metric; statute miles and kiloyards only where the radar ranges in them.
+pub(crate) const RANGE_UNITS_NAUTICAL: i32 = 0;
+pub(crate) const RANGE_UNITS_METRIC: i32 = 1;
+pub(crate) const RANGE_UNITS_STATUTE: i32 = 3;
+pub(crate) const RANGE_UNITS_KILOYARDS: i32 = 4;
+
+/// The RangeUnits labels, by value; 2 is Mixed, metric short ranges with
+/// nautical long ones.
+pub(crate) const RANGE_UNITS_NAMES: [&str; 5] =
+    ["Nautical", "Metric", "Mixed", "Statute", "Kiloyards"];
 
 /// The `AutoStandby` control, for brands whose receiver honours
 /// [`RadarInfo::stand_down`](crate::radar::RadarInfo::stand_down); a brand
@@ -4913,6 +4927,34 @@ mod test {
             controls.get(&ControlId::TargetTrails).unwrap().value,
             Some(3.)
         );
+    }
+
+    /// Statute miles and kiloyards are Furuno's alone: Navico and the
+    /// emulator keep nautical, metric and mixed, at the values saved
+    /// settings hold them by.
+    #[test]
+    fn only_furuno_ranges_in_statute_miles_and_kiloyards() {
+        let args = Cli::parse_from(["my_program"]);
+        let others = crate::brand::navico::controls_for_every_model(&args)
+            .into_iter()
+            .chain(crate::brand::emulator::controls_for_every_model(&args));
+
+        for controls in others {
+            let item = controls.get(&ControlId::RangeUnits).unwrap().item;
+            let descriptions = item.descriptions.unwrap();
+            let mut values: Vec<_> = descriptions.iter().collect();
+            values.sort();
+
+            assert_eq!(
+                values,
+                [
+                    (&0, &"Nautical".to_string()),
+                    (&1, &"Metric".to_string()),
+                    (&2, &"Mixed".to_string())
+                ]
+            );
+            assert_eq!(item.max_value, Some(2.));
+        }
     }
 
     #[test]
