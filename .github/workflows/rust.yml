@@ -116,7 +116,7 @@ jobs:
     steps:
     - uses: actions/checkout@v7
     - uses: swatinem/rust-cache@v2
-    - uses: taiki-e/install-action@v2.87.28
+    - uses: taiki-e/install-action@v2.87.30
       with:
         tool: nextest
     - name: Run tests
@@ -139,7 +139,7 @@ jobs:
       with:
         persist-credentials: false
     - uses: swatinem/rust-cache@v2
-    - uses: taiki-e/install-action@v2.87.28
+    - uses: taiki-e/install-action@v2.87.30
       with:
         tool: nextest
     - name: Run tests
@@ -151,7 +151,7 @@ jobs:
     steps:
     - uses: actions/checkout@v7
     - uses: swatinem/rust-cache@v2
-    - uses: taiki-e/install-action@v2.87.28
+    - uses: taiki-e/install-action@v2.87.30
       with:
         tool: nextest
     - name: Run tests
