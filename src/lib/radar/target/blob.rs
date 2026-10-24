@@ -291,11 +291,9 @@ pub struct BlobDetector {
 }
 
 impl BlobDetector {
-    pub fn new(
-        spokes_per_revolution: u16,
-        threshold: u8,
-        doppler_approaching: Option<(u8, u8)>,
-    ) -> Self {
+    /// A detector without Doppler bands; [`Self::set_doppler`] gives it
+    /// the radar's.
+    pub fn new(spokes_per_revolution: u16, threshold: u8) -> Self {
         let threshold = if threshold > 0 {
             threshold
         } else {
@@ -304,7 +302,7 @@ impl BlobDetector {
         BlobDetector {
             spokes_per_revolution,
             threshold,
-            doppler_approaching_range: inclusive(doppler_approaching),
+            doppler_approaching_range: None,
             doppler_receding_range: None,
             next_blob_id: 1,
             active_blobs: HashMap::new(),
@@ -321,11 +319,16 @@ impl BlobDetector {
         }
     }
 
-    /// Also flag the receding Doppler band, so a blob moving away from us is
-    /// as much a Doppler echo as one moving towards us.
-    pub fn with_doppler_receding(mut self, doppler_receding: Option<(u8, u8)>) -> Self {
-        self.doppler_receding_range = inclusive(doppler_receding);
-        self
+    /// Take the Doppler bands of a legend that changed after the detector
+    /// was built: a radar says whether it has Doppler only once it has been
+    /// found.
+    pub(crate) fn set_doppler(
+        &mut self,
+        approaching: Option<(u8, u8)>,
+        receding: Option<(u8, u8)>,
+    ) {
+        self.doppler_approaching_range = inclusive(approaching);
+        self.doppler_receding_range = inclusive(receding);
     }
 
     /// Set guard zone 1 config (call when control changes)
@@ -903,7 +906,7 @@ mod tests {
     fn echo_across_sparse_spokes_is_one_blob() {
         const SPOKES: u16 = 8192;
         const STEP: u16 = 14;
-        let mut detector = BlobDetector::new(SPOKES, 10, None);
+        let mut detector = BlobDetector::new(SPOKES, 10);
         let echo: Vec<usize> = (300..310).collect();
 
         let mut completed = Vec::new();
@@ -929,8 +932,9 @@ mod tests {
         const APPROACHING: u8 = 16;
         const RECEDING: u8 = 17;
         let detector = || {
-            BlobDetector::new(SPOKES, STRONG_RETURN, Some((APPROACHING, 1)))
-                .with_doppler_receding(Some((RECEDING, 1)))
+            let mut detector = BlobDetector::new(SPOKES, STRONG_RETURN);
+            detector.set_doppler(Some((APPROACHING, 1)), Some((RECEDING, 1)));
+            detector
         };
         let blobs = |colour: u8| {
             let mut detector = detector();
@@ -952,13 +956,34 @@ mod tests {
         }
     }
 
+    /// A radar reports its Doppler only after it has been found, so the
+    /// detector built before then learns the bands from the new legend: a
+    /// HALO's Doppler echoes were never Doppler blobs while it did not.
+    #[test]
+    fn doppler_bands_learnt_after_the_detector_was_built_count() {
+        let mut detector = BlobDetector::new(2048, STRONG_RETURN);
+        detector.set_doppler(Some((16, 1)), Some((17, 1)));
+
+        let mut completed = Vec::new();
+        for angle in 100..112 {
+            let mut spoke = spoke_with(angle, 512, &[]);
+            if angle < 110 {
+                spoke.data[300..306].fill(17);
+            }
+            completed.extend(detector.process_spoke(&spoke));
+        }
+
+        assert_eq!(completed.len(), 1);
+        assert!(completed[0].has_doppler);
+    }
+
     /// Spokes a whole revolution apart, or far enough apart that the radar
     /// would show two echoes, must not be joined just because no spoke came
     /// in between.
     #[test]
     fn echoes_across_a_wide_spoke_gap_stay_apart() {
         const SPOKES: u16 = 8192;
-        let mut detector = BlobDetector::new(SPOKES, 10, None);
+        let mut detector = BlobDetector::new(SPOKES, 10);
         let echo: Vec<usize> = (300..330).collect();
 
         let mut completed = Vec::new();
@@ -977,7 +1002,7 @@ mod tests {
         // check. Its retained pixels must stay bounded by its geometric
         // extent instead of growing every revolution (issue #434).
         const SPOKES: u16 = 64;
-        let mut detector = BlobDetector::new(SPOKES, 10, None);
+        let mut detector = BlobDetector::new(SPOKES, 10);
 
         let mut completed = Vec::new();
         for _rev in 0..4 {
@@ -998,7 +1023,7 @@ mod tests {
         // A normal discrete target must keep completing once per revolution
         // even while an immortal ring blob is active.
         const SPOKES: u16 = 64;
-        let mut detector = BlobDetector::new(SPOKES, 10, None);
+        let mut detector = BlobDetector::new(SPOKES, 10);
 
         let mut completions = 0;
         for _rev in 0..3 {
@@ -1023,7 +1048,7 @@ mod tests {
         // A fully saturated disk merges into one blob that never completes;
         // the pixel cap must keep the detector's retained state bounded.
         const SPOKES: u16 = 64;
-        let mut detector = BlobDetector::new(SPOKES, 10, None);
+        let mut detector = BlobDetector::new(SPOKES, 10);
         let all: Vec<usize> = (0..2048).collect();
 
         let mut completed = Vec::new();
@@ -1048,7 +1073,7 @@ mod tests {
         // blob (whose active_blobs entry would be overwritten, stranding its
         // cells on a dead id and panicking the next adjacency hit).
         const SPOKES: u16 = 64;
-        let mut detector = BlobDetector::new(SPOKES, 10, None);
+        let mut detector = BlobDetector::new(SPOKES, 10);
 
         // An immortal ring keeps one low blob id alive across the rollover.
         for angle in 0..SPOKES {
@@ -1081,7 +1106,7 @@ mod tests {
         // blob must be discarded so a subsequent adjacency check can't
         // mis-associate a pixel with a blob from the previous range.
         const SPOKES: u16 = 64;
-        let mut detector = BlobDetector::new(SPOKES, 10, None);
+        let mut detector = BlobDetector::new(SPOKES, 10);
 
         // Seed a persistent ring at spoke_len 512 so a blob is live in
         // active_blobs and pixel_index.
@@ -1109,7 +1134,7 @@ mod tests {
     /// operator gets a ring on the display that only acquires dead ahead.
     #[test]
     fn guard_zone_with_equal_angles_covers_the_full_circle() {
-        let mut detector = BlobDetector::new(2048, 10, None);
+        let mut detector = BlobDetector::new(2048, 10);
         detector.current_range = 8000;
         detector.current_spoke_len = 1000;
         detector.set_guard_zone_1(Some(GuardZone {
@@ -1138,7 +1163,7 @@ mod tests {
     /// it has to be read as a ring too rather than collapsing to one spoke.
     #[test]
     fn guard_zone_spanning_a_whole_revolution_covers_the_full_circle() {
-        let mut detector = BlobDetector::new(2048, 10, None);
+        let mut detector = BlobDetector::new(2048, 10);
         detector.current_range = 8000;
         detector.current_spoke_len = 1000;
         detector.set_guard_zone_1(Some(GuardZone {
@@ -1158,7 +1183,7 @@ mod tests {
     /// the operator never asked about.
     #[test]
     fn guard_zone_narrower_than_a_spoke_is_not_a_full_circle() {
-        let mut detector = BlobDetector::new(2048, 10, None);
+        let mut detector = BlobDetector::new(2048, 10);
         detector.current_range = 8000;
         detector.current_spoke_len = 1000;
         // 0.002 rad is a tenth of a degree — under half a spoke at 2048.
@@ -1191,7 +1216,7 @@ mod tests {
             end_distance: 6000.0,
             enabled: true,
         };
-        let mut detector = BlobDetector::new(2048, 10, None);
+        let mut detector = BlobDetector::new(2048, 10);
         detector.current_range = 8000;
         detector.current_spoke_len = 1000;
 
@@ -1217,7 +1242,7 @@ mod tests {
     #[test]
     fn guard_zone_negative_angles_wrap_correctly() {
         // A sector like -55 deg .. 38 deg must wrap across spoke 0.
-        let mut detector = BlobDetector::new(2048, 10, None);
+        let mut detector = BlobDetector::new(2048, 10);
 
         // The actual range/pixel values only need to be non-zero so the guard
         // zone cache can be rebuilt.

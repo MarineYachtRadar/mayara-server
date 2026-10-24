@@ -1937,12 +1937,12 @@ impl CommonRadar {
                 info.legend.strong_return,
                 info.spokes_per_revolution
             );
-            let mut detector = BlobDetector::new(
-                info.spokes_per_revolution,
-                info.legend.strong_return,
+            let mut detector =
+                BlobDetector::new(info.spokes_per_revolution, info.legend.strong_return);
+            detector.set_doppler(
                 info.legend.doppler_approaching,
-            )
-            .with_doppler_receding(info.legend.doppler_receding);
+                info.legend.doppler_receding,
+            );
             // Initialize guard zones from current control values
             detector.set_guard_zone_1(info.controls.guard_zone(&ControlId::GuardZone1));
             detector.set_guard_zone_2(info.controls.guard_zone(&ControlId::GuardZone2));
@@ -1992,6 +1992,10 @@ impl CommonRadar {
     }
 
     pub(crate) fn update(&mut self) {
+        if let Some(ref mut detector) = self.blob_detector {
+            let legend = &self.info.legend;
+            detector.set_doppler(legend.doppler_approaching, legend.doppler_receding);
+        }
         self.radars.update(&mut self.info);
     }
 
