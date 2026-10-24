@@ -28,3 +28,11 @@
     height: 32px;
   }
 }
+
+/* No room for target data boxes beside the PPI on a phone or a short
+   window; the PPI re-centres once they are gone. */
+@media (max-width: 700px), (max-height: 480px) {
+  .myr_data_boxes {
+    display: none;
+  }
+}

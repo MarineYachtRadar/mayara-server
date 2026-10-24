@@ -22,6 +22,8 @@ class WebGLRenderer {
     this.height = 0;
     this.beam_length = 0;
     this.headingRotation = 0;
+    this.offsetX = 0;
+    this.offsetY = 0;
     this.range = 0;
     this.actual_range = 0;
 
@@ -192,8 +194,10 @@ class WebGLRenderer {
    * @param {number} height - Canvas height
    * @param {number} beam_length - Beam length in pixels
    * @param {number} headingRotation - Heading rotation in radians
+   * @param {number} [offsetX=0] - PPI centre right of the canvas centre, px
+   * @param {number} [offsetY=0] - PPI centre below the canvas centre, px
    */
-  resize(width, height, beam_length, headingRotation) {
+  resize(width, height, beam_length, headingRotation, offsetX = 0, offsetY = 0) {
     // Only re-assign canvas dimensions when they actually changed.
     // Assigning to canvas.width / .height clears the bitmap and resets
     // the WebGL context's framebuffer, so for transform-only updates
@@ -205,6 +209,8 @@ class WebGLRenderer {
     this.height = height;
     this.beam_length = beam_length;
     this.headingRotation = headingRotation;
+    this.offsetX = offsetX;
+    this.offsetY = offsetY;
 
     if (sizeChanged) {
       this.dom.width = width;
@@ -237,12 +243,15 @@ class WebGLRenderer {
 
     const scaleX = scale * ((2 * this.beam_length) / this.width);
     const scaleY = scale * ((2 * this.beam_length) / this.height);
+    // Clip space runs -1..1 over the canvas with y up
+    const translateX = (2 * this.offsetX) / this.width;
+    const translateY = (-2 * this.offsetY) / this.height;
 
     const transformMatrix = new Float32Array([
       scaleX, 0.0, 0.0, 0.0,
       0.0, scaleY, 0.0, 0.0,
       0.0, 0.0, 1.0, 0.0,
-      0.0, 0.0, 0.0, 1.0,
+      translateX, translateY, 0.0, 1.0,
     ]);
 
     this.gl.uniformMatrix4fv(this.transformMatrixLocation, false, transformMatrix);

@@ -822,3 +822,95 @@ div.myr_ppi {
 .myr_close_button:hover svg {
   stroke: #c99;
 }
+
+/* Target data boxes: AIS vessels down the left edge, ARPA targets down the
+   right. They sit under the controls panel (z-index 200), clear of the
+   lozenges: the left column starts right of the range lozenge and below the
+   speaker lozenge, the right one below the hamburger and above the
+   position box. Colours follow the PPI's own target symbols. */
+.myr_data_boxes {
+  position: absolute;
+  width: 180px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow: hidden;
+  z-index: 90;
+  pointer-events: none;
+}
+
+.myr_data_boxes_left {
+  left: 80px;
+  top: 110px;
+  bottom: 110px;
+}
+
+.myr_data_boxes_right {
+  right: 20px;
+  top: 76px;
+  bottom: 140px;
+}
+
+.myr_data_box {
+  flex: none;
+  padding: 4px 8px;
+  background: rgba(0, 0, 0, 0.7);
+  border: 2px solid #446;
+  border-radius: 6px;
+  font-family: Verdana, Geneva, sans-serif;
+  font-size: 11px;
+  line-height: 1.35;
+  color: #ffffff;
+}
+
+.myr_data_box_ais {
+  color: #00ffff;
+}
+
+.myr_data_box_acquiring {
+  color: #ffff00;
+}
+
+.myr_data_box_lost {
+  color: #ffa500;
+}
+
+.myr_data_box_danger {
+  color: #ff4040;
+  border-color: #ff0000;
+}
+
+.myr_data_box_header {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  font-weight: bold;
+}
+
+.myr_data_box_label {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.myr_data_box_status {
+  font-weight: normal;
+  opacity: 0.8;
+}
+
+.myr_data_box_fields {
+  display: grid;
+  grid-template-columns: auto 1fr auto 1fr;
+  column-gap: 5px;
+  margin: 2px 0 0;
+}
+
+.myr_data_box_fields dt {
+  opacity: 0.7;
+}
+
+.myr_data_box_fields dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
