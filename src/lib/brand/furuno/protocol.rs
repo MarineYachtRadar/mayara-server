@@ -739,21 +739,20 @@ pub(crate) fn wire_unit_for_meters(meters: i32) -> i32 {
 // Spoke frame header — field offsets and bitmasks
 // =============================================================================
 //
-// 16-byte IMO frame header layout:
-//   [0]    packet_type (must be FRAME_MAGIC)
-//   [1]    sequence_number
-//   [2-3]  total_length (big-endian)
-//   [4-7]  timestamp (little-endian u32)
-//   [8]    spoke_data_len low byte
-//   [9]    bit 0: spoke_data_len high; bits 1-7: spoke_count
-//   [10]   sample_count low byte
-//   [11]   bits 0-2: sample_count high; bits 3-4: encoding;
-//          bits 5-7: unknown, constant per model
-//   [12]   bits 0-5: range wire index; bits 6-7: range unit
-//   [13]   range resolution metadata
-//   [14]   scale low byte
-//   [15]   bits 0-2: scale high; bit 3: flag;
-//          bits 4-5: heading state; bit 6: dual_range_id; bit 7: unknown
+// The 16-byte IMO frame header, as the radar firmware builds it and TimeZero
+// and the NavNet displays read it; research/furuno/spoke-frame-header.md
+// has the sources.
+//   [0]      magic (FRAME_MAGIC)
+//   [1]      sequence, counted separately for range A and B
+//   [2-7]    constant 00 01 00 00 00 00
+//   [8-9]    bits 0-8: spoke data length in 4-byte words; bits 9-15: spoke count
+//   [10-11]  bits 0-10: samples per spoke; bits 11-12: encoding;
+//            bits 13-15: unknown, constant per model
+//   [12]     bits 0-4: range wire index; bit 5: unknown; bits 6-7: range unit
+//   [13]     bit 0: ATF on; bits 1-2: ATF high-gain level;
+//            bit 3: Target Analyzer active; bits 4-7: unknown
+//   [14-15]  bits 0-10: scale; bit 11: FPGA counter alive;
+//            bits 12-13: heading state; bit 14: dual range id; bit 15: reserved
 
 /// Byte 0 of every IMO echo frame must be this value.
 pub(crate) const FRAME_MAGIC: u8 = 0x02;
@@ -774,14 +773,15 @@ pub(crate) const FRAME_MAGIC: u8 = 0x02;
     ctx_default = "deku::ctx::Endian::Little"
 )]
 pub(crate) struct FurunoImoFrameHeader {
-    pub _sequence_number: u8,
-    /// Big-endian, unlike everything after it, and unread.
-    pub _total_length: [u8; 2],
-    pub _timestamp: u32,
-    /// Bytes 8-9: the length of the spoke data, and the number of spokes
-    /// that follow this header.
+    /// Counted separately for range A and B.
+    pub _sequence: u8,
+    /// `00 01 00 00 00 00` from the radar's template, not a length and a
+    /// timestamp.
+    pub _constant: [u8; 6],
+    /// Bytes 8-9: the length of the spoke data in 4-byte words, and the
+    /// number of spokes that follow this header.
     #[deku(bits = 9)]
-    pub _spoke_data_len: u16,
+    pub _spoke_data_words: u16,
     #[deku(bits = 7)]
     pub sweep_count: u32,
     /// Bytes 10-11: how many samples each spoke carries, and how they are
@@ -793,31 +793,46 @@ pub(crate) struct FurunoImoFrameHeader {
     /// The same for every frame from one model: 0b110 from a DRS-NXT,
     /// 0b001 from a DRS2D.
     #[deku(bits = 3)]
-    pub _unknown1: u8,
+    pub _model_bits: u8,
     /// Byte 12: which range the radar is on, as an index into the wire index
     /// table rather than a distance.
-    #[deku(bits = 6)]
+    #[deku(bits = 5)]
     pub wire_index: u8,
+    /// Always 0.
+    #[deku(bits = 1)]
+    pub _unknown: u8,
     /// The unit the wire index counts in: [`WIRE_UNIT_NM`], [`WIRE_UNIT_KM`],
     /// 2 for statute miles or 3 for kiloyards.
     #[deku(bits = 2)]
     pub range_unit: u8,
-    pub _range_resolution: u8,
+    /// Byte 13: the radar's ATF setting for this range, and whether Target
+    /// Analyzer puts Doppler classes in the samples' top two bits.
+    #[deku(bits = 1)]
+    pub _atf_on: u8,
+    #[deku(bits = 2)]
+    pub _atf_high_gain_level: u8,
+    #[deku(bits = 1)]
+    pub _target_analyzer: u8,
+    /// Always 0.
+    #[deku(bits = 4)]
+    pub _unknown_range_bits: u8,
     /// Bytes 14-15: how many of the `sweep_len` samples cover the configured
     /// display range, whether the spokes carry a heading, and which of a
-    /// dual range's two antennas sent this.
+    /// dual range's two ranges this is.
     #[deku(bits = 11)]
     pub scale: u32,
+    /// Set while the radar sees its FPGA counter advance.
     #[deku(bits = 1)]
-    pub _flag: u8,
+    pub _fpga_alive: u8,
     /// [`HEADING_STATE_VALID`] when the spokes carry the radar's heading;
     /// without one the radar sends 0 and a heading of 0.
     #[deku(bits = 2)]
     pub heading_state: u8,
     #[deku(bits = 1)]
     pub radar_no: u8,
+    /// Always cleared by the radar.
     #[deku(bits = 1)]
-    pub _unknown2: u8,
+    pub _reserved: u8,
 }
 
 /// [`FurunoImoFrameHeader::heading_state`] of a frame whose spokes carry a
@@ -855,7 +870,7 @@ pub(crate) const TILE_MAGIC: u32 = 2;
 
 /// The word at byte 8 of a frame, which is what tells the two echo formats
 /// apart: on a Tile frame its top three bits are [`TILE_MAGIC`]. The same
-/// bytes are `_spoke_data_len` and `sweep_count` in an IMO frame.
+/// bytes are `_spoke_data_words` and `sweep_count` in an IMO frame.
 #[derive(DekuRead, Debug, Copy, Clone)]
 #[deku(
     endian = "little",
@@ -1023,11 +1038,6 @@ mod tests {
         assert_eq!(BEACON_REPORT_HEADER[..OUTER_HEADER.len()], OUTER_HEADER);
     }
 
-    /// The header a DRS-4D NXT sends, as captured in the notes above
-    /// `parse_metadata_header`, which read it apart by hand with masks and
-    /// shifts. Its fields are bit runs counted from the least significant bit
-    /// up, and two of them cross a byte boundary, so this pins that the
-    /// declaration lands them where the masks used to.
     /// A DRS2D-NXT with a network heading, then with none: only the heading
     /// state in byte 15 tells them apart.
     #[test]
@@ -1062,6 +1072,11 @@ mod tests {
         );
     }
 
+    /// The header a DRS-4D NXT sends, as captured in the notes above
+    /// `parse_metadata_header`, which read it apart by hand with masks and
+    /// shifts. Its fields are bit runs counted from the least significant bit
+    /// up, and two of them cross a byte boundary, so this pins that the
+    /// declaration lands them where the masks used to.
     #[test]
     fn a_captured_imo_frame_header_reads_as_it_always_did() {
         let header: FurunoImoFrameHeader =

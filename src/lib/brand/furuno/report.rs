@@ -2238,12 +2238,12 @@ impl FurunoReportReceiver {
     //   0,
     //   1,
     //   0, 0, 0, 0,
-    //   48,   #  8: 0x30 - low byte of range? (= range * 4 + 4)
-    //   17,   #  9: 0x11 - bit 0 = high bit of range
+    //   48,   #  8: 0x30 - low byte of the spoke data length in words
+    //   17,   #  9: 0x11 - bit 0 = its high bit; bits 7..1 = 8 spokes
     //   116,  # 10: 0x74 - low byte of sweep_len
     //   219,  # 11: 0xDB - bits 2..0 (011) = bits 10..8 of sweep_len
     //                    - bits 4..3 (11) = encoding 3
-    //                    - bits 7..5 (110) = ?
+    //                    - bits 7..5 (110) = constant per model
     //   6,    # 12: 0x06
     //   0,    # 13: 0x00
     //   240,  # 14: 0xF0
@@ -2257,30 +2257,6 @@ impl FurunoReportReceiver {
     // [2, 250, 0, 1, 0, 0, 0, 0, 36, 49, 116, 59, 0, 0, 240, 9]
 
     fn parse_metadata_header(&self, data: &[u8]) -> Option<FurunoSpokeMetadata> {
-        // Frame header layout (16 bytes), derived from radar.dll disassembly:
-        //
-        // Bytes 0-7: Packet header
-        //   [0]    packet_type (always 0x02)
-        //   [1]    sequence_number
-        //   [2-3]  total_length (big-endian)
-        //   [4-7]  timestamp (little-endian u32)
-        //
-        // Bytes 8-11: Sweep metadata
-        //   [8]    spoke_data_len low byte
-        //   [9]    bit 0: spoke_data_len high bit; bits 1-7: spoke_count
-        //   [10]   sample_count low byte
-        //   [11]   bits 0-2: sample_count high; bits 3-4: encoding;
-        //          bits 5-7: unknown (0b110 from a DRS-NXT, 0b001 from a DRS2D)
-        //
-        // Bytes 12-15: Range and status
-        //   [12]   bits 0-5: range wire index; bits 6-7: range unit
-        //   [13]   range resolution metadata
-        //   [14]   range_value low byte
-        //   [15]   bits 0-2: range_value high; bit 3: flag;
-        //          bits 4-5: heading_state (1 = the spokes carry the
-        //          radar's heading); bit 6: dual_range_id (0=A, 1=B);
-        //          bit 7: unknown
-
         let header = decode_head::<FurunoImoFrameHeader>(data).ok()?;
         let wire_index = header.wire_index as i32;
 
