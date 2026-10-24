@@ -616,7 +616,17 @@ pub(crate) const WIRE_UNIT_NM: i32 = 0;
 
 /// Wire unit value for kilometres.
 pub(crate) const WIRE_UNIT_KM: i32 = 1;
-// Wire unit 2 = SM (statute miles), 3 = Kyd (kilo-yards) — not yet implemented
+
+/// Wire unit value for statute miles. The wire index counts the same
+/// numbers as in nautical miles.
+pub(crate) const WIRE_UNIT_SM: i32 = 2;
+
+/// Wire unit value for kiloyards. The wire index counts the same numbers as
+/// in kilometres.
+pub(crate) const WIRE_UNIT_KYD: i32 = 3;
+
+const METERS_PER_SM: f64 = 1609.344;
+const METERS_PER_KYD: f64 = 914.4;
 
 /// Wire index → meters mapping (NM mode, wire unit 0).
 ///
@@ -718,8 +728,15 @@ pub(crate) fn wire_index_to_meters_km(wire_index: i32) -> Option<i32> {
 
 /// Convert a wire index to meters for the given wire unit.
 pub(crate) fn wire_index_to_meters_for_unit(wire_index: i32, wire_unit: i32) -> Option<i32> {
+    let rescale = |meters: i32, from: f64, to: f64| (f64::from(meters) * to / from).round() as i32;
     match wire_unit {
         WIRE_UNIT_KM => wire_index_to_meters_km(wire_index),
+        WIRE_UNIT_SM => {
+            wire_index_to_meters(wire_index).map(|m| rescale(m, NM as f64, METERS_PER_SM))
+        }
+        WIRE_UNIT_KYD => {
+            wire_index_to_meters_km(wire_index).map(|m| rescale(m, 1000., METERS_PER_KYD))
+        }
         _ => wire_index_to_meters(wire_index),
     }
 }
@@ -799,7 +816,7 @@ pub(crate) struct FurunoImoFrameHeader {
     #[deku(bits = 6)]
     pub wire_index: u8,
     /// The unit the wire index counts in: [`WIRE_UNIT_NM`], [`WIRE_UNIT_KM`],
-    /// 2 for statute miles or 3 for kiloyards.
+    /// [`WIRE_UNIT_SM`] or [`WIRE_UNIT_KYD`].
     #[deku(bits = 2)]
     pub range_unit: u8,
     pub _range_resolution: u8,
@@ -908,6 +925,24 @@ pub(crate) const TX_CHANNEL_MAX: i32 = 3;
 mod tests {
     use super::*;
     use crate::util::decode_head;
+
+    /// Statute miles count the nautical mile steps, 1/16 included, and
+    /// kiloyards the kilometre steps, which have no 1/16.
+    #[test]
+    fn statute_miles_and_kiloyards_count_the_steps_of_their_neighbours() {
+        assert_eq!(wire_index_to_meters_for_unit(4, WIRE_UNIT_SM), Some(1609));
+        assert_eq!(wire_index_to_meters_for_unit(21, WIRE_UNIT_SM), Some(100));
+        assert_eq!(
+            wire_index_to_meters_for_unit(18, WIRE_UNIT_SM),
+            Some(193_121)
+        );
+        assert_eq!(wire_index_to_meters_for_unit(4, WIRE_UNIT_KYD), Some(914));
+        assert_eq!(
+            wire_index_to_meters_for_unit(18, WIRE_UNIT_KYD),
+            Some(109_728)
+        );
+        assert_eq!(wire_index_to_meters_for_unit(21, WIRE_UNIT_KYD), None);
+    }
 
     /// The beacon names a DRS2D-NXT as one, not as the DRS before the NXT
     /// generation that a bare "DRS" prefix would make it.
