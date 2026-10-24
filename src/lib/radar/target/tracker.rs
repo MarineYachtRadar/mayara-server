@@ -40,11 +40,13 @@ const STATIONARY_SPEED_THRESHOLD: f64 = 0.5;
 /// each within this distance of the others but all representing the same physical target.
 const DUPLICATE_MERGE_DISTANCE_M: f64 = 100.0;
 
-/// Updates a target needs before it is promoted to Tracking. 4 updates are 3
-/// successive intervals, enough for the Kalman filter to settle on a COG and
-/// SOG before the target counts as confirmed; younger targets are the ones
+/// Updates a target needs before it is promoted to Tracking: enough for the
+/// Kalman filter to settle on a COG and SOG, and for a short-lived echo of
+/// wake or sea to have faded, before the target counts as confirmed. On the
+/// #722 voyage 6 rather than 4 halves the false tracks and the IDs a vessel
+/// goes through, for a start two sweeps later. Younger targets are the ones
 /// the duplicate and merge passes may remove.
-const MIN_UPDATES_FOR_TRACKING: u32 = 4;
+pub(super) const MIN_UPDATES_FOR_TRACKING: u32 = 6;
 
 /// Minimum number of updates before a target can be considered stationary.
 ///
@@ -203,6 +205,8 @@ pub struct ActiveTarget {
     pub is_manual: bool,
     /// Which guard zone acquired this target (1 or 2), or None for manual/doppler
     pub source_zone: Option<u8>,
+    /// Reached Tracking at least once: confirmed, whatever its status now
+    pub confirmed: bool,
     /// Key of radar that last updated this target (for Signal K broadcast path)
     pub last_radar_key: String,
     /// Position of radar that last updated this target (for bearing/distance calculation)
@@ -243,6 +247,7 @@ impl ActiveTarget {
             status: TargetStatus::Acquiring,
             is_manual,
             source_zone,
+            confirmed: false,
             last_radar_key: candidate.radar_key.clone(),
             last_radar_position: candidate.radar_position,
         }
@@ -320,6 +325,7 @@ impl ActiveTarget {
 
         if self.update_count >= MIN_UPDATES_FOR_TRACKING && self.cog.is_some() {
             self.status = TargetStatus::Tracking;
+            self.confirmed = true;
         } else if self.status == TargetStatus::Lost {
             self.status = TargetStatus::Acquiring;
         }
@@ -330,6 +336,13 @@ impl ActiveTarget {
     /// Predict position at given time using motion model
     pub fn predict_position(&self, time: u64) -> GeoPosition {
         self.motion_model.predict(time)
+    }
+
+    /// Whether clients are told about this target: one the user acquired, or
+    /// one that has been confirmed. A candidate that dies young is never
+    /// seen by a client and never alarms.
+    pub fn is_shown(&self) -> bool {
+        self.is_manual || self.confirmed
     }
 
     /// Check if target is considered stationary (very low speed, enough updates)
@@ -462,7 +475,8 @@ impl TargetTracker {
     }
 
     /// Merge duplicate targets that are within DUPLICATE_MERGE_DISTANCE_M
-    /// of each other. Only young targets (< 4 updates) are candidates for
+    /// of each other. Only young targets (fewer than
+    /// [`MIN_UPDATES_FOR_TRACKING`] updates) are candidates for
     /// removal — established targets are never discarded.
     ///
     /// A large vessel can produce multiple blobs per rotation from
@@ -645,7 +659,7 @@ impl TargetTracker {
         if let Some(target_id) = self.match_active_target(&candidate)
             && let Some(target) = self.active_targets.get_mut(&target_id)
         {
-            let was_acquiring = target.status == TargetStatus::Acquiring;
+            let was_confirmed = target.confirmed;
 
             // Update may return false if the maneuver is rejected as implausible
             if !target.update(&candidate) {
@@ -660,8 +674,9 @@ impl TargetTracker {
                 // Update revolution count for lost detection
                 target.set_last_update_revolution(self.revolution_count);
 
-                // If target transitioned from Acquiring to Tracking, report as Promoted
-                if was_acquiring && target.status == TargetStatus::Tracking {
+                // The first time a target reaches Tracking it is promoted, even
+                // if it went Lost while it was still collecting its updates
+                if !was_confirmed && target.status == TargetStatus::Tracking {
                     log::info!(
                         "Promoted target {} to tracking at ({:.6}, {:.6}), SOG={:.1}m/s, COG={:.1}°",
                         target_id,
@@ -1013,8 +1028,10 @@ mod tests {
     fn test_promote_to_tracking() {
         let mut tracker = TargetTracker::new_merged();
 
-        // First 3 candidates build up the track but remain Acquiring
-        for i in 0..3 {
+        // All but the last of the updates promotion needs build up the
+        // track but leave it Acquiring
+        let last = u64::from(MIN_UPDATES_FOR_TRACKING) - 1;
+        for i in 0..last {
             let lat = 52.0 + (i as f64 * 0.0001);
             tracker.process_candidate(make_candidate(lat, 4.0, 1000 + i * 3000));
         }
@@ -1022,8 +1039,9 @@ mod tests {
         let target = tracker.get_active_targets().next().unwrap();
         assert_eq!(target.status, TargetStatus::Acquiring);
 
-        // Fourth candidate promotes to tracking (4 updates with COG established)
-        let result = tracker.process_candidate(make_candidate(52.0003, 4.0, 10000));
+        // The last one promotes to tracking, with a COG established
+        let lat = 52.0 + (last as f64 * 0.0001);
+        let result = tracker.process_candidate(make_candidate(lat, 4.0, 1000 + last * 3000));
 
         assert!(matches!(result, ProcessResult::Promoted(_)));
         let target = tracker.get_active_targets().next().unwrap();
@@ -1267,12 +1285,40 @@ mod tests {
         );
     }
 
+    /// A candidate that goes Lost while still collecting its updates, then
+    /// is seen again, is promoted when it is confirmed: its guard-zone
+    /// alarm hangs on that.
+    #[test]
+    fn a_target_lost_before_it_was_confirmed_is_promoted_later() {
+        let mut tracker = TargetTracker::new_merged();
+        let last = u64::from(MIN_UPDATES_FOR_TRACKING) - 1;
+        for i in 0..last {
+            let lat = 52.0 + (i as f64 * 0.0001);
+            tracker.process_candidate(make_candidate(lat, 4.0, i * 3000));
+        }
+        for _ in 0..LOST_REVOLUTION_COUNT {
+            tracker.complete_revolution();
+        }
+        let (_, lost) = tracker.check_timeouts(0);
+        assert_eq!(lost.len(), 1);
+
+        let time = 1000 + last * 3000;
+        let predicted = tracker
+            .get_active_targets()
+            .next()
+            .unwrap()
+            .predict_position(time);
+        let result =
+            tracker.process_candidate(make_candidate(predicted.lat(), predicted.lon(), time));
+
+        assert!(matches!(result, ProcessResult::Promoted(_)), "{result:?}");
+    }
+
     #[test]
     fn test_target_lost_timeout() {
         let mut tracker = TargetTracker::new_merged();
 
-        // 4 updates to reach Tracking (last update at 9000ms)
-        for i in 0..4u64 {
+        for i in 0..u64::from(MIN_UPDATES_FOR_TRACKING) {
             let lat = 52.0 + (i as f64 * 0.0001);
             tracker.process_candidate(make_candidate(lat, 4.0, i * 3000));
         }
@@ -1306,8 +1352,7 @@ mod tests {
     fn test_target_deleted_timeout() {
         let mut tracker = TargetTracker::new_merged();
 
-        // 4 updates to reach Tracking (last update at 9000ms)
-        for i in 0..4u64 {
+        for i in 0..u64::from(MIN_UPDATES_FOR_TRACKING) {
             let lat = 52.0 + (i as f64 * 0.0001);
             tracker.process_candidate(make_candidate(lat, 4.0, i * 3000));
         }
@@ -1334,10 +1379,10 @@ mod tests {
     fn test_target_recovers_from_lost() {
         let mut tracker = TargetTracker::new_merged();
 
-        // MARPA target (counts as update 1) + 3 more updates to reach Tracking
-        let candidate = make_candidate(52.0, 4.0, 0);
+        // The MARPA target counts as update 1; the rest take it to Tracking
+        let candidate = make_candidate_with_source(52.0, 4.0, 0, CandidateSource::GuardZone(0));
         tracker.add_active_target(&candidate);
-        for i in 1..4u64 {
+        for i in 1..u64::from(MIN_UPDATES_FOR_TRACKING) {
             let lat = 52.0 + (i as f64 * 0.0001);
             tracker.process_candidate(make_candidate(lat, 4.0, i * 3000));
         }
@@ -1357,7 +1402,6 @@ mod tests {
         assert_eq!(target.status, TargetStatus::Lost);
 
         // Target is seen again at predicted position - should recover to Tracking
-        // (update_count is now 5 which is >= 4, and COG is set)
         let candidate3 = make_candidate(predicted.lat(), predicted.lon(), 21_000);
         tracker.process_candidate(candidate3);
 
@@ -1370,9 +1414,8 @@ mod tests {
         let mut tracker = TargetTracker::new_merged();
 
         // Create a stationary target (buoy) - same position for multiple updates
-        // Need MIN_UPDATES_FOR_STATIONARY (5) updates at same position
         let pos = (52.0, 4.0);
-        for i in 0..6 {
+        for i in 0..u64::from(MIN_UPDATES_FOR_STATIONARY) {
             let candidate = make_candidate(pos.0, pos.1, i * 3000);
             tracker.process_candidate(candidate);
         }
@@ -1385,7 +1428,7 @@ mod tests {
             "SOG should be near zero: {:?}",
             target.sog
         );
-        assert!(target.update_count >= 5);
+        assert!(target.update_count >= MIN_UPDATES_FOR_STATIONARY);
 
         // Simulate 5 revolutions - normal target would be lost after 3
         // But stationary target has 10 revolution timeout, so should still be tracking
@@ -1467,8 +1510,8 @@ mod tests {
             _ => panic!("Expected NewAcquiring"),
         };
 
-        // Feed 3 more candidates to reach promotion (4 updates total)
-        for i in 1..4u64 {
+        let promoted_at = u64::from(MIN_UPDATES_FOR_TRACKING);
+        for i in 1..promoted_at {
             let angle = angular_velocity * (i as f64 * 3.0);
             let (lat, lon) = position_at_angle(angle);
             tracker.process_candidate(make_candidate(lat, lon, i * revolution_ms));
@@ -1480,7 +1523,7 @@ mod tests {
         let mut successful_updates = 0;
         let mut lost_count = 0;
 
-        for rev in 4..num_revolutions {
+        for rev in promoted_at..num_revolutions {
             let time = rev * revolution_ms;
             let angle = angular_velocity * (time as f64 / 1000.0);
             let (lat, lon) = position_at_angle(angle);
@@ -1508,7 +1551,7 @@ mod tests {
         );
 
         // Should have maintained tracking for at least 90% of updates
-        let expected_updates = (num_revolutions - 4) as usize;
+        let expected_updates = (num_revolutions - promoted_at) as usize;
         let min_successful = (expected_updates as f64 * 0.9) as usize;
         assert!(
             successful_updates >= min_successful,
@@ -1583,8 +1626,8 @@ mod tests {
             _ => panic!("Expected NewAcquiring"),
         };
 
-        // Feed 3 more candidates to reach promotion (4 updates total)
-        for i in 1..4u64 {
+        let promoted_at = u64::from(MIN_UPDATES_FOR_TRACKING);
+        for i in 1..promoted_at {
             let angle = angular_velocity * (i as f64 * 3.0);
             let (lat, lon) = position_at_angle(angle);
             tracker.process_candidate(make_candidate(lat, lon, i * revolution_ms));
@@ -1595,7 +1638,7 @@ mod tests {
         let mut successful_updates = 0;
         let mut lost_count = 0;
 
-        for rev in 4..num_revolutions {
+        for rev in promoted_at..num_revolutions {
             let time = rev * revolution_ms;
             let angle = angular_velocity * (time as f64 / 1000.0);
             let (lat, lon) = position_at_angle(angle);
@@ -1621,7 +1664,7 @@ mod tests {
         );
 
         // IMM should maintain tracking through continuous turns
-        let expected_updates = (num_revolutions - 4) as usize;
+        let expected_updates = (num_revolutions - promoted_at) as usize;
         let min_successful = (expected_updates as f64 * 0.9) as usize;
         assert!(
             successful_updates >= min_successful,
@@ -1683,7 +1726,7 @@ mod tests {
         let revolution_ms = 3000u64;
         let num_revolutions = (2.0 * circle_time_s / 3.0).ceil() as u64 + 2;
 
-        // First 4 detections are in guard zone (target gets acquired and promoted)
+        // The detections up to promotion are in the guard zone
         let (lat0, lon0) = position_at_angle(0.0);
         let result0 = tracker.process_candidate(make_candidate_with_source(
             lat0,
@@ -1696,7 +1739,8 @@ mod tests {
             _ => panic!("Expected NewAcquiring"),
         };
 
-        for i in 1..4u64 {
+        let promoted_at = u64::from(MIN_UPDATES_FOR_TRACKING);
+        for i in 1..promoted_at {
             let angle = angular_velocity * (i as f64 * 3.0);
             let (lat, lon) = position_at_angle(angle);
             tracker.process_candidate(make_candidate_with_source(
@@ -1714,7 +1758,7 @@ mod tests {
         let mut successful_updates = 0;
         let mut lost_count = 0;
 
-        for rev in 4..num_revolutions {
+        for rev in promoted_at..num_revolutions {
             let time = rev * revolution_ms;
             let angle = angular_velocity * (time as f64 / 1000.0);
             let (lat, lon) = position_at_angle(angle);
@@ -1745,7 +1789,7 @@ mod tests {
         );
 
         // Should maintain tracking even when leaving guard zone
-        let expected_updates = (num_revolutions - 4) as usize;
+        let expected_updates = (num_revolutions - promoted_at) as usize;
         let min_successful = (expected_updates as f64 * 0.9) as usize;
         assert!(
             successful_updates >= min_successful,
@@ -1956,10 +2000,9 @@ mod tests {
 
                 if matches!(result, ProcessResult::NewAcquiring(_)) {
                     new_target_count += 1;
-                    // After revolution 5, the first target should be established
-                    // (4 updates for promotion + 1 for established tracking)
-                    // Any new targets after that indicate misses
-                    if rev >= 5 {
+                    // One sweep past promotion the first target is
+                    // established; any new targets after that are misses
+                    if rev > u64::from(MIN_UPDATES_FOR_TRACKING) {
                         miss_after_established += 1;
                     }
                 }
@@ -2015,8 +2058,8 @@ mod tests {
                 "Medium speed: Expected target to be promoted to tracking"
             );
 
-            // After promotion at rev 3, we should have updates for revs 4-14 (11 updates)
-            let expected_updates = num_revolutions - 4;
+            // Every revolution after the promoting one should update the track
+            let expected_updates = num_revolutions - u64::from(MIN_UPDATES_FOR_TRACKING);
             assert!(
                 update_count >= expected_updates - 1,
                 "Medium speed: Expected at least {} updates after promotion, got {}",
@@ -2068,7 +2111,7 @@ mod tests {
                 "Fast speed: Expected target to be promoted to tracking"
             );
 
-            let expected_updates = num_revolutions - 4;
+            let expected_updates = num_revolutions - u64::from(MIN_UPDATES_FOR_TRACKING);
             assert_eq!(
                 update_count, expected_updates,
                 "Fast speed: Expected all {} updates after promotion, got {}",
@@ -2113,9 +2156,9 @@ mod tests {
         let lat_step = 8.0 / METERS_PER_DEGREE_LATITUDE; // ~2.7 m/s northbound
         let lon_step = 8.0 / meters_per_degree_longitude(&52.0); // ~2.7 m/s eastbound
 
-        // Target A: heading north, 4 updates so it reaches Tracking
-        // and gets a converged COG estimate.
-        for i in 0..4u64 {
+        // Target A: heading north, enough updates to reach Tracking
+        // and get a converged COG estimate.
+        for i in 0..u64::from(MIN_UPDATES_FOR_TRACKING) {
             tracker.process_candidate(TargetCandidate {
                 time: i * 3000,
                 position: GeoPosition::new(52.0 + lat_step * i as f64, 4.0),
@@ -2129,7 +2172,7 @@ mod tests {
         }
 
         // Target B: heading east, 70m east of A's start. 3 updates so
-        // it stays a young (< 4) dedup candidate.
+        // it stays a young dedup candidate.
         let b_start_lon = 4.0 + 70.0 / meters_per_degree_longitude(&52.0);
         for i in 0..3u64 {
             tracker.process_candidate(TargetCandidate {
@@ -2185,7 +2228,7 @@ mod tests {
         let max_speed_ms = TEST_MAX_SPEED_MS;
 
         // 10 clean revolutions heading east at ~10 m/s — well past the
-        // 4-update Tracking promotion threshold.
+        // Tracking promotion threshold.
         let lat = 52.0;
         let start_lon = 4.0;
         let lon_step = 30.0 / meters_per_degree_longitude(&lat);
