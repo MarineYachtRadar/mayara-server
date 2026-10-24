@@ -1932,6 +1932,13 @@ impl NavigationData {
                 set_cog(cog);
                 set_sog(vtg_sog(&vtg));
             }
+            // Our own transponder's reports are VDO, not VDM: never a target.
+            Ok(ParsedMessage::VesselDynamicData(vdd)) if !vdd.own_vessel => {
+                update_ais_vessel(&ais_context(vdd.mmsi), &ais_dynamic_updates(&vdd));
+            }
+            Ok(ParsedMessage::VesselStaticData(vsd)) if !vsd.own_vessel => {
+                update_ais_vessel(&ais_context(vsd.mmsi), &ais_static_updates(&vsd));
+            }
 
             Err(e) => match e {
                 ParseError::UnsupportedSentenceType(_) => {}
@@ -1943,6 +1950,54 @@ impl NavigationData {
         }
         Ok(())
     }
+}
+
+/// The Signal K context an AIS vessel's updates are filed under.
+fn ais_context(mmsi: u32) -> String {
+    format!("vessels.urn:mrn:imo:mmsi:{mmsi}")
+}
+
+/// A Signal K update, in SI units, from the values an AIS position report
+/// carries.
+fn ais_dynamic_updates(vdd: &ais::VesselDynamicData) -> Value {
+    let mut values = Vec::new();
+    if let (Some(latitude), Some(longitude)) = (vdd.latitude, vdd.longitude) {
+        values.push(serde_json::json!({ "path": "navigation.position",
+            "value": { "latitude": latitude, "longitude": longitude } }));
+    }
+    if let Some(cog) = vdd.cog {
+        values.push(
+            serde_json::json!({ "path": "navigation.courseOverGroundTrue",
+            "value": cog.to_radians() }),
+        );
+    }
+    if let Some(sog) = vdd.sog_knots {
+        values.push(serde_json::json!({ "path": "navigation.speedOverGround",
+            "value": sog * METERS_PER_SECOND_PER_KNOT }));
+    }
+    if let Some(heading) = vdd.heading_true {
+        values.push(serde_json::json!({ "path": "navigation.headingTrue",
+            "value": heading.to_radians() }));
+    }
+    serde_json::json!([{ "values": values }])
+}
+
+/// A Signal K update from an AIS static report: the name, and the size the
+/// antenna's offsets from bow, stern and sides add up to.
+fn ais_static_updates(vsd: &ais::VesselStaticData) -> Value {
+    let mut values = Vec::new();
+    if let Some(name) = &vsd.name {
+        values.push(serde_json::json!({ "path": "", "value": { "name": name } }));
+    }
+    if let (Some(bow), Some(stern)) = (vsd.dimension_to_bow, vsd.dimension_to_stern) {
+        values.push(serde_json::json!({ "path": "design.length",
+            "value": { "overall": f64::from(bow) + f64::from(stern) } }));
+    }
+    if let (Some(port), Some(starboard)) = (vsd.dimension_to_port, vsd.dimension_to_starboard) {
+        values.push(serde_json::json!({ "path": "design.beam",
+            "value": f64::from(port) + f64::from(starboard) }));
+    }
+    serde_json::json!([{ "values": values }])
 }
 
 const KPH_PER_KNOT: f64 = 1.852;
@@ -2444,6 +2499,36 @@ mod tests {
             assert_eq!(get_cog(), None, "{sentence}");
             assert_eq!(get_sog(), None, "{sentence} sets nothing");
         }
+    }
+
+    /// An AIS receiver on NMEA 0183, or a replay carrying one, fills the AIS
+    /// store as Signal K does: a position report places the vessel, and a
+    /// two-part static report names it.
+    #[test]
+    fn nmea_ais_reports_fill_the_ais_store() {
+        let _globals = nav_globals();
+        init_ais_store(tokio::sync::broadcast::channel(16).0);
+        let mut receiver = nmea0183_receiver();
+
+        receiver.parse_nmea0183(NMEA_AIS).unwrap();
+        for part in [
+            "!AIVDM,2,1,1,A,55?MbV02;H;s<HtKR20EHE:0@T4@Dn2222222216L961O5Gf0NSQEp6ClRp8,0*1C",
+            "!AIVDM,2,2,1,A,88888888880,2*25",
+        ] {
+            receiver.parse_nmea0183(part).unwrap();
+        }
+
+        let vessels = get_ais_store().unwrap().get_all_active();
+        let vessel = |mmsi: &str| vessels.iter().find(|v| v.mmsi == mmsi).unwrap();
+        let placed = vessel("477553000");
+        let position = placed.position.as_ref().unwrap();
+        assert!((position.latitude - 47.582833).abs() < 1e-5, "{position:?}");
+        assert!(
+            (position.longitude + 122.345833).abs() < 1e-5,
+            "{position:?}"
+        );
+        assert!((placed.cog.unwrap() - 51f64.to_radians()).abs() < 1e-6);
+        assert_eq!(vessel("351759000").name.as_deref(), Some("EVER DIADEM"));
     }
 
     #[test]
