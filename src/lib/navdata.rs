@@ -750,7 +750,7 @@ pub(crate) fn clear_own_ship_nav() {
     }
 }
 
-pub(crate) fn get_cog() -> Option<f64> {
+pub fn get_cog() -> Option<f64> {
     let cog = COG.load(Ordering::Acquire);
     if !cog.is_nan() {
         return Some(cog);
@@ -766,6 +766,9 @@ pub(crate) fn set_cog(cog: Option<f64>) {
     store_cog(cog);
     let cog = cog.map(|c| c.rem_euclid(std::f64::consts::TAU));
     update_external_nav(|nav| nav.cog = cog.map(|c| (c, std::time::Instant::now())));
+    if let Some(cog) = get_cog() {
+        broadcast_nav_update("navigation.courseOverGroundTrue", cog, "mayara");
+    }
 }
 
 /// COG in radians and SOG in m/s of the boat the emulator sails itself.
@@ -777,6 +780,8 @@ pub(crate) fn set_emulator_course(cog: f64, sog: f64) {
     SOG_FROM_EMULATOR.store(true, Ordering::Release);
     store_cog(Some(cog));
     store_sog(Some(sog));
+    broadcast_nav_update("navigation.courseOverGroundTrue", cog, EMULATOR_SOURCE);
+    broadcast_nav_update("navigation.speedOverGround", sog, EMULATOR_SOURCE);
 }
 
 fn store_cog(cog: Option<f64>) {
@@ -794,7 +799,7 @@ fn store_cog(cog: Option<f64>) {
     }
 }
 
-pub(crate) fn get_sog() -> Option<f64> {
+pub fn get_sog() -> Option<f64> {
     let sog = SOG.load(Ordering::Acquire);
     if !sog.is_nan() {
         return Some(sog);
@@ -808,6 +813,9 @@ pub(crate) fn set_sog(sog: Option<f64>) {
     }
     SOG_FROM_EMULATOR.store(false, Ordering::Release);
     store_sog(sog);
+    if let Some(sog) = sog {
+        broadcast_nav_update("navigation.speedOverGround", sog, "mayara");
+    }
 }
 
 fn store_sog(sog: Option<f64>) {

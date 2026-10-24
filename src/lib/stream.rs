@@ -600,7 +600,11 @@ fn pattern_covers(pattern: &str, path: &str) -> bool {
 fn is_navigation_path(path: &str) -> bool {
     matches!(
         path,
-        "navigation.position" | "navigation.headingTrue" | "navigation.headingMagnetic"
+        "navigation.position"
+            | "navigation.headingTrue"
+            | "navigation.headingMagnetic"
+            | "navigation.courseOverGroundTrue"
+            | "navigation.speedOverGround"
     )
 }
 
@@ -1867,7 +1871,21 @@ mod build_tests {
         );
     }
 
-    /// `minPeriod` lets a client on a slow link ask a busy boat to slow down.
+    /// Own ship's course and speed are paced as its position is: a client
+    /// works out the CPA of an AIS vessel from them.
+    #[test]
+    fn own_ship_course_and_speed_are_owed_on_the_tick() {
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
+        subs.subscribe(subscribe_to(json!({"subscribe": [
+            {"path": "navigation.courseOverGroundTrue", "policy": "fixed", "period": 100},
+            {"path": "navigation.speedOverGround", "policy": "fixed", "period": 100}
+        ]})))
+        .unwrap();
+
+        assert!(subs.is_due_periodic("navigation.courseOverGroundTrue"));
+        assert!(subs.is_due_periodic("navigation.speedOverGround"));
+    }
+
     #[test]
     fn a_navigation_path_honours_min_period() {
         let mut subs = ActiveSubscriptions::new(Subscribe::None);

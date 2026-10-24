@@ -2163,6 +2163,16 @@ async fn send_navigation(
     {
         delta.add_navigation_update("navigation.headingMagnetic", h, "mayara");
     }
+    if due(subscriptions, "navigation.courseOverGroundTrue")
+        && let Some(cog) = navdata::get_cog()
+    {
+        delta.add_navigation_update("navigation.courseOverGroundTrue", cog, "mayara");
+    }
+    if due(subscriptions, "navigation.speedOverGround")
+        && let Some(sog) = navdata::get_sog()
+    {
+        delta.add_navigation_update("navigation.speedOverGround", sog, "mayara");
+    }
 
     if let Some(d) = delta.build() {
         send_message(socket, d).await?;
