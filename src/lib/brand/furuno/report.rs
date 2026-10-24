@@ -1058,8 +1058,9 @@ impl FurunoReportReceiver {
                     _ => 0.0,                            // Nautical
                 };
                 let target = self.common_for_range(drid);
-                target.set_value(&ControlId::Range, range_meters as f64);
+                // The units first: they choose the steps the range snaps to.
                 target.set_value(&ControlId::RangeUnits, range_units_value);
+                target.set_value(&ControlId::Range, range_meters as f64);
             }
             CommandId::OnTime => {
                 let seconds = first_number(&numbers, "OnTime")?;
@@ -2665,24 +2666,22 @@ mod tests {
 
     /// A radar an MFD set to statute miles or kiloyards shows mayara's range
     /// steps in the units nearest them: nautical for statute miles, metric
-    /// for kiloyards.
+    /// for kiloyards. 2 Kyd is 1,829 m, nearer 2 km than 1.5 km and nearer
+    /// 1 NM than either; it shows as 2 km.
     #[tokio::test]
     async fn a_range_in_statute_miles_or_kiloyards_shows_the_nearest_units() {
         let mut receiver = nxt_receiver();
-        let units = |receiver: &FurunoReportReceiver| {
-            receiver
-                .common
-                .info
-                .controls
-                .get(&ControlId::RangeUnits)
-                .and_then(|c| c.value)
+        let control = |receiver: &FurunoReportReceiver, id| {
+            receiver.common.info.controls.get(&id).and_then(|c| c.value)
         };
 
+        receiver.process_report("$N62,6,0,0").unwrap();
         receiver.process_report("$N62,6,3,0").unwrap();
-        assert_eq!(units(&receiver), Some(1.));
+        assert_eq!(control(&receiver, ControlId::RangeUnits), Some(1.));
+        assert_eq!(control(&receiver, ControlId::Range), Some(2000.));
 
         receiver.process_report("$N62,6,2,0").unwrap();
-        assert_eq!(units(&receiver), Some(0.));
+        assert_eq!(control(&receiver, ControlId::RangeUnits), Some(0.));
     }
 
     /// Channel 0 is the radar choosing for itself, which is auto rather than
