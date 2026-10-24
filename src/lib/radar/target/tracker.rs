@@ -40,14 +40,20 @@ const STATIONARY_SPEED_THRESHOLD: f64 = 0.5;
 /// each within this distance of the others but all representing the same physical target.
 const DUPLICATE_MERGE_DISTANCE_M: f64 = 100.0;
 
+/// Updates a target needs before it is promoted to Tracking. 4 updates are 3
+/// successive intervals, enough for the Kalman filter to settle on a COG and
+/// SOG before the target counts as confirmed; younger targets are the ones
+/// the duplicate and merge passes may remove.
+const MIN_UPDATES_FOR_TRACKING: u32 = 4;
+
 /// Minimum number of updates before a target can be considered stationary.
 ///
-/// Promotion to Tracking requires `update_count >= 4`, so this is one
-/// step further: a stationary classification needs not just a promoted
-/// track but also a converged motion estimate. That prevents the
-/// extended stationary timeouts being applied to a track that was only
-/// just confirmed and may still have a noisy Kalman SOG.
-const MIN_UPDATES_FOR_STATIONARY: u32 = 5;
+/// One update past [`MIN_UPDATES_FOR_TRACKING`]: a stationary
+/// classification needs not just a promoted track but also a converged
+/// motion estimate. That prevents the extended stationary timeouts being
+/// applied to a track that was only just confirmed and may still have a
+/// noisy Kalman SOG.
+const MIN_UPDATES_FOR_STATIONARY: u32 = MIN_UPDATES_FOR_TRACKING + 1;
 
 /// Minimum match distance (meters) for matching a blob to an active target
 /// Even slow targets need some search radius for position uncertainty
@@ -312,10 +318,7 @@ impl ActiveTarget {
         self.last_radar_key = candidate.radar_key.clone();
         self.last_radar_position = candidate.radar_position;
 
-        // Promote to Tracking only after enough observations for a reliable motion estimate.
-        // 4 updates means 3 successive intervals, giving the Kalman filter enough time to
-        // converge on a stable COG/SOG before the target is considered confirmed.
-        if self.update_count >= 4 && self.cog.is_some() {
+        if self.update_count >= MIN_UPDATES_FOR_TRACKING && self.cog.is_some() {
             self.status = TargetStatus::Tracking;
         } else if self.status == TargetStatus::Lost {
             self.status = TargetStatus::Acquiring;
@@ -483,7 +486,7 @@ impl TargetTracker {
                 continue;
             }
             // Only consider young targets as the candidate to be removed
-            if self.active_targets[&a].update_count >= 4 {
+            if self.active_targets[&a].update_count >= MIN_UPDATES_FOR_TRACKING {
                 continue;
             }
             // A manually acquired target looks exactly like the clutter this
@@ -539,7 +542,7 @@ impl TargetTracker {
                     (a, b)
                 };
                 // discard must be young — skip if the merge would remove an established target
-                if self.active_targets[&discard].update_count >= 4
+                if self.active_targets[&discard].update_count >= MIN_UPDATES_FOR_TRACKING
                     || self.active_targets[&discard].is_manual
                 {
                     continue;
