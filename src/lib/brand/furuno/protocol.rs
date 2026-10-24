@@ -30,7 +30,9 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::LazyLock;
 use std::time::Duration;
 
-use crate::radar::{FRAC_NM_2, FRAC_NM_4, FRAC_NM_8, FRAC_NM_16, NM};
+use crate::radar::{
+    FRAC_NM_2, FRAC_NM_4, FRAC_NM_8, FRAC_NM_16, KILOYARD_F64, NM, NM_F64, STATUTE_MILE_F64,
+};
 use crate::util::encode;
 
 // =============================================================================
@@ -625,8 +627,24 @@ pub(crate) const WIRE_UNIT_SM: i32 = 2;
 /// in kilometres.
 pub(crate) const WIRE_UNIT_KYD: i32 = 3;
 
-const METERS_PER_SM: f64 = 1609.344;
-const METERS_PER_KYD: f64 = 914.4;
+/// Metres per kilometre, to rescale the kilometre steps into kiloyards.
+const KILOMETER_F64: f64 = 1000.;
+
+fn rescale(meters: i32, from: f64, to: f64) -> i32 {
+    (f64::from(meters) * to / from).round() as i32
+}
+
+/// The statute mile range that counts the same number as `meters` does in
+/// nautical miles.
+pub(crate) fn nautical_to_statute(meters: i32) -> i32 {
+    rescale(meters, NM_F64, STATUTE_MILE_F64)
+}
+
+/// The kiloyard range that counts the same number as `meters` does in
+/// kilometres.
+pub(crate) fn metric_to_kiloyards(meters: i32) -> i32 {
+    rescale(meters, KILOMETER_F64, KILOYARD_F64)
+}
 
 /// Wire index → meters mapping (NM mode, wire unit 0).
 ///
@@ -698,6 +716,8 @@ pub(crate) fn meters_to_wire_index_km(meters: i32) -> i32 {
 pub(crate) fn meters_to_wire_index_for_unit(meters: i32, wire_unit: i32) -> i32 {
     match wire_unit {
         WIRE_UNIT_KM => meters_to_wire_index_km(meters),
+        WIRE_UNIT_SM => meters_to_wire_index(rescale(meters, STATUTE_MILE_F64, NM_F64)),
+        WIRE_UNIT_KYD => meters_to_wire_index_km(rescale(meters, KILOYARD_F64, KILOMETER_F64)),
         _ => meters_to_wire_index(meters),
     }
 }
@@ -728,15 +748,10 @@ pub(crate) fn wire_index_to_meters_km(wire_index: i32) -> Option<i32> {
 
 /// Convert a wire index to meters for the given wire unit.
 pub(crate) fn wire_index_to_meters_for_unit(wire_index: i32, wire_unit: i32) -> Option<i32> {
-    let rescale = |meters: i32, from: f64, to: f64| (f64::from(meters) * to / from).round() as i32;
     match wire_unit {
         WIRE_UNIT_KM => wire_index_to_meters_km(wire_index),
-        WIRE_UNIT_SM => {
-            wire_index_to_meters(wire_index).map(|m| rescale(m, NM as f64, METERS_PER_SM))
-        }
-        WIRE_UNIT_KYD => {
-            wire_index_to_meters_km(wire_index).map(|m| rescale(m, 1000., METERS_PER_KYD))
-        }
+        WIRE_UNIT_SM => wire_index_to_meters(wire_index).map(nautical_to_statute),
+        WIRE_UNIT_KYD => wire_index_to_meters_km(wire_index).map(metric_to_kiloyards),
         _ => wire_index_to_meters(wire_index),
     }
 }

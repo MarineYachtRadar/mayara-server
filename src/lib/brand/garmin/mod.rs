@@ -135,7 +135,7 @@ enum RadarState {
     Pending {
         detected_type: GarminRadarType,
         capabilities: Option<GarminCapabilities>,
-        ranges: Option<Ranges>,
+        ranges: Option<Box<Ranges>>,
     },
     /// Radar has been registered with mayara and is being driven by its
     /// own `GarminReportReceiver` subsystem.
@@ -513,7 +513,7 @@ impl GarminLocator {
                     parsed.all.len(),
                     capabilities.is_some(),
                 );
-                *ranges = Some(parsed);
+                *ranges = Some(Box::new(parsed));
             }
         }
         self.try_register_pending(from, nic_addr, radars, subsys);
@@ -553,7 +553,7 @@ impl GarminLocator {
                     detected_type,
                     capabilities: Some(caps),
                     ranges: Some(ranges),
-                }) => (*detected_type, *caps, ranges.clone()),
+                }) => (*detected_type, *caps, (**ranges).clone()),
                 _ => return,
             }
         };

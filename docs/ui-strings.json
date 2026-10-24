@@ -571,9 +571,11 @@
     {
       "control": "rangeUnits",
       "labels": [
+        "Kiloyards",
         "Metric",
         "Mixed",
-        "Nautical"
+        "Nautical",
+        "Statute"
       ]
     },
     {

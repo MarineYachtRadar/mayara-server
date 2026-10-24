@@ -3,8 +3,9 @@ use std::collections::HashMap;
 use crate::{
     Cli,
     radar::settings::{
-        ControlBuilder, ControlId, HAS_AUTO_NOT_ADJUSTABLE, SharedControls, new_auto,
-        new_auto_standby, new_list, new_numeric, new_sector, new_string,
+        ControlBuilder, ControlId, HAS_AUTO_NOT_ADJUSTABLE, RANGE_UNITS_KILOYARDS,
+        RANGE_UNITS_METRIC, RANGE_UNITS_NAMES, RANGE_UNITS_NAUTICAL, RANGE_UNITS_STATUTE,
+        SharedControls, new_auto, new_auto_standby, new_list, new_numeric, new_sector, new_string,
     },
     radar::{
         FRAC_NM_2, FRAC_NM_4, FRAC_NM_8, FRAC_NM_16, NM, RadarInfo, range::Ranges, units::Units,
@@ -12,7 +13,7 @@ use crate::{
     stream::SignalKDelta,
 };
 
-use super::protocol::{RadarModel, TX_CHANNEL_MAX};
+use super::protocol::{RadarModel, TX_CHANNEL_MAX, metric_to_kiloyards, nautical_to_statute};
 
 /// `$NF5` reports supply rails in hundredths of a volt.
 const SUPPLY_VOLTAGE_SCALE: f64 = 100.;
@@ -46,7 +47,15 @@ pub(crate) fn new(
         .build(&mut controls);
 
     new_string(ControlId::SerialNumber).build(&mut controls);
-    new_list(ControlId::RangeUnits, &["Nautical", "Metric"]).build(&mut controls);
+    // The radar ranges in each of these; Mixed has no wire unit.
+    new_list(ControlId::RangeUnits, &RANGE_UNITS_NAMES)
+        .set_valid_values(vec![
+            RANGE_UNITS_NAUTICAL,
+            RANGE_UNITS_METRIC,
+            RANGE_UNITS_STATUTE,
+            RANGE_UNITS_KILOYARDS,
+        ])
+        .build(&mut controls);
 
     // The report receiver stands a transmit that was asked through mayara down itself
     new_auto_standby().build(&mut controls);
@@ -395,7 +404,7 @@ pub(crate) fn update_when_model_known(info: &mut RadarInfo, model: RadarModel, v
         info.controls.set_user_name(user_name);
     }
 
-    let ranges = Ranges::new_by_distance(&get_ranges_by_model(&model));
+    let ranges = ranges_by_model(&model);
     log::info!(
         "{}: model {} supports ranges {}",
         info.key(),
@@ -823,10 +832,11 @@ static RANGE_TABLE_FAR: &[i32] = &[
     NM * 96,    // 96 NM
 ];
 
-/// Get the combined NM + km range table for a specific model.
-/// Both unit modes are included so the Ranges struct can auto-classify
-/// them into nautical/metric lists for RangeUnits filtering.
-fn get_ranges_by_model(model: &RadarModel) -> Vec<i32> {
+/// The ranges of a specific model in every unit it ranges in. The NM and km
+/// tables are classified into nautical and metric by their metres; statute
+/// miles count the NM steps and kiloyards the km ones, at metres that cannot
+/// be told apart from the others, so those are listed by unit.
+fn ranges_by_model(model: &RadarModel) -> Ranges {
     let (nm_table, km_table): (&[i32], &[i32]) = match model {
         // DRS-NXT series with extended ranges
         RadarModel::DRS12ANXT | RadarModel::DRS25ANXT => (
@@ -864,7 +874,9 @@ fn get_ranges_by_model(model: &RadarModel) -> Vec<i32> {
         nm_table.len(),
         km_table.len(),
     );
-    ranges
+    let statute: Vec<i32> = nm_table.iter().copied().map(nautical_to_statute).collect();
+    let kiloyards: Vec<i32> = km_table.iter().copied().map(metric_to_kiloyards).collect();
+    Ranges::new_by_distance(&ranges).with_statute_and_kiloyards(&statute, &kiloyards)
 }
 
 /// This brand's controls for every model it knows, for the UI strings catalog
@@ -1111,5 +1123,52 @@ mod tests {
         let tx = tokio::sync::broadcast::Sender::new(1);
         let controls = new("fur1234".to_string(), tx, &args);
         assert_eq!(controls.auto_standby(), Some(Duration::from_secs(60)));
+    }
+
+    /// In statute miles a Furuno offers the nautical mile steps, and in
+    /// kiloyards the kilometre ones, without the 1/16 kilometres lack. The
+    /// ranges shown are the numbers on the radar's own range key.
+    #[test]
+    fn a_furuno_ranges_in_statute_miles_and_kiloyards() {
+        let controls = controls_of(RadarModel::DRS4DNXT);
+        let offered = |units: i32| {
+            controls
+                .set_value(&ControlId::RangeUnits, units.into())
+                .unwrap();
+            let item = controls.get(&ControlId::Range).unwrap().item().clone();
+            let descriptions = item.descriptions.unwrap();
+            item.valid_values
+                .unwrap()
+                .iter()
+                .map(|v| (*v, descriptions[v].clone()))
+                .collect::<Vec<_>>()
+        };
+
+        let statute = offered(RANGE_UNITS_STATUTE);
+        assert_eq!(statute.len(), RANGE_TABLE_DRS_NXT.len());
+        assert_eq!(statute[0], (100, "1/16 mi".to_string()));
+        assert_eq!(statute[7], (3219, "2 mi".to_string()));
+        assert_eq!(statute.last().unwrap().1, "48 mi");
+
+        let kiloyards = offered(RANGE_UNITS_KILOYARDS);
+        assert_eq!(kiloyards.len(), RANGE_TABLE_DRS_NXT_KM.len());
+        assert_eq!(kiloyards[0], (114, "0.125 kyd".to_string()));
+        assert_eq!(kiloyards[6], (1829, "2 kyd".to_string()));
+
+        let nautical = offered(RANGE_UNITS_NAUTICAL);
+        assert_eq!(nautical.len(), RANGE_TABLE_DRS_NXT.len());
+        assert_eq!(nautical[7], (3704, "2 nm".to_string()));
+    }
+
+    /// Mixed has no wire unit, so a Furuno does not offer it.
+    #[test]
+    fn a_furuno_offers_every_range_unit_but_mixed() {
+        let args = Cli::parse_from(["mayara-server"]);
+        let tx = tokio::sync::broadcast::Sender::new(1);
+        let controls = new("fur1234".to_string(), tx, &args);
+        let item = controls.get(&ControlId::RangeUnits).unwrap().item().clone();
+
+        assert_eq!(item.valid_values, Some(vec![0, 1, 3, 4]));
+        assert_eq!(item.descriptions.unwrap()[&3], "Statute");
     }
 }

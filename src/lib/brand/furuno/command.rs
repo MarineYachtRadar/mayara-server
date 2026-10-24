@@ -6,12 +6,15 @@ use std::f64::consts::TAU;
 
 use super::protocol::{
     CommandId, CommandMode, GUARD_MODE_FAN, GUARD_MODE_OFF, HEADING_ADJUST_FULL_TURN, SPOKES,
-    TX_CHANNEL_AUTO, TX_CHANNEL_MAX, WIRE_UNIT_KM, WIRE_UNIT_NM, meters_to_wire_index_for_unit,
-    wire_unit_for_meters,
+    TX_CHANNEL_AUTO, TX_CHANNEL_MAX, WIRE_UNIT_KM, WIRE_UNIT_KYD, WIRE_UNIT_NM, WIRE_UNIT_SM,
+    meters_to_wire_index_for_unit, wire_unit_for_meters,
 };
 use crate::brand::CommandSender;
 use crate::radar::range::Ranges;
-use crate::radar::settings::{ControlId, ControlValue, SharedControls};
+use crate::radar::settings::{
+    ControlId, ControlValue, RANGE_UNITS_KILOYARDS, RANGE_UNITS_METRIC, RANGE_UNITS_STATUTE,
+    SharedControls,
+};
 use crate::radar::{Power, RadarError, RadarInfo};
 
 /// A sector's start and width on the wire wrap at a full circle of degrees.
@@ -471,8 +474,13 @@ impl CommandSender for Command {
             }
 
             ControlId::Range => {
-                // Determine wire unit from the range value (metric vs nautical)
-                let wire_unit = wire_unit_for_meters(value);
+                // A range in statute miles or kiloyards cannot be told from
+                // its metres, so those come from the units the range is in.
+                let wire_unit = match controls.range_units() {
+                    RANGE_UNITS_STATUTE => WIRE_UNIT_SM,
+                    RANGE_UNITS_KILOYARDS => WIRE_UNIT_KYD,
+                    _ => wire_unit_for_meters(value),
+                };
                 let wire_index = meters_to_wire_index_for_unit(value, wire_unit);
                 cmd.push(wire_index);
                 cmd.push(wire_unit);
@@ -483,11 +491,11 @@ impl CommandSender for Command {
             ControlId::RangeUnits => {
                 // When changing range units, re-send the current range with the new unit.
                 // The radar firmware reinterprets the range index in the new unit context.
-                // value: 0=Nautical, 1=Metric
-                let wire_unit = if value == 1 {
-                    WIRE_UNIT_KM
-                } else {
-                    WIRE_UNIT_NM
+                let wire_unit = match value {
+                    RANGE_UNITS_METRIC => WIRE_UNIT_KM,
+                    RANGE_UNITS_STATUTE => WIRE_UNIT_SM,
+                    RANGE_UNITS_KILOYARDS => WIRE_UNIT_KYD,
+                    _ => WIRE_UNIT_NM,
                 };
 
                 // Get the current range in meters from the target range's
@@ -1070,6 +1078,40 @@ mod tests {
         set(&mut command, &info, cv(ControlId::RangeUnits, json!(1))).await;
 
         assert_eq!(wire.first(), "$S62,11,1,0");
+    }
+
+    /// Statute miles are unit 2 and kiloyards unit 3, each re-sending the
+    /// range nearest the current one: 6 nm is nearer 6 mi than 8 mi, and
+    /// nearer 12 kyd than 16 kyd.
+    #[tokio::test]
+    async fn statute_miles_and_kiloyards_have_their_own_wire_units() {
+        for (units, expected) in [(3, "$S62,9,2,0"), (4, "$S62,11,3,0")] {
+            let (mut command, info, wire) = nxt();
+            info.controls
+                .set_value(&ControlId::Range, json!(11112))
+                .expect("range");
+
+            set(&mut command, &info, cv(ControlId::RangeUnits, json!(units))).await;
+
+            assert_eq!(wire.first(), expected, "units {units}");
+        }
+    }
+
+    /// A range in statute miles or kiloyards goes out in the units the
+    /// radar is in, which its metres alone cannot tell: 2 mi is 3,219 m and
+    /// 2 kyd 1,829 m, neither of them a nautical or metric step.
+    #[tokio::test]
+    async fn a_range_is_sent_in_the_units_the_radar_is_in() {
+        for (units, meters, expected) in [(3, 3219, "$S62,6,2,0"), (4, 1829, "$S62,6,3,0")] {
+            let (mut command, info, wire) = nxt();
+            info.controls
+                .set_value(&ControlId::RangeUnits, json!(units))
+                .expect("units");
+
+            set(&mut command, &info, cv(ControlId::Range, json!(meters))).await;
+
+            assert_eq!(wire.first(), expected, "units {units}");
+        }
     }
 
     // ----- Gain, sea, rain -----
