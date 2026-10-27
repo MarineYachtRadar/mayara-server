@@ -83,7 +83,8 @@ fn update_external_nav(update: impl FnOnce(&mut ExternalNav)) {
 /// written by the emulator, so it can take back what it wrote, and nothing
 /// else, when another source takes over.
 static HEADING_FROM_EMULATOR: AtomicBool = AtomicBool::new(false);
-static COURSE_FROM_EMULATOR: AtomicBool = AtomicBool::new(false);
+static COG_FROM_EMULATOR: AtomicBool = AtomicBool::new(false);
+static SOG_FROM_EMULATOR: AtomicBool = AtomicBool::new(false);
 
 fn mark_own_ship_nav_fresh() {
     let lock = LAST_OWN_SHIP_NAV.get_or_init(|| std::sync::Mutex::new(None));
@@ -661,8 +662,10 @@ pub(crate) fn withdraw_emulator_nav() {
     if HEADING_FROM_EMULATOR.swap(false, Ordering::AcqRel) {
         HEADING_TRUE.store(f64::NAN, Ordering::Release);
     }
-    if COURSE_FROM_EMULATOR.swap(false, Ordering::AcqRel) {
+    if COG_FROM_EMULATOR.swap(false, Ordering::AcqRel) {
         COG.store(f64::NAN, Ordering::Release);
+    }
+    if SOG_FROM_EMULATOR.swap(false, Ordering::AcqRel) {
         SOG.store(f64::NAN, Ordering::Release);
     }
 }
@@ -747,7 +750,7 @@ pub(crate) fn set_cog(cog: Option<f64>) {
     if static_nav_holds() {
         return;
     }
-    COURSE_FROM_EMULATOR.store(false, Ordering::Release);
+    COG_FROM_EMULATOR.store(false, Ordering::Release);
     update_external_nav(|nav| nav.cog = cog);
     store_cog(cog);
 }
@@ -757,7 +760,8 @@ pub(crate) fn set_emulator_course(cog: f64, sog: f64) {
     if static_nav_holds() {
         return;
     }
-    COURSE_FROM_EMULATOR.store(true, Ordering::Release);
+    COG_FROM_EMULATOR.store(true, Ordering::Release);
+    SOG_FROM_EMULATOR.store(true, Ordering::Release);
     store_cog(Some(cog));
     store_sog(Some(sog));
 }
@@ -789,7 +793,7 @@ pub(crate) fn set_sog(sog: Option<f64>) {
     if static_nav_holds() {
         return;
     }
-    COURSE_FROM_EMULATOR.store(false, Ordering::Release);
+    SOG_FROM_EMULATOR.store(false, Ordering::Release);
     store_sog(sog);
 }
 
@@ -2684,7 +2688,8 @@ mod tests {
             STATIC_NAV.store(false, Ordering::Release);
             TRUE_HEADING_AUTHORITATIVE.store(false, Ordering::Release);
             HEADING_FROM_EMULATOR.store(false, Ordering::Release);
-            COURSE_FROM_EMULATOR.store(false, Ordering::Release);
+            COG_FROM_EMULATOR.store(false, Ordering::Release);
+            SOG_FROM_EMULATOR.store(false, Ordering::Release);
             set_heading_true(None, "test-reset");
             set_heading_magnetic(None, "test-reset");
             set_position(None, None, "test-reset");
@@ -2798,6 +2803,25 @@ mod tests {
         withdraw_emulator_nav();
         assert_eq!(get_heading_true(), Some(5.18));
         assert_eq!(get_cog(), Some(2.0));
+        assert_eq!(get_sog(), Some(3.0));
+    }
+
+    /// A source that sends only COG, or only SOG, takes over just that value:
+    /// the other one the emulator wrote is still withdrawn.
+    #[test]
+    fn cog_and_sog_are_taken_over_one_at_a_time() {
+        let _globals = nav_globals();
+        set_emulator_course(1.0, 2.0);
+        set_cog(Some(2.5));
+        withdraw_emulator_nav();
+        assert_eq!(get_cog(), Some(2.5));
+        assert_eq!(get_sog(), None);
+
+        set_cog(None);
+        set_emulator_course(1.0, 2.0);
+        set_sog(Some(3.0));
+        withdraw_emulator_nav();
+        assert_eq!(get_cog(), None);
         assert_eq!(get_sog(), Some(3.0));
     }
 
