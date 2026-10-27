@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::f64::consts::{PI, TAU};
 
 use crate::ais::AisVesselApi;
@@ -154,6 +155,10 @@ pub(crate) struct AisEcho {
     target: Target,
     /// Radar return radius in meters
     radius: f64,
+    mmsi: String,
+    /// Latitude, longitude, course (radians) and speed of the report
+    /// `target` set out from
+    report: [f64; 4],
 }
 
 impl AisEcho {
@@ -162,6 +167,7 @@ impl AisEcho {
     fn new(vessel: &AisVesselApi) -> Option<Self> {
         let position = vessel.position.as_ref()?;
         let course = vessel.cog.or(vessel.heading).unwrap_or(0.0);
+        let speed = vessel.sog.unwrap_or(0.0);
         let radius = vessel
             .dimensions
             .as_ref()
@@ -173,10 +179,12 @@ impl AisEcho {
             target: Target {
                 position: GeoPosition::new(position.latitude, position.longitude),
                 heading: course.to_degrees(),
-                speed: vessel.sog.unwrap_or(0.0),
+                speed,
                 turn: None,
             },
             radius,
+            mmsi: vessel.mmsi.clone(),
+            report: [position.latitude, position.longitude, course, speed],
         })
     }
 }
@@ -521,9 +529,21 @@ impl EmulatorWorld {
     }
 
     /// Replace the AIS vessels with the latest the navigation source
-    /// reported. Between reports they move on along their course.
+    /// reported. Between reports they move on along their course, so a
+    /// vessel whose report has not changed keeps where it has got to.
     pub(crate) fn set_ais_vessels(&mut self, vessels: &[AisVesselApi]) {
-        self.ais = vessels.iter().filter_map(AisEcho::new).collect();
+        let mut previous: HashMap<String, AisEcho> = std::mem::take(&mut self.ais)
+            .into_iter()
+            .map(|echo| (echo.mmsi.clone(), echo))
+            .collect();
+        self.ais = vessels
+            .iter()
+            .filter_map(AisEcho::new)
+            .map(|fresh| match previous.remove(&fresh.mmsi) {
+                Some(moved_on) if moved_on.report == fresh.report => moved_on,
+                _ => fresh,
+            })
+            .collect();
     }
 
     /// Initiate port (counterclockwise) half-circle turns for all linear targets
@@ -945,6 +965,33 @@ mod tests {
 
         assert!(echo_at(&world, 180.0, 900.0).intensity > 0);
         assert_eq!(echo_at(&world, 180.0, 1000.0), Echo::NONE);
+    }
+
+    /// The store is read once per rotation, more often than most vessels
+    /// report, so a repeated report must not pull the echo back.
+    #[test]
+    fn a_repeated_ais_report_keeps_the_vessel_moving_on() {
+        let report = vessel(180.0, 1000.0, Some(20.0));
+        let mut world = ais_world(std::slice::from_ref(&report));
+
+        world.update(20.0);
+        world.set_ais_vessels(std::slice::from_ref(&report));
+        world.update_cache(&GeoPosition::new(OWN_SHIP.0, OWN_SHIP.1), 1.0);
+
+        assert!(echo_at(&world, 180.0, 900.0).intensity > 0);
+        assert_eq!(echo_at(&world, 180.0, 1000.0), Echo::NONE);
+    }
+
+    #[test]
+    fn a_new_ais_report_moves_the_vessel_to_it() {
+        let mut world = ais_world(&[vessel(180.0, 1000.0, Some(20.0))]);
+
+        world.update(20.0);
+        world.set_ais_vessels(&[vessel(180.0, 1500.0, Some(20.0))]);
+        world.update_cache(&GeoPosition::new(OWN_SHIP.0, OWN_SHIP.1), 1.0);
+
+        assert!(echo_at(&world, 180.0, 1500.0).intensity > 0);
+        assert_eq!(echo_at(&world, 180.0, 900.0), Echo::NONE);
     }
 
     /// The test scenario is laid out around the emulator's own boat, so it
