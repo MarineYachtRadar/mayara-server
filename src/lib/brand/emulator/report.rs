@@ -296,7 +296,6 @@ impl EmulatorReportReceiver {
     /// navigation from. Returns whether it does.
     fn follow_own_ship(&mut self) -> bool {
         let own_ship = crate::navdata::external_own_ship();
-        let took_over = own_ship.is_some() && !self.following;
         if own_ship.is_some() != self.following {
             self.following = own_ship.is_some();
             if self.following {
@@ -311,7 +310,7 @@ impl EmulatorReportReceiver {
         };
         (self.boat_position, self.boat_heading) = place_boat(own_ship, self.boat_heading);
         self.boat_turn = None;
-        if took_over && out_of_sight(&self.world_origin, &self.boat_position) {
+        if out_of_sight(&self.world_origin, &self.boat_position) {
             log::info!("Emulator: moving the test scenario to where the boat now is");
             self.world = EmulatorWorld::new(self.boat_position);
             self.world_origin = self.boat_position;
