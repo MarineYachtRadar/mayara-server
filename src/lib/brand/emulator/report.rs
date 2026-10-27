@@ -321,8 +321,7 @@ impl EmulatorReportReceiver {
         self.boat_turn = None;
         if out_of_sight(&self.world_origin, &self.boat_position, self.current_range) {
             log::info!("Emulator: moving the test scenario to where the boat now is");
-            self.world = EmulatorWorld::new(self.boat_position);
-            self.world.show_test_scenario(false);
+            self.world.rebuild_around(self.boat_position);
             self.world_origin = self.boat_position;
             self.initial_lon = self.boat_position.lon();
         }

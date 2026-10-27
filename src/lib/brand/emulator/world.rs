@@ -528,6 +528,17 @@ impl EmulatorWorld {
         self.test_scenario = show;
     }
 
+    /// Lay the test scenario out afresh around `origin`. The AIS vessels and
+    /// whether the scenario shows stay as they are.
+    pub(crate) fn rebuild_around(&mut self, origin: GeoPosition) {
+        let rebuilt = EmulatorWorld::new(origin);
+        *self = EmulatorWorld {
+            test_scenario: self.test_scenario,
+            ais: std::mem::take(&mut self.ais),
+            ..rebuilt
+        };
+    }
+
     /// Replace the AIS vessels with the latest the navigation source
     /// reported. Between reports they move on along their course, so a
     /// vessel whose report has not changed keeps where it has got to.
@@ -980,6 +991,18 @@ mod tests {
 
         assert!(echo_at(&world, 180.0, 900.0).intensity > 0);
         assert_eq!(echo_at(&world, 180.0, 1000.0), Echo::NONE);
+    }
+
+    /// Following a boat far from the scenario rebuilds it there; the AIS
+    /// vessels must not vanish until the store is next read.
+    #[test]
+    fn rebuilding_the_world_keeps_the_ais_vessels() {
+        let mut world = ais_world(&[vessel(180.0, 1000.0, Some(20.0))]);
+
+        world.rebuild_around(GeoPosition::new(OWN_SHIP.0 + 1.0, OWN_SHIP.1));
+        world.update_cache(&GeoPosition::new(OWN_SHIP.0, OWN_SHIP.1), 1.0);
+
+        assert!(echo_at(&world, 180.0, 1000.0).intensity > 0);
     }
 
     #[test]
