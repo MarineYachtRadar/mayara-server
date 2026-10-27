@@ -2705,6 +2705,7 @@ mod tests {
             SOG_FROM_EMULATOR.store(false, Ordering::Release);
             set_heading_true(None, "test-reset");
             set_heading_magnetic(None, "test-reset");
+            set_magnetic_variation(None);
             set_position(None, None, "test-reset");
             set_cog(None);
             set_sog(None);
