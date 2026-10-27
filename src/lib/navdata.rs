@@ -763,8 +763,9 @@ pub(crate) fn set_cog(cog: Option<f64>) {
         return;
     }
     COG_FROM_EMULATOR.store(false, Ordering::Release);
-    update_external_nav(|nav| nav.cog = cog.map(|c| (c, std::time::Instant::now())));
     store_cog(cog);
+    let cog = cog.map(|c| c.rem_euclid(std::f64::consts::TAU));
+    update_external_nav(|nav| nav.cog = cog.map(|c| (c, std::time::Instant::now())));
 }
 
 /// COG in radians and SOG in m/s of the boat the emulator sails itself.
@@ -2791,6 +2792,23 @@ mod tests {
 
         assert!(external_own_ship_at(after(NAV_STALE_AFTER_SECS - 1)).is_some());
         assert_eq!(external_own_ship_at(after(NAV_STALE_AFTER_SECS + 1)), None);
+    }
+
+    /// A followed source's course is turned into [0, 2π) like the shared COG,
+    /// so a negative course does not read as north.
+    #[test]
+    fn a_followed_course_is_normalized() {
+        use std::f64::consts::TAU;
+        let _globals = nav_globals();
+        set_position(Some(53.19), Some(5.33), "signalk");
+
+        for (cog, expected) in [(TAU, 0.0), (-0.5, TAU - 0.5)] {
+            set_cog(Some(cog));
+            let (_, direction) = external_own_ship().expect("followed");
+            let direction = direction.expect("course");
+            assert!((0.0..TAU).contains(&direction), "{cog} -> {direction}");
+            assert!((direction - expected).abs() < 1e-9, "{cog} -> {direction}");
+        }
     }
 
     /// A source whose heading and course have stopped while its positions

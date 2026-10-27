@@ -443,8 +443,7 @@ impl EmulatorReportReceiver {
         let sin_b = world_bearing_rad.sin();
         let cos_b = world_bearing_rad.cos();
 
-        // Spokes are 1.5x the range setting
-        let spoke_range = self.current_range as f64 * 1.5;
+        let spoke_range = self.current_range as f64 * SPOKE_RANGE_FACTOR;
         let meters_per_pixel = spoke_range / EMULATOR_SPOKE_LEN as f64;
 
         // Generate spoke data directly as bytes (one byte per pixel, 4-bit intensity)
@@ -459,12 +458,14 @@ impl EmulatorReportReceiver {
     }
 }
 
-/// Whether the radar at `boat` can no longer see anything of a test scenario
-/// built around `origin`, at even its longest range.
+/// How far past the range setting the spokes reach, like a HALO's
+const SPOKE_RANGE_FACTOR: f64 = 1.5;
+
+/// Whether the radar at `boat`, set to `range`, can no longer see anything of
+/// a test scenario built around `origin`.
 fn out_of_sight(origin: &GeoPosition, boat: &GeoPosition, range: u32) -> bool {
     const METERS_PER_DEGREE: f64 = 111_320.0;
-    // Spokes reach 1.5x the range setting
-    let reach = range as f64 * 1.5;
+    let reach = range as f64 * SPOKE_RANGE_FACTOR;
     let north = (boat.lat() - origin.lat()) * METERS_PER_DEGREE;
     let east = (boat.lon() - origin.lon()) * METERS_PER_DEGREE * origin.lat().to_radians().cos();
     north.hypot(east) > reach
@@ -573,7 +574,7 @@ mod tests {
     fn a_fix_beyond_the_displayed_range_is_out_of_sight() {
         let origin = GeoPosition::new(53.0, 5.6);
         let range = FRAC_NM_2 as u32;
-        let reach = range as f64 * 1.5;
+        let reach = range as f64 * SPOKE_RANGE_FACTOR;
 
         let near = origin.position_from_bearing(PI / 4.0, reach * 0.9);
         assert!(!out_of_sight(&origin, &near, range));
