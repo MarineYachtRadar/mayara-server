@@ -551,7 +551,10 @@ impl EmulatorWorld {
             .iter()
             .filter_map(AisEcho::new)
             .map(|fresh| match previous.remove(&fresh.mmsi) {
-                Some(moved_on) if moved_on.report == fresh.report => moved_on,
+                Some(moved_on) if moved_on.report == fresh.report => AisEcho {
+                    radius: fresh.radius,
+                    ..moved_on
+                },
                 _ => fresh,
             })
             .collect();
@@ -1003,6 +1006,17 @@ mod tests {
         world.update_cache(&GeoPosition::new(OWN_SHIP.0, OWN_SHIP.1), 1.0);
 
         assert!(echo_at(&world, 180.0, 1000.0).intensity > 0);
+    }
+
+    /// A vessel's length often arrives in a later message than its
+    /// position, so the echo takes it up without waiting for a new position.
+    #[test]
+    fn an_ais_vessel_takes_up_a_newly_reported_length() {
+        let mut world = ais_world(&[vessel(180.0, 1000.0, None)]);
+        world.set_ais_vessels(&[vessel(180.0, 1000.0, Some(200.0))]);
+        world.update_cache(&GeoPosition::new(OWN_SHIP.0, OWN_SHIP.1), 1.0);
+
+        assert!(echo_at(&world, 180.0, 1080.0).intensity > 0);
     }
 
     #[test]
