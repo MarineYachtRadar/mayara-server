@@ -125,7 +125,9 @@ impl EmulatorReportReceiver {
         let batch_interval_ms = ROTATION_TIME_MS / (spokes_sent / SPOKES_PER_BATCH as u64);
         let mut spoke_interval = interval(Duration::from_millis(batch_interval_ms));
 
-        // Update navdata with initial position
+        // A source that already reports the boat places it before the
+        // emulator publishes a position of its own
+        self.follow_own_ship();
         self.update_navdata();
 
         loop {
@@ -293,22 +295,15 @@ impl EmulatorReportReceiver {
             self.following = own_ship.is_some();
             if self.following {
                 log::info!("Emulator: following own ship from the navigation source");
-                // A source without heading or course must not leave the
-                // emulator steering by the values it wrote itself.
-                crate::navdata::set_heading_true(None, crate::navdata::EMULATOR_SOURCE);
-                crate::navdata::set_cog(None);
-                crate::navdata::set_sog(None);
+                crate::navdata::withdraw_emulator_nav();
             } else {
                 log::info!("Emulator: navigation source went quiet, moving the boat itself");
             }
         }
-        let Some((position, heading)) = own_ship else {
+        let Some(own_ship) = own_ship else {
             return false;
         };
-        self.boat_position = position;
-        if let Some(heading) = heading {
-            self.boat_heading = heading.to_degrees();
-        }
+        (self.boat_position, self.boat_heading) = place_boat(own_ship, self.boat_heading);
         self.boat_turn = None;
         true
     }
@@ -382,8 +377,10 @@ impl EmulatorReportReceiver {
             Some(self.boat_heading * DEG_TO_RAD),
             crate::navdata::EMULATOR_SOURCE,
         );
-        crate::navdata::set_sog(Some(self.boat_speed * KN_TO_MS));
-        crate::navdata::set_cog(Some(self.boat_heading * DEG_TO_RAD));
+        crate::navdata::set_emulator_course(
+            self.boat_heading * DEG_TO_RAD,
+            self.boat_speed * KN_TO_MS,
+        );
     }
 
     fn generate_spoke_batch(&mut self) {
@@ -451,6 +448,15 @@ impl EmulatorReportReceiver {
 
         data
     }
+}
+
+/// Where a followed source puts the boat: its position, and its heading in
+/// degrees, or `heading` when the source gives neither heading nor course.
+fn place_boat(
+    (position, source_heading): (GeoPosition, Option<f64>),
+    heading: f64,
+) -> (GeoPosition, f64) {
+    (position, source_heading.map_or(heading, f64::to_degrees))
 }
 
 fn next_spoke(spoke: u16, step: u16) -> u16 {
@@ -521,6 +527,23 @@ mod tests {
         assert_eq!(sent.len(), EMULATOR_SPOKES / 4);
         assert!(sent.iter().all(|spoke| spoke % 4 == 0));
         assert_eq!(one_rotation(1).len(), EMULATOR_SPOKES);
+    }
+
+    /// The boat goes where the followed source puts it and points where
+    /// that source heads (or, without a heading, where its course goes).
+    #[test]
+    fn a_followed_source_places_and_points_the_boat() {
+        let fix = GeoPosition::new(53.19, 5.33);
+
+        let (position, heading) = place_boat((fix, Some(PI / 2.0)), 270.0);
+        assert_eq!(position, fix);
+        assert!((heading - 90.0).abs() < 1e-9);
+
+        let (_, heading) = place_boat((fix, None), 270.0);
+        assert_eq!(
+            heading, 270.0,
+            "keeps its heading without one from the source"
+        );
     }
 
     fn echo(closing_speed: f64) -> Echo {

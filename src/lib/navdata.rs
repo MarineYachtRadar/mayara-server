@@ -56,11 +56,34 @@ static LAST_OWN_SHIP_NAV: OnceLock<std::sync::Mutex<Option<std::time::Instant>>>
 /// The source name the emulator writes its own boat's navigation under.
 pub(crate) const EMULATOR_SOURCE: &str = "emulator";
 
-/// When a source other than the emulator last reported own-ship position.
-/// While one does, the emulator sits where that source puts the vessel
-/// instead of moving a boat of its own.
-static LAST_EXTERNAL_POSITION: std::sync::Mutex<Option<std::time::Instant>> =
-    std::sync::Mutex::new(None);
+/// Own-ship navigation as the sources other than the emulator last reported
+/// it. While one reports a position, the emulator sits where that source puts
+/// the vessel instead of moving a boat of its own. Kept apart from the shared
+/// values, which the emulator itself writes while it sails its own boat.
+struct ExternalNav {
+    /// Latitude, longitude and when they arrived
+    position: Option<(f64, f64, std::time::Instant)>,
+    heading_true: Option<f64>,
+    cog: Option<f64>,
+}
+
+static EXTERNAL_NAV: std::sync::Mutex<ExternalNav> = std::sync::Mutex::new(ExternalNav {
+    position: None,
+    heading_true: None,
+    cog: None,
+});
+
+fn update_external_nav(update: impl FnOnce(&mut ExternalNav)) {
+    if let Ok(mut nav) = EXTERNAL_NAV.lock() {
+        update(&mut nav);
+    }
+}
+
+/// Whether the shared true heading, and the shared COG and SOG, were last
+/// written by the emulator, so it can take back what it wrote, and nothing
+/// else, when another source takes over.
+static HEADING_FROM_EMULATOR: AtomicBool = AtomicBool::new(false);
+static COURSE_FROM_EMULATOR: AtomicBool = AtomicBool::new(false);
 
 fn mark_own_ship_nav_fresh() {
     let lock = LAST_OWN_SHIP_NAV.get_or_init(|| std::sync::Mutex::new(None));
@@ -490,14 +513,19 @@ pub(crate) fn set_heading_true(heading: Option<f64>, source: &str) {
             h.to_degrees()
         );
         // Any real true-heading source (SignalK headingTrue, NMEA0183 HDT,
-        // emulator, static config) takes permanent precedence over a value
-        // derived from magnetic heading + variation.
-        if source != DERIVED_SOURCE {
+        // static config) takes permanent precedence over a value derived
+        // from magnetic heading + variation. The emulator does not: a source
+        // it later follows may only send magnetic heading and variation.
+        if source != DERIVED_SOURCE && source != EMULATOR_SOURCE {
             TRUE_HEADING_AUTHORITATIVE.store(true, Ordering::Release);
         }
         let h = h.rem_euclid(TAU);
 
         mark_own_ship_nav_fresh();
+        HEADING_FROM_EMULATOR.store(source == EMULATOR_SOURCE, Ordering::Release);
+        if source != EMULATOR_SOURCE {
+            update_external_nav(|nav| nav.heading_true = Some(h));
+        }
         let old = HEADING_TRUE.swap(h, Ordering::AcqRel);
         // Only broadcast if value changed significantly (> 0.001 rad ~ 0.06 deg)
         if (old - h).abs() > 0.001 || old.is_nan() {
@@ -505,6 +533,9 @@ pub(crate) fn set_heading_true(heading: Option<f64>, source: &str) {
         }
     } else {
         HEADING_TRUE.store(f64::NAN, Ordering::Release);
+        if source != EMULATOR_SOURCE {
+            update_external_nav(|nav| nav.heading_true = None);
+        }
     }
 }
 
@@ -612,14 +643,28 @@ pub fn get_radar_position() -> Option<GeoPosition> {
 /// position, and the true heading in radians (or the course over ground when
 /// the source sends no heading).
 pub(crate) fn external_own_ship() -> Option<(GeoPosition, Option<f64>)> {
-    let live = LAST_EXTERNAL_POSITION
-        .lock()
-        .ok()?
-        .is_some_and(|at| at.elapsed().as_secs() < NAV_STALE_AFTER_SECS);
-    if !live {
-        return None;
+    external_own_ship_at(std::time::Instant::now())
+}
+
+fn external_own_ship_at(now: std::time::Instant) -> Option<(GeoPosition, Option<f64>)> {
+    let nav = EXTERNAL_NAV.lock().ok()?;
+    let (lat, lon, at) = nav.position?;
+    (now.saturating_duration_since(at).as_secs() < NAV_STALE_AFTER_SECS)
+        .then(|| (GeoPosition::new(lat, lon), nav.heading_true.or(nav.cog)))
+}
+
+/// Take back the heading, COG and SOG the emulator wrote for its own boat
+/// when another source takes over, so a source that sends none of them does
+/// not leave the emulator's values behind as the vessel's. Values another
+/// source wrote since stay.
+pub(crate) fn withdraw_emulator_nav() {
+    if HEADING_FROM_EMULATOR.swap(false, Ordering::AcqRel) {
+        HEADING_TRUE.store(f64::NAN, Ordering::Release);
     }
-    Some((get_radar_position()?, get_heading_true().or_else(get_cog)))
+    if COURSE_FROM_EMULATOR.swap(false, Ordering::AcqRel) {
+        COG.store(f64::NAN, Ordering::Release);
+        SOG.store(f64::NAN, Ordering::Release);
+    }
 }
 
 pub fn get_position() -> (Option<f64>, Option<f64>) {
@@ -639,10 +684,10 @@ pub(crate) fn set_position(lat: Option<f64>, lon: Option<f64>, source: &str) {
     if let (Some(lat), Some(lon)) = (lat, lon) {
         log::trace!("navdata::set_position(lat={}, lon={})", lat, lon);
         mark_own_ship_nav_fresh();
-        if source != EMULATOR_SOURCE
-            && let Ok(mut last) = LAST_EXTERNAL_POSITION.lock()
-        {
-            *last = Some(std::time::Instant::now());
+        if source != EMULATOR_SOURCE {
+            update_external_nav(|nav| {
+                nav.position = Some((lat, lon, std::time::Instant::now()));
+            });
         }
         let old_lat = POSITION_LAT.swap(lat, Ordering::AcqRel);
         let old_lon = POSITION_LON.swap(lon, Ordering::AcqRel);
@@ -656,6 +701,9 @@ pub(crate) fn set_position(lat: Option<f64>, lon: Option<f64>, source: &str) {
         }
     } else {
         POSITION_VALID.store(false, Ordering::Release);
+        if source != EMULATOR_SOURCE {
+            update_external_nav(|nav| nav.position = None);
+        }
     }
 }
 
@@ -678,9 +726,6 @@ pub(crate) fn clear_own_ship_nav() {
     }
     set_heading_true(None, "disconnect");
     set_position(None, None, "disconnect");
-    if let Ok(mut last) = LAST_EXTERNAL_POSITION.lock() {
-        *last = None;
-    }
     set_cog(None);
     set_sog(None);
     if let Some(lock) = LAST_OWN_SHIP_NAV.get()
@@ -702,7 +747,19 @@ pub(crate) fn set_cog(cog: Option<f64>) {
     if static_nav_holds() {
         return;
     }
+    COURSE_FROM_EMULATOR.store(false, Ordering::Release);
+    update_external_nav(|nav| nav.cog = cog);
     store_cog(cog);
+}
+
+/// COG in radians and SOG in m/s of the boat the emulator sails itself.
+pub(crate) fn set_emulator_course(cog: f64, sog: f64) {
+    if static_nav_holds() {
+        return;
+    }
+    COURSE_FROM_EMULATOR.store(true, Ordering::Release);
+    store_cog(Some(cog));
+    store_sog(Some(sog));
 }
 
 fn store_cog(cog: Option<f64>) {
@@ -732,6 +789,7 @@ pub(crate) fn set_sog(sog: Option<f64>) {
     if static_nav_holds() {
         return;
     }
+    COURSE_FROM_EMULATOR.store(false, Ordering::Release);
     store_sog(sog);
 }
 
@@ -2625,9 +2683,8 @@ mod tests {
         fn drop(&mut self) {
             STATIC_NAV.store(false, Ordering::Release);
             TRUE_HEADING_AUTHORITATIVE.store(false, Ordering::Release);
-            *LAST_EXTERNAL_POSITION
-                .lock()
-                .unwrap_or_else(|e| e.into_inner()) = None;
+            HEADING_FROM_EMULATOR.store(false, Ordering::Release);
+            COURSE_FROM_EMULATOR.store(false, Ordering::Release);
             set_heading_true(None, "test-reset");
             set_heading_magnetic(None, "test-reset");
             set_position(None, None, "test-reset");
@@ -2675,6 +2732,87 @@ mod tests {
         set_position(Some(53.19), Some(5.33), EMULATOR_SOURCE);
 
         assert_eq!(external_own_ship(), None);
+    }
+
+    /// The emulator writing the shared position after the followed source
+    /// withdrew its own must not count as that source.
+    #[test]
+    fn a_withdrawn_position_is_no_longer_followed() {
+        let _globals = nav_globals();
+        set_position(Some(53.19), Some(5.33), "signalk");
+
+        set_position(None, None, "signalk");
+        set_position(Some(53.2), Some(5.3), EMULATOR_SOURCE);
+
+        assert_eq!(external_own_ship(), None);
+    }
+
+    /// The emulator writes the shared values while it sails its own boat;
+    /// the followed source's own report is what it follows.
+    #[test]
+    fn the_followed_fix_is_the_sources_not_the_emulators() {
+        let _globals = nav_globals();
+        set_position(Some(53.19), Some(5.33), "signalk");
+        set_heading_true(Some(5.18), "signalk");
+
+        set_position(Some(53.2), Some(5.3), EMULATOR_SOURCE);
+        set_heading_true(Some(1.0), EMULATOR_SOURCE);
+
+        assert_eq!(
+            external_own_ship(),
+            Some((GeoPosition::new(53.19, 5.33), Some(5.18)))
+        );
+    }
+
+    /// A source that falls silent is followed for 10 s, then no longer.
+    #[test]
+    fn a_silent_source_is_followed_until_it_goes_stale() {
+        let _globals = nav_globals();
+        let start = std::time::Instant::now();
+        set_position(Some(53.19), Some(5.33), "signalk");
+        let after = |secs| start + std::time::Duration::from_secs(secs);
+
+        assert!(external_own_ship_at(after(NAV_STALE_AFTER_SECS - 1)).is_some());
+        assert_eq!(external_own_ship_at(after(NAV_STALE_AFTER_SECS + 1)), None);
+    }
+
+    /// On takeover the emulator takes back its own heading and course, and
+    /// only those: values the source sent stay.
+    #[test]
+    fn taking_over_withdraws_only_what_the_emulator_wrote() {
+        let _globals = nav_globals();
+        set_heading_true(Some(1.0), EMULATOR_SOURCE);
+        set_emulator_course(1.0, 2.0);
+
+        withdraw_emulator_nav();
+        assert_eq!(get_heading_true(), None);
+        assert_eq!(get_cog(), None);
+        assert_eq!(get_sog(), None);
+
+        set_heading_true(Some(1.0), EMULATOR_SOURCE);
+        set_emulator_course(1.0, 2.0);
+        set_heading_true(Some(5.18), "signalk");
+        set_cog(Some(2.0));
+        set_sog(Some(3.0));
+
+        withdraw_emulator_nav();
+        assert_eq!(get_heading_true(), Some(5.18));
+        assert_eq!(get_cog(), Some(2.0));
+        assert_eq!(get_sog(), Some(3.0));
+    }
+
+    /// A followed source that sends only magnetic heading and variation still
+    /// gets its true heading derived after the emulator steered by its own.
+    #[test]
+    fn the_emulators_heading_does_not_block_a_derived_one() {
+        let _globals = nav_globals();
+        set_heading_true(Some(1.0), EMULATOR_SOURCE);
+
+        set_magnetic_variation(Some(0.03));
+        set_heading_magnetic(Some(1.5), "signalk");
+
+        let derived = get_heading_true().expect("derived from magnetic");
+        assert!((derived - 1.53).abs() < 1e-9, "{derived}");
     }
 
     /// A source that sends a position but no heading still steers the
