@@ -63,8 +63,10 @@ pub(crate) const EMULATOR_SOURCE: &str = "emulator";
 struct ExternalNav {
     /// Latitude, longitude and when they arrived
     position: Option<(f64, f64, std::time::Instant)>,
-    heading_true: Option<f64>,
-    cog: Option<f64>,
+    /// True heading in radians and when it arrived
+    heading_true: Option<(f64, std::time::Instant)>,
+    /// COG in radians and when it arrived
+    cog: Option<(f64, std::time::Instant)>,
 }
 
 static EXTERNAL_NAV: std::sync::Mutex<ExternalNav> = std::sync::Mutex::new(ExternalNav {
@@ -525,7 +527,7 @@ pub(crate) fn set_heading_true(heading: Option<f64>, source: &str) {
         mark_own_ship_nav_fresh();
         HEADING_FROM_EMULATOR.store(source == EMULATOR_SOURCE, Ordering::Release);
         if source != EMULATOR_SOURCE {
-            update_external_nav(|nav| nav.heading_true = Some(h));
+            update_external_nav(|nav| nav.heading_true = Some((h, std::time::Instant::now())));
         }
         let old = HEADING_TRUE.swap(h, Ordering::AcqRel);
         // Only broadcast if value changed significantly (> 0.001 rad ~ 0.06 deg)
@@ -648,10 +650,20 @@ pub(crate) fn external_own_ship() -> Option<(GeoPosition, Option<f64>)> {
 }
 
 fn external_own_ship_at(now: std::time::Instant) -> Option<(GeoPosition, Option<f64>)> {
+    let fresh =
+        |at: std::time::Instant| now.saturating_duration_since(at).as_secs() < NAV_STALE_AFTER_SECS;
     let nav = EXTERNAL_NAV.lock().ok()?;
     let (lat, lon, at) = nav.position?;
-    (now.saturating_duration_since(at).as_secs() < NAV_STALE_AFTER_SECS)
-        .then(|| (GeoPosition::new(lat, lon), nav.heading_true.or(nav.cog)))
+    // A source can keep sending positions after its heading or course has
+    // stopped, so each one ages on its own
+    let direction =
+        |value: Option<(f64, std::time::Instant)>| value.and_then(|(v, at)| fresh(at).then_some(v));
+    fresh(at).then(|| {
+        (
+            GeoPosition::new(lat, lon),
+            direction(nav.heading_true).or(direction(nav.cog)),
+        )
+    })
 }
 
 /// Take back the heading, COG and SOG the emulator wrote for its own boat
@@ -751,7 +763,7 @@ pub(crate) fn set_cog(cog: Option<f64>) {
         return;
     }
     COG_FROM_EMULATOR.store(false, Ordering::Release);
-    update_external_nav(|nav| nav.cog = cog);
+    update_external_nav(|nav| nav.cog = cog.map(|c| (c, std::time::Instant::now())));
     store_cog(cog);
 }
 
@@ -2779,6 +2791,32 @@ mod tests {
 
         assert!(external_own_ship_at(after(NAV_STALE_AFTER_SECS - 1)).is_some());
         assert_eq!(external_own_ship_at(after(NAV_STALE_AFTER_SECS + 1)), None);
+    }
+
+    /// A source whose heading and course have stopped while its positions
+    /// still come is followed without them.
+    #[test]
+    fn a_stale_heading_or_course_is_not_followed() {
+        let _globals = nav_globals();
+        let start = std::time::Instant::now();
+        let after = |secs| start + std::time::Duration::from_secs(secs);
+        update_external_nav(|nav| {
+            nav.heading_true = Some((1.0, start));
+            nav.cog = Some((2.0, after(5)));
+            nav.position = Some((53.19, 5.33, after(NAV_STALE_AFTER_SECS + 2)));
+        });
+
+        let heading = |secs| external_own_ship_at(after(secs)).and_then(|(_, h)| h);
+        assert_eq!(
+            heading(NAV_STALE_AFTER_SECS + 2),
+            Some(2.0),
+            "course once heading is stale"
+        );
+        assert_eq!(
+            heading(NAV_STALE_AFTER_SECS + 6),
+            None,
+            "neither once both are stale"
+        );
     }
 
     /// On takeover the emulator takes back its own heading and course, and

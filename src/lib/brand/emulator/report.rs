@@ -7,9 +7,7 @@ use tokio_graceful_shutdown::SubsystemHandle;
 
 use super::command::Command;
 use super::world::{Echo, EmulatorWorld, TURN_RADIUS, TurnProgress};
-use super::{
-    EMULATOR_RANGES, EMULATOR_SPOKE_LEN, EMULATOR_SPOKES, get_initial_position, spoke_step,
-};
+use super::{EMULATOR_SPOKE_LEN, EMULATOR_SPOKES, get_initial_position, spoke_step};
 use crate::Cli;
 use crate::radar::settings::{ControlId, ControlUpdate};
 use crate::radar::spoke::GenericSpoke;
@@ -310,7 +308,7 @@ impl EmulatorReportReceiver {
         };
         (self.boat_position, self.boat_heading) = place_boat(own_ship, self.boat_heading);
         self.boat_turn = None;
-        if out_of_sight(&self.world_origin, &self.boat_position) {
+        if out_of_sight(&self.world_origin, &self.boat_position, self.current_range) {
             log::info!("Emulator: moving the test scenario to where the boat now is");
             self.world = EmulatorWorld::new(self.boat_position);
             self.world_origin = self.boat_position;
@@ -463,10 +461,10 @@ impl EmulatorReportReceiver {
 
 /// Whether the radar at `boat` can no longer see anything of a test scenario
 /// built around `origin`, at even its longest range.
-fn out_of_sight(origin: &GeoPosition, boat: &GeoPosition) -> bool {
+fn out_of_sight(origin: &GeoPosition, boat: &GeoPosition, range: u32) -> bool {
     const METERS_PER_DEGREE: f64 = 111_320.0;
     // Spokes reach 1.5x the range setting
-    let reach = *EMULATOR_RANGES.last().unwrap_or(&0) as f64 * 1.5;
+    let reach = range as f64 * 1.5;
     let north = (boat.lat() - origin.lat()) * METERS_PER_DEGREE;
     let east = (boat.lon() - origin.lon()) * METERS_PER_DEGREE * origin.lat().to_radians().cos();
     north.hypot(east) > reach
@@ -568,17 +566,21 @@ mod tests {
         );
     }
 
-    /// A fix within the radar's longest reach keeps the test scenario where
-    /// it is; one farther off moves it to the boat.
+    /// A fix within what the radar shows at its range keeps the test scenario
+    /// where it is; one beyond it moves the scenario to the boat, even when
+    /// a longer range would still reach it.
     #[test]
-    fn a_distant_fix_is_out_of_sight_of_the_test_scenario() {
+    fn a_fix_beyond_the_displayed_range_is_out_of_sight() {
         let origin = GeoPosition::new(53.0, 5.6);
-        let reach = *EMULATOR_RANGES.last().unwrap() as f64 * 1.5;
+        let range = FRAC_NM_2 as u32;
+        let reach = range as f64 * 1.5;
 
         let near = origin.position_from_bearing(PI / 4.0, reach * 0.9);
-        assert!(!out_of_sight(&origin, &near));
+        assert!(!out_of_sight(&origin, &near, range));
         let far = origin.position_from_bearing(PI / 4.0, reach * 1.1);
-        assert!(out_of_sight(&origin, &far));
+        assert!(out_of_sight(&origin, &far, range));
+        let longest = *super::super::EMULATOR_RANGES.last().unwrap() as u32;
+        assert!(!out_of_sight(&origin, &far, longest));
     }
 
     fn echo(closing_speed: f64) -> Echo {
