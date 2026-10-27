@@ -43,6 +43,10 @@ pub(crate) struct EmulatorReportReceiver {
     current_range: u32, // meters
     transmitting: bool,
 
+    /// Another navigation source places the boat, so the emulator does not
+    /// move it or publish its navigation.
+    following: bool,
+
     // Turn state for course reversal loop
     boat_turn: Option<TurnProgress>,
     initial_lon: f64,
@@ -86,6 +90,7 @@ impl EmulatorReportReceiver {
             boat_speed: speed,
             current_range: FRAC_NM_2 as u32, // Default 1/2 nm
             transmitting: false,
+            following: false,
             boat_turn: None,
             initial_lon: initial_pos.lon(),
             current_spoke: 0,
@@ -219,6 +224,17 @@ impl EmulatorReportReceiver {
         self.last_update = now;
         let elapsed_secs = elapsed.as_secs_f64();
 
+        if !self.follow_own_ship() {
+            self.move_boat(elapsed_secs);
+        }
+
+        // Always update world (moving targets) even when boat is stationary
+        self.world.update(elapsed_secs);
+    }
+
+    /// Move the emulator's own boat along its course, turning it round at
+    /// the ends of its run.
+    fn move_boat(&mut self, elapsed_secs: f64) {
         if let Some(mut turn) = self.boat_turn.take() {
             let speed_ms = self.boat_speed * KN_TO_MS;
             let angular_velocity = speed_ms / turn.radius;
@@ -266,9 +282,35 @@ impl EmulatorReportReceiver {
 
             self.check_turn_trigger();
         }
+    }
 
-        // Always update world (moving targets) even when boat is stationary
-        self.world.update(elapsed_secs);
+    /// Take the boat's position and heading from another navigation source
+    /// while one reports them, such as the Signal K server mayara reads its
+    /// navigation from. Returns whether it does.
+    fn follow_own_ship(&mut self) -> bool {
+        let own_ship = crate::navdata::external_own_ship();
+        if own_ship.is_some() != self.following {
+            self.following = own_ship.is_some();
+            if self.following {
+                log::info!("Emulator: following own ship from the navigation source");
+                // A source without heading or course must not leave the
+                // emulator steering by the values it wrote itself.
+                crate::navdata::set_heading_true(None, crate::navdata::EMULATOR_SOURCE);
+                crate::navdata::set_cog(None);
+                crate::navdata::set_sog(None);
+            } else {
+                log::info!("Emulator: navigation source went quiet, moving the boat itself");
+            }
+        }
+        let Some((position, heading)) = own_ship else {
+            return false;
+        };
+        self.boat_position = position;
+        if let Some(heading) = heading {
+            self.boat_heading = heading.to_degrees();
+        }
+        self.boat_turn = None;
+        true
     }
 
     /// Check whether the boat should initiate a half-circle turn to reverse course.
@@ -328,13 +370,18 @@ impl EmulatorReportReceiver {
     }
 
     fn update_navdata(&self) {
-        // Update the global navigation data
+        if self.following {
+            return;
+        }
         crate::navdata::set_position(
             Some(self.boat_position.lat()),
             Some(self.boat_position.lon()),
-            "emulator",
+            crate::navdata::EMULATOR_SOURCE,
         );
-        crate::navdata::set_heading_true(Some(self.boat_heading * DEG_TO_RAD), "emulator");
+        crate::navdata::set_heading_true(
+            Some(self.boat_heading * DEG_TO_RAD),
+            crate::navdata::EMULATOR_SOURCE,
+        );
         crate::navdata::set_sog(Some(self.boat_speed * KN_TO_MS));
         crate::navdata::set_cog(Some(self.boat_heading * DEG_TO_RAD));
     }
@@ -370,7 +417,9 @@ impl EmulatorReportReceiver {
             if new_spoke < self.current_spoke {
                 // Rotation wrapped - broadcast heading to ensure GUI receives it
                 self.rotation_count += 1;
-                crate::navdata::broadcast_heading("emulator");
+                if !self.following {
+                    crate::navdata::broadcast_heading(crate::navdata::EMULATOR_SOURCE);
+                }
             }
             self.current_spoke = new_spoke;
         }

@@ -53,6 +53,15 @@ static NAV_BROADCAST_TX: OnceLock<tokio::sync::broadcast::Sender<SignalKDelta>> 
 /// (e.g. a revoked token). `None` until the first own-ship nav arrives.
 static LAST_OWN_SHIP_NAV: OnceLock<std::sync::Mutex<Option<std::time::Instant>>> = OnceLock::new();
 
+/// The source name the emulator writes its own boat's navigation under.
+pub(crate) const EMULATOR_SOURCE: &str = "emulator";
+
+/// When a source other than the emulator last reported own-ship position.
+/// While one does, the emulator sits where that source puts the vessel
+/// instead of moving a boat of its own.
+static LAST_EXTERNAL_POSITION: std::sync::Mutex<Option<std::time::Instant>> =
+    std::sync::Mutex::new(None);
+
 fn mark_own_ship_nav_fresh() {
     let lock = LAST_OWN_SHIP_NAV.get_or_init(|| std::sync::Mutex::new(None));
     if let Ok(mut guard) = lock.lock() {
@@ -599,6 +608,20 @@ pub fn get_radar_position() -> Option<GeoPosition> {
     None
 }
 
+/// Own ship as a live source other than the emulator reports it: the
+/// position, and the true heading in radians (or the course over ground when
+/// the source sends no heading).
+pub(crate) fn external_own_ship() -> Option<(GeoPosition, Option<f64>)> {
+    let live = LAST_EXTERNAL_POSITION
+        .lock()
+        .ok()?
+        .is_some_and(|at| at.elapsed().as_secs() < NAV_STALE_AFTER_SECS);
+    if !live {
+        return None;
+    }
+    Some((get_radar_position()?, get_heading_true().or_else(get_cog)))
+}
+
 pub fn get_position() -> (Option<f64>, Option<f64>) {
     if POSITION_VALID.load(Ordering::Acquire) {
         let lat = POSITION_LAT.load(Ordering::Acquire);
@@ -616,6 +639,11 @@ pub(crate) fn set_position(lat: Option<f64>, lon: Option<f64>, source: &str) {
     if let (Some(lat), Some(lon)) = (lat, lon) {
         log::trace!("navdata::set_position(lat={}, lon={})", lat, lon);
         mark_own_ship_nav_fresh();
+        if source != EMULATOR_SOURCE
+            && let Ok(mut last) = LAST_EXTERNAL_POSITION.lock()
+        {
+            *last = Some(std::time::Instant::now());
+        }
         let old_lat = POSITION_LAT.swap(lat, Ordering::AcqRel);
         let old_lon = POSITION_LON.swap(lon, Ordering::AcqRel);
         let was_valid = POSITION_VALID.swap(true, Ordering::AcqRel);
@@ -650,6 +678,9 @@ pub(crate) fn clear_own_ship_nav() {
     }
     set_heading_true(None, "disconnect");
     set_position(None, None, "disconnect");
+    if let Ok(mut last) = LAST_EXTERNAL_POSITION.lock() {
+        *last = None;
+    }
     set_cog(None);
     set_sog(None);
     if let Some(lock) = LAST_OWN_SHIP_NAV.get()
@@ -2594,6 +2625,9 @@ mod tests {
         fn drop(&mut self) {
             STATIC_NAV.store(false, Ordering::Release);
             TRUE_HEADING_AUTHORITATIVE.store(false, Ordering::Release);
+            *LAST_EXTERNAL_POSITION
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = None;
             set_heading_true(None, "test-reset");
             set_heading_magnetic(None, "test-reset");
             set_position(None, None, "test-reset");
@@ -2611,6 +2645,52 @@ mod tests {
     const STATIC_LAT: f64 = 52.0;
     const STATIC_LON: f64 = 4.0;
     const STATIC_HEADING: f64 = 2.1537;
+
+    /// The emulator moves its own boat only while nothing else says where
+    /// the vessel is; its own writes must not count as such a source.
+    #[test]
+    fn only_a_source_other_than_the_emulator_is_followed() {
+        let _globals = nav_globals();
+
+        set_position(Some(53.2), Some(5.3), EMULATOR_SOURCE);
+        set_heading_true(Some(1.0), EMULATOR_SOURCE);
+        assert_eq!(external_own_ship(), None);
+
+        set_position(Some(53.19), Some(5.33), "signalk");
+        set_heading_true(Some(5.18), "signalk");
+        assert_eq!(
+            external_own_ship(),
+            Some((GeoPosition::new(53.19, 5.33), Some(5.18)))
+        );
+    }
+
+    /// Once the followed source disconnects, the emulator moves its boat
+    /// again straight away, from where the source left it.
+    #[test]
+    fn a_disconnected_source_is_no_longer_followed() {
+        let _globals = nav_globals();
+        set_position(Some(53.19), Some(5.33), "signalk");
+
+        clear_own_ship_nav();
+        set_position(Some(53.19), Some(5.33), EMULATOR_SOURCE);
+
+        assert_eq!(external_own_ship(), None);
+    }
+
+    /// A source that sends a position but no heading still steers the
+    /// emulator, by its course over ground.
+    #[test]
+    fn a_followed_source_without_heading_gives_its_course() {
+        let _globals = nav_globals();
+
+        set_position(Some(53.19), Some(5.33), "nmea0183");
+        set_cog(Some(2.0));
+
+        assert_eq!(
+            external_own_ship(),
+            Some((GeoPosition::new(53.19, 5.33), Some(2.0)))
+        );
+    }
 
     /// The whole point of `--static-position`: an upstream that disagrees is
     /// wrong, and a fixed installation stays where it was put.

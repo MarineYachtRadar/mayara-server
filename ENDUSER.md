@@ -85,6 +85,9 @@ mayara-server --emulator
 ```
 
 This simulates a radar with moving targets so you can explore the interface.
+When mayara also gets the boat's position from Signal K or NMEA 0183, the
+emulated radar sits where that source puts the boat; otherwise it sails a boat
+of its own.
 
 ### Common options
 
