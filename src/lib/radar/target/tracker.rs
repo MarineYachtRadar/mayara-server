@@ -3,7 +3,7 @@
 //! This module tracks detected blobs across radar sweeps, maintaining
 //! active (confirmed) and acquiring (potential) target lists.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::f64::consts::{FRAC_PI_2, TAU};
 
 use super::motion::{ImmMotionModel, MotionModel};
@@ -368,7 +368,9 @@ struct TrackerStats {
 /// Target tracker state
 pub struct TargetTracker {
     /// Active targets (including those in Acquiring status)
-    active_targets: HashMap<u64, ActiveTarget>,
+    /// By id, which grows with age: the passes that pick one of two near
+    /// duplicates walk them oldest first, the same way on every run.
+    active_targets: BTreeMap<u64, ActiveTarget>,
     /// Next target ID number
     next_id: u64,
     /// ID base for this tracker (0 for merged, 1000000 for radar 1, 2000000 for radar 2, etc.)
@@ -385,7 +387,7 @@ impl TargetTracker {
     /// Create a new tracker for merged mode
     pub fn new_merged() -> Self {
         TargetTracker {
-            active_targets: HashMap::new(),
+            active_targets: BTreeMap::new(),
             next_id: 1,
             id_base: 0,
             max_id_offset: RADAR_ID_MULTIPLIER - 1,
@@ -397,7 +399,7 @@ impl TargetTracker {
     /// Create a new tracker for per-radar mode
     pub fn new_per_radar(radar_index: usize) -> Self {
         TargetTracker {
-            active_targets: HashMap::new(),
+            active_targets: BTreeMap::new(),
             next_id: 1,
             id_base: (radar_index as u64) * RADAR_ID_MULTIPLIER,
             max_id_offset: RADAR_ID_MULTIPLIER - 1,
