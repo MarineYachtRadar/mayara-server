@@ -435,13 +435,23 @@ fn compare_to_baseline(scores: &BTreeMap<String, (f64, bool)>) {
     }
     let baseline: BTreeMap<String, f64> =
         serde_json::from_str(&std::fs::read_to_string(&path).expect("baseline")).unwrap();
+    let unrecorded: Vec<_> = scores
+        .keys()
+        .filter(|k| !baseline.contains_key(*k))
+        .collect();
+    let dropped: Vec<_> = baseline
+        .keys()
+        .filter(|k| !scores.contains_key(*k))
+        .collect();
+    assert!(
+        unrecorded.is_empty() && dropped.is_empty(),
+        "scores missing from {BASELINE}: {unrecorded:?}; baseline scores no longer \
+         measured: {dropped:?}; run with UPDATE_ARPA_BASELINE=1 and commit {BASELINE}"
+    );
     let mut worse = Vec::new();
     let mut better = Vec::new();
     for (name, (value, higher_is_better)) in scores {
-        let Some(&base) = baseline.get(name) else {
-            eprintln!("{name:32} {value:9.2}  (no baseline)");
-            continue;
-        };
+        let base = baseline[name];
         let regression = if *higher_is_better {
             base - value
         } else {
