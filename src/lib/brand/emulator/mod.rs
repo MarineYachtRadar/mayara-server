@@ -13,6 +13,7 @@ use crate::radar::{
 use crate::{Brand, Cli};
 
 mod command;
+mod land;
 mod report;
 mod settings;
 

@@ -60,6 +60,7 @@ Command Line Options
 | `-b, --brand <BRAND>` | Limit to a specific radar brand: `furuno`, `garmin`, `koden`, `navico`, `onwa`, `raymarine`, `emulator`, `playback` |
 | `--multiple-radar`    | Keep searching for additional radars after finding one                                 |
 | `--emulator`          | Use built-in radar emulator instead of real radar discovery                            |
+| `--emulator-land <FILE>` | GeoJSON land areas (Polygon/MultiPolygon) the emulator paints around the boat, e.g. a chart's land layer |
 
 ### Target Tracking
 

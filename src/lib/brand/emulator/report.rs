@@ -1,4 +1,4 @@
-use std::f64::consts::PI;
+use std::f64::consts::{PI, TAU};
 use std::time::Duration;
 
 use num_traits::FromPrimitive;
@@ -6,6 +6,7 @@ use tokio::time::{Instant, interval};
 use tokio_graceful_shutdown::SubsystemHandle;
 
 use super::command::Command;
+use super::land::{Coast, LAND_DEPTH};
 use super::world::{Echo, EmulatorWorld, TURN_RADIUS, TurnProgress};
 use super::{
     EMULATOR_RANGES, EMULATOR_SPOKE_LEN, EMULATOR_SPOKES, get_initial_position, spoke_step,
@@ -37,6 +38,8 @@ const DEG_TO_RAD: f64 = PI / 180.0;
 /// over that much of the picture to either side, as on a real radar, so a
 /// small boat far out shows as an arc rather than a speck or not at all.
 const HALF_BEAM_WIDTH: f64 = 1.0 * DEG_TO_RAD;
+/// Land returns strongly, but less than a ship's steel
+const LAND_INTENSITY: u8 = 12;
 /// An echo is never shorter than this many pixels along a spoke, as a
 /// radar pulse has a length of its own.
 const MIN_ECHO_PIXELS: f64 = 2.0;
@@ -49,6 +52,7 @@ pub(crate) struct EmulatorReportReceiver {
     world: EmulatorWorld,
     /// Where the test scenario in `world` was built around
     world_origin: GeoPosition,
+    coast: CoastView,
     boat_position: GeoPosition,
     boat_heading: f64,  // degrees
     boat_speed: f64,    // knots
@@ -92,12 +96,23 @@ impl EmulatorReportReceiver {
 
         // Create the world simulation
         let world = EmulatorWorld::new(initial_pos);
+        let coast = args
+            .emulator_land
+            .as_deref()
+            .and_then(|path| match Coast::load(path) {
+                Ok(coast) => Some(coast),
+                Err(e) => {
+                    log::error!("Emulator: no land: {e}");
+                    None
+                }
+            });
 
         EmulatorReportReceiver {
             common,
             command_sender,
             world,
             world_origin: initial_pos,
+            coast: CoastView::new(coast),
             boat_position: initial_pos,
             boat_heading: heading,
             boat_speed: speed,
@@ -141,6 +156,7 @@ impl EmulatorReportReceiver {
         // A source that already reports the boat places it before the
         // emulator publishes a position of its own
         self.follow_own_ship();
+        self.refresh_coast();
         self.update_navdata();
 
         loop {
@@ -153,10 +169,12 @@ impl EmulatorReportReceiver {
                 _ = spoke_interval.tick() => {
                     // The emulator is its own radar, so it is never silent.
                     self.common.info.mark_input();
-                    if self.transmitting {
-                        self.generate_spoke_batch();
-                    }
+                    let rotation_ended = self.transmitting && self.generate_spoke_batch();
                     self.update_boat_position();
+                    // From where the boat is now, as the next rotation sees it
+                    if rotation_ended {
+                        self.refresh_coast();
+                    }
                     self.update_navdata();
                 }
 
@@ -179,6 +197,8 @@ impl EmulatorReportReceiver {
                         Ok(Power::Transmit) => {
                             log::info!("{}: Starting transmission", self.common.key);
                             self.transmitting = true;
+                            // The boat moved on while no rotation refreshed it
+                            self.refresh_coast();
                             self.common
                                 .set_value(&ControlId::Power, Power::Transmit as i32 as f64);
                         }
@@ -206,6 +226,7 @@ impl EmulatorReportReceiver {
                     log::debug!("{}: Range changed to {} m", self.common.key, range);
                     self.current_range = range;
                     self.common.set_value(&ControlId::Range, range as f64);
+                    self.refresh_coast();
                 }
             }
             ControlId::Doppler => {
@@ -403,7 +424,8 @@ impl EmulatorReportReceiver {
         );
     }
 
-    fn generate_spoke_batch(&mut self) {
+    /// Returns whether the batch finished a rotation.
+    fn generate_spoke_batch(&mut self) -> bool {
         self.common.new_spoke_message();
 
         // Update the world's local coordinate cache once per batch
@@ -419,6 +441,7 @@ impl EmulatorReportReceiver {
             self.doppler_threshold,
         );
 
+        let mut rotation_ended = false;
         for _ in 0..SPOKES_PER_BATCH {
             let spoke_data = self.generate_spoke(self.current_spoke, &doppler);
 
@@ -437,6 +460,7 @@ impl EmulatorReportReceiver {
             if new_spoke < self.current_spoke {
                 // Rotation wrapped - broadcast heading to ensure GUI receives it
                 self.rotation_count += 1;
+                rotation_ended = true;
                 self.refresh_ais();
                 if !self.following {
                     crate::navdata::broadcast_heading(crate::navdata::EMULATOR_SOURCE);
@@ -446,6 +470,7 @@ impl EmulatorReportReceiver {
         }
 
         self.common.send_spoke_message();
+        rotation_ended
     }
 
     fn generate_spoke(&self, spoke_angle: u16, doppler: &DopplerColors) -> GenericSpoke {
@@ -460,13 +485,15 @@ impl EmulatorReportReceiver {
 
         let meters_per_pixel = meters_per_pixel(self.current_range);
         let boats = self.world.boats_on_spoke(sin_b, cos_b, HALF_BEAM_WIDTH);
+        let land = self.coast.on(world_bearing_rad);
 
         // Generate spoke data directly as bytes (one byte per pixel, 4-bit intensity)
         let mut data: Vec<u8> = Vec::with_capacity(EMULATOR_SPOKE_LEN);
 
         for pixel in 0..EMULATOR_SPOKE_LEN {
             let distance = pixel as f64 * meters_per_pixel;
-            data.push(doppler.pixel(self.world.echo_fast(sin_b, cos_b, distance, &boats)));
+            let echo = self.world.echo_fast(sin_b, cos_b, distance, &boats);
+            data.push(doppler.pixel(with_land(echo, distance, land)));
         }
 
         data
@@ -478,6 +505,63 @@ impl EmulatorReportReceiver {
         if let Some(store) = crate::navdata::get_ais_store() {
             self.world.set_ais_vessels(&store.get_all_active());
         }
+    }
+
+    /// Work out where the spokes cross land from where the boat now is.
+    fn refresh_coast(&mut self) {
+        self.coast
+            .refresh(&self.boat_position, spoke_range(self.current_range) as f64);
+    }
+}
+
+/// The echo at `distance` meters along a spoke whose stretches over land
+/// are `land`: the land's return, unless `echo` is stronger, as a ship
+/// alongside a quay is.
+fn with_land(echo: Echo, distance: f64, land: &[(f64, f64)]) -> Echo {
+    let on_land = land
+        .iter()
+        .any(|&(enter, leave)| distance >= enter && distance < leave.min(enter + LAND_DEPTH));
+    if on_land && echo.intensity < LAND_INTENSITY {
+        Echo {
+            intensity: LAND_INTENSITY,
+            closing_speed: 0.0,
+        }
+    } else {
+        echo
+    }
+}
+
+/// Land from `--emulator-land`, and where each spoke, by true bearing, lies
+/// over it as last seen from the boat
+struct CoastView {
+    coast: Option<Coast>,
+    spokes: Vec<Vec<(f64, f64)>>,
+}
+
+impl CoastView {
+    fn new(coast: Option<Coast>) -> Self {
+        CoastView {
+            coast,
+            spokes: Vec::new(),
+        }
+    }
+
+    /// Work out where the spokes, reaching `reach` meters, cross land from
+    /// the boat at `boat`.
+    fn refresh(&mut self, boat: &GeoPosition, reach: f64) {
+        if let Some(coast) = &self.coast {
+            self.spokes = coast.spokes(boat, EMULATOR_SPOKES, reach);
+        }
+    }
+
+    /// The land a spoke at this true bearing, in radians, passes over.
+    fn on(&self, bearing: f64) -> &[(f64, f64)] {
+        if self.spokes.is_empty() {
+            return &[];
+        }
+        let spoke = (bearing.rem_euclid(TAU) / TAU * EMULATOR_SPOKES as f64).round() as usize
+            % EMULATOR_SPOKES;
+        &self.spokes[spoke]
     }
 }
 
@@ -576,6 +660,71 @@ impl DopplerColors {
 mod tests {
     use super::*;
 
+    /// A coast view whose spoke `i` lies over land from `i` meters on, so a
+    /// lookup shows which spoke it picked.
+    fn numbered_spokes() -> CoastView {
+        CoastView {
+            coast: None,
+            spokes: (0..EMULATOR_SPOKES)
+                .map(|i| vec![(i as f64, i as f64 + 1.0)])
+                .collect(),
+        }
+    }
+
+    fn spoke_picked(view: &CoastView, bearing: f64) -> usize {
+        view.on(bearing)[0].0 as usize
+    }
+
+    /// Bearings pick the nearest spoke, and a bearing a whole turn on, or
+    /// just short of one, is the same as north.
+    #[test]
+    fn a_bearing_picks_the_nearest_spoke() {
+        let view = numbered_spokes();
+        let step = TAU / EMULATOR_SPOKES as f64;
+
+        assert_eq!(spoke_picked(&view, 0.0), 0);
+        assert_eq!(spoke_picked(&view, PI / 2.0), EMULATOR_SPOKES / 4);
+        assert_eq!(spoke_picked(&view, TAU - step), EMULATOR_SPOKES - 1);
+        assert_eq!(spoke_picked(&view, TAU - step / 10.0), 0);
+        assert_eq!(spoke_picked(&view, TAU + step), 1);
+        assert_eq!(spoke_picked(&view, -step), EMULATOR_SPOKES - 1);
+    }
+
+    /// Without `--emulator-land`, or before the first refresh, no spoke
+    /// passes over land, and a refresh leaves it so.
+    #[test]
+    fn without_land_no_spoke_passes_over_any() {
+        let mut view = CoastView::new(None);
+        assert!(view.on(0.0).is_empty());
+
+        view.refresh(&GeoPosition::new(53.2, 5.3), 3000.0);
+        assert!(view.on(1.0).is_empty());
+    }
+
+    /// A refresh works the spokes out from where the boat now is: land
+    /// north of the boat shows ahead on the north spoke and behind on the
+    /// south one once the boat has sailed past it.
+    #[test]
+    fn a_refresh_follows_the_boat() {
+        let land = serde_json::json!({
+            "type": "Polygon",
+            "coordinates": [[[5.29, 53.21], [5.31, 53.21], [5.31, 53.22], [5.29, 53.22], [5.29, 53.21]]]
+        });
+        let path =
+            std::env::temp_dir().join(format!("mayara-coast-{}.geojson", std::process::id()));
+        std::fs::write(&path, land.to_string()).unwrap();
+        let mut view = CoastView::new(Some(Coast::load(&path).unwrap()));
+        std::fs::remove_file(&path).unwrap();
+
+        view.refresh(&GeoPosition::new(53.2, 5.3), 3000.0);
+        assert!(!view.on(0.0).is_empty(), "land ahead to the north");
+        assert!(view.on(PI).is_empty());
+
+        view.refresh(&GeoPosition::new(53.23, 5.3), 3000.0);
+        assert!(view.on(0.0).is_empty());
+        assert!(!view.on(PI).is_empty(), "land behind to the south");
+    }
+
     /// Spokes reach half as far again as the range, rounded down to whole
     /// meters, and the pixels span exactly that reach.
     #[test]
@@ -660,6 +809,51 @@ mod tests {
             intensity: 14,
             closing_speed,
         }
+    }
+
+    const NO_ECHO: Echo = Echo {
+        intensity: 0,
+        closing_speed: 0.0,
+    };
+
+    /// Land returns from where the beam reaches it, for `LAND_DEPTH` meters
+    /// or to where it leaves the land, whichever comes first.
+    #[test]
+    fn land_returns_from_the_shore_to_its_depth() {
+        let land = [(1000.0, 5000.0), (8000.0, 8100.0)];
+
+        assert_eq!(with_land(NO_ECHO, 999.0, &land).intensity, 0);
+        assert_eq!(with_land(NO_ECHO, 1000.0, &land).intensity, LAND_INTENSITY);
+        assert_eq!(
+            with_land(NO_ECHO, 1000.0 + LAND_DEPTH - 1.0, &land).intensity,
+            LAND_INTENSITY
+        );
+        assert_eq!(with_land(NO_ECHO, 1000.0 + LAND_DEPTH, &land).intensity, 0);
+        assert_eq!(with_land(NO_ECHO, 8050.0, &land).intensity, LAND_INTENSITY);
+        assert_eq!(with_land(NO_ECHO, 8100.0, &land).intensity, 0);
+    }
+
+    /// Off land, and on a spoke without any, the echo passes unchanged.
+    #[test]
+    fn an_echo_off_land_passes_unchanged() {
+        assert_eq!(with_land(echo(2.0), 500.0, &[]), echo(2.0));
+        assert_eq!(with_land(echo(2.0), 500.0, &[(1000.0, 2000.0)]), echo(2.0));
+    }
+
+    /// A ship stronger than the land shows on it, Doppler colour and all;
+    /// a weaker one disappears into the land's return.
+    #[test]
+    fn a_ship_stronger_than_the_land_shows_on_it() {
+        let land = [(1000.0, 2000.0)];
+        let both = colors(DopplerMode::Both);
+
+        assert_eq!(both.pixel(with_land(echo(2.0), 1100.0, &land)), 40);
+        assert_eq!(both.pixel(with_land(echo(0.0), 1100.0, &land)), 14);
+        let weak = Echo {
+            intensity: LAND_INTENSITY - 1,
+            closing_speed: 2.0,
+        };
+        assert_eq!(both.pixel(with_land(weak, 1100.0, &land)), LAND_INTENSITY);
     }
 
     fn colors(mode: DopplerMode) -> DopplerColors {

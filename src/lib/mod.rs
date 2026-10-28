@@ -219,6 +219,12 @@ pub struct Cli {
     #[arg(long, default_value_t = false, requires = "emulator")]
     pub emulator_sparse_spokes: bool,
 
+    /// GeoJSON file with the land around the emulator's boat, as Polygon or
+    /// MultiPolygon features: the emulator paints its coast wherever the
+    /// boat is
+    #[arg(long, requires = "emulator")]
+    pub emulator_land: Option<std::path::PathBuf>,
+
     /// Merge targets from multiple radars into a single shared target list
     #[arg(long, default_value_t = false)]
     pub merge_targets: bool,
