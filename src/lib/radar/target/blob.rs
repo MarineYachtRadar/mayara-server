@@ -986,25 +986,28 @@ mod tests {
         assert!(!completed[0].has_doppler);
     }
 
-    /// A radar reports its Doppler only after it has been found, so the
-    /// detector built before then learns the bands from the new legend: a
+    /// A radar reports its Doppler only after it has been found, so a
+    /// detector already at work learns the bands from the new legend: a
     /// HALO's Doppler echoes were never Doppler blobs while it did not.
     #[test]
-    fn doppler_bands_learnt_after_the_detector_was_built_count() {
-        let mut detector = BlobDetector::new(2048, STRONG_RETURN);
-        detector.set_doppler(Some((16, 1)), Some((17, 1)));
-
-        let mut completed = Vec::new();
-        for angle in 100..112 {
-            let mut spoke = spoke_with(angle, 512, &[]);
-            if angle < 110 {
-                spoke.data[300..306].fill(17);
+    fn doppler_bands_learnt_while_running_count() {
+        let echo = |detector: &mut BlobDetector, first_angle: u16| {
+            let mut completed = Vec::new();
+            for angle in first_angle..first_angle + 12 {
+                let mut spoke = spoke_with(angle, 512, &[]);
+                if angle < first_angle + 10 {
+                    spoke.data[300..306].fill(17);
+                }
+                completed.extend(detector.process_spoke(&spoke));
             }
-            completed.extend(detector.process_spoke(&spoke));
-        }
+            assert_eq!(completed.len(), 1);
+            completed[0].has_doppler
+        };
+        let mut detector = BlobDetector::new(2048, STRONG_RETURN);
 
-        assert_eq!(completed.len(), 1);
-        assert!(completed[0].has_doppler);
+        assert!(!echo(&mut detector, 100), "no bands known yet");
+        detector.set_doppler(Some((16, 1)), Some((17, 1)));
+        assert!(echo(&mut detector, 200), "bands learnt from the radar");
     }
 
     /// Spokes a whole revolution apart, or far enough apart that the radar

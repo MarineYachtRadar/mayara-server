@@ -68,7 +68,8 @@ pub struct SpokeContext {
     pub angle: u16,
     /// Maximum target speed in m/s (from ArpaDetectMaxSpeed: 0=25kn, 1=40kn, 2=50kn)
     pub max_target_speed_ms: f64,
-    /// Whether DopplerAutoTrack is enabled (track approaching Doppler targets everywhere)
+    /// Whether DopplerAutoTrack is enabled (track approaching and receding
+    /// Doppler targets everywhere)
     pub doppler_auto_track: bool,
 }
 
