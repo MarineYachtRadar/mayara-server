@@ -1,6 +1,7 @@
 export { PPI };
 
 import { SpokeProcessorFactory } from "./spoke_processor.js";
+import { isDangerous, bearingDistance, cpaTcpa, motion } from "./target-summary.js";
 
 // Fraction of the shorter canvas axis used as the outer radar range ring radius.
 // The PPI is a circle inscribed in the canvas so the full set range is visible
@@ -18,6 +19,12 @@ const RANGE_UNITS_KILOYARDS = 4;
 // A statute mile fraction within this many miles of a distance names it.
 const STATUTE_FRACTION_TOLERANCE = 0.001;
 const STATUTE_FRACTION_MAX_DENOMINATOR = 128;
+
+// When target data boxes cover the canvas edges the PPI moves into the free
+// band between them, shrinking to fit — but never below this fraction of its
+// full size: a radar picture that is too small costs more than letting the
+// circle's empty corners slide under a box.
+const MIN_INSET_RADIUS_FRACTION = 0.8;
 
 // Exponential-smoothing factor for the radar-derived heading. The bearing
 // field on each spoke is quantized, so the per-spoke `bearing - angle` heading
@@ -175,6 +182,8 @@ class PPI {
     this.center_x = 0;
     this.center_y = 0;
     this.beam_length = 0;
+    // Canvas width (px) covered by target data boxes at each side
+    this.sideInsets = { left: 0, right: 0 };
 
     // Radar state
     this.range = 0;
@@ -271,6 +280,13 @@ class PPI {
     // AIS vessels: Map of mmsi -> vessel data
     this.aisVessels = new Map();
     this.showAis = true; // Default to showing AIS vessels
+
+    // Own-ship course (rad true) and speed (m/s), for AIS CPA/TCPA
+    this.ownShipCourse = null;
+    this.ownShipSpeed = null;
+
+    // Called when anything the target data boxes show may have changed
+    this.onTrackedChange = null;
 
     // Target acquisition mode
     this.acquireTargetMode = false;
@@ -380,6 +396,7 @@ class PPI {
   setRangeUnits(rangeUnits) {
     this.rangeUnits = rangeUnits;
     this.redrawCanvas();
+    this.onTrackedChange?.();
   }
 
   setRange(range) {
@@ -393,6 +410,8 @@ class PPI {
       this.renderer.setRangeScale(this.range, this.#imageRange() || this.range);
     }
     this.redrawCanvas();
+    // The boxes show distances in the range's units
+    this.onTrackedChange?.();
   }
 
   // The distance at the outer edge of the image. A spoke's range is that of
@@ -749,6 +768,7 @@ class PPI {
   updateTarget(id, data) {
     this.targets.set(id, data);
     this.#drawOverlay();
+    this.onTrackedChange?.();
   }
 
   /**
@@ -758,6 +778,7 @@ class PPI {
   removeTarget(id) {
     this.targets.delete(id);
     this.#drawOverlay();
+    this.onTrackedChange?.();
   }
 
   /**
@@ -768,6 +789,7 @@ class PPI {
   updateAisVessel(mmsi, data) {
     this.aisVessels.set(mmsi, data);
     this.#drawOverlay();
+    this.onTrackedChange?.();
   }
 
   /**
@@ -777,6 +799,7 @@ class PPI {
   removeAisVessel(mmsi) {
     this.aisVessels.delete(mmsi);
     this.#drawOverlay();
+    this.onTrackedChange?.();
   }
 
   /**
@@ -786,6 +809,7 @@ class PPI {
   setShowAis(show) {
     this.showAis = show;
     this.#drawOverlay();
+    this.onTrackedChange?.();
   }
 
   /**
@@ -794,6 +818,7 @@ class PPI {
   clearAisVessels() {
     this.aisVessels.clear();
     this.#drawOverlay();
+    this.onTrackedChange?.();
   }
 
   setLegend(legend) {
@@ -1138,9 +1163,10 @@ class PPI {
 
     this.width = w;
     this.height = h;
-    this.center_x = w / 2;
+    const { centerX, halfSize } = this.#ppiPlacement(w, h);
+    this.center_x = centerX;
     this.center_y = h / 2;
-    this.beam_length = Math.trunc(Math.min(this.center_x, this.center_y) * RANGE_SCALE * this.displayZoom);
+    this.beam_length = Math.trunc(halfSize * RANGE_SCALE * this.displayZoom);
 
     // Draw overlay
     this.#drawOverlay();
@@ -1150,7 +1176,7 @@ class PPI {
     // not by rotating the whole (mixed-age) image, which drifted as the
     // boat yawed between redraws.
     if (this.renderer && this.renderer.resize) {
-      this.renderer.resize(w, h, this.beam_length, 0);
+      this.renderer.resize(w, h, this.beam_length, 0, this.center_x - w / 2, this.center_y - h / 2);
       // WebGL's transform update clears its canvas without redrawing
       // (WebGPU keeps the previous frame) — re-upload the current raster
       // so a redraw never leaves a blank or stale spoke image behind,
@@ -1163,6 +1189,100 @@ class PPI {
         );
       }
     }
+  }
+
+  // Centre the PPI in the band the target data boxes leave free, as large
+  // as that band allows within MIN_INSET_RADIUS_FRACTION, and keep the
+  // circle on the canvas. Without boxes this is the canvas centre.
+  #ppiPlacement(w, h) {
+    const { left, right } = this.sideInsets;
+    const fullHalf = Math.min(w, h) / 2;
+    const freeWidth = Math.max(0, w - left - right);
+    const halfSize = Math.max(
+      Math.min(freeWidth, h) / 2,
+      fullHalf * MIN_INSET_RADIUS_FRACTION
+    );
+    const centerX = Math.min(Math.max(left + freeWidth / 2, halfSize), w - halfSize);
+    return { centerX, halfSize };
+  }
+
+  /**
+   * Tell the PPI how much of the canvas the target data boxes cover at
+   * each side, so it can move clear of them.
+   * @param {number} left - px
+   * @param {number} right - px
+   */
+  setSideInsets(left, right) {
+    if (this.sideInsets.left === left && this.sideInsets.right === right) return;
+    this.sideInsets = { left, right };
+    this.redrawCanvas();
+  }
+
+  /**
+   * A distance in the units of the current range, as the VRM readout shows it
+   * @param {number} meters
+   */
+  formatDistance(meters) {
+    return formatVrmDistance(displayUnits(this.rangeUnits, this.range), meters);
+  }
+
+  /**
+   * ARPA targets and AIS vessels as the data boxes show them: true bearing
+   * (rad), range (m), course (rad true), speed (m/s) and CPA (m) / TCPA (s)
+   * where known.
+   */
+  getTrackedTargets() {
+    const arpa = [];
+    for (const [id, target] of this.targets) {
+      if (!target.position) continue;
+      // Only a tracked target's CPA is a danger, as #drawTarget colours it
+      const danger = target.status === "tracking" ? target.danger : null;
+      arpa.push({
+        label: `T${id}`,
+        status: target.status,
+        bearing: target.position.bearing,
+        range: target.position.distance,
+        course: target.motion?.course ?? null,
+        speed: target.motion?.speed ?? null,
+        cpa: danger?.cpa ?? null,
+        tcpa: danger?.tcpa ?? null,
+      });
+    }
+
+    const ais = [];
+    if (this.showAis) {
+      for (const [mmsi, vessel] of this.aisVessels) {
+        const rel = this.#aisRelative(vessel);
+        if (!rel) continue;
+        const course = vessel.cog ?? null;
+        const speed = vessel.sog ?? null;
+        const theirs = motion(course, speed);
+        const own = motion(this.ownShipCourse, this.ownShipSpeed);
+        const closest = theirs && own ? cpaTcpa(rel.bearing, rel.distance, theirs, own) : null;
+        ais.push({
+          label: vessel.name || String(mmsi),
+          bearing: rel.bearing,
+          range: rel.distance,
+          course,
+          speed,
+          cpa: closest?.cpa ?? null,
+          tcpa: closest?.tcpa ?? null,
+        });
+      }
+    }
+    return { arpa, ais };
+  }
+
+  // Bearing (rad true) and distance (m) of an AIS vessel from own ship,
+  // or null while either position is unknown.
+  #aisRelative(vessel) {
+    if (!vessel.position || this.ownShipLat == null || this.ownShipLon == null) return null;
+    return bearingDistance(
+      this.ownShipLat,
+      this.ownShipLon,
+      vessel.position.latitude,
+      vessel.position.longitude
+    );
   }
 
   // ============================================================
@@ -1551,17 +1671,11 @@ class PPI {
     const x = this.center_x + pixelDist * Math.sin(adjustedBearing);
     const y = this.center_y - pixelDist * Math.cos(adjustedBearing);
 
-    // Determine color based on status and danger
-    // Dangerous: CPA < 0.5 NM (926m) and TCPA < 10 min (600s)
-    const isDangerous =
-      target.danger &&
-      target.danger.cpa < 926 &&
-      target.danger.tcpa > 0 &&
-      target.danger.tcpa < 600;
+    const dangerous = target.danger && isDangerous(target.danger.cpa, target.danger.tcpa);
 
     let color;
     let fillColor;
-    if (isDangerous && target.status === "tracking") {
+    if (dangerous && target.status === "tracking") {
       color = "#ff0000"; // Red for dangerous
       fillColor = "rgba(255, 0, 0, 0.3)";
     } else {
@@ -1687,7 +1801,6 @@ class PPI {
   }
 
   #drawAisVessel(ctx, mmsi, vessel, pixelsPerMeter) {
-    if (!vessel.position) return;
     // Don't draw vessels until we have a heading reference. An AIS target
     // and its own radar echo are the same vessel, so the symbol must land
     // on the echo — that means rotating the true geographic bearing into
@@ -1699,43 +1812,9 @@ class PPI {
     const heading = this.#displayHeadingRad();
     if (heading === null) return;
 
-    // Calculate screen position from lat/lon
-    // We need own-ship position to calculate relative position
-    // For now, we use bearing/distance if provided, or calculate from lat/lon
-    const lat = vessel.position.latitude;
-    const lon = vessel.position.longitude;
-
-    // Get own-ship position from the radar (stored in trueHeading context)
-    // If no position available, we can't draw AIS vessels
-    // TODO: Get own-ship position from navigation data
-    // For now, assume vessels come with relative bearing/distance or we skip
-
-    // Calculate distance and bearing from own ship
-    // Since AIS vessels come from Signal K which has absolute positions,
-    // we need own-ship position. For now, let's use a simple approach:
-    // The server should send position relative to own-ship, or we calculate here.
-
-    // Assuming we have own-ship lat/lon (needs to be added to PPI state)
-    if (!this.ownShipLat || !this.ownShipLon) return;
-
-    // Haversine formula for distance and bearing
-    const R = 6371000; // Earth radius in meters
-    const lat1 = this.ownShipLat * Math.PI / 180;
-    const lat2 = lat * Math.PI / 180;
-    const dLat = (lat - this.ownShipLat) * Math.PI / 180;
-    const dLon = (lon - this.ownShipLon) * Math.PI / 180;
-
-    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-              Math.cos(lat1) * Math.cos(lat2) *
-              Math.sin(dLon / 2) * Math.sin(dLon / 2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    const distance = R * c;
-
-    // Calculate bearing from own ship to vessel
-    const y = Math.sin(dLon) * Math.cos(lat2);
-    const x = Math.cos(lat1) * Math.sin(lat2) -
-              Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
-    const bearingRad = Math.atan2(y, x); // Bearing in radians, 0 = North
+    const rel = this.#aisRelative(vessel);
+    if (!rel) return;
+    const { bearing: bearingRad, distance } = rel;
 
     const pixelDist = distance * pixelsPerMeter;
 
@@ -1837,6 +1916,17 @@ class PPI {
   setOwnShipPosition(lat, lon) {
     this.ownShipLat = lat;
     this.ownShipLon = lon;
+    this.onTrackedChange?.();
+  }
+
+  /**
+   * Set own-ship course over ground (rad true) and speed (m/s), for AIS
+   * CPA/TCPA. Either may be null while unknown.
+   */
+  setOwnShipMotion(course, speed) {
+    this.ownShipCourse = course;
+    this.ownShipSpeed = speed;
+    this.onTrackedChange?.();
   }
 
   #drawCompassRose(ctx) {

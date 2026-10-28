@@ -37,6 +37,7 @@ import "./vendor/protobuf.min.js";
 import { WebGPURenderer } from "./render_webgpu.js";
 import { WebGLRenderer } from "./render_webgl.js";
 import { PPI } from "./ppi.js";
+import { TargetDataBoxes } from "./data-boxes.js";
 import { startTourIfFirstVisit } from "./tour.js";
 import "./app-dock.js";
 
@@ -94,6 +95,9 @@ var lastHeadingTime = 0; // Timestamp of last heading update
 var lastRadarLat = null;
 var lastRadarLon = null;
 var lastRadarHeading = null;
+// Own-ship course over ground (rad true) and speed (m/s); null until known
+var ownShipCog = null;
+var ownShipSog = null;
 var isStationary = false; // Set from server config
 
 // AIS overlay enabled state (client-only toggle, persists in localStorage)
@@ -289,6 +293,9 @@ window.onload = async function () {
   // Create range lozenge
   createRangeLozenge();
 
+  // ARPA (right) and AIS (left) data boxes for the most interesting targets
+  new TargetDataBoxes(ppi, document.querySelector(".myr_ppi"));
+
   // Walk a first-time visitor around the controls just created.
   startTourIfFirstVisit();
 
@@ -351,6 +358,9 @@ function subscribeToHeading() {
         // when the radar is transmitting and can disagree with the
         // chartplotter GPS, causing visible target jumps.
         { path: "navigation.position", period: 1000 },
+        // Own-ship motion gives the AIS data boxes their CPA/TCPA
+        { path: "navigation.courseOverGroundTrue", period: 1000 },
+        { path: "navigation.speedOverGround", period: 1000 },
       ],
     };
     headingSocket.send(JSON.stringify(subscription));
@@ -392,6 +402,12 @@ function subscribeToHeading() {
                 }
                 refreshPositionBoxHeading();
                 updateHeadingDisplayToggle();
+              } else if (value.path === "navigation.courseOverGroundTrue") {
+                ownShipCog = value.value;
+                ppi?.setOwnShipMotion(ownShipCog, ownShipSog);
+              } else if (value.path === "navigation.speedOverGround") {
+                ownShipSog = value.value;
+                ppi?.setOwnShipMotion(ownShipCog, ownShipSog);
               } else if (
                 value.path === "navigation.position" &&
                 value.value?.latitude != null &&
@@ -1091,6 +1107,12 @@ function onHeadingLost() {
   haveMagneticHeading = false;
   magneticHeading = 0;
   updateHeadingDisplayToggle();
+
+  // Course and speed come over the same socket; stale ones would give the
+  // AIS data boxes a CPA against a course the boat no longer sails.
+  ownShipCog = null;
+  ownShipSog = null;
+  ppi?.setOwnShipMotion(null, null);
 
   // The radar-derived heading may still be live (boats that feed heading
   // to the radar over N2K, with no Signal K heading at all). It is a
