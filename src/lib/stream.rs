@@ -1882,8 +1882,13 @@ mod build_tests {
         ]})))
         .unwrap();
 
-        assert!(subs.is_due_periodic("navigation.courseOverGroundTrue"));
-        assert!(subs.is_due_periodic("navigation.speedOverGround"));
+        for path in [
+            "navigation.courseOverGroundTrue",
+            "navigation.speedOverGround",
+        ] {
+            assert!(!subs.is_subscribed_path(path, false), "{path} on change");
+            assert!(subs.is_due_periodic(path), "{path} on the tick");
+        }
     }
 
     /// `minPeriod` lets a client on a slow link ask a busy boat to slow down.
