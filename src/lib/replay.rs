@@ -66,6 +66,9 @@ impl RadarSocket {
 pub(crate) struct ReplayPacket {
     pub data: Vec<u8>,
     pub from: SocketAddrV4,
+    /// When the packet was captured, since the Unix epoch.
+    #[cfg(feature = "pcap-replay")]
+    pub timestamp: std::time::Duration,
 }
 
 /// A replay receiver that can be used in place of a UDP socket.
@@ -80,6 +83,8 @@ impl ReplayReceiver {
     pub async fn recv_buf_from(&mut self, buf: &mut Vec<u8>) -> io::Result<(usize, SocketAddr)> {
         match self.rx.recv().await {
             Some(pkt) => {
+                #[cfg(feature = "pcap-replay")]
+                capture_clock::received(pkt.timestamp);
                 let len = pkt.data.len();
                 buf.extend_from_slice(&pkt.data);
                 Ok((len, SocketAddr::V4(pkt.from)))
@@ -88,6 +93,163 @@ impl ReplayReceiver {
                 io::ErrorKind::ConnectionReset,
                 "replay channel closed",
             )),
+        }
+    }
+}
+
+#[cfg(feature = "pcap-replay")]
+pub(crate) use capture_clock::capture_position;
+#[cfg(feature = "pcap-replay")]
+pub use capture_clock::{NavFix, capture_time_ms, release_replay, use_capture_clock};
+
+/// Replays a capture on its own clock rather than the wall clock.
+///
+/// A tracker measures speed as distance over spoke time, and spoke time is
+/// the wall clock, so a capture replayed faster than it was recorded makes
+/// every target appear to move that much faster. With the capture clock on,
+/// each spoke is stamped with the time its packet was captured, and own-ship
+/// position follows the voyage the capture was recorded on, so a replay at
+/// any speed tracks as the original did.
+#[cfg(feature = "pcap-replay")]
+mod capture_clock {
+    use std::cell::Cell;
+    use std::sync::OnceLock;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::time::Duration;
+
+    /// One own-ship fix of the voyage a capture was recorded on.
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    pub struct NavFix {
+        /// Milliseconds since the Unix epoch.
+        pub time_ms: u64,
+        pub lat: f64,
+        pub lon: f64,
+        /// Course over ground, radians true.
+        pub cog: f64,
+        /// Speed over ground, m/s.
+        pub sog: f64,
+    }
+
+    /// The voyage, in time order; set once the capture clock is on.
+    static VOYAGE: OnceLock<Vec<NavFix>> = OnceLock::new();
+
+    /// How much of the capture's start is replayed to discover the radars.
+    static DISCOVERY: OnceLock<Duration> = OnceLock::new();
+
+    /// Whether the caller has configured the radars and wants the capture.
+    static RELEASED: AtomicBool = AtomicBool::new(false);
+
+    /// When own-ship navigation was last moved along the voyage.
+    static NAV_SET_MS: AtomicU64 = AtomicU64::new(0);
+
+    /// Own ship moves less than a metre in this time at sailing speeds.
+    const NAV_STEP_MS: u64 = 100;
+
+    thread_local! {
+        /// Capture time of the packet this thread received last. Receivers
+        /// stamp a spoke synchronously after receiving its frame, so this is
+        /// the frame's own time.
+        static PACKET_TIME_MS: Cell<Option<u64>> = const { Cell::new(None) };
+    }
+
+    /// Stamps spokes with capture time and sails own ship along `voyage`,
+    /// which may be empty when the capture holds its own navigation.
+    ///
+    /// Until [`release_replay`], only the first `discovery` of the capture
+    /// plays, over and over: long enough for the radars to be found and to
+    /// report what they are, and short enough to hold no spoke, so the
+    /// caller can set their controls before any spoke is tracked. After it
+    /// the capture plays once, from the start, so the clock never runs
+    /// backwards while there are spokes.
+    pub fn use_capture_clock(voyage: Vec<NavFix>, discovery: Duration) {
+        let _ = VOYAGE.set(voyage);
+        let _ = DISCOVERY.set(discovery);
+    }
+
+    /// Lets the capture play, once the radars are set up.
+    pub fn release_replay() {
+        RELEASED.store(true, Ordering::Release);
+    }
+
+    /// The discovery window, when the capture clock is on.
+    pub(super) fn discovery() -> Option<Duration> {
+        DISCOVERY.get().copied()
+    }
+
+    pub(super) fn released() -> bool {
+        RELEASED.load(Ordering::Acquire)
+    }
+
+    /// The capture time of the packet being handled on this thread, when the
+    /// capture clock is on.
+    pub fn capture_time_ms() -> Option<u64> {
+        VOYAGE.get()?;
+        PACKET_TIME_MS.get()
+    }
+
+    /// Own ship when the packet being handled on this thread was captured.
+    pub(crate) fn capture_position() -> Option<(f64, f64)> {
+        let fix = fix_at(VOYAGE.get()?, PACKET_TIME_MS.get()?)?;
+        Some((fix.lat, fix.lon))
+    }
+
+    pub(super) fn received(timestamp: Duration) {
+        let Some(voyage) = VOYAGE.get() else {
+            return;
+        };
+        let now = timestamp.as_millis() as u64;
+        PACKET_TIME_MS.set(Some(now));
+        let last = NAV_SET_MS.load(Ordering::Relaxed);
+        if now.abs_diff(last) >= NAV_STEP_MS
+            && NAV_SET_MS
+                .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            && let Some(fix) = fix_at(voyage, now)
+        {
+            crate::navdata::set_position(Some(fix.lat), Some(fix.lon), "replay");
+            crate::navdata::set_cog(Some(fix.cog));
+            crate::navdata::set_sog(Some(fix.sog));
+        }
+    }
+
+    /// Own ship at `time_ms`: position interpolated between the fixes either
+    /// side, course and speed from the one before.
+    pub(super) fn fix_at(voyage: &[NavFix], time_ms: u64) -> Option<NavFix> {
+        let after = voyage.partition_point(|f| f.time_ms <= time_ms);
+        let before = voyage.get(after.checked_sub(1)?)?;
+        let Some(next) = voyage.get(after) else {
+            return Some(*before);
+        };
+        let span = (next.time_ms - before.time_ms) as f64;
+        let f = (time_ms - before.time_ms) as f64 / span;
+        Some(NavFix {
+            time_ms,
+            lat: before.lat + (next.lat - before.lat) * f,
+            lon: before.lon + (next.lon - before.lon) * f,
+            ..*before
+        })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn fix(time_ms: u64, lat: f64) -> NavFix {
+            NavFix {
+                time_ms,
+                lat,
+                lon: 177.0,
+                cog: 1.0,
+                sog: 2.5,
+            }
+        }
+
+        #[test]
+        fn own_ship_is_interpolated_between_fixes() {
+            let voyage = [fix(1000, -17.0), fix(2000, -17.1)];
+            assert_eq!(fix_at(&voyage, 500), None, "before the voyage");
+            assert!((fix_at(&voyage, 1500).unwrap().lat + 17.05).abs() < 1e-12);
+            assert_eq!(fix_at(&voyage, 2500).unwrap().lat, -17.1, "after it");
         }
     }
 }
@@ -109,6 +271,8 @@ pub fn set_instant_timing() {
 #[cfg(feature = "pcap-replay")]
 struct ReplayState {
     packets: Vec<PcapPacket>,
+    /// When the first packet was captured, since the Unix epoch.
+    start: Duration,
     channels: Mutex<HashMap<SocketAddrV4, Vec<mpsc::Sender<ReplayPacket>>>>,
 }
 
@@ -132,7 +296,7 @@ impl ReplayState {
 /// Initialize the replay system with a pcap/nnd file. Called once at startup.
 #[cfg(feature = "pcap-replay")]
 pub fn init(path: &Path) -> io::Result<()> {
-    let packets = pcap::parse_file(path)?;
+    let (packets, start) = pcap::parse_file_anchored(path)?;
     log::info!(
         "Replay: loaded {} UDP packets from {}",
         packets.len(),
@@ -141,6 +305,7 @@ pub fn init(path: &Path) -> io::Result<()> {
     REPLAY
         .set(Arc::new(ReplayState {
             packets,
+            start,
             channels: Mutex::new(HashMap::new()),
         }))
         .map_err(|_| io::Error::new(io::ErrorKind::AlreadyExists, "replay already initialized"))?;
@@ -219,6 +384,11 @@ pub async fn run(realistic_timing: bool, repeat: bool, max_time: Option<u32>) {
     let realistic_timing =
         realistic_timing && !INSTANT_TIMING.load(std::sync::atomic::Ordering::Relaxed);
 
+    if let Some(discovery) = capture_clock::discovery() {
+        run_on_capture_clock(&state, discovery, realistic_timing).await;
+        return;
+    }
+
     log::info!(
         "Replay: starting dispatcher ({} packets, timing={}, repeat={})",
         state.packets.len(),
@@ -236,6 +406,7 @@ pub async fn run(realistic_timing: bool, repeat: bool, max_time: Option<u32>) {
         let mut prev_ts = Duration::ZERO;
         let mut sent = 0u64;
         let mut unrouted = 0u64;
+        let mut dropped = 0u64;
 
         let first_ts = state
             .packets
@@ -268,9 +439,12 @@ pub async fn run(realistic_timing: bool, repeat: bool, max_time: Option<u32>) {
                 let replay_pkt = ReplayPacket {
                     data: pkt.payload.clone(),
                     from: pkt.src_addr,
+                    timestamp: state.start + pkt.timestamp,
                 };
                 for tx in senders {
-                    let _ = tx.try_send(replay_pkt.clone());
+                    if tx.try_send(replay_pkt.clone()).is_err() {
+                        dropped += 1;
+                    }
                 }
                 sent += 1;
             } else {
@@ -279,9 +453,10 @@ pub async fn run(realistic_timing: bool, repeat: bool, max_time: Option<u32>) {
         }
 
         log::info!(
-            "Replay: dispatched {} packets ({} unrouted)",
+            "Replay: dispatched {} packets ({} unrouted, {} dropped by a full receiver)",
             sent,
-            unrouted
+            unrouted,
+            dropped
         );
 
         // After the first pass, wait for new listeners that may have
@@ -337,6 +512,74 @@ pub async fn run(realistic_timing: bool, repeat: bool, max_time: Option<u32>) {
     }
 }
 
+/// Plays the start of the capture until released, then all of it once.
+#[cfg(feature = "pcap-replay")]
+async fn run_on_capture_clock(state: &ReplayState, discovery: Duration, realistic_timing: bool) {
+    let Some(first_ts) = state.packets.first().map(|p| p.timestamp) else {
+        return;
+    };
+    let window = state
+        .packets
+        .partition_point(|p| p.timestamp < first_ts + discovery);
+    log::info!(
+        "Replay: discovering radars in the first {} packets of {}",
+        window,
+        state.packets.len()
+    );
+    while !capture_clock::released() {
+        dispatch(state, &state.packets[..window], false).await;
+        sleep(Duration::from_millis(20)).await;
+    }
+    log::info!("Replay: playing the capture on its own clock");
+    dispatch(state, &state.packets, realistic_timing).await;
+    // Give receivers a moment to process the last dispatched packets before
+    // returning to the caller, which will request shutdown.
+    sleep(Duration::from_secs(1)).await;
+}
+
+/// How long a full receiver may hold up the capture before its packet is
+/// dropped: a listener nobody reads must not stall the replay for good.
+#[cfg(feature = "pcap-replay")]
+const RECEIVER_PATIENCE: Duration = Duration::from_secs(1);
+
+/// Sends `packets` to their listeners, waiting for any that are behind: on
+/// the capture clock a replay runs as fast as its receivers keep up, and
+/// loses nothing. Drops are logged.
+#[cfg(feature = "pcap-replay")]
+async fn dispatch(state: &ReplayState, packets: &[PcapPacket], realistic_timing: bool) {
+    let mut prev_ts = packets.first().map(|p| p.timestamp).unwrap_or_default();
+    let mut dropped = 0u64;
+    for pkt in packets {
+        if realistic_timing && pkt.timestamp > prev_ts {
+            sleep(pkt.timestamp - prev_ts).await;
+        } else {
+            tokio::task::yield_now().await;
+        }
+        prev_ts = pkt.timestamp;
+        let senders = state.channels.lock().unwrap().get(&pkt.dst_addr).cloned();
+        let Some(senders) = senders else {
+            continue;
+        };
+        let replay_pkt = ReplayPacket {
+            data: pkt.payload.clone(),
+            from: pkt.src_addr,
+            timestamp: state.start + pkt.timestamp,
+        };
+        for tx in senders.iter().filter(|tx| !tx.is_closed()) {
+            let sent = tokio::time::timeout(RECEIVER_PATIENCE, tx.send(replay_pkt.clone())).await;
+            if sent.is_err() {
+                dropped += 1;
+            }
+        }
+    }
+    if dropped > 0 {
+        log::warn!(
+            "Replay: {} packets dropped by a receiver that fell behind",
+            dropped
+        );
+    }
+}
+
 #[cfg(all(test, feature = "pcap-replay"))]
 mod tests {
     use super::*;
@@ -350,6 +593,7 @@ mod tests {
         }
         ReplayState {
             packets: Vec::new(),
+            start: Duration::ZERO,
             channels: Mutex::new(channels),
         }
     }
