@@ -87,17 +87,29 @@ fn read_maybe_gzip(path: &Path) -> io::Result<Vec<u8>> {
 /// start with a 4-byte magic number. Both `.gz` and uncompressed files are
 /// supported.
 pub fn parse_file(path: &Path) -> io::Result<Vec<PcapPacket>> {
+    parse_file_anchored(path).map(|(packets, _)| packets)
+}
+
+/// [`parse_file`], with the capture time of the first datagram, since the
+/// Unix epoch, that every packet's timestamp counts from. An NND file has
+/// no such anchor and gives zero.
+pub fn parse_file_anchored(path: &Path) -> io::Result<(Vec<PcapPacket>, Duration)> {
     let data = read_maybe_gzip(path)?;
 
     if crate::nnd::is_nnd(&data) {
-        return crate::nnd::parse_bytes(&data, path);
+        return Ok((crate::nnd::parse_bytes(&data, path)?, Duration::ZERO));
     }
 
-    parse_bytes(&data)
+    parse_bytes_anchored(&data)
 }
 
 /// Parse pcap data from a byte slice.
+#[cfg(test)]
 pub(crate) fn parse_bytes(data: &[u8]) -> io::Result<Vec<PcapPacket>> {
+    parse_bytes_anchored(data).map(|(packets, _)| packets)
+}
+
+fn parse_bytes_anchored(data: &[u8]) -> io::Result<(Vec<PcapPacket>, Duration)> {
     if data.len() < 24 {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "pcap too short"));
     }
@@ -206,7 +218,13 @@ pub(crate) fn parse_bytes(data: &[u8]) -> io::Result<Vec<PcapPacket>> {
         }
     }
 
-    Ok(packets)
+    let start = first_ts
+        .map(|(sec, frac)| {
+            Duration::from_secs(sec.into())
+                + Duration::from_nanos(frac as u64 * (1_000_000_000 / divisor))
+        })
+        .unwrap_or_default();
+    Ok((packets, start))
 }
 
 /// One IPv4 datagram, or one fragment of one, as it came off the wire.
@@ -487,6 +505,31 @@ mod tests {
                 payload: vec![0xAA, 0xBB],
             },
         ]
+    }
+
+    /// Replay places a capture in time by the absolute moment its first
+    /// datagram was captured; the packets themselves count from zero.
+    #[test]
+    fn a_capture_is_anchored_at_its_first_datagram() {
+        let start = Duration::from_millis(1_700_000_000_250);
+        let mut packets = sample_packets();
+        for p in &mut packets {
+            p.timestamp += start;
+        }
+
+        let (parsed, anchor) = parse_bytes_anchored(&encode_packets(&packets)).expect("parse");
+
+        assert_eq!(anchor, start);
+        let offsets: Vec<_> = parsed.iter().map(|p| p.timestamp).collect();
+        assert_eq!(offsets, [Duration::ZERO, Duration::from_millis(100)]);
+    }
+
+    #[test]
+    fn an_empty_capture_has_no_anchor() {
+        let (parsed, anchor) = parse_bytes_anchored(&encode_packets(&[])).expect("parse");
+
+        assert!(parsed.is_empty());
+        assert_eq!(anchor, Duration::ZERO);
     }
 
     /// The bug this guards: a fixture holding exactly these packets, but

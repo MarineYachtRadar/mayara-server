@@ -62,6 +62,11 @@ pub const FRAC_NM_8: i32 = NM / 8;
 pub const FRAC_NM_16: i32 = NM / 16;
 pub const FRAC_NM_32: i32 = NM / 32;
 
+/// 1 statute mile in metres.
+pub(crate) const STATUTE_MILE_F64: f64 = 1609.344;
+/// 1 kiloyard in metres.
+pub(crate) const KILOYARD_F64: f64 = 914.4;
+
 /// Knots ↔ m/s, derived from `NM_F64`. Placed here (alongside the NM
 /// constants) rather than scattered as `1852.0 / 3600.0` literals.
 pub const KN_TO_MS: f64 = NM_F64 / 3600.;
@@ -571,6 +576,19 @@ pub(crate) fn legacy_address_key(info: &RadarInfo) -> String {
         info.dual.as_deref(),
         &info.legacy_addr,
     )
+}
+
+/// The time a spoke is stamped with: the wall clock, or the capture's own
+/// clock when a replay runs on it.
+fn spoke_clock_ms() -> u64 {
+    #[cfg(feature = "pcap-replay")]
+    if let Some(t) = crate::replay::capture_time_ms() {
+        return t;
+    }
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap()
 }
 
 impl RadarInfo {
@@ -2222,10 +2240,7 @@ impl CommonRadar {
     pub fn new_spoke_message(&mut self) {
         if self.spoke_message.is_none() {
             self.spoke_message = Some(RadarMessage::new());
-            self.spoke_time = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_millis() as u64)
-                .unwrap();
+            self.spoke_time = spoke_clock_ms();
         }
     }
 
@@ -2356,7 +2371,7 @@ impl CommonRadar {
             if self.blob_detector.is_some()
                 && let Some(ref arpa_tx) = self.arpa_tx
             {
-                let (lat, lon) = crate::navdata::get_position();
+                let (lat, lon) = spoke::own_ship_position();
                 let tick = TrackerInput::Revolution {
                     radar_key: self.key.clone(),
                     radar_position: match (lat, lon) {

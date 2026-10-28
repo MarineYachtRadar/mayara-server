@@ -37,9 +37,21 @@ pub(crate) fn to_protobuf_spoke(
     spoke.angle = angle as u32;
     spoke.bearing = heading;
 
-    (spoke.lat, spoke.lon) = crate::navdata::get_position();
+    (spoke.lat, spoke.lon) = own_ship_position();
     spoke.time = time;
     spoke.data = generic_spoke;
 
     spoke
+}
+
+/// Where own ship was when the spoke being handled was received: now, or
+/// when it was captured if a replay runs on the capture's clock. Other
+/// receivers move the current position along as they replay, so a spoke
+/// cannot take it from navdata without racing them.
+pub(crate) fn own_ship_position() -> (Option<f64>, Option<f64>) {
+    #[cfg(feature = "pcap-replay")]
+    if let Some((lat, lon)) = crate::replay::capture_position() {
+        return (Some(lat), Some(lon));
+    }
+    crate::navdata::get_position()
 }
