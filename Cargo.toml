@@ -139,3 +139,9 @@ tempfile = "3"
 name = "generate-fixtures"
 required-features = ["pcap-replay"]
 
+
+# The replay tests push whole radar captures through the tracker; at the
+# dev profile's opt-level 0 the #722 ARPA rig takes five times as long.
+# Debug assertions and overflow checks stay on.
+[profile.test]
+opt-level = 1
