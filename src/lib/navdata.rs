@@ -1932,6 +1932,19 @@ impl NavigationData {
                 set_cog(cog);
                 set_sog(vtg_sog(&vtg));
             }
+            // Our own transponder's reports are VDO, not VDM: never a target.
+            Ok(ParsedMessage::VesselDynamicData(vdd))
+                if !vdd.own_vessel && !is_long_range_report(s) =>
+            {
+                // A report without a position must not keep a vessel alive at
+                // the last one it had, so it lets the vessel age out instead.
+                if let Some(updates) = ais_dynamic_updates(&vdd) {
+                    update_ais_vessel(&ais_context(vdd.mmsi), &updates);
+                }
+            }
+            Ok(ParsedMessage::VesselStaticData(vsd)) if !vsd.own_vessel => {
+                update_ais_vessel(&ais_context(vsd.mmsi), &ais_static_updates(&vsd));
+            }
 
             Err(e) => match e {
                 ParseError::UnsupportedSentenceType(_) => {}
@@ -1943,6 +1956,77 @@ impl NavigationData {
         }
         Ok(())
     }
+}
+
+/// An MMSI is nine digits; a coast station's or a group's starts with zeros.
+fn ais_context(mmsi: u32) -> String {
+    format!("vessels.urn:mrn:imo:mmsi:{mmsi:09}")
+}
+
+/// A Signal K update, in SI units, from the values an AIS position report
+/// carries, or `None` when it carries no position.
+fn ais_dynamic_updates(vdd: &ais::VesselDynamicData) -> Option<Value> {
+    let (Some(latitude), Some(longitude)) = (vdd.latitude, vdd.longitude) else {
+        return None;
+    };
+    let mut values = vec![serde_json::json!({ "path": "navigation.position",
+        "value": { "latitude": latitude, "longitude": longitude } })];
+    if let Some(cog) = vdd.cog {
+        values.push(
+            serde_json::json!({ "path": "navigation.courseOverGroundTrue",
+            "value": cog.to_radians() }),
+        );
+    }
+    if let Some(sog) = vdd.sog_knots {
+        values.push(serde_json::json!({ "path": "navigation.speedOverGround",
+            "value": sog * METERS_PER_SECOND_PER_KNOT }));
+    }
+    if let Some(heading) = vdd.heading_true {
+        values.push(serde_json::json!({ "path": "navigation.headingTrue",
+            "value": heading.to_radians() }));
+    }
+    Some(serde_json::json!([{ "values": values }]))
+}
+
+/// Whether a sentence holds an AIS long-range report (message 27), the
+/// one-sentence message whose six-bit payload starts with type 27, `K`.
+/// nmea-parser takes its course, speed and missing-position values from the
+/// wrong bits, so these reports are not used.
+fn is_long_range_report(sentence: &str) -> bool {
+    const FRAGMENT_COUNT: usize = 1;
+    const PAYLOAD: usize = 5;
+    // A tag block may come first, with commas of its own; the parser starts
+    // at the sentence's `!` too.
+    let sentence = sentence
+        .find('!')
+        .map_or(sentence, |start| &sentence[start..]);
+    let fields: Vec<&str> = sentence.split(',').collect();
+    fields.get(FRAGMENT_COUNT) == Some(&"1")
+        && fields.get(PAYLOAD).is_some_and(|p| p.starts_with('K'))
+}
+
+/// A Signal K update from an AIS static report: the name, and the size the
+/// antenna's offsets from bow, stern and sides add up to.
+fn ais_static_updates(vsd: &ais::VesselStaticData) -> Value {
+    let mut values = Vec::new();
+    if let Some(name) = &vsd.name {
+        values.push(serde_json::json!({ "path": "", "value": { "name": name } }));
+    }
+    if let Some(length) = ais_size(vsd.dimension_to_bow, vsd.dimension_to_stern) {
+        values.push(serde_json::json!({ "path": "design.length",
+            "value": { "overall": length } }));
+    }
+    if let Some(beam) = ais_size(vsd.dimension_to_port, vsd.dimension_to_starboard) {
+        values.push(serde_json::json!({ "path": "design.beam", "value": beam }));
+    }
+    serde_json::json!([{ "values": values }])
+}
+
+/// The size two antenna offsets add up to, in metres. AIS sends offsets of
+/// 0 for "not available", so a size of 0 is none.
+fn ais_size(a: Option<u16>, b: Option<u16>) -> Option<f64> {
+    let size = f64::from(a?) + f64::from(b?);
+    (size > 0.0).then_some(size)
 }
 
 const KPH_PER_KNOT: f64 = 1.852;
@@ -2444,6 +2528,86 @@ mod tests {
             assert_eq!(get_cog(), None, "{sentence}");
             assert_eq!(get_sog(), None, "{sentence} sets nothing");
         }
+    }
+
+    /// An AIS receiver on NMEA 0183, or a replay carrying one, fills the AIS
+    /// store as Signal K does: a position report places the vessel, and a
+    /// two-part static report names it.
+    #[test]
+    fn nmea_ais_reports_fill_the_ais_store() {
+        let _globals = nav_globals();
+        init_ais_store(tokio::sync::broadcast::channel(16).0);
+        let mut receiver = nmea0183_receiver();
+
+        receiver.parse_nmea0183(NMEA_AIS).unwrap();
+        for part in [
+            "!AIVDM,2,1,1,A,55?MbV02;H;s<HtKR20EHE:0@T4@Dn2222222216L961O5Gf0NSQEp6ClRp8,0*1C",
+            "!AIVDM,2,2,1,A,88888888880,2*25",
+        ] {
+            receiver.parse_nmea0183(part).unwrap();
+        }
+
+        let vessels = get_ais_store().unwrap().get_all_active();
+        let vessel = |mmsi: &str| vessels.iter().find(|v| v.mmsi == mmsi).unwrap();
+        let placed = vessel("477553000");
+        let position = placed.position.as_ref().unwrap();
+        assert!((position.latitude - 47.582833).abs() < 1e-5, "{position:?}");
+        assert!(
+            (position.longitude + 122.345833).abs() < 1e-5,
+            "{position:?}"
+        );
+        assert!((placed.cog.unwrap() - 51f64.to_radians()).abs() < 1e-6);
+        assert_eq!(vessel("351759000").name.as_deref(), Some("EVER DIADEM"));
+    }
+
+    #[test]
+    fn a_long_range_report_is_found_behind_a_tag_block() {
+        let tag = "\\s:2573535,c:1671533231*0B\\";
+        assert!(is_long_range_report(&format!(
+            "{tag}!AIVDM,1,1,,B,KC5E2b@U19PFdLbMuc5=ROv62<7m,0*16"
+        )));
+        assert!(!is_long_range_report(&format!("{tag}{NMEA_AIS}")));
+    }
+
+    #[test]
+    fn an_ais_size_of_zero_is_not_available() {
+        assert_eq!(ais_size(Some(0), Some(0)), None);
+        assert_eq!(ais_size(Some(0), Some(12)), Some(12.0));
+        assert_eq!(ais_size(None, Some(12)), None);
+    }
+
+    #[test]
+    fn an_ais_context_keeps_the_mmsi_leading_zeros() {
+        assert_eq!(ais_context(2_442_000), "vessels.urn:mrn:imo:mmsi:002442000");
+        assert_eq!(
+            ais_context(477_553_000),
+            "vessels.urn:mrn:imo:mmsi:477553000"
+        );
+    }
+
+    #[test]
+    fn nmea_ais_reports_without_a_usable_position_are_not_stored() {
+        let _globals = nav_globals();
+        init_ais_store(tokio::sync::broadcast::channel(16).0);
+        let mut receiver = nmea0183_receiver();
+
+        // Latitude 91 and longitude 181 mean "not available".
+        let no_position = "!AIVDM,1,1,,A,1819@f@P0jdtSF0l4Q@3Q?v00000,0*2C";
+        let long_range = "!AIVDM,1,1,,B,KC5E2b@U19PFdLbMuc5=ROv62<7m,0*16";
+        assert!(is_long_range_report(long_range));
+        assert!(!is_long_range_report(NMEA_AIS));
+        for sentence in [no_position, long_range] {
+            receiver.parse_nmea0183(sentence).unwrap();
+        }
+
+        let mmsis: Vec<_> = get_ais_store()
+            .unwrap()
+            .get_all_active()
+            .into_iter()
+            .map(|v| v.mmsi)
+            .collect();
+        assert!(!mmsis.contains(&"538071225".to_string()), "{mmsis:?}");
+        assert!(!mmsis.contains(&"206914217".to_string()), "{mmsis:?}");
     }
 
     #[test]
