@@ -780,6 +780,7 @@ pub(crate) fn set_emulator_course(cog: f64, sog: f64) {
     SOG_FROM_EMULATOR.store(true, Ordering::Release);
     store_cog(Some(cog));
     store_sog(Some(sog));
+    let cog = cog.rem_euclid(std::f64::consts::TAU);
     broadcast_nav_update("navigation.courseOverGroundTrue", cog, EMULATOR_SOURCE);
     broadcast_nav_update("navigation.speedOverGround", sog, EMULATOR_SOURCE);
 }
@@ -3005,6 +3006,29 @@ mod tests {
                 .iter()
                 .any(|d| d.contains("navigation.headingTrue")),
             "and the heading: {published:?}"
+        );
+    }
+
+    /// The emulator's course goes out as it is stored, in [0, 2π), so a
+    /// client gets the same number on change as on the tick.
+    #[test]
+    fn the_emulator_course_is_broadcast_as_stored() {
+        let _globals = nav_globals();
+        let (tx, _) = tokio::sync::broadcast::channel(16);
+        let mut rx = NAV_BROADCAST_TX.get_or_init(|| tx).subscribe();
+        while rx.try_recv().is_ok() {}
+
+        set_emulator_course(-std::f64::consts::FRAC_PI_2, 1.0);
+
+        let stored = get_cog().unwrap();
+        let published: Vec<String> = std::iter::from_fn(|| rx.try_recv().ok())
+            .map(|d| serde_json::to_string(&d).unwrap())
+            .collect();
+        assert!(
+            published
+                .iter()
+                .any(|d| d.contains("courseOverGroundTrue") && d.contains(&stored.to_string())),
+            "{stored} not in {published:?}"
         );
     }
 
