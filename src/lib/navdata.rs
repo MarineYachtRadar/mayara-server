@@ -1958,8 +1958,9 @@ impl NavigationData {
     }
 }
 
+/// An MMSI is nine digits; a coast station's or a group's starts with zeros.
 fn ais_context(mmsi: u32) -> String {
-    format!("vessels.urn:mrn:imo:mmsi:{mmsi}")
+    format!("vessels.urn:mrn:imo:mmsi:{mmsi:09}")
 }
 
 /// A Signal K update, in SI units, from the values an AIS position report
@@ -2543,6 +2544,15 @@ mod tests {
         );
         assert!((placed.cog.unwrap() - 51f64.to_radians()).abs() < 1e-6);
         assert_eq!(vessel("351759000").name.as_deref(), Some("EVER DIADEM"));
+    }
+
+    #[test]
+    fn an_ais_context_keeps_the_mmsi_leading_zeros() {
+        assert_eq!(ais_context(2_442_000), "vessels.urn:mrn:imo:mmsi:002442000");
+        assert_eq!(
+            ais_context(477_553_000),
+            "vessels.urn:mrn:imo:mmsi:477553000"
+        );
     }
 
     #[test]
