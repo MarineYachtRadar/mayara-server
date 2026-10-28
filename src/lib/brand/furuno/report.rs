@@ -17,7 +17,7 @@ use super::protocol::{
     ENCODING_3_REPEAT_DEFAULT, FurunoImoFrameHeader, FurunoTileFrameHeader,
     HEADING_ADJUST_FULL_TURN, HEADING_STATE_VALID, KEEP_ALIVE, PIXEL_VALUES, RadarModel,
     SPOKE_ALIGNMENT_MASK, SPOKE_ANGLE_HIGH_MASK, SPOKE_LEN, SPOKES, TILE_MAGIC,
-    TILE_REPEAT_DEFAULT, TILE_SCALE, TX_CHANNEL_AUTO, WIRE_UNIT_KM, WIRE_UNIT_KYD,
+    TILE_REPEAT_DEFAULT, TILE_SCALE, TX_CHANNEL_AUTO, WIRE_UNIT_KM, WIRE_UNIT_KYD, WIRE_UNIT_SM,
     wire_index_to_meters_for_unit,
 };
 use super::settings;
@@ -27,7 +27,10 @@ use crate::network;
 use crate::radar::CommonRadar;
 use crate::radar::SharedRadars;
 use crate::radar::SpokeBearing;
-use crate::radar::settings::{ControlId, ControlValue};
+use crate::radar::settings::{
+    ControlId, ControlValue, RANGE_UNITS_KILOYARDS, RANGE_UNITS_METRIC, RANGE_UNITS_NAUTICAL,
+    RANGE_UNITS_STATUTE,
+};
 use crate::radar::{
     DUAL_RANGE_A, DUAL_RANGE_B, Power, RadarError, RadarInfo, transmit_claim_after_request,
 };
@@ -127,12 +130,24 @@ struct FurunoSpokeMetadata {
     have_heading: bool,
     range: u32,
     radar_no: u8, // 0 = Range A, 1 = Range B (dual range)
+    /// The RangeUnits value of the unit the frame counts its range in.
+    range_units: i32,
     /// Number of samples that cover the configured display range.
     /// Extracted from header bytes 14-15 as `((byte[15] & 0x07) << 8) | byte[14]`.
     /// The radar always transmits `sweep_len` total samples per spoke, but only
     /// the first `scale` of them map to 0..range_meters. Samples beyond `scale`
     /// are oversampled data outside the display range.
     scale: u32,
+}
+
+/// The RangeUnits value for the unit a radar counts its range in.
+fn range_units_for_wire_unit(wire_unit: i32) -> i32 {
+    match wire_unit {
+        WIRE_UNIT_KM => RANGE_UNITS_METRIC,
+        WIRE_UNIT_SM => RANGE_UNITS_STATUTE,
+        WIRE_UNIT_KYD => RANGE_UNITS_KILOYARDS,
+        _ => RANGE_UNITS_NAUTICAL,
+    }
 }
 
 pub(crate) struct FurunoReportReceiver {
@@ -1051,15 +1066,12 @@ impl FurunoReportReceiver {
                     })?;
 
                 let drid = self.extract_drid(&command_id, &numbers);
-                let range_units_value = match wire_unit {
-                    // Kiloyards share the kilometre range steps, statute
-                    // miles the nautical ones.
-                    WIRE_UNIT_KM | WIRE_UNIT_KYD => 1.0, // Metric
-                    _ => 0.0,                            // Nautical
-                };
                 let target = self.common_for_range(drid);
                 // The units first: they choose the steps the range snaps to.
-                target.set_value(&ControlId::RangeUnits, range_units_value);
+                target.set_value(
+                    &ControlId::RangeUnits,
+                    f64::from(range_units_for_wire_unit(wire_unit)),
+                );
                 target.set_value(&ControlId::Range, range_meters as f64);
             }
             CommandId::OnTime => {
@@ -1771,6 +1783,7 @@ impl FurunoReportReceiver {
             .get(&ControlId::Range)
             .and_then(|c| c.value)
             .unwrap_or(0.0) as u32;
+        let range_units = range_controls.range_units();
 
         if is_range_b {
             self.common_b.as_mut().unwrap().new_spoke_message();
@@ -1840,6 +1853,7 @@ impl FurunoReportReceiver {
                 have_heading: true,
                 range,
                 radar_no,
+                range_units,
                 scale: TILE_SCALE,
             };
 
@@ -2197,6 +2211,12 @@ impl FurunoReportReceiver {
         wire_to_legend: &[u8; 256],
     ) {
         if common.replay {
+            // The units first, as from a range report.
+            let _ = common.info.controls.set(
+                &ControlId::RangeUnits,
+                f64::from(metadata.range_units),
+                None,
+            );
             let _ = common
                 .info
                 .controls
@@ -2298,6 +2318,7 @@ impl FurunoReportReceiver {
             have_heading: header.heading_state == HEADING_STATE_VALID,
             range,
             radar_no: header.radar_no,
+            range_units: range_units_for_wire_unit(wire_unit),
             scale,
         };
         log::trace!("header {:?} -> {:?}", &data[0..16], metadata);
@@ -2640,24 +2661,58 @@ mod tests {
         assert!((degrees - expected).abs() < 1e-6, "{when}: {degrees}");
     }
 
-    /// A radar an MFD set to statute miles or kiloyards shows mayara's range
-    /// steps in the units nearest them: nautical for statute miles, metric
-    /// for kiloyards. 2 Kyd is 1,829 m, nearer 2 km than 1.5 km and nearer
-    /// 1 NM than either; it shows as 2 km.
+    /// A radar an MFD set to statute miles or kiloyards shows that unit and
+    /// the range step it is on, not the nautical or metric one nearest it:
+    /// 2 SM is 3,219 m, which would otherwise show as 1.5 NM, and 2 Kyd is
+    /// 1,829 m.
     #[tokio::test]
-    async fn a_range_in_statute_miles_or_kiloyards_shows_the_nearest_units() {
+    async fn a_range_in_statute_miles_or_kiloyards_shows_that_unit() {
         let mut receiver = nxt_receiver();
         let control = |receiver: &FurunoReportReceiver, id| {
             receiver.common.info.controls.get(&id).and_then(|c| c.value)
         };
 
-        receiver.process_report("$N62,6,0,0").unwrap();
-        receiver.process_report("$N62,6,3,0").unwrap();
-        assert_eq!(control(&receiver, ControlId::RangeUnits), Some(1.));
-        assert_eq!(control(&receiver, ControlId::Range), Some(2000.));
-
         receiver.process_report("$N62,6,2,0").unwrap();
+        assert_eq!(control(&receiver, ControlId::RangeUnits), Some(3.));
+        assert_eq!(control(&receiver, ControlId::Range), Some(3219.));
+
+        receiver.process_report("$N62,6,3,0").unwrap();
+        assert_eq!(control(&receiver, ControlId::RangeUnits), Some(4.));
+        assert_eq!(control(&receiver, ControlId::Range), Some(1829.));
+
+        receiver.process_report("$N62,6,0,0").unwrap();
         assert_eq!(control(&receiver, ControlId::RangeUnits), Some(0.));
+        assert_eq!(control(&receiver, ControlId::Range), Some(3704.));
+    }
+
+    /// A replay has no range reports, so its spoke frames set the units as
+    /// well as the range: a recording made in statute miles plays back in
+    /// statute miles.
+    #[test]
+    fn a_replayed_spoke_frame_sets_the_units_it_ranges_in() {
+        let mut receiver = nxt_receiver();
+        receiver.common.replay = true;
+        let frame = [
+            2, 186, 0, 1, 0, 0, 0, 0, 33, 8, 100, 219, 0x86, 0, 240, 0x19,
+        ];
+        let metadata = receiver.parse_metadata_header(&frame).unwrap();
+
+        FurunoReportReceiver::add_spoke_to_common(
+            &mut receiver.common,
+            &metadata,
+            metadata.range,
+            0,
+            0,
+            &[],
+            &[0; 256],
+        );
+
+        let controls = &receiver.common.info.controls;
+        assert_eq!(controls.range_units(), 3);
+        assert_eq!(
+            controls.get(&ControlId::Range).and_then(|c| c.value),
+            Some(3219.)
+        );
     }
 
     /// Channel 0 is the radar choosing for itself, which is auto rather than

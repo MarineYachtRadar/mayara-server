@@ -62,6 +62,11 @@ pub const FRAC_NM_8: i32 = NM / 8;
 pub const FRAC_NM_16: i32 = NM / 16;
 pub const FRAC_NM_32: i32 = NM / 32;
 
+/// 1 statute mile in metres.
+pub(crate) const STATUTE_MILE_F64: f64 = 1609.344;
+/// 1 kiloyard in metres.
+pub(crate) const KILOYARD_F64: f64 = 914.4;
+
 /// Knots ↔ m/s, derived from `NM_F64`. Placed here (alongside the NM
 /// constants) rather than scattered as `1852.0 / 3600.0` literals.
 pub const KN_TO_MS: f64 = NM_F64 / 3600.;

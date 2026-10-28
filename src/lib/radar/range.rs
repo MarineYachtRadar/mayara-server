@@ -10,7 +10,7 @@
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::sync::LazyLock;
 
-use crate::radar::NM_F64;
+use crate::radar::{KILOYARD_F64, NM_F64, STATUTE_MILE_F64};
 
 use super::{FRAC_NM_2, FRAC_NM_4, FRAC_NM_8, FRAC_NM_16, FRAC_NM_32, NM};
 
@@ -76,29 +76,38 @@ static ALL_POSSIBLE_METRIC_RANGES: LazyLock<Ranges> = LazyLock::new(|| {
     ])
 });
 
+/// The unit a range is shown in. Metres alone tell metric from nautical
+/// ranges, but not statute miles or kiloyards from either, so those are
+/// named by whoever builds the range.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Unit {
+    MetricOrNautical,
+    StatuteMiles,
+    Kiloyards,
+}
+
 /// A single radar range entry. `distance` is the only field that
 /// participates in equality and ordering; `index` is purely informational
 /// (it tags the entry's position in some originating table) and two
 /// `Range`s with the same `distance` are considered equal regardless of
-/// `index`.
+/// `index` or `unit`.
 #[derive(Debug, Clone, Copy, Eq)]
 pub struct Range {
     distance: i32,
     index: usize,
+    unit: Unit,
 }
 
 impl Range {
     fn initial(value: i32) -> Self {
-        Self {
-            distance: value,
-            index: 0,
-        }
+        Self::new(value, 0)
     }
 
     pub fn new(value: i32, index: usize) -> Self {
         Self {
             distance: value,
             index,
+            unit: Unit::MetricOrNautical,
         }
     }
 
@@ -164,8 +173,41 @@ impl PartialEq for Range {
     }
 }
 
+/// Statute mile ranges go down to 1/16 mi, as nautical ones do.
+const STATUTE_MILE_FRACTIONS: i32 = 16;
+
+/// Kiloyard ranges are shown to the yard.
+const YARDS_PER_KILOYARD: f64 = 1000.;
+
+fn gcd(a: i32, b: i32) -> i32 {
+    if b == 0 { a } else { gcd(b, a % b) }
+}
+
 impl Display for Range {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        match self.unit {
+            Unit::StatuteMiles => {
+                let miles = f64::from(self.distance) / STATUTE_MILE_F64;
+                let sixteenths = (miles * f64::from(STATUTE_MILE_FRACTIONS)).round() as i32;
+                if sixteenths < STATUTE_MILE_FRACTIONS {
+                    let divisor = gcd(sixteenths, STATUTE_MILE_FRACTIONS);
+                    return write!(
+                        f,
+                        "{}/{} mi",
+                        sixteenths / divisor,
+                        STATUTE_MILE_FRACTIONS / divisor
+                    );
+                }
+                let miles = f64::from(sixteenths) / f64::from(STATUTE_MILE_FRACTIONS);
+                return write!(f, "{} mi", miles);
+            }
+            Unit::Kiloyards => {
+                let kiloyards = f64::from(self.distance) / KILOYARD_F64;
+                let kiloyards = (kiloyards * YARDS_PER_KILOYARD).round() / YARDS_PER_KILOYARD;
+                return write!(f, "{} kyd", kiloyards);
+            }
+            Unit::MetricOrNautical => {}
+        }
         {
             let v = self.distance;
             if Range::metric(v) {
@@ -218,6 +260,11 @@ pub struct Ranges {
     pub metric: Vec<Range>,
     pub nautical: Vec<Range>,
     pub mixed: Vec<Range>,
+    /// Only filled by a brand that can range in statute miles; not in `all`,
+    /// which holds the metric and nautical ranges the others are told from.
+    pub statute: Vec<Range>,
+    /// Only filled by a brand that can range in kiloyards; not in `all`.
+    pub kiloyards: Vec<Range>,
     ordered: bool,
 }
 
@@ -248,8 +295,31 @@ impl Ranges {
             metric,
             nautical,
             mixed,
+            statute: Vec::new(),
+            kiloyards: Vec::new(),
             ordered: true,
         }
+    }
+
+    /// These ranges, plus the given distances in statute miles and in
+    /// kiloyards, each in metres.
+    pub(crate) fn with_statute_and_kiloyards(mut self, statute: &[i32], kiloyards: &[i32]) -> Self {
+        let tagged = |distances: &[i32], unit| {
+            let mut ranges: Vec<Range> = distances
+                .iter()
+                .enumerate()
+                .map(|(index, &distance)| Range {
+                    distance,
+                    index,
+                    unit,
+                })
+                .collect();
+            ranges.sort();
+            ranges
+        };
+        self.statute = tagged(statute, Unit::StatuteMiles);
+        self.kiloyards = tagged(kiloyards, Unit::Kiloyards);
+        self
     }
 
     pub(crate) fn empty() -> Self {
@@ -258,6 +328,8 @@ impl Ranges {
             metric: Vec::new(),
             nautical: Vec::new(),
             mixed: Vec::new(),
+            statute: Vec::new(),
+            kiloyards: Vec::new(),
             ordered: false,
         }
     }
@@ -429,5 +501,23 @@ mod tests {
         // pushing it between 116m and 231m in the nautical range list and
         // producing a dead zoom step at the 1/16 NM minimum.
         assert!(Range::is_metric_distance(125));
+    }
+
+    /// Statute miles and kiloyards are not told from metres, so a range
+    /// given in them is shown in them: 3,219 m would otherwise read as
+    /// 1.74 nm and 1,829 m as 0.99 nm.
+    #[test]
+    fn statute_miles_and_kiloyards_show_in_their_own_units() {
+        let ranges = super::Ranges::new_by_distance(&[1852])
+            .with_statute_and_kiloyards(&[3219, 100, 201, 1207, 2414], &[114, 1829, 1372]);
+        let shown = |ranges: &[Range]| ranges.iter().map(|r| r.to_string()).collect::<Vec<_>>();
+
+        assert_eq!(
+            shown(&ranges.statute),
+            ["1/16 mi", "1/8 mi", "3/4 mi", "1.5 mi", "2 mi"]
+        );
+        assert_eq!(shown(&ranges.kiloyards), ["0.125 kyd", "1.5 kyd", "2 kyd"]);
+        assert_eq!(shown(&ranges.nautical), ["1 nm"]);
+        assert_eq!(ranges.all.len(), 1, "the other units stay out of all");
     }
 }
