@@ -19,11 +19,6 @@ use super::{
 use crate::radar::{GeoPosition, KN_TO_MS};
 use crate::stream::{NotificationMethod, NotificationState, NotificationValue, SignalKDelta};
 
-/// Updates a target needs before it is broadcast to clients. Below this
-/// the motion estimate is too green to be worth reporting, so a target
-/// that dies young is never seen by a client and never alarms.
-const MIN_BROADCAST_UPDATE_COUNT: u32 = 4;
-
 /// How long the radar driving the merged revolution clock may stay silent
 /// before another radar is allowed to take it over. Long enough that a
 /// slow antenna between sweeps is never mistaken for a departed radar.
@@ -227,9 +222,7 @@ impl TrackerManager {
             self.per_radar_trackers.values().collect()
         };
         for target in trackers.iter().flat_map(|t| t.get_active_targets()) {
-            if target.status == TargetStatus::Lost
-                || target.update_count < MIN_BROADCAST_UPDATE_COUNT
-            {
+            if target.status == TargetStatus::Lost || !target.is_shown() {
                 continue;
             }
             if let Some(idx) = target.source_zone.and_then(guard_zone_index) {
@@ -474,7 +467,7 @@ impl TrackerManager {
         if self.merge_mode {
             if let Some(ref tracker) = self.shared_tracker {
                 for target in tracker.get_active_targets() {
-                    if target.update_count >= MIN_BROADCAST_UPDATE_COUNT {
+                    if target.is_shown() {
                         targets.push(active_target_to_api(target, radar_position.as_ref()));
                     }
                 }
@@ -482,7 +475,7 @@ impl TrackerManager {
         } else {
             for tracker in self.per_radar_trackers.values() {
                 for target in tracker.get_active_targets() {
-                    if target.update_count >= MIN_BROADCAST_UPDATE_COUNT {
+                    if target.is_shown() {
                         targets.push(active_target_to_api(target, radar_position.as_ref()));
                     }
                 }
@@ -664,7 +657,9 @@ impl TrackerManager {
 
                 // Collect lost status updates
                 for id in &lost_ids {
-                    if let Some(target) = tracker.get_target(*id) {
+                    if let Some(target) = tracker.get_target(*id)
+                        && target.is_shown()
+                    {
                         let radar_key = target.last_radar_key.clone();
                         let api = active_target_to_api(target, target.last_radar_position.as_ref());
                         lost_updates.push((*id, radar_key, api));
@@ -689,7 +684,9 @@ impl TrackerManager {
 
                     // Collect lost status updates
                     for id in &lost_ids {
-                        if let Some(target) = tracker.get_target(*id) {
+                        if let Some(target) = tracker.get_target(*id)
+                            && target.is_shown()
+                        {
                             let api =
                                 active_target_to_api(target, target.last_radar_position.as_ref());
                             lost_updates.push((*id, radar_key.clone(), api));
@@ -723,7 +720,7 @@ impl TrackerManager {
                 .as_ref()
                 .map(|t| {
                     t.get_active_targets()
-                        .filter(|t| t.update_count >= MIN_BROADCAST_UPDATE_COUNT)
+                        .filter(|t| t.is_shown())
                         .map(|t| (t.id, active_target_to_api(t, radar_position)))
                         .collect()
                 })
@@ -733,7 +730,7 @@ impl TrackerManager {
                 .get(radar_key)
                 .map(|t| {
                     t.get_active_targets()
-                        .filter(|t| t.update_count >= MIN_BROADCAST_UPDATE_COUNT)
+                        .filter(|t| t.is_shown())
                         .map(|t| (t.id, active_target_to_api(t, radar_position)))
                         .collect()
                 })
@@ -818,12 +815,21 @@ fn blob_to_position(blob: &CompletedBlob, ctx: &SpokeContext) -> Option<GeoPosit
     Some(radar_pos.position_from_bearing(bearing_rad, distance_m))
 }
 
-/// How much of a blob's own extent to take as the 1-sigma error of its
-/// centre. A beam-smeared point target wanders by a fair fraction of the
+/// How much of a blob's angular extent to take as the 1-sigma error of its
+/// bearing. A beam-smeared point target wanders by a fair fraction of the
 /// beam width from sweep to sweep — the reported capture showed 1.5-3
 /// degrees against a beam of about 5 — and a physically large target has a
 /// correspondingly less certain centre. Half the extent covers both.
-const CENTROID_SIGMA_FRACTION: f64 = 0.5;
+const CROSS_SIGMA_FRACTION: f64 = 0.5;
+
+/// How much of a blob's radial depth to take as the 1-sigma error of its
+/// range. The depth is mostly the pulse length smearing the echo, and it
+/// smears it the same way every sweep, so the centre stays put: vessels
+/// at 5 km in the #722 voyage, 250 m deep, held their range to about 5 m.
+/// Half the depth, as across the beam, made the tracker distrust every
+/// fix and report a target at nearly zero speed when it first confirmed
+/// it, however fast it was going.
+const RADIAL_SIGMA_FRACTION: f64 = 0.02;
 
 /// Floor on either axis of the measurement error (meters). Keeps a
 /// single-pixel blob close in from claiming an implausibly exact position.
@@ -853,11 +859,11 @@ fn blob_to_covariance(blob: &CompletedBlob, ctx: &SpokeContext) -> PositionCovar
     } else {
         0.0
     };
-    let radial_sigma = (blob.pixel_extent as f64 * meters_per_pixel * CENTROID_SIGMA_FRACTION)
+    let radial_sigma = (blob.pixel_extent as f64 * meters_per_pixel * RADIAL_SIGMA_FRACTION)
         .max(MIN_MEASUREMENT_SIGMA_M);
 
     let angular_extent = blob.spoke_extent as f64 / ctx.spokes_per_revolution as f64 * TAU;
-    let bearing_sigma = (angular_extent * CENTROID_SIGMA_FRACTION).max(MIN_BEARING_SIGMA_RAD);
+    let bearing_sigma = (angular_extent * CROSS_SIGMA_FRACTION).max(MIN_BEARING_SIGMA_RAD);
     let cross_sigma = (distance_m * bearing_sigma).max(MIN_MEASUREMENT_SIGMA_M);
 
     PositionCovariance::from_polar(bearing_rad, radial_sigma.powi(2), cross_sigma.powi(2))
@@ -979,11 +985,14 @@ fn compute_danger(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::radar::target::tracker::LOST_REVOLUTION_COUNT;
+    use crate::radar::target::tracker::{LOST_REVOLUTION_COUNT, MIN_UPDATES_FOR_TRACKING};
 
     /// Isotropic 5 m measurement noise, so these tests exercise tracking
     /// logic rather than the range-dependent noise model.
     const TEST_COV: PositionCovariance = PositionCovariance::isotropic(25.0);
+
+    /// Guard-zone hits that take a fresh track to promotion.
+    const PROMOTING_HITS: u64 = MIN_UPDATES_FOR_TRACKING as u64;
 
     fn make_test_manager(merge_mode: bool) -> TrackerManager {
         let (sk_tx, _rx) = broadcast::channel(16);
@@ -1043,6 +1052,44 @@ mod tests {
         assert_ne!(status(&manager), Some(TargetStatus::Lost), "lost too soon");
         manager.process_revolution(key, None);
         assert_eq!(status(&manager), Some(TargetStatus::Lost));
+    }
+
+    /// A target the user acquired is listed from the click on, not only once
+    /// it has been confirmed.
+    #[test]
+    fn a_manual_target_is_listed_at_once() {
+        let mut manager = make_test_manager(false);
+        manager.process_marpa(MarpaRequest {
+            radar_key: "nav1".to_string(),
+            position: GeoPosition::new(52.0, 4.0),
+            radar_position: Some(GeoPosition::new(52.0, 4.01)),
+            time: 1000,
+            size_meters: 30.0,
+        });
+        assert_eq!(manager.get_targets_api(None).len(), 1);
+    }
+
+    /// A candidate that is lost before it was confirmed was never shown, so
+    /// clients are not told it is lost either.
+    #[test]
+    fn an_unconfirmed_candidate_is_lost_without_a_word() {
+        let (mut manager, rx) = make_test_manager_with_rx();
+        let key = "nav1";
+        manager.process_blob(BlobMessage {
+            radar_key: key.to_string(),
+            blob: make_blob(0, 100, 20.0),
+            context: make_context(1000, 0),
+        });
+        for _ in 0..LOST_REVOLUTION_COUNT {
+            manager.process_revolution(key, None);
+        }
+
+        let sent: Vec<String> = drain_sk_deltas(rx)
+            .iter()
+            .map(|d| serde_json::to_string(d).unwrap())
+            .filter(|d| d.contains(".targets."))
+            .collect();
+        assert!(sent.is_empty(), "{sent:?}");
     }
 
     #[test]
@@ -1156,6 +1203,24 @@ mod tests {
         assert!(blob_to_covariance(&wide, &ctx).ee > cov.ee);
     }
 
+    /// The pulse smears an echo in range the same way every sweep, so a
+    /// deep blob's range is still known to metres, not to half its depth.
+    #[test]
+    fn a_deep_blob_still_knows_its_range() {
+        // 250 m deep at 5 km, on 7.4 km over 512 pixels.
+        let ctx = SpokeContext {
+            range: 7400,
+            ..make_context(1000, 0)
+        };
+        let mut blob = make_blob(0, 346, 30.0);
+        blob.pixel_extent = 17;
+
+        let cov = blob_to_covariance(&blob, &ctx);
+
+        // Dead ahead, so the range error is on the north axis.
+        assert!(cov.nn.sqrt() < 10.0, "range sigma {:.0} m", cov.nn.sqrt());
+    }
+
     #[test]
     fn blob_covariance_is_near_circular_close_in() {
         // The same blob at 100 m: one spoke subtends well under a metre, so
@@ -1249,9 +1314,8 @@ mod tests {
 
         let mut tracker = super::super::tracker::TargetTracker::new_merged();
 
-        // Process 4 times to promote (requires 4 updates)
         tracker.process_candidate(candidate);
-        for i in 1..4u64 {
+        for i in 1..PROMOTING_HITS {
             let c = TargetCandidate {
                 time: 1000 + i * 3000,
                 position: GeoPosition::new(52.001 + i as f64 * 0.0001, 4.001),
@@ -1386,7 +1450,7 @@ mod tests {
     #[test]
     fn guard_zone_alert_fires_when_target_is_promoted() {
         let (mut manager, rx) = make_test_manager_with_rx();
-        feed_guard_zone_target(&mut manager, "nav1", 0, 1, 4);
+        feed_guard_zone_target(&mut manager, "nav1", 0, 1, PROMOTING_HITS);
         assert_eq!(
             notifications(&drain_sk_deltas(rx)),
             vec![(
@@ -1399,9 +1463,9 @@ mod tests {
     #[test]
     fn guard_zone_stays_silent_for_unconfirmed_blobs() {
         let (mut manager, rx) = make_test_manager_with_rx();
-        // Three hits is one short of promotion, so this is still clutter
-        // as far as clients are concerned.
-        feed_guard_zone_target(&mut manager, "nav1", 0, 1, 3);
+        // One hit short of promotion, so this is still clutter as far as
+        // clients are concerned.
+        feed_guard_zone_target(&mut manager, "nav1", 0, 1, PROMOTING_HITS - 1);
         assert!(notifications(&drain_sk_deltas(rx)).is_empty());
     }
 
@@ -1410,8 +1474,8 @@ mod tests {
         let (mut manager, rx) = make_test_manager_with_rx();
         // Two targets on opposite bearings, both in zone 1: the second one
         // must be announced even though the zone is already alarming.
-        feed_guard_zone_target(&mut manager, "nav1", 0, 1, 4);
-        feed_guard_zone_target(&mut manager, "nav1", 1024, 1, 4);
+        feed_guard_zone_target(&mut manager, "nav1", 0, 1, PROMOTING_HITS);
+        feed_guard_zone_target(&mut manager, "nav1", 1024, 1, PROMOTING_HITS);
         let alerts = notifications(&drain_sk_deltas(rx));
         assert_eq!(alerts.len(), 2);
         assert!(alerts.iter().all(|(_, state)| state == "alert"));
@@ -1420,9 +1484,9 @@ mod tests {
     #[test]
     fn guard_zone_alerts_are_per_radar_and_per_zone() {
         let (mut manager, rx) = make_test_manager_with_rx();
-        feed_guard_zone_target(&mut manager, "nav1", 0, 1, 4);
-        feed_guard_zone_target(&mut manager, "nav1", 1024, 2, 4);
-        feed_guard_zone_target(&mut manager, "nav2", 0, 1, 4);
+        feed_guard_zone_target(&mut manager, "nav1", 0, 1, PROMOTING_HITS);
+        feed_guard_zone_target(&mut manager, "nav1", 1024, 2, PROMOTING_HITS);
+        feed_guard_zone_target(&mut manager, "nav2", 0, 1, PROMOTING_HITS);
         let paths: Vec<String> = notifications(&drain_sk_deltas(rx))
             .into_iter()
             .map(|(path, _)| path)
@@ -1438,24 +1502,25 @@ mod tests {
     }
 
     /// Feed one blob that matches the track `feed_guard_zone_target` built
-    /// but lies outside every guard zone, taking it to its 4th update and
-    /// so to promotion.
+    /// with one hit short of promotion, but lies outside every guard zone,
+    /// so taking it to promotion there.
     fn promote_outside_guard_zone(manager: &mut TrackerManager, radar_key: &str, spoke: u16) {
-        let mut blob = make_blob(spoke, 250, 30.0);
+        let i = PROMOTING_HITS - 1;
+        let mut blob = make_blob(spoke, 256 - 2 * i as usize, 30.0);
         blob.in_guard_zones = Vec::new();
         manager.process_blob(BlobMessage {
             radar_key: radar_key.to_string(),
             blob,
-            context: make_context(10_000, spoke),
+            context: make_context(1000 + i * 3000, spoke),
         });
     }
 
     #[test]
     fn guard_zone_stays_silent_when_promotion_happens_outside_the_zone() {
         let (mut manager, rx) = make_test_manager_with_rx();
-        // Three hits inside zone 1, then the confirming hit outside it: the
+        // Hits inside zone 1, then the confirming hit outside it: the
         // track was never established as an intrusion.
-        feed_guard_zone_target(&mut manager, "nav1", 0, 1, 3);
+        feed_guard_zone_target(&mut manager, "nav1", 0, 1, PROMOTING_HITS - 1);
         promote_outside_guard_zone(&mut manager, "nav1", 0);
 
         // The track really was promoted — it is the alarm that is withheld,
@@ -1474,13 +1539,13 @@ mod tests {
     #[test]
     fn guard_zone_promoted_outside_does_not_hold_the_alarm_up() {
         let (mut manager, rx) = make_test_manager_with_rx();
-        feed_guard_zone_target(&mut manager, "nav1", 0, 1, 3);
+        feed_guard_zone_target(&mut manager, "nav1", 0, 1, PROMOTING_HITS - 1);
         promote_outside_guard_zone(&mut manager, "nav1", 0);
 
         // A real intrusion on another bearing raises zone 1; deleting it has
         // to clear the zone again. It cannot while the track promoted
         // outside still counts as occupying it.
-        feed_guard_zone_target(&mut manager, "nav1", 1024, 1, 4);
+        feed_guard_zone_target(&mut manager, "nav1", 1024, 1, PROMOTING_HITS);
         let intruder = last_target_id(&manager, "nav1");
         assert!(manager.delete_target("nav1", intruder));
 
@@ -1507,7 +1572,7 @@ mod tests {
     #[test]
     fn revolution_clock_ages_targets_when_no_echo_ever_wraps() {
         let mut manager = make_test_manager(false);
-        feed_guard_zone_target(&mut manager, "nav1", 0, 1, 4);
+        feed_guard_zone_target(&mut manager, "nav1", 0, 1, PROMOTING_HITS);
         let target_id = first_target_id(&manager, "nav1");
 
         // Time alone must not age the target: the timeouts are counted in
@@ -1540,7 +1605,7 @@ mod tests {
     #[test]
     fn merged_clock_is_driven_by_one_radar_only() {
         let mut manager = make_test_manager(true);
-        feed_guard_zone_target(&mut manager, "nav1", 0, 1, 4);
+        feed_guard_zone_target(&mut manager, "nav1", 0, 1, PROMOTING_HITS);
         let target_id = first_target_id(&manager, "nav1");
         let status = |m: &TrackerManager| {
             m.shared_tracker
@@ -1580,7 +1645,8 @@ mod tests {
             range: 4000,
             ..make_context(time, spoke)
         };
-        for i in 0..3 {
+        // One hit short of promotion, so the clutter echo would confirm it.
+        for i in 0..PROMOTING_HITS - 1 {
             let mut blob = make_blob(1115, 247, 71.3); // 1,933 m at 196 degrees
             blob.in_guard_zones = vec![1];
             manager.process_blob(BlobMessage {
@@ -1613,7 +1679,7 @@ mod tests {
     #[test]
     fn guard_zone_clears_once_the_zone_is_empty() {
         let (mut manager, rx) = make_test_manager_with_rx();
-        feed_guard_zone_target(&mut manager, "nav1", 0, 1, 4);
+        feed_guard_zone_target(&mut manager, "nav1", 0, 1, PROMOTING_HITS);
 
         let target_id = first_target_id(&manager, "nav1");
         assert!(manager.delete_target("nav1", target_id));
@@ -1636,8 +1702,8 @@ mod tests {
     #[test]
     fn guard_zone_stays_raised_while_a_target_remains() {
         let (mut manager, rx) = make_test_manager_with_rx();
-        feed_guard_zone_target(&mut manager, "nav1", 0, 1, 4);
-        feed_guard_zone_target(&mut manager, "nav1", 1024, 1, 4);
+        feed_guard_zone_target(&mut manager, "nav1", 0, 1, PROMOTING_HITS);
+        feed_guard_zone_target(&mut manager, "nav1", 1024, 1, PROMOTING_HITS);
 
         let target_id = first_target_id(&manager, "nav1");
         manager.delete_target("nav1", target_id);
@@ -1660,7 +1726,7 @@ mod tests {
     #[test]
     fn guard_zone_clears_after_clear_all_targets() {
         let (mut manager, rx) = make_test_manager_with_rx();
-        feed_guard_zone_target(&mut manager, "nav1", 0, 1, 4);
+        feed_guard_zone_target(&mut manager, "nav1", 0, 1, PROMOTING_HITS);
 
         // Clearing a radar's targets removes them without any Lost
         // transition; the alarm must still be released, without waiting
@@ -1685,7 +1751,7 @@ mod tests {
         // occupancy is keyed by each target's last_radar_key rather than
         // by which tracker it came from.
         let (mut manager, rx) = make_test_manager_with_rx_mode(true);
-        feed_guard_zone_target(&mut manager, "nav1", 0, 1, 4);
+        feed_guard_zone_target(&mut manager, "nav1", 0, 1, PROMOTING_HITS);
 
         let target_id = first_target_id(&manager, "nav1");
         assert!(manager.delete_target("nav1", target_id));
