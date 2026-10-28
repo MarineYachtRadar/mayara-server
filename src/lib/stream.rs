@@ -1886,6 +1886,7 @@ mod build_tests {
         assert!(subs.is_due_periodic("navigation.speedOverGround"));
     }
 
+    /// `minPeriod` lets a client on a slow link ask a busy boat to slow down.
     #[test]
     fn a_navigation_path_honours_min_period() {
         let mut subs = ActiveSubscriptions::new(Subscribe::None);
