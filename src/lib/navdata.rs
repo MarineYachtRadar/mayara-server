@@ -750,7 +750,7 @@ pub(crate) fn clear_own_ship_nav() {
     }
 }
 
-pub(crate) fn get_cog() -> Option<f64> {
+pub fn get_cog() -> Option<f64> {
     let cog = COG.load(Ordering::Acquire);
     if !cog.is_nan() {
         return Some(cog);
@@ -766,6 +766,9 @@ pub(crate) fn set_cog(cog: Option<f64>) {
     store_cog(cog);
     let cog = cog.map(|c| c.rem_euclid(std::f64::consts::TAU));
     update_external_nav(|nav| nav.cog = cog.map(|c| (c, std::time::Instant::now())));
+    if let Some(cog) = get_cog() {
+        broadcast_nav_update("navigation.courseOverGroundTrue", cog, "mayara");
+    }
 }
 
 /// COG in radians and SOG in m/s of the boat the emulator sails itself.
@@ -777,6 +780,9 @@ pub(crate) fn set_emulator_course(cog: f64, sog: f64) {
     SOG_FROM_EMULATOR.store(true, Ordering::Release);
     store_cog(Some(cog));
     store_sog(Some(sog));
+    let cog = cog.rem_euclid(std::f64::consts::TAU);
+    broadcast_nav_update("navigation.courseOverGroundTrue", cog, EMULATOR_SOURCE);
+    broadcast_nav_update("navigation.speedOverGround", sog, EMULATOR_SOURCE);
 }
 
 fn store_cog(cog: Option<f64>) {
@@ -794,7 +800,7 @@ fn store_cog(cog: Option<f64>) {
     }
 }
 
-pub(crate) fn get_sog() -> Option<f64> {
+pub fn get_sog() -> Option<f64> {
     let sog = SOG.load(Ordering::Acquire);
     if !sog.is_nan() {
         return Some(sog);
@@ -808,6 +814,9 @@ pub(crate) fn set_sog(sog: Option<f64>) {
     }
     SOG_FROM_EMULATOR.store(false, Ordering::Release);
     store_sog(sog);
+    if let Some(sog) = sog {
+        broadcast_nav_update("navigation.speedOverGround", sog, "mayara");
+    }
 }
 
 fn store_sog(sog: Option<f64>) {
@@ -3161,6 +3170,29 @@ mod tests {
                 .iter()
                 .any(|d| d.contains("navigation.headingTrue")),
             "and the heading: {published:?}"
+        );
+    }
+
+    /// The emulator's course goes out as it is stored, in [0, 2π), so a
+    /// client gets the same number on change as on the tick.
+    #[test]
+    fn the_emulator_course_is_broadcast_as_stored() {
+        let _globals = nav_globals();
+        let (tx, _) = tokio::sync::broadcast::channel(16);
+        let mut rx = NAV_BROADCAST_TX.get_or_init(|| tx).subscribe();
+        while rx.try_recv().is_ok() {}
+
+        set_emulator_course(-std::f64::consts::FRAC_PI_2, 1.0);
+
+        let stored = get_cog().unwrap();
+        let published: Vec<String> = std::iter::from_fn(|| rx.try_recv().ok())
+            .map(|d| serde_json::to_string(&d).unwrap())
+            .collect();
+        assert!(
+            published
+                .iter()
+                .any(|d| d.contains("courseOverGroundTrue") && d.contains(&stored.to_string())),
+            "{stored} not in {published:?}"
         );
     }
 
