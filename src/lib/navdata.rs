@@ -1995,6 +1995,11 @@ fn ais_dynamic_updates(vdd: &ais::VesselDynamicData) -> Option<Value> {
 fn is_long_range_report(sentence: &str) -> bool {
     const FRAGMENT_COUNT: usize = 1;
     const PAYLOAD: usize = 5;
+    // A tag block may come first, with commas of its own; the parser starts
+    // at the sentence's `!` too.
+    let sentence = sentence
+        .find('!')
+        .map_or(sentence, |start| &sentence[start..]);
     let fields: Vec<&str> = sentence.split(',').collect();
     fields.get(FRAGMENT_COUNT) == Some(&"1")
         && fields.get(PAYLOAD).is_some_and(|p| p.starts_with('K'))
@@ -2547,6 +2552,15 @@ mod tests {
         );
         assert!((placed.cog.unwrap() - 51f64.to_radians()).abs() < 1e-6);
         assert_eq!(vessel("351759000").name.as_deref(), Some("EVER DIADEM"));
+    }
+
+    #[test]
+    fn a_long_range_report_is_found_behind_a_tag_block() {
+        let tag = "\\s:2573535,c:1671533231*0B\\";
+        assert!(is_long_range_report(&format!(
+            "{tag}!AIVDM,1,1,,B,KC5E2b@U19PFdLbMuc5=ROv62<7m,0*16"
+        )));
+        assert!(!is_long_range_report(&format!("{tag}{NMEA_AIS}")));
     }
 
     #[test]
