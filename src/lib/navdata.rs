@@ -1993,8 +1993,11 @@ fn ais_dynamic_updates(vdd: &ais::VesselDynamicData) -> Option<Value> {
 /// nmea-parser takes its course, speed and missing-position values from the
 /// wrong bits, so these reports are not used.
 fn is_long_range_report(sentence: &str) -> bool {
+    const FRAGMENT_COUNT: usize = 1;
+    const PAYLOAD: usize = 5;
     let fields: Vec<&str> = sentence.split(',').collect();
-    fields.get(1) == Some(&"1") && fields.get(5).is_some_and(|p| p.starts_with('K'))
+    fields.get(FRAGMENT_COUNT) == Some(&"1")
+        && fields.get(PAYLOAD).is_some_and(|p| p.starts_with('K'))
 }
 
 /// A Signal K update from an AIS static report: the name, and the size the
