@@ -98,6 +98,7 @@ fn test_args(pcap: &Path) -> Cli {
         signalk_token_file: None,
         emulator: false,
         emulator_sparse_spokes: false,
+        emulator_land: None,
         merge_targets: false,
         no_websocket_compression: false,
         mdns_hostname: None,
