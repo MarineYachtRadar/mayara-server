@@ -1933,8 +1933,14 @@ impl NavigationData {
                 set_sog(vtg_sog(&vtg));
             }
             // Our own transponder's reports are VDO, not VDM: never a target.
-            Ok(ParsedMessage::VesselDynamicData(vdd)) if !vdd.own_vessel => {
-                update_ais_vessel(&ais_context(vdd.mmsi), &ais_dynamic_updates(&vdd));
+            Ok(ParsedMessage::VesselDynamicData(vdd))
+                if !vdd.own_vessel && !is_long_range_report(s) =>
+            {
+                // A report without a position must not keep a vessel alive at
+                // the last one it had, so it lets the vessel age out instead.
+                if let Some(updates) = ais_dynamic_updates(&vdd) {
+                    update_ais_vessel(&ais_context(vdd.mmsi), &updates);
+                }
             }
             Ok(ParsedMessage::VesselStaticData(vsd)) if !vsd.own_vessel => {
                 update_ais_vessel(&ais_context(vsd.mmsi), &ais_static_updates(&vsd));
@@ -1952,19 +1958,18 @@ impl NavigationData {
     }
 }
 
-/// The Signal K context an AIS vessel's updates are filed under.
 fn ais_context(mmsi: u32) -> String {
     format!("vessels.urn:mrn:imo:mmsi:{mmsi}")
 }
 
 /// A Signal K update, in SI units, from the values an AIS position report
-/// carries.
-fn ais_dynamic_updates(vdd: &ais::VesselDynamicData) -> Value {
-    let mut values = Vec::new();
-    if let (Some(latitude), Some(longitude)) = (vdd.latitude, vdd.longitude) {
-        values.push(serde_json::json!({ "path": "navigation.position",
-            "value": { "latitude": latitude, "longitude": longitude } }));
-    }
+/// carries, or `None` when it carries no position.
+fn ais_dynamic_updates(vdd: &ais::VesselDynamicData) -> Option<Value> {
+    let (Some(latitude), Some(longitude)) = (vdd.latitude, vdd.longitude) else {
+        return None;
+    };
+    let mut values = vec![serde_json::json!({ "path": "navigation.position",
+        "value": { "latitude": latitude, "longitude": longitude } })];
     if let Some(cog) = vdd.cog {
         values.push(
             serde_json::json!({ "path": "navigation.courseOverGroundTrue",
@@ -1979,7 +1984,16 @@ fn ais_dynamic_updates(vdd: &ais::VesselDynamicData) -> Value {
         values.push(serde_json::json!({ "path": "navigation.headingTrue",
             "value": heading.to_radians() }));
     }
-    serde_json::json!([{ "values": values }])
+    Some(serde_json::json!([{ "values": values }]))
+}
+
+/// Whether a sentence holds an AIS long-range report (message 27), the
+/// one-sentence message whose six-bit payload starts with type 27, `K`.
+/// nmea-parser takes its course, speed and missing-position values from the
+/// wrong bits, so these reports are not used.
+fn is_long_range_report(sentence: &str) -> bool {
+    let fields: Vec<&str> = sentence.split(',').collect();
+    fields.get(1) == Some(&"1") && fields.get(5).is_some_and(|p| p.starts_with('K'))
 }
 
 /// A Signal K update from an AIS static report: the name, and the size the
@@ -2529,6 +2543,31 @@ mod tests {
         );
         assert!((placed.cog.unwrap() - 51f64.to_radians()).abs() < 1e-6);
         assert_eq!(vessel("351759000").name.as_deref(), Some("EVER DIADEM"));
+    }
+
+    #[test]
+    fn nmea_ais_reports_without_a_usable_position_are_not_stored() {
+        let _globals = nav_globals();
+        init_ais_store(tokio::sync::broadcast::channel(16).0);
+        let mut receiver = nmea0183_receiver();
+
+        // Latitude 91 and longitude 181 mean "not available".
+        let no_position = "!AIVDM,1,1,,A,1819@f@P0jdtSF0l4Q@3Q?v00000,0*2C";
+        let long_range = "!AIVDM,1,1,,B,KC5E2b@U19PFdLbMuc5=ROv62<7m,0*16";
+        assert!(is_long_range_report(long_range));
+        assert!(!is_long_range_report(NMEA_AIS));
+        for sentence in [no_position, long_range] {
+            receiver.parse_nmea0183(sentence).unwrap();
+        }
+
+        let mmsis: Vec<_> = get_ais_store()
+            .unwrap()
+            .get_all_active()
+            .into_iter()
+            .map(|v| v.mmsi)
+            .collect();
+        assert!(!mmsis.contains(&"538071225".to_string()), "{mmsis:?}");
+        assert!(!mmsis.contains(&"206914217".to_string()), "{mmsis:?}");
     }
 
     #[test]
