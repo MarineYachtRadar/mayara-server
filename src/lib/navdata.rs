@@ -2012,15 +2012,21 @@ fn ais_static_updates(vsd: &ais::VesselStaticData) -> Value {
     if let Some(name) = &vsd.name {
         values.push(serde_json::json!({ "path": "", "value": { "name": name } }));
     }
-    if let (Some(bow), Some(stern)) = (vsd.dimension_to_bow, vsd.dimension_to_stern) {
+    if let Some(length) = ais_size(vsd.dimension_to_bow, vsd.dimension_to_stern) {
         values.push(serde_json::json!({ "path": "design.length",
-            "value": { "overall": f64::from(bow) + f64::from(stern) } }));
+            "value": { "overall": length } }));
     }
-    if let (Some(port), Some(starboard)) = (vsd.dimension_to_port, vsd.dimension_to_starboard) {
-        values.push(serde_json::json!({ "path": "design.beam",
-            "value": f64::from(port) + f64::from(starboard) }));
+    if let Some(beam) = ais_size(vsd.dimension_to_port, vsd.dimension_to_starboard) {
+        values.push(serde_json::json!({ "path": "design.beam", "value": beam }));
     }
     serde_json::json!([{ "values": values }])
+}
+
+/// The size two antenna offsets add up to, in metres. AIS sends offsets of
+/// 0 for "not available", so a size of 0 is none.
+fn ais_size(a: Option<u16>, b: Option<u16>) -> Option<f64> {
+    let size = f64::from(a?) + f64::from(b?);
+    (size > 0.0).then_some(size)
 }
 
 const KPH_PER_KNOT: f64 = 1.852;
@@ -2561,6 +2567,13 @@ mod tests {
             "{tag}!AIVDM,1,1,,B,KC5E2b@U19PFdLbMuc5=ROv62<7m,0*16"
         )));
         assert!(!is_long_range_report(&format!("{tag}{NMEA_AIS}")));
+    }
+
+    #[test]
+    fn an_ais_size_of_zero_is_not_available() {
+        assert_eq!(ais_size(Some(0), Some(0)), None);
+        assert_eq!(ais_size(Some(0), Some(12)), Some(12.0));
+        assert_eq!(ais_size(None, Some(12)), None);
     }
 
     #[test]
