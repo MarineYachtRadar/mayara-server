@@ -840,7 +840,7 @@ const BROADCAST_QUIET_LIMIT: Duration = Duration::from_secs(30);
 /// Listens on `addr` alongside any other program on this host that does the
 /// same, as each of them should get the broadcasts.
 fn udp_broadcast_listener(addr: SocketAddr) -> std::io::Result<UdpSocket> {
-    let socket = crate::network::new_socket()?;
+    let socket = crate::network::new_socket_for(&addr)?;
     #[cfg(unix)]
     socket.set_reuse_port(true)?;
     socket.bind(&addr.into())?;
@@ -2432,6 +2432,17 @@ mod tests {
     async fn two_listeners_can_share_a_udp_navigation_port() {
         let first = udp_broadcast_listener("127.0.0.1:0".parse().unwrap()).unwrap();
         let addr = first.local_addr().unwrap();
+        let second = udp_broadcast_listener(addr).unwrap();
+        assert_eq!(second.local_addr().unwrap(), addr);
+    }
+
+    /// A configured IPv6 navigation address, such as `udp:[::1]:10110`,
+    /// binds rather than retrying forever on an IPv4 socket.
+    #[tokio::test]
+    async fn a_udp_navigation_listener_binds_an_ipv6_address() {
+        let first = udp_broadcast_listener("[::1]:0".parse().unwrap()).unwrap();
+        let addr = first.local_addr().unwrap();
+        assert!(addr.is_ipv6());
         let second = udp_broadcast_listener(addr).unwrap();
         assert_eq!(second.local_addr().unwrap(), addr);
     }
