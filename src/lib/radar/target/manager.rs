@@ -208,7 +208,7 @@ impl TrackerManager {
             self.per_radar_trackers.get_mut(radar_key)
         };
         if let Some(target) = tracker.and_then(|t| t.get_target_mut(target_id)) {
-            target.zone_alarm_raised = true;
+            target.zone_alarm_radar = Some(radar_key.to_string());
         }
         self.guard_zone_alarm
             .entry(radar_key.to_string())
@@ -240,8 +240,12 @@ impl TrackerManager {
                 continue;
             }
             if let Some(idx) = target.source_zone.and_then(guard_zone_index) {
+                let radar_key = target
+                    .zone_alarm_radar
+                    .as_deref()
+                    .unwrap_or(&target.last_radar_key);
                 occupied
-                    .entry(target.last_radar_key.as_str())
+                    .entry(radar_key)
                     .or_insert([false; GUARD_ZONE_COUNT as usize])[idx] = true;
             }
         }
@@ -434,10 +438,6 @@ impl TrackerManager {
     /// the user already knows about it: it alarms only once it has left that
     /// zone and enters one again.
     fn alarm_on_zone_entry(&mut self, radar_key: &str, target_id: u64, in_zones: &[u8]) {
-        let entered = in_zones
-            .iter()
-            .copied()
-            .find(|&z| guard_zone_index(z).is_some());
         let tracker = if self.merge_mode {
             self.shared_tracker.as_mut()
         } else {
@@ -446,6 +446,17 @@ impl TrackerManager {
         let Some(target) = tracker.and_then(|t| t.get_target_mut(target_id)) else {
             return;
         };
+        // Overlapping zones report every zone the echo lies in; the one the
+        // target already holds decides whether this is a return to it.
+        let entered = target
+            .source_zone
+            .filter(|own| in_zones.contains(own))
+            .or_else(|| {
+                in_zones
+                    .iter()
+                    .copied()
+                    .find(|&z| guard_zone_index(z).is_some())
+            });
         let Some(zone) = entered else {
             target.clicked_in_zone = None;
             return;
@@ -458,7 +469,7 @@ impl TrackerManager {
         }
         let entered = match target.source_zone {
             None => true,
-            Some(own) => own == zone && !target.zone_alarm_raised,
+            Some(own) => own == zone && target.zone_alarm_radar.is_none(),
         };
         if !target.is_shown() || !entered {
             return;
@@ -1931,9 +1942,9 @@ mod tests {
         );
     }
 
-    /// In merged mode another radar's echo moves the shared target's alarm
-    /// to that radar and clears it on the first; the target is still the
-    /// same one, so returning to the first radar is not a new entry.
+    /// In merged mode another radar's echo of the shared target neither
+    /// clears the first radar's alarm nor counts as a new entry, and
+    /// neither does the first radar seeing it again.
     #[test]
     fn guard_zone_alerts_once_for_a_merged_target_seen_by_two_radars() {
         let (mut manager, rx) = make_test_manager_with_rx_mode(true);
@@ -1942,16 +1953,34 @@ mod tests {
         manager.process_revolution("nav1", None);
         hit_in_zone(&mut manager, "nav1", 0, 1, PROMOTING_HITS + 1);
 
-        let alerts: Vec<(String, String)> = notifications(&drain_sk_deltas(rx))
-            .into_iter()
-            .filter(|(_, state)| state == "alert")
-            .collect();
         assert_eq!(
-            alerts,
+            notifications(&drain_sk_deltas(rx)),
             vec![(
                 "notifications.radar.nav1.guardZone.1".to_string(),
                 "alert".to_string()
             )]
+        );
+    }
+
+    /// With overlapping zones an echo lies in both; a target that held zone
+    /// 2 before it went Lost returns to zone 2, not to the lower-numbered 1.
+    #[test]
+    fn guard_zone_alerts_again_for_the_held_zone_when_zones_overlap() {
+        let (mut manager, rx) = make_test_manager_with_rx();
+        feed_guard_zone_target(&mut manager, "nav1", 0, 2, PROMOTING_HITS);
+        for _ in 0..LOST_REVOLUTION_COUNT {
+            manager.process_revolution("nav1", None);
+        }
+        hit_in_zones(&mut manager, "nav1", 0, &[1, 2], PROMOTING_HITS);
+
+        let zone2 = "notifications.radar.nav1.guardZone.2".to_string();
+        assert_eq!(
+            notifications(&drain_sk_deltas(rx)),
+            vec![
+                (zone2.clone(), "alert".to_string()),
+                (zone2.clone(), "normal".to_string()),
+                (zone2, "alert".to_string()),
+            ]
         );
     }
 

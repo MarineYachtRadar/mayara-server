@@ -208,9 +208,11 @@ pub struct ActiveTarget {
     /// Guard zone a manual target was clicked in, which it does not alarm
     /// until its echo has left it
     pub clicked_in_zone: Option<u8>,
-    /// Its alarm for `source_zone` has gone out; cleared when it goes Lost,
-    /// so a target found again in that zone alarms again
-    pub zone_alarm_raised: bool,
+    /// Radar whose alarm announced this target in `source_zone`. The target
+    /// holds that radar's zone occupied even when another radar of a merged
+    /// set saw it last; cleared when it goes Lost, so a target found again in
+    /// that zone alarms again
+    pub zone_alarm_radar: Option<String>,
     /// Reached Tracking at least once: confirmed, whatever its status now
     pub confirmed: bool,
     /// Key of radar that last updated this target (for Signal K broadcast path)
@@ -254,7 +256,7 @@ impl ActiveTarget {
             is_manual,
             source_zone,
             clicked_in_zone: None,
-            zone_alarm_raised: false,
+            zone_alarm_radar: None,
             confirmed: false,
             last_radar_key: candidate.radar_key.clone(),
             last_radar_position: candidate.radar_position,
@@ -637,7 +639,7 @@ impl TargetTracker {
                 if revolutions_since_update >= lost_revolutions {
                     target.status = TargetStatus::Lost;
                     target.lost_revolution = current_revolution;
-                    target.zone_alarm_raised = false;
+                    target.zone_alarm_radar = None;
                     lost_ids.push(*id);
                     log::info!(
                         "Target {} marked as lost after {} revolutions without update{}",
