@@ -837,13 +837,12 @@ const TCP_SERVICE_PREFERENCE: Duration = Duration::from_secs(5);
 /// How long a broadcaster may go quiet before discovery starts over.
 const BROADCAST_QUIET_LIMIT: Duration = Duration::from_secs(30);
 
-/// Listens on the NMEA 0183 port alongside any other program on this host
-/// that does the same, as each of them should get the broadcasts.
-fn nmea0183_broadcast_listener() -> std::io::Result<UdpSocket> {
-    let socket = crate::network::new_socket()?;
+/// Listens on `addr` alongside any other program on this host that does the
+/// same, as each of them should get the broadcasts.
+fn udp_broadcast_listener(addr: SocketAddr) -> std::io::Result<UdpSocket> {
+    let socket = crate::network::new_socket_for(&addr)?;
     #[cfg(unix)]
     socket.set_reuse_port(true)?;
-    let addr = SocketAddr::from((std::net::Ipv4Addr::UNSPECIFIED, NMEA0183_UDP_PORT));
     socket.bind(&addr.into())?;
     UdpSocket::from_std(socket.into())
 }
@@ -1528,7 +1527,8 @@ impl NavigationData {
         let locator = mdns
             .browse(NMEA0183_SERVICE_NAME)
             .expect("Failed to browse for NMEA0183 service");
-        let broadcast = match nmea0183_broadcast_listener() {
+        let broadcast_addr = SocketAddr::from((std::net::Ipv4Addr::UNSPECIFIED, NMEA0183_UDP_PORT));
+        let broadcast = match udp_broadcast_listener(broadcast_addr) {
             Ok(socket) => Some(socket),
             Err(e) => {
                 log::debug!("NMEA0183: cannot listen on UDP port {NMEA0183_UDP_PORT}: {e}");
@@ -1642,21 +1642,20 @@ impl NavigationData {
         log::debug!("UDP find_service (re)start");
 
         loop {
-            let s = &subsys;
-
-            tokio::select! { biased;
-                _ = s.on_shutdown_requested() => {
-                    return Err(RadarError::Shutdown);
-                },
-                stream = UdpSocket::bind(addr) => {
-                    match stream {
-                        Ok(stream) => {
-                            return Ok(Stream::Udp(stream, None));
-                        }
-                        Err(e) => {
-                            log::trace!("Failed to bind {} to {addr}: {e}", self.what);
-                            sleep(Duration::from_millis(1000)).await;
-                        }
+            if subsys.is_shutdown_requested() {
+                return Err(RadarError::Shutdown);
+            }
+            match udp_broadcast_listener(addr) {
+                Ok(stream) => {
+                    return Ok(Stream::Udp(stream, None));
+                }
+                Err(e) => {
+                    log::trace!("Failed to bind {} to {addr}: {e}", self.what);
+                    tokio::select! { biased;
+                        _ = subsys.on_shutdown_requested() => {
+                            return Err(RadarError::Shutdown);
+                        },
+                        _ = sleep(Duration::from_millis(1000)) => {}
                     }
                 }
             }
@@ -2425,6 +2424,50 @@ mod tests {
         let socket = loopback_socket().await;
         let r = readable_within(&socket, Some(Duration::from_millis(20))).await;
         assert!(matches!(r, Err(RadarError::Timeout)), "{r:?}");
+    }
+
+    /// Two listeners on the same host can bind the same UDP navigation port,
+    /// as each of them should get the broadcasts.
+    #[tokio::test]
+    async fn two_listeners_can_share_a_udp_navigation_port() {
+        let first = udp_broadcast_listener("127.0.0.1:0".parse().unwrap()).unwrap();
+        let addr = first.local_addr().unwrap();
+        let second = udp_broadcast_listener(addr).unwrap();
+        assert_eq!(second.local_addr().unwrap(), addr);
+    }
+
+    /// A configured IPv6 navigation address, such as `udp:[::1]:10110`,
+    /// binds rather than retrying forever on an IPv4 socket.
+    #[tokio::test]
+    async fn a_udp_navigation_listener_binds_an_ipv6_address() {
+        if std::net::UdpSocket::bind("[::1]:0").is_err() {
+            eprintln!("skipped: this host has no IPv6 loopback");
+            return;
+        }
+        let first = udp_broadcast_listener("[::1]:0".parse().unwrap()).unwrap();
+        let addr = first.local_addr().unwrap();
+        assert!(addr.is_ipv6());
+        let second = udp_broadcast_listener(addr).unwrap();
+        assert_eq!(second.local_addr().unwrap(), addr);
+    }
+
+    /// A configured UDP endpoint that can be bound stops at shutdown rather
+    /// than binding again, so the navigation task ends instead of reopening
+    /// its socket over and over.
+    #[tokio::test]
+    async fn a_udp_navigation_endpoint_stops_at_shutdown() {
+        use tokio_graceful_shutdown::Toplevel;
+
+        Toplevel::new(async |subsys: &mut SubsystemHandle| {
+            subsys.request_shutdown();
+            let r = nmea0183_receiver()
+                .find_udp_service(subsys, "127.0.0.1:0".parse().unwrap())
+                .await;
+            assert!(matches!(r, Err(RadarError::Shutdown)), "{:?}", r.err());
+        })
+        .handle_shutdown_requests(Duration::from_secs(1))
+        .await
+        .unwrap();
     }
 
     const ACTIVE_RMC: &str = "$GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W*6A";

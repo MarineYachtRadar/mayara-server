@@ -75,7 +75,16 @@ impl fmt::Debug for LittleEndianSocketAddrV4 {
 
 // this will be common for all our sockets
 pub(crate) fn new_socket() -> io::Result<socket2::Socket> {
-    let socket = socket2::Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
+    new_socket_in(Domain::IPV4)
+}
+
+/// A socket of the address family `addr` will be bound to.
+pub(crate) fn new_socket_for(addr: &SocketAddr) -> io::Result<socket2::Socket> {
+    new_socket_in(Domain::for_address(*addr))
+}
+
+fn new_socket_in(domain: Domain) -> io::Result<socket2::Socket> {
+    let socket = socket2::Socket::new(domain, Type::DGRAM, Some(Protocol::UDP))?;
 
     // we're going to use read timeouts so that we don't hang waiting for packets
     socket.set_nonblocking(true)?;
