@@ -202,6 +202,14 @@ impl TrackerManager {
         let Some(idx) = guard_zone_index(zone) else {
             return;
         };
+        let tracker = if self.merge_mode {
+            self.shared_tracker.as_mut()
+        } else {
+            self.per_radar_trackers.get_mut(radar_key)
+        };
+        if let Some(target) = tracker.and_then(|t| t.get_target_mut(target_id)) {
+            target.zone_alarm_raised = true;
+        }
         self.guard_zone_alarm
             .entry(radar_key.to_string())
             .or_insert([false; GUARD_ZONE_COUNT as usize])[idx] = true;
@@ -428,12 +436,8 @@ impl TrackerManager {
     fn alarm_on_zone_entry(&mut self, radar_key: &str, target_id: u64, in_zones: &[u8]) {
         let entered = in_zones
             .iter()
-            .find_map(|&z| guard_zone_index(z).map(|idx| (z, idx)));
-        let raised = entered.is_some_and(|(_, idx)| {
-            self.guard_zone_alarm
-                .get(radar_key)
-                .is_some_and(|alarms| alarms[idx])
-        });
+            .copied()
+            .find(|&z| guard_zone_index(z).is_some());
         let tracker = if self.merge_mode {
             self.shared_tracker.as_mut()
         } else {
@@ -442,7 +446,7 @@ impl TrackerManager {
         let Some(target) = tracker.and_then(|t| t.get_target_mut(target_id)) else {
             return;
         };
-        let Some((zone, _)) = entered else {
+        let Some(zone) = entered else {
             target.clicked_in_zone = None;
             return;
         };
@@ -454,7 +458,7 @@ impl TrackerManager {
         }
         let entered = match target.source_zone {
             None => true,
-            Some(own) => own == zone && !raised,
+            Some(own) => own == zone && !target.zone_alarm_raised,
         };
         if !target.is_shown() || !entered {
             return;
@@ -1924,6 +1928,30 @@ mod tests {
                 (zone1.clone(), "normal".to_string()),
                 (zone1, "alert".to_string()),
             ]
+        );
+    }
+
+    /// In merged mode another radar's echo moves the shared target's alarm
+    /// to that radar and clears it on the first; the target is still the
+    /// same one, so returning to the first radar is not a new entry.
+    #[test]
+    fn guard_zone_alerts_once_for_a_merged_target_seen_by_two_radars() {
+        let (mut manager, rx) = make_test_manager_with_rx_mode(true);
+        feed_guard_zone_target(&mut manager, "nav1", 0, 1, PROMOTING_HITS);
+        hit_in_zone(&mut manager, "nav2", 0, 1, PROMOTING_HITS);
+        manager.process_revolution("nav1", None);
+        hit_in_zone(&mut manager, "nav1", 0, 1, PROMOTING_HITS + 1);
+
+        let alerts: Vec<(String, String)> = notifications(&drain_sk_deltas(rx))
+            .into_iter()
+            .filter(|(_, state)| state == "alert")
+            .collect();
+        assert_eq!(
+            alerts,
+            vec![(
+                "notifications.radar.nav1.guardZone.1".to_string(),
+                "alert".to_string()
+            )]
         );
     }
 
