@@ -881,7 +881,10 @@ fn is_on(interface: Option<&str>, sender: &SocketAddr) -> bool {
 }
 
 /// Whether a datagram holds a checksummed sentence with position, heading or
-/// motion, which tells a navigation source from AIS or other traffic.
+/// motion, which tells a navigation source from AIS or other traffic. A
+/// sentence the receiver would reject as corrupt, or one without the
+/// position, heading or motion it exists to carry, does not count, so a
+/// sender of only those cannot win discovery over one with usable data.
 fn carries_navigation(datagram: &[u8]) -> bool {
     let Ok(text) = std::str::from_utf8(datagram) else {
         return false;
@@ -889,13 +892,24 @@ fn carries_navigation(datagram: &[u8]) -> bool {
     let mut parser = NmeaParser::new();
     text.lines().map(str::trim).any(|line| {
         line.rfind('*').is_some_and(|star| star + 3 <= line.len())
-            && matches!(
-                parse_nmea_sentence(&mut parser, line),
-                Ok(ParsedMessage::Rmc(_)
-                    | ParsedMessage::Gll(_)
-                    | ParsedMessage::Hdt(_)
-                    | ParsedMessage::Vtg(_))
-            )
+            && match parse_nmea_sentence(&mut parser, line) {
+                Ok(ParsedMessage::Rmc(rmc)) => {
+                    rmc.latitude.is_some()
+                        && rmc.longitude.is_some()
+                        && check_rmc_motion(&rmc).is_ok()
+                }
+                Ok(ParsedMessage::Gll(gll)) => gll.latitude.is_some() && gll.longitude.is_some(),
+                Ok(ParsedMessage::Hdt(hdt)) => {
+                    matches!(nmea_angle(hdt.heading_true, "heading"), Ok(Some(_)))
+                }
+                Ok(ParsedMessage::Vtg(vtg)) => {
+                    (vtg.cog_true.is_some() || vtg.sog_knots.is_some() || vtg.sog_kph.is_some())
+                        && nmea_angle(vtg.cog_true, "course").is_ok()
+                        && check_nmea_speed(vtg.sog_knots, "kn").is_ok()
+                        && check_nmea_speed(vtg.sog_kph, "km/h").is_ok()
+                }
+                _ => false,
+            }
     })
 }
 
@@ -2395,6 +2409,28 @@ mod tests {
         let corrupt = NMEA_RMC.replace("*6A", "*00");
         assert!(!carries_navigation(corrupt.as_bytes()));
         assert!(!carries_navigation(b"\xff\xfe not text"));
+    }
+
+    /// A sender of only impossible or empty positions, headings, courses or
+    /// speeds must not be locked onto ahead of one with usable navigation
+    /// data.
+    #[test]
+    fn a_rejected_or_empty_value_carries_no_navigation() {
+        assert!(carries_navigation(b"$GPHDT,224.2,T*33"));
+        for sentence in [
+            "$GPHDT,720.0,T*30",
+            "$GPHDT,NaN,T*7A",
+            "$GPHDT,,T*1B",
+            "$GPVTG,720.0,T,,M,6.0,N,11.1,K,A*3F",
+            "$GPVTG,90.0,T,,M,-6.0,N,-11.1,K,A*03",
+            "$GPVTG,,T,,M,,N,,K,N*2C",
+            "$GPRMC,123519,A,4807.038,N,01131.000,E,022.4,720.0,230394,003.1,W*67",
+            "$GPRMC,123519,A,4807.038,N,01131.000,E,-1.0,084.4,230394,003.1,W*42",
+            "$GPRMC,123519,V,,,,,,,230394,,,N*51",
+            "$GPGLL,,,,,123519,V,N*69",
+        ] {
+            assert!(!carries_navigation(sentence.as_bytes()), "{sentence}");
+        }
     }
 
     async fn loopback_socket() -> UdpSocket {
