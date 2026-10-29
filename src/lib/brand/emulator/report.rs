@@ -39,7 +39,7 @@ const DEG_TO_RAD: f64 = PI / 180.0;
 /// small boat far out shows as an arc rather than a speck or not at all.
 const HALF_BEAM_WIDTH: f64 = 1.0 * DEG_TO_RAD;
 /// Land returns strongly, but less than a ship's steel
-const LAND_INTENSITY: u8 = 12;
+const LAND_INTENSITY: u8 = 14;
 /// An echo is never shorter than this many pixels along a spoke, as a
 /// radar pulse has a length of its own.
 const MIN_ECHO_PIXELS: f64 = 2.0;
