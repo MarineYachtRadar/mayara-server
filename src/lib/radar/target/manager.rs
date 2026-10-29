@@ -33,6 +33,10 @@ const MARPA_CLICK_VARIANCE: f64 = 1250.0;
 /// Zone 0 is reserved for manual MARPA acquisition and never alarms.
 const GUARD_ZONE_COUNT: u8 = 2;
 
+/// A manual target's update count after its first echo: the click itself
+/// counts as the first update.
+const MANUAL_FIRST_ECHO_UPDATES: u32 = 2;
+
 /// Index into a per-radar alarm array for a wire zone number, or `None`
 /// when the number is outside the guard zones (manual MARPA, or a value
 /// a brand backend should never produce).
@@ -414,20 +418,22 @@ impl TrackerManager {
     /// not acquired in: one the user acquired by hand, one Doppler picked up
     /// outside the zones, or one that was confirmed outside and drives in
     /// later. Its zone is recorded, so it alarms once and holds the zone
-    /// occupied like a target acquired there. A target that went Lost, and
-    /// so let its zone's alarm clear, alarms again when it is found in that
-    /// zone.
+    /// occupied like a target acquired there; a target that already holds a
+    /// zone does not alarm another. A target that went Lost, and so let its
+    /// zone's alarm clear, alarms again when it is found in that zone.
+    ///
+    /// A manual target whose first echo lies in a zone was clicked there, so
+    /// the user already knows about it: it alarms only once it has left that
+    /// zone and enters one again.
     fn alarm_on_zone_entry(&mut self, radar_key: &str, target_id: u64, in_zones: &[u8]) {
-        let Some((zone, idx)) = in_zones
+        let entered = in_zones
             .iter()
-            .find_map(|&z| guard_zone_index(z).map(|idx| (z, idx)))
-        else {
-            return;
-        };
-        let raised = self
-            .guard_zone_alarm
-            .get(radar_key)
-            .is_some_and(|alarms| alarms[idx]);
+            .find_map(|&z| guard_zone_index(z).map(|idx| (z, idx)));
+        let raised = entered.is_some_and(|(_, idx)| {
+            self.guard_zone_alarm
+                .get(radar_key)
+                .is_some_and(|alarms| alarms[idx])
+        });
         let tracker = if self.merge_mode {
             self.shared_tracker.as_mut()
         } else {
@@ -436,6 +442,16 @@ impl TrackerManager {
         let Some(target) = tracker.and_then(|t| t.get_target_mut(target_id)) else {
             return;
         };
+        let Some((zone, _)) = entered else {
+            target.clicked_in_zone = None;
+            return;
+        };
+        if target.is_manual && target.update_count == MANUAL_FIRST_ECHO_UPDATES {
+            target.clicked_in_zone = Some(zone);
+        }
+        if target.clicked_in_zone == Some(zone) {
+            return;
+        }
         let entered = match target.source_zone {
             None => true,
             Some(own) => own == zone && !raised,
@@ -1832,12 +1848,36 @@ mod tests {
     /// One blob of the track `feed_guard_zone_target` builds, `i` hits in,
     /// lying in guard zone `zone`.
     fn hit_in_zone(manager: &mut TrackerManager, radar_key: &str, spoke: u16, zone: u8, i: u64) {
+        hit_in_zones(manager, radar_key, spoke, &[zone], i);
+    }
+
+    /// One blob of that track, lying in the guard zones `zones`.
+    fn hit_in_zones(
+        manager: &mut TrackerManager,
+        radar_key: &str,
+        spoke: u16,
+        zones: &[u8],
+        i: u64,
+    ) {
         let mut blob = make_blob(spoke, 256 - 2 * i as usize, 30.0);
-        blob.in_guard_zones = vec![zone];
+        blob.in_guard_zones = zones.to_vec();
         manager.process_blob(BlobMessage {
             radar_key: radar_key.to_string(),
             blob,
             context: make_context(1000 + i * 3000, spoke),
+        });
+    }
+
+    /// Acquire by hand where the first blob of `hit_in_zones` lies, so the
+    /// track's echoes update the acquired target rather than start a new one.
+    fn click_at_first_hit(manager: &mut TrackerManager, radar_key: &str) {
+        let click = blob_to_position(&make_blob(0, 256, 30.0), &make_context(1000, 0)).unwrap();
+        manager.process_marpa(MarpaRequest {
+            radar_key: radar_key.to_string(),
+            position: click,
+            radar_position: Some(GeoPosition::new(52.0, 4.0)),
+            time: 500,
+            size_meters: 30.0,
         });
     }
 
@@ -1890,18 +1930,9 @@ mod tests {
     #[test]
     fn guard_zone_alerts_when_a_manual_target_drives_in() {
         let (mut manager, rx) = make_test_manager_with_rx();
-        let radar = GeoPosition::new(52.0, 4.0);
-        // Click where the first blob of `hit_in_zone` lies, so that echo
-        // updates the acquired target rather than starting a new one.
-        let click = blob_to_position(&make_blob(0, 256, 30.0), &make_context(1000, 0)).unwrap();
-        manager.process_marpa(MarpaRequest {
-            radar_key: "nav1".to_string(),
-            position: click,
-            radar_position: Some(radar),
-            time: 500,
-            size_meters: 30.0,
-        });
-        hit_in_zone(&mut manager, "nav1", 0, 1, 0);
+        click_at_first_hit(&mut manager, "nav1");
+        hit_in_zones(&mut manager, "nav1", 0, &[], 0);
+        hit_in_zone(&mut manager, "nav1", 0, 1, 1);
 
         let target_id = first_target_id(&manager, "nav1");
         assert_eq!(
@@ -1911,6 +1942,34 @@ mod tests {
                 .source_zone,
             Some(1)
         );
+        assert_eq!(
+            notifications(&drain_sk_deltas(rx)),
+            vec![(
+                "notifications.radar.nav1.guardZone.1".to_string(),
+                "alert".to_string()
+            )]
+        );
+    }
+
+    /// The user clicked the target where it lies, so the zone it lies in is
+    /// no news.
+    #[test]
+    fn guard_zone_stays_silent_for_a_manual_target_clicked_inside() {
+        let (mut manager, rx) = make_test_manager_with_rx();
+        click_at_first_hit(&mut manager, "nav1");
+        for i in 0..PROMOTING_HITS {
+            hit_in_zone(&mut manager, "nav1", 0, 1, i);
+        }
+        assert!(notifications(&drain_sk_deltas(rx)).is_empty());
+    }
+
+    #[test]
+    fn guard_zone_alerts_when_a_manual_target_clicked_inside_comes_back() {
+        let (mut manager, rx) = make_test_manager_with_rx();
+        click_at_first_hit(&mut manager, "nav1");
+        hit_in_zone(&mut manager, "nav1", 0, 1, 0);
+        hit_in_zones(&mut manager, "nav1", 0, &[], 1);
+        hit_in_zone(&mut manager, "nav1", 0, 1, 2);
         assert_eq!(
             notifications(&drain_sk_deltas(rx)),
             vec![(

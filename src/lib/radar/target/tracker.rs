@@ -205,6 +205,9 @@ pub struct ActiveTarget {
     pub is_manual: bool,
     /// Which guard zone acquired this target (1 or 2), or None for manual/doppler
     pub source_zone: Option<u8>,
+    /// Guard zone a manual target was clicked in, which it does not alarm
+    /// until its echo has left it
+    pub clicked_in_zone: Option<u8>,
     /// Reached Tracking at least once: confirmed, whatever its status now
     pub confirmed: bool,
     /// Key of radar that last updated this target (for Signal K broadcast path)
@@ -247,6 +250,7 @@ impl ActiveTarget {
             status: TargetStatus::Acquiring,
             is_manual,
             source_zone,
+            clicked_in_zone: None,
             confirmed: false,
             last_radar_key: candidate.radar_key.clone(),
             last_radar_position: candidate.radar_position,
