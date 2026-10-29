@@ -945,7 +945,7 @@ struct AcquireTargetRequest {
 struct AcquireTargetResponse {
     /// Unique identifier for the acquired target
     #[schema(example = 1)]
-    target_id: usize,
+    target_id: u64,
     /// Radar that is tracking this target
     #[schema(example = "nav1034A")]
     radar_id: String,
@@ -1048,19 +1048,33 @@ async fn acquire_target(
         size_meters: 30.0, // Default ship size estimate
     };
 
-    // Send to tracker
-    if let Err(e) = command_tx.try_send(TrackerCommand::Marpa(marpa_request)) {
+    let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+    if let Err(e) = command_tx
+        .send(TrackerCommand::Marpa {
+            request: marpa_request,
+            response_tx,
+        })
+        .await
+    {
         log::error!("Failed to send MARPA request: {}", e);
         return SignalKResponse::failed(
             StatusCode::INTERNAL_SERVER_ERROR,
             "Failed to send acquisition request".to_string(),
         );
     }
+    let target_id = match response_rx.await {
+        Ok(id) => id,
+        Err(e) => {
+            log::error!("Failed to receive MARPA response: {}", e);
+            return SignalKResponse::failed(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to receive acquisition response".to_string(),
+            );
+        }
+    };
 
-    // Return success - target will be tracked and updates broadcast via delta stream
-    // The actual target ID will be assigned by the tracker after confirmation
     Json(AcquireTargetResponse {
-        target_id: 0, // Will be assigned when target is confirmed
+        target_id,
         radar_id: radar.key(),
     })
     .into_response()
