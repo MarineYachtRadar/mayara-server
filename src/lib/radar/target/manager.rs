@@ -31,7 +31,7 @@ const MARPA_CLICK_VARIANCE: f64 = 1250.0;
 
 /// Guard zones a radar carries, numbered 1..=GUARD_ZONE_COUNT on the wire.
 /// Zone 0 is reserved for manual MARPA acquisition and never alarms.
-const GUARD_ZONE_COUNT: u8 = 2;
+pub(super) const GUARD_ZONE_COUNT: u8 = 2;
 
 /// A manual target's update count after its first echo: the click itself
 /// counts as the first update.
@@ -461,15 +461,15 @@ impl TrackerManager {
                     .find(|&z| guard_zone_index(z).is_some())
             });
         let Some(zone) = entered else {
-            target.clicked_in_zones = [false; 2];
+            target.clicked_in_zones = [false; GUARD_ZONE_COUNT as usize];
             return;
         };
         if target.is_manual && target.update_count == MANUAL_FIRST_ECHO_UPDATES {
-            for index in in_zones.iter().filter_map(|&z| guard_zone_index(z)) {
-                target.clicked_in_zones[index] = true;
+            for idx in in_zones.iter().filter_map(|&z| guard_zone_index(z)) {
+                target.clicked_in_zones[idx] = true;
             }
         }
-        if guard_zone_index(zone).is_some_and(|index| target.clicked_in_zones[index]) {
+        if guard_zone_index(zone).is_some_and(|idx| target.clicked_in_zones[idx]) {
             return;
         }
         let entered = match target.source_zone {
