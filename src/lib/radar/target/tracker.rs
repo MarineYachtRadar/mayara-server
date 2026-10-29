@@ -206,9 +206,9 @@ pub struct ActiveTarget {
     /// Guard zone (1 or 2) this target occupies: the zone that acquired it,
     /// or the last zone a tracked target was announced entering
     pub source_zone: Option<u8>,
-    /// Guard zone a manual target was clicked in, which it does not alarm
-    /// until its echo has left it
-    pub clicked_in_zone: Option<u8>,
+    /// Guard zones a manual target was clicked in, by zone index, which it
+    /// does not alarm for until its echo has left every zone
+    pub clicked_in_zones: [bool; 2],
     /// Radar whose alarm announced this target in `source_zone`. The target
     /// holds that radar's zone occupied even when another radar of a merged
     /// set saw it last; cleared when it goes Lost, so a target found again in
@@ -256,7 +256,7 @@ impl ActiveTarget {
             status: TargetStatus::Acquiring,
             is_manual,
             source_zone,
-            clicked_in_zone: None,
+            clicked_in_zones: [false; 2],
             zone_alarm_radar: None,
             confirmed: false,
             last_radar_key: candidate.radar_key.clone(),

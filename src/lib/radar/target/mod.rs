@@ -121,7 +121,8 @@ pub struct ArpaTargetApi {
     pub danger: TargetDangerApi,
     /// How target was acquired: "auto" or "manual"
     pub acquisition: String,
-    /// Which guard zone acquired this target (1 or 2), or 0 for manual
+    /// Guard zone (1 or 2) this target occupies: the zone that acquired it,
+    /// or the last zone a tracked target was announced entering
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_zone: Option<u8>,
     /// ISO 8601 timestamp when target was first seen

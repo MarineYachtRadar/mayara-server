@@ -438,8 +438,8 @@ impl TrackerManager {
     /// zone's alarm clear, alarms again when it is found in that zone.
     ///
     /// A manual target whose first echo lies in a zone was clicked there, so
-    /// the user already knows about it: it alarms only once it has left that
-    /// zone and enters one again.
+    /// the user already knows about it: it alarms only once it has left every
+    /// zone it was clicked in and enters one again.
     fn alarm_on_zone_entry(&mut self, radar_key: &str, target_id: u64, in_zones: &[u8]) {
         let tracker = if self.merge_mode {
             self.shared_tracker.as_mut()
@@ -461,13 +461,15 @@ impl TrackerManager {
                     .find(|&z| guard_zone_index(z).is_some())
             });
         let Some(zone) = entered else {
-            target.clicked_in_zone = None;
+            target.clicked_in_zones = [false; 2];
             return;
         };
         if target.is_manual && target.update_count == MANUAL_FIRST_ECHO_UPDATES {
-            target.clicked_in_zone = Some(zone);
+            for index in in_zones.iter().filter_map(|&z| guard_zone_index(z)) {
+                target.clicked_in_zones[index] = true;
+            }
         }
-        if target.clicked_in_zone == Some(zone) {
+        if guard_zone_index(zone).is_some_and(|index| target.clicked_in_zones[index]) {
             return;
         }
         let entered = match target.source_zone {
@@ -2079,6 +2081,19 @@ mod tests {
                 "alert".to_string()
             )]
         );
+    }
+
+    /// Clicked where two zones overlap, the target was clicked in both, so
+    /// leaving one while it stays in the other is no entry.
+    #[test]
+    fn guard_zone_stays_silent_for_a_manual_target_clicked_in_overlapping_zones() {
+        let (mut manager, rx) = make_test_manager_with_rx();
+        click_at_first_hit(&mut manager, "nav1");
+        hit_in_zones(&mut manager, "nav1", 0, &[1, 2], 0);
+        for i in 1..PROMOTING_HITS {
+            hit_in_zone(&mut manager, "nav1", 0, 2, i);
+        }
+        assert!(notifications(&drain_sk_deltas(rx)).is_empty());
     }
 
     /// After a noisy measurement the Kalman filter's smoothed position
