@@ -1,7 +1,7 @@
 use directories::ProjectDirs;
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fs;
 use std::fs::File;
@@ -148,6 +148,8 @@ pub(crate) struct Persistence {
     /// The stored answer no longer matches what the user asked for, so this
     /// run neither reports nor asks again.
     consent_unwritable: bool,
+    /// Radars whose model-dependent controls have taken their saved values.
+    model_controls_restored: HashSet<String>,
 }
 
 const SETTINGS_FILE: &str = "settings.json";
@@ -222,6 +224,7 @@ impl Persistence {
             path: PathBuf::new(),
             unwritable,
             consent_unwritable: false,
+            model_controls_restored: HashSet::new(),
         }
     }
 
@@ -280,6 +283,7 @@ impl Persistence {
             path: settings_path,
             unwritable: None,
             consent_unwritable: false,
+            model_controls_restored: HashSet::new(),
         };
 
         match this.load() {
@@ -308,6 +312,7 @@ impl Persistence {
             unwritable: Some(self.path),
             path: PathBuf::new(),
             consent_unwritable: self.consent_unwritable,
+            model_controls_restored: self.model_controls_restored,
         }
     }
 
@@ -482,6 +487,7 @@ impl Persistence {
     }
 
     pub(crate) fn store(&mut self, radar_info: &RadarInfo) {
+        self.restore_model_controls(radar_info);
         if self.path.as_os_str().is_empty() {
             return; // Pcap replay mode — no persistence
         }
@@ -614,14 +620,36 @@ impl Persistence {
             modified = true;
         }
 
-        let doppler_auto_track = radar_info.controls.doppler_auto_track();
-        if radar.doppler_auto_track != doppler_auto_track {
-            radar.doppler_auto_track = doppler_auto_track;
-            modified = true;
+        // Until the model is known there is no Doppler Auto Track control,
+        // and its absence must not overwrite the saved choice.
+        if radar_info
+            .controls
+            .contains_key(&ControlId::DopplerAutoTrack)
+        {
+            let doppler_auto_track = radar_info.controls.doppler_auto_track();
+            if radar.doppler_auto_track != doppler_auto_track {
+                radar.doppler_auto_track = doppler_auto_track;
+                modified = true;
+            }
         }
 
         if modified {
             let _ = self.save();
+        }
+    }
+
+    /// Give the controls a radar only gets once its model is known their
+    /// saved values, the first time they are there. They do not exist yet
+    /// when `update_info_from_persistence` runs as the radar is found.
+    fn restore_model_controls(&mut self, radar_info: &RadarInfo) {
+        let controls = &radar_info.controls;
+        if !controls.contains_key(&ControlId::DopplerAutoTrack)
+            || !self.model_controls_restored.insert(radar_info.key())
+        {
+            return;
+        }
+        if let Some(p) = self.config.radars.get(&radar_info.key()) {
+            controls.set_doppler_auto_track(p.doppler_auto_track);
         }
     }
 
@@ -706,7 +734,6 @@ impl Persistence {
                     .set_exclusion_rect(&ControlId::ExclusionRect4, rect);
             }
             info.controls.set_arpa_max_speed(p.arpa_max_speed);
-            info.controls.set_doppler_auto_track(p.doppler_auto_track);
         }
     }
 }
@@ -944,6 +971,78 @@ mod tests {
         assert_eq!(
             Persistence::disabled(None).storage(),
             SettingsStorage::NotWanted
+        );
+    }
+
+    /// A radar as discovery finds it: with only the controls every radar of
+    /// its brand has, before its model is known.
+    fn found_radar() -> RadarInfo {
+        use crate::radar::SharedRadars;
+        use crate::radar::settings::SharedControls;
+        use clap::Parser;
+        use std::net::{Ipv4Addr, SocketAddrV4};
+
+        const PIXEL_VALUES: u8 = 64;
+        const SPOKES: usize = 2048;
+        const SPOKE_LEN: usize = 1024;
+        let args = crate::Cli::parse_from(["mayara-server"]);
+        let addr = SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 2), 10000);
+        RadarInfo::new(
+            &SharedRadars::new(),
+            &args,
+            Brand::Furuno,
+            Some("TEST0001"),
+            None,
+            None,
+            PIXEL_VALUES,
+            SPOKES,
+            SPOKE_LEN,
+            addr,
+            Ipv4Addr::new(10, 0, 0, 1),
+            addr,
+            addr,
+            addr,
+            |id, tx| SharedControls::new(id, tx, &args, HashMap::new()),
+            true,
+            true,
+        )
+    }
+
+    /// Doppler Auto Track only exists once the radar has told its model,
+    /// which is after the saved settings were applied to the radar found.
+    /// A restart must still bring the switch back the way the user left it.
+    #[test]
+    fn doppler_auto_track_survives_a_restart() {
+        use crate::radar::settings::new_list;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut p = persistence_at(dir.path().join("settings.json"));
+        let mut info = found_radar();
+        p.config.radars.insert(
+            info.key(),
+            Radar {
+                doppler_auto_track: true,
+                ..Default::default()
+            },
+        );
+
+        p.update_info_from_persistence(&mut info);
+        p.store(&info);
+        assert!(
+            p.config.radars[&info.key()].doppler_auto_track,
+            "a radar without the control must not overwrite the saved choice"
+        );
+
+        info.controls
+            .add(new_list(ControlId::DopplerAutoTrack, &["Off", "On"]));
+        p.store(&info);
+        assert!(info.controls.doppler_auto_track());
+
+        info.controls.set_doppler_auto_track(false);
+        p.store(&info);
+        assert!(
+            !p.config.radars[&info.key()].doppler_auto_track,
+            "the user's later choice is saved, not undone"
         );
     }
 
