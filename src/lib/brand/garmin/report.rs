@@ -206,6 +206,21 @@ struct RangeState {
     wire_to_legend: WireToLegendTable,
 }
 
+impl RangeState {
+    /// Take the MotionScope mode the radar reported for this range. A new
+    /// mode rebuilds the lookup table, so spoke data in the 0xF0–0xFF
+    /// Doppler range maps to the right legend entries. Returns whether the
+    /// mode changed.
+    fn set_doppler(&mut self, mode: DopplerMode, legend: &Legend, is_xhd: bool) -> bool {
+        if mode == self.doppler {
+            return false;
+        }
+        self.doppler = mode;
+        self.wire_to_legend = wire_to_legend(legend, is_xhd, mode != DopplerMode::None);
+        true
+    }
+}
+
 pub(crate) struct GarminReportReceiver {
     common: CommonRadar,
     common_b: Option<CommonRadar>,
@@ -1256,6 +1271,7 @@ impl GarminReportReceiver {
     }
 
     fn process_range_b_scan_mode(&mut self, data: &[u8]) -> Result<(), Error> {
+        let is_xhd = self.radar_type == GarminRadarType::XHD;
         self.with_range_b(data, |common, rs, d| {
             let value = Self::extract_value(d)?;
             log::debug!("{}: range B doppler mode: {}", common.key, value);
@@ -1264,7 +1280,7 @@ impl GarminReportReceiver {
                 2 => DopplerMode::Both,
                 _ => DopplerMode::None,
             };
-            rs.doppler = mode;
+            rs.set_doppler(mode, &common.info.get_legend(), is_xhd);
             common.set_value(&ControlId::Doppler, mode as i32 as f64);
             Ok(())
         })
@@ -1602,15 +1618,11 @@ impl GarminReportReceiver {
             _ => DopplerMode::None,
         };
 
-        if mode != self.range_a.doppler {
-            self.range_a.doppler = mode;
-            // Rebuild the lookup table so spoke data in the 0xF0–0xFF
-            // doppler range maps to the correct legend entries.
-            self.range_a.wire_to_legend = wire_to_legend(
-                &self.common.info.get_legend(),
-                self.radar_type == GarminRadarType::XHD,
-                mode != DopplerMode::None,
-            );
+        if self.range_a.set_doppler(
+            mode,
+            &self.common.info.get_legend(),
+            self.radar_type == GarminRadarType::XHD,
+        ) {
             log::info!(
                 "{}: MotionScope mode changed to {:?}",
                 self.common.key,
@@ -2103,6 +2115,31 @@ mod tests {
         assert_eq!(lookup[1], 1);
         assert_eq!(lookup[128], 128);
         assert_eq!(lookup[255], 255);
+    }
+
+    /// Both ranges of a dual-range radar show MotionScope once the radar
+    /// reports it on. Range B's table was never rebuilt, so its Doppler
+    /// echoes were drawn, and handed to ARPA, as ordinary ones.
+    #[test]
+    fn a_reported_motionscope_mode_maps_the_doppler_bands() {
+        let mut legend = empty_legend();
+        legend.doppler_approaching = Some((120, 4));
+        legend.doppler_receding = Some((124, 4));
+        let mut range = RangeState {
+            range_meters: 0,
+            doppler: DopplerMode::None,
+            gain_level: 0,
+            gain_auto: false,
+            wire_to_legend: wire_to_legend(&legend, true, false),
+        };
+
+        assert!(range.set_doppler(DopplerMode::Both, &legend, true));
+        assert_eq!(range.wire_to_legend[0xF0], 120);
+        assert_eq!(range.wire_to_legend[0xF8], 124);
+        assert!(!range.set_doppler(DopplerMode::Both, &legend, true));
+
+        assert!(range.set_doppler(DopplerMode::None, &legend, true));
+        assert_eq!(range.wire_to_legend, wire_to_legend(&legend, true, false));
     }
 
     #[test]
