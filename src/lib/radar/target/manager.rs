@@ -189,10 +189,11 @@ impl TrackerManager {
     }
 
     /// Raise `notifications.radar.<key>.guardZone.<zone>` for a target that
-    /// has just been confirmed inside the zone. Fired per target rather
-    /// than only on the first one, so a second vessel entering an already
-    /// alarming zone is still announced.
-    fn raise_guard_zone_alarm(&mut self, radar_key: &str, zone: u8, target_id: u64) {
+    /// has just been confirmed inside the zone, or a tracked one that has
+    /// just entered it. Fired per target rather than only on the first one,
+    /// so a second vessel entering an already alarming zone is still
+    /// announced.
+    fn raise_guard_zone_alarm(&mut self, radar_key: &str, zone: u8, target_id: u64, what: &str) {
         let Some(idx) = guard_zone_index(zone) else {
             return;
         };
@@ -204,8 +205,8 @@ impl TrackerManager {
             zone,
             NotificationState::Alert,
             format!(
-                "Radar {} guard zone {}: target {} acquired",
-                radar_key, zone, target_id
+                "Radar {} guard zone {}: target {} {}",
+                radar_key, zone, target_id, what
             ),
         );
     }
@@ -398,10 +399,38 @@ impl TrackerManager {
         // that never survives long enough to be reported to clients is
         // clutter, not an intrusion.
         if let Some((target_id, zone)) = promoted_in_zone {
-            self.raise_guard_zone_alarm(&msg.radar_key, zone, target_id);
+            self.raise_guard_zone_alarm(&msg.radar_key, zone, target_id, "acquired");
         } else if let ProcessResult::Promoted(target_id) = result {
             self.clear_source_zone(&msg.radar_key, target_id);
         }
+
+        if let ProcessResult::Updated(target_id) | ProcessResult::Promoted(target_id) = result {
+            self.alarm_on_zone_entry(&msg.radar_key, target_id, &msg.blob.in_guard_zones);
+        }
+    }
+
+    /// Alarm for a tracked target whose echo now lies in a guard zone it was
+    /// not acquired in: one the user acquired by hand, one Doppler picked up
+    /// outside the zones, or one that was confirmed outside and drives in
+    /// later. Its zone is recorded, so it alarms once and holds the zone
+    /// occupied like a target acquired there.
+    fn alarm_on_zone_entry(&mut self, radar_key: &str, target_id: u64, in_zones: &[u8]) {
+        let Some(&zone) = in_zones.iter().find(|&&z| guard_zone_index(z).is_some()) else {
+            return;
+        };
+        let tracker = if self.merge_mode {
+            self.shared_tracker.as_mut()
+        } else {
+            self.per_radar_trackers.get_mut(radar_key)
+        };
+        let Some(target) = tracker.and_then(|t| t.get_target_mut(target_id)) else {
+            return;
+        };
+        if !target.is_shown() || target.source_zone.is_some() {
+            return;
+        }
+        target.source_zone = Some(zone);
+        self.raise_guard_zone_alarm(radar_key, zone, target_id, "entered");
     }
 
     /// Advance a radar's revolution clock and ship the batched target update.
@@ -1784,6 +1813,68 @@ mod tests {
         manager.check_all_timeouts();
         // MARPA acquisitions carry no source zone and must not alarm.
         assert!(notifications(&drain_sk_deltas(rx)).is_empty());
+    }
+
+    /// One blob of the track `feed_guard_zone_target` builds, `i` hits in,
+    /// lying in guard zone `zone`.
+    fn hit_in_zone(manager: &mut TrackerManager, radar_key: &str, spoke: u16, zone: u8, i: u64) {
+        let mut blob = make_blob(spoke, 256 - 2 * i as usize, 30.0);
+        blob.in_guard_zones = vec![zone];
+        manager.process_blob(BlobMessage {
+            radar_key: radar_key.to_string(),
+            blob,
+            context: make_context(1000 + i * 3000, spoke),
+        });
+    }
+
+    #[test]
+    fn guard_zone_alerts_when_a_tracked_target_drives_in() {
+        let (mut manager, rx) = make_test_manager_with_rx();
+        feed_guard_zone_target(&mut manager, "nav1", 0, 1, PROMOTING_HITS - 1);
+        promote_outside_guard_zone(&mut manager, "nav1", 0);
+        hit_in_zone(&mut manager, "nav1", 0, 2, PROMOTING_HITS);
+        hit_in_zone(&mut manager, "nav1", 0, 2, PROMOTING_HITS + 1);
+        // Once on entry, not on every sweep it stays inside.
+        assert_eq!(
+            notifications(&drain_sk_deltas(rx)),
+            vec![(
+                "notifications.radar.nav1.guardZone.2".to_string(),
+                "alert".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn guard_zone_alerts_when_a_manual_target_drives_in() {
+        let (mut manager, rx) = make_test_manager_with_rx();
+        let radar = GeoPosition::new(52.0, 4.0);
+        // Click where the first blob of `hit_in_zone` lies, so that echo
+        // updates the acquired target rather than starting a new one.
+        let click = blob_to_position(&make_blob(0, 256, 30.0), &make_context(1000, 0)).unwrap();
+        manager.process_marpa(MarpaRequest {
+            radar_key: "nav1".to_string(),
+            position: click,
+            radar_position: Some(radar),
+            time: 500,
+            size_meters: 30.0,
+        });
+        hit_in_zone(&mut manager, "nav1", 0, 1, 0);
+
+        let target_id = first_target_id(&manager, "nav1");
+        assert_eq!(
+            manager.per_radar_trackers["nav1"]
+                .get_target(target_id)
+                .unwrap()
+                .source_zone,
+            Some(1)
+        );
+        assert_eq!(
+            notifications(&drain_sk_deltas(rx)),
+            vec![(
+                "notifications.radar.nav1.guardZone.1".to_string(),
+                "alert".to_string()
+            )]
+        );
     }
 
     /// After a noisy measurement the Kalman filter's smoothed position
