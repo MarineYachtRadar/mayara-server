@@ -648,9 +648,13 @@ fn effective(command_reachable: bool, control: &Control) -> Control {
 
 impl Controls {
     fn insert(&mut self, control_id: ControlId, value: Control) {
+        // A replay cannot reach a radar, but mayara's own target controls
+        // still act on the recording, as `new_base` allows.
+        let replay_locked =
+            self.replay && control_id.get_destination() != ControlDestination::Target;
         let v = Control {
             item: ControlDefinition {
-                is_read_only: self.replay || value.item.is_read_only,
+                is_read_only: replay_locked || value.item.is_read_only,
                 ..value.item
             },
             ..value
@@ -4666,6 +4670,27 @@ mod test {
             controls.get(&ControlId::TransmitChannel).unwrap().auto,
             Some(true)
         );
+    }
+
+    /// A replay cannot send a command, but mayara's own target controls act
+    /// on the recording. One a brand adds once the model is known, as Doppler
+    /// Auto Track is, must stay settable like one made at discovery.
+    #[test]
+    fn a_target_control_added_on_a_replay_stays_settable() {
+        let args = Cli::parse_from(["my_program", "--replay"]);
+        let tx = tokio::sync::broadcast::Sender::new(10);
+        let mut controls = SharedControls::new("ray1234".to_string(), tx, &args, HashMap::new());
+        controls.add(new_list(ControlId::DopplerAutoTrack, &["Off", "On"]));
+        controls.add(new_list(ControlId::Doppler, &["Off", "On"]));
+
+        assert!(
+            !controls
+                .get(&ControlId::DopplerAutoTrack)
+                .unwrap()
+                .item
+                .is_read_only
+        );
+        assert!(controls.get(&ControlId::Doppler).unwrap().item.is_read_only);
     }
 
     fn controls_with_auto_control() -> SharedControls {
