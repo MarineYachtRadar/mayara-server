@@ -882,7 +882,10 @@ fn is_on(interface: Option<&str>, sender: &SocketAddr) -> bool {
 }
 
 /// Whether a datagram holds a checksummed sentence with position, heading or
-/// motion, which tells a navigation source from AIS or other traffic.
+/// motion, which tells a navigation source from AIS or other traffic. A
+/// sentence the receiver would reject as corrupt, or a heading sentence
+/// without a heading, does not count, so a sender of only those cannot win
+/// discovery over one with usable data.
 fn carries_navigation(datagram: &[u8]) -> bool {
     let Ok(text) = std::str::from_utf8(datagram) else {
         return false;
@@ -890,13 +893,19 @@ fn carries_navigation(datagram: &[u8]) -> bool {
     let mut parser = NmeaParser::new();
     text.lines().map(str::trim).any(|line| {
         line.rfind('*').is_some_and(|star| star + 3 <= line.len())
-            && matches!(
-                parser.parse_sentence(line),
-                Ok(ParsedMessage::Rmc(_)
-                    | ParsedMessage::Gll(_)
-                    | ParsedMessage::Hdt(_)
-                    | ParsedMessage::Vtg(_))
-            )
+            && match parser.parse_sentence(line) {
+                Ok(ParsedMessage::Rmc(rmc)) => check_rmc_motion(&rmc).is_ok(),
+                Ok(ParsedMessage::Gll(_)) => true,
+                Ok(ParsedMessage::Hdt(hdt)) => {
+                    matches!(nmea_angle(hdt.heading_true, "heading"), Ok(Some(_)))
+                }
+                Ok(ParsedMessage::Vtg(vtg)) => {
+                    nmea_angle(vtg.cog_true, "course").is_ok()
+                        && check_nmea_speed(vtg.sog_knots, "kn").is_ok()
+                        && check_nmea_speed(vtg.sog_kph, "km/h").is_ok()
+                }
+                _ => false,
+            }
     })
 }
 
@@ -2356,6 +2365,22 @@ mod tests {
         let corrupt = NMEA_RMC.replace("*6A", "*00");
         assert!(!carries_navigation(corrupt.as_bytes()));
         assert!(!carries_navigation(b"\xff\xfe not text"));
+    }
+
+    /// A sender of only impossible or empty headings, courses or speeds must
+    /// not be locked onto ahead of one with usable navigation data.
+    #[test]
+    fn a_rejected_or_empty_value_carries_no_navigation() {
+        assert!(carries_navigation(b"$GPHDT,224.2,T*33"));
+        for sentence in [
+            "$GPHDT,720.0,T*30",
+            "$GPHDT,NaN,T*7A",
+            "$GPHDT,,T*1B",
+            "$GPVTG,720.0,T,,M,6.0,N,11.1,K,A*3F",
+            "$GPVTG,90.0,T,,M,-6.0,N,-11.1,K,A*03",
+        ] {
+            assert!(!carries_navigation(sentence.as_bytes()), "{sentence}");
+        }
     }
 
     async fn loopback_socket() -> UdpSocket {
