@@ -681,6 +681,8 @@ impl Persistence {
 
     pub(crate) fn update_info_from_persistence(&mut self, info: &mut RadarInfo) {
         self.take_legacy_entry(&info.key(), &crate::radar::legacy_address_key(info));
+        // A radar found again after it was removed gets its controls anew.
+        self.model_controls_restored.remove(&info.key());
 
         if let Some(p) = self.config.radars.get(&info.key()) {
             if let Some(model_name) = p.model_name.as_ref() {
@@ -1044,6 +1046,35 @@ mod tests {
             !p.config.radars[&info.key()].doppler_auto_track,
             "the user's later choice is saved, not undone"
         );
+    }
+
+    /// A radar removed and found again under the same key, as when an
+    /// interface loses its address, gets a new switch that must take the
+    /// saved value too.
+    #[test]
+    fn doppler_auto_track_survives_finding_the_radar_again() {
+        use crate::radar::settings::new_list;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut p = persistence_at(dir.path().join("settings.json"));
+        let key = found_radar().key();
+        p.config.radars.insert(
+            key.clone(),
+            Radar {
+                doppler_auto_track: true,
+                ..Default::default()
+            },
+        );
+
+        for _ in 0..2 {
+            let mut info = found_radar();
+            p.update_info_from_persistence(&mut info);
+            info.controls
+                .add(new_list(ControlId::DopplerAutoTrack, &["Off", "On"]));
+            p.store(&info);
+            assert!(info.controls.doppler_auto_track());
+        }
+        assert!(p.config.radars[&key].doppler_auto_track);
     }
 
     fn persistence_at(path: PathBuf) -> Persistence {
