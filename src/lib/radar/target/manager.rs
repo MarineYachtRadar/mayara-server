@@ -153,11 +153,12 @@ pub struct TrackerManager {
     /// Whether `notifications.radar.<key>.guardZone.<n>` currently stands
     /// raised, per (radar_key, [`guard_zone_index`]).
     ///
-    /// The alarm means "a target acquired in this zone is still being
-    /// tracked", not "a target is inside the zone right now": a target
-    /// carries the zone it was acquired in for life, so one that wanders
-    /// out keeps the alarm up until it is lost or deleted. That mirrors
-    /// the GUI's audible alert, which is likewise driven by acquisition.
+    /// The alarm means "a target acquired in this zone, or tracked into
+    /// it, is still being tracked", not "a target is inside the zone right
+    /// now": a target carries the zone it was acquired in or entered for
+    /// life, so one that wanders out keeps the alarm up until it is lost or
+    /// deleted. That mirrors the GUI's audible alert, which is likewise
+    /// driven by acquisition.
     guard_zone_alarm: HashMap<String, [bool; GUARD_ZONE_COUNT as usize]>,
 }
 
@@ -413,11 +414,20 @@ impl TrackerManager {
     /// not acquired in: one the user acquired by hand, one Doppler picked up
     /// outside the zones, or one that was confirmed outside and drives in
     /// later. Its zone is recorded, so it alarms once and holds the zone
-    /// occupied like a target acquired there.
+    /// occupied like a target acquired there. A target that went Lost, and
+    /// so let its zone's alarm clear, alarms again when it is found in that
+    /// zone.
     fn alarm_on_zone_entry(&mut self, radar_key: &str, target_id: u64, in_zones: &[u8]) {
-        let Some(&zone) = in_zones.iter().find(|&&z| guard_zone_index(z).is_some()) else {
+        let Some((zone, idx)) = in_zones
+            .iter()
+            .find_map(|&z| guard_zone_index(z).map(|idx| (z, idx)))
+        else {
             return;
         };
+        let raised = self
+            .guard_zone_alarm
+            .get(radar_key)
+            .is_some_and(|alarms| alarms[idx]);
         let tracker = if self.merge_mode {
             self.shared_tracker.as_mut()
         } else {
@@ -426,7 +436,11 @@ impl TrackerManager {
         let Some(target) = tracker.and_then(|t| t.get_target_mut(target_id)) else {
             return;
         };
-        if !target.is_shown() || target.source_zone.is_some() {
+        let entered = match target.source_zone {
+            None => true,
+            Some(own) => own == zone && !raised,
+        };
+        if !target.is_shown() || !entered {
             return;
         }
         target.source_zone = Some(zone);
@@ -1841,6 +1855,35 @@ mod tests {
                 "notifications.radar.nav1.guardZone.2".to_string(),
                 "alert".to_string()
             )]
+        );
+    }
+
+    #[test]
+    fn guard_zone_alerts_again_when_a_lost_target_returns_inside() {
+        let (mut manager, rx) = make_test_manager_with_rx();
+        feed_guard_zone_target(&mut manager, "nav1", 0, 1, PROMOTING_HITS);
+        for _ in 0..LOST_REVOLUTION_COUNT {
+            manager.process_revolution("nav1", None);
+        }
+        let target_id = first_target_id(&manager, "nav1");
+        assert_eq!(
+            manager.per_radar_trackers["nav1"]
+                .get_target(target_id)
+                .unwrap()
+                .status,
+            TargetStatus::Lost
+        );
+        hit_in_zone(&mut manager, "nav1", 0, 1, PROMOTING_HITS);
+        assert_eq!(first_target_id(&manager, "nav1"), target_id);
+
+        let zone1 = "notifications.radar.nav1.guardZone.1".to_string();
+        assert_eq!(
+            notifications(&drain_sk_deltas(rx)),
+            vec![
+                (zone1.clone(), "alert".to_string()),
+                (zone1.clone(), "normal".to_string()),
+                (zone1, "alert".to_string()),
+            ]
         );
     }
 
