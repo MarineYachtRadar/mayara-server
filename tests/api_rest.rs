@@ -459,13 +459,26 @@ async fn test_acquire_target() {
     assert!(response.status().is_success());
 
     let json: Value = response.json().await.unwrap();
-    assert!(
-        json.get("targetId").is_some(),
-        "Response should include 'targetId'"
-    );
+    let target_id = json["targetId"]
+        .as_u64()
+        .expect("Response should include a numeric 'targetId'");
     assert!(
         json.get("radarId").is_some(),
         "Response should include 'radarId'"
+    );
+
+    let targets = get_json(&format!(
+        "/signalk/v2/api/vessels/self/radars/{}/targets",
+        id
+    ))
+    .await;
+    assert!(
+        targets
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|target| target["id"].as_u64() == Some(target_id)),
+        "The acquired target should appear in the target list"
     );
 }
 

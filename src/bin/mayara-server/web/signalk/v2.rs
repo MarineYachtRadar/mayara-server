@@ -943,7 +943,8 @@ struct AcquireTargetRequest {
     "radarId": "nav1034A"
 }))]
 struct AcquireTargetResponse {
-    /// Unique identifier for the acquired target
+    /// Id of the acquired target, as it appears in the target list and in
+    /// `radars.{id}.targets.{tid}` stream updates
     #[schema(example = 1)]
     target_id: u64,
     /// Radar that is tracking this target
