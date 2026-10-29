@@ -2114,15 +2114,20 @@ fn parse_nmea_sentence(
 
 fn pashr_hdt(sentence: &str) -> Option<Result<ParsedMessage, ParseError>> {
     const HEADING: usize = 1;
-    let body = sentence
+    let sentence = sentence
         .find('$')
-        .map_or(sentence, |start| &sentence[start..])
-        .split('*')
-        .next()?
-        .strip_prefix("$PASHR,")?;
-    let heading_true = body
-        .split(',')
-        .nth(HEADING)
+        .map_or(sentence, |start| &sentence[start..]);
+    let (body, checksum) = sentence.rsplit_once('*')?;
+    if checksum.len() < 2 {
+        return None;
+    }
+    let body = body.strip_prefix("$PASHR,")?;
+    let mut fields = body.split(',');
+    let heading = fields.nth(HEADING)?;
+    if fields.next()? != "T" {
+        return None;
+    }
+    let heading_true = Some(heading)
         .filter(|s| !s.is_empty())
         .map(|s| {
             s.parse::<f64>().map_err(|_| {
@@ -2671,6 +2676,19 @@ mod tests {
             assert!(
                 (get_heading_true().unwrap() - degrees.to_radians()).abs() < 1e-9,
                 "{sentence}"
+            );
+        }
+
+        for ignored in [
+            "$PASHR,085335.000,90.0,T,-01.26,+00.83,+00.00,0.101,0.113,0.267,1,0",
+            "$PASHR,085335.000,90.0,T,-01.26,+00.83,+00.00,0.101,0.113,0.267,1,0*0",
+            "$PASHR,ACK*3D",
+        ] {
+            assert!(!carries_navigation(ignored.as_bytes()), "{ignored}");
+            nmea0183_receiver().parse_nmea0183(ignored).unwrap();
+            assert!(
+                (get_heading_true().unwrap() - 224.19_f64.to_radians()).abs() < 1e-9,
+                "{ignored}"
             );
         }
     }
