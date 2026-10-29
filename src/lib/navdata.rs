@@ -2440,11 +2440,34 @@ mod tests {
     /// binds rather than retrying forever on an IPv4 socket.
     #[tokio::test]
     async fn a_udp_navigation_listener_binds_an_ipv6_address() {
+        if std::net::UdpSocket::bind("[::1]:0").is_err() {
+            eprintln!("skipped: this host has no IPv6 loopback");
+            return;
+        }
         let first = udp_broadcast_listener("[::1]:0".parse().unwrap()).unwrap();
         let addr = first.local_addr().unwrap();
         assert!(addr.is_ipv6());
         let second = udp_broadcast_listener(addr).unwrap();
         assert_eq!(second.local_addr().unwrap(), addr);
+    }
+
+    /// A configured UDP endpoint that can be bound stops at shutdown rather
+    /// than binding again, so the navigation task ends instead of reopening
+    /// its socket over and over.
+    #[tokio::test]
+    async fn a_udp_navigation_endpoint_stops_at_shutdown() {
+        use tokio_graceful_shutdown::Toplevel;
+
+        Toplevel::new(async |subsys: &mut SubsystemHandle| {
+            subsys.request_shutdown();
+            let r = nmea0183_receiver()
+                .find_udp_service(subsys, "127.0.0.1:0".parse().unwrap())
+                .await;
+            assert!(matches!(r, Err(RadarError::Shutdown)), "{:?}", r.err());
+        })
+        .handle_shutdown_requests(Duration::from_secs(1))
+        .await
+        .unwrap();
     }
 
     const ACTIVE_RMC: &str = "$GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W*6A";
