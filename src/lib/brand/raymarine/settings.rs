@@ -136,6 +136,9 @@ pub(crate) fn offer_doppler_control(
 ) {
     if doppler && base_model == BaseModel::Quantum {
         controls.add(new_list(ControlId::Doppler, &["Off", "On"]));
+        // Mayara's tracker acquires the Doppler echoes itself, so this needs
+        // no command on the radar.
+        controls.add(new_list(ControlId::DopplerAutoTrack, &["Off", "On"]));
     }
 }
 
@@ -260,6 +263,12 @@ mod tests {
                 controls.get(&ControlId::Doppler).is_some(),
                 expected,
                 "{base_model} with doppler={doppler} should{} offer Doppler",
+                if expected { "" } else { " not" }
+            );
+            assert_eq!(
+                controls.get(&ControlId::DopplerAutoTrack).is_some(),
+                expected,
+                "{base_model} with doppler={doppler} should{} offer Doppler Auto Track",
                 if expected { "" } else { " not" }
             );
         }
