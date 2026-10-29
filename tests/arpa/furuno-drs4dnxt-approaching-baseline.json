@@ -1,0 +1,18 @@
+{
+  "all.ids_broadcast": 204.0,
+  "false.track_ids": 193.0,
+  "false.track_seconds": 9683.552000000003,
+  "land.max_sog_ms": 40.02264569087127,
+  "land.track_ids": 180.0,
+  "land.track_seconds": 9149.360999999999,
+  "ohana_ii.coverage": 0.6260162601626016,
+  "ohana_ii.position_error_m": 52.23111132110246,
+  "ohana_ii.settled_sog_error_ms": 0.12378767587652639,
+  "ohana_ii.sog_error_at_promotion_ms": 0.7591854670981582,
+  "ohana_ii.track_ids": 8.0,
+  "wild_thing_2.coverage": 0.15833333333333333,
+  "wild_thing_2.position_error_m": 41.81885637858955,
+  "wild_thing_2.settled_sog_error_ms": 0.09687928367967125,
+  "wild_thing_2.sog_error_at_promotion_ms": 1.4052680811405254,
+  "wild_thing_2.track_ids": 3.0
+}
