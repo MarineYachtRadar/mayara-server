@@ -1642,6 +1642,9 @@ impl NavigationData {
         log::debug!("UDP find_service (re)start");
 
         loop {
+            if subsys.is_shutdown_requested() {
+                return Err(RadarError::Shutdown);
+            }
             match udp_broadcast_listener(addr) {
                 Ok(stream) => {
                     return Ok(Stream::Udp(stream, None));
