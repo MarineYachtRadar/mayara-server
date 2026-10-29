@@ -117,8 +117,11 @@ pub struct MarpaRequest {
 /// Command sent to the tracker manager
 #[derive(Debug)]
 pub enum TrackerCommand {
-    /// MARPA request from user click
-    Marpa(MarpaRequest),
+    /// MARPA request from user click; answered with the new target's id
+    Marpa {
+        request: MarpaRequest,
+        response_tx: tokio::sync::oneshot::Sender<u64>,
+    },
     /// Delete a target by ID
     DeleteTarget { radar_key: String, target_id: u64 },
     /// Clear all targets for a radar
@@ -606,8 +609,8 @@ impl TrackerManager {
                 }
                 Some(command) = self.command_rx.recv() => {
                     match command {
-                        TrackerCommand::Marpa(request) => {
-                            self.process_marpa(request);
+                        TrackerCommand::Marpa { request, response_tx } => {
+                            let _ = response_tx.send(self.process_marpa(request));
                         }
                         TrackerCommand::DeleteTarget { radar_key, target_id } => {
                             self.delete_target(&radar_key, target_id);
@@ -1769,6 +1772,47 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn a_marpa_command_is_answered_with_the_new_target_id() {
+        let (sk_tx, _sk_rx) = broadcast::channel(16);
+        let (manager, command_tx) = TrackerManager::new(false, sk_tx);
+        let (_tracker_tx, tracker_rx) = mpsc::channel(1);
+        tokio::spawn(manager.run(tracker_rx));
+
+        let mut ids = Vec::new();
+        for _ in 0..2 {
+            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+            command_tx
+                .send(TrackerCommand::Marpa {
+                    request: MarpaRequest {
+                        radar_key: "nav1".to_string(),
+                        position: GeoPosition::new(52.001, 4.001),
+                        radar_position: Some(GeoPosition::new(52.0, 4.0)),
+                        time: 1000,
+                        size_meters: 30.0,
+                    },
+                    response_tx,
+                })
+                .await
+                .unwrap();
+            ids.push(response_rx.await.unwrap());
+        }
+
+        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+        command_tx
+            .send(TrackerCommand::GetTargets {
+                radar_key: Some("nav1".to_string()),
+                radar_position: None,
+                response_tx,
+            })
+            .await
+            .unwrap();
+        let mut listed: Vec<u64> = response_rx.await.unwrap().iter().map(|t| t.id).collect();
+        listed.sort_unstable();
+        assert_ne!(ids[0], ids[1]);
+        assert_eq!(listed, ids);
     }
 
     #[test]

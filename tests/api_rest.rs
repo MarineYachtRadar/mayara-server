@@ -459,13 +459,26 @@ async fn test_acquire_target() {
     assert!(response.status().is_success());
 
     let json: Value = response.json().await.unwrap();
-    assert!(
-        json.get("targetId").is_some(),
-        "Response should include 'targetId'"
-    );
+    let target_id = json["targetId"]
+        .as_u64()
+        .expect("Response should include a numeric 'targetId'");
     assert!(
         json.get("radarId").is_some(),
         "Response should include 'radarId'"
+    );
+
+    let targets = get_json(&format!(
+        "/signalk/v2/api/vessels/self/radars/{}/targets",
+        id
+    ))
+    .await;
+    assert!(
+        targets
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|target| target["id"].as_u64() == Some(target_id)),
+        "The acquired target should appear in the target list"
     );
 }
 
@@ -473,49 +486,32 @@ async fn test_acquire_target() {
 #[ignore = "requires running server"]
 async fn test_delete_target() {
     let id = first_radar_id().await;
-
-    // Get existing targets to find one to delete
-    let json = get_json(&format!(
-        "/signalk/v2/api/vessels/self/radars/{}/targets",
+    let targets_url = format!(
+        "{}/signalk/v2/api/vessels/self/radars/{}/targets",
+        base_url(),
         id
-    ))
-    .await;
-    let targets = json.as_array().unwrap();
+    );
 
-    if targets.is_empty() {
-        // Acquire one first
-        let url = format!(
-            "{}/signalk/v2/api/vessels/self/radars/{}/targets",
-            base_url(),
-            id
-        );
-        reqwest::Client::new()
-            .post(&url)
-            .json(&serde_json::json!({"bearing": 1.57, "distance": 1000}))
-            .send()
-            .await
-            .unwrap();
-    }
+    // Delete a target this test acquired itself, so a parallel test's target
+    // is never the one removed.
+    let response = reqwest::Client::new()
+        .post(&targets_url)
+        .json(&serde_json::json!({"bearing": 1.57, "distance": 1000}))
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+    let json: Value = response.json().await.unwrap();
+    let target_id = json["targetId"]
+        .as_u64()
+        .expect("Response should include a numeric 'targetId'");
 
-    // Get target list again
-    let json = get_json(&format!(
-        "/signalk/v2/api/vessels/self/radars/{}/targets",
-        id
-    ))
-    .await;
-    let targets = json.as_array().unwrap();
-
-    if let Some(target) = targets.first() {
-        let target_id = target["id"].as_i64().unwrap();
-        let url = format!(
-            "{}/signalk/v2/api/vessels/self/radars/{}/targets/{}",
-            base_url(),
-            id,
-            target_id
-        );
-        let response = reqwest::Client::new().delete(&url).send().await.unwrap();
-        assert!(response.status().is_success());
-    }
+    let response = reqwest::Client::new()
+        .delete(format!("{}/{}", targets_url, target_id))
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
 }
 
 // ============================================================================

@@ -43,7 +43,7 @@ mayara-server --openapi
 | GET    | `/signalk/v2/api/vessels/self/radars/{id}/controls/{cid}`    | Get specific control value                         |
 | PUT    | `/signalk/v2/api/vessels/self/radars/{id}/controls/{cid}`    | Set control value                                  |
 | GET    | `/signalk/v2/api/vessels/self/radars/{id}/targets`           | List tracked targets                               |
-| POST   | `/signalk/v2/api/vessels/self/radars/{id}/targets`           | Acquire target at position                         |
+| POST   | `/signalk/v2/api/vessels/self/radars/{id}/targets`           | Acquire target at position; answers with the new target's `targetId` |
 | DELETE | `/signalk/v2/api/vessels/self/radars/{id}/targets/{tid}`     | Delete tracked target                              |
 | GET    | `/signalk/v2/api/vessels/self/radars/resources/openapi.json` | OpenAPI specification                              |
 
