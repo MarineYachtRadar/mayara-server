@@ -208,7 +208,7 @@ pub struct ActiveTarget {
     /// or the last zone a tracked target was announced entering
     pub source_zone: Option<u8>,
     /// Guard zones a manual target was clicked in, by zone index, which it
-    /// does not alarm for until its echo has left every zone
+    /// does not alarm for until its echo has left them
     pub clicked_in_zones: [bool; GUARD_ZONE_COUNT as usize],
     /// Radar whose zones `clicked_in_zones` refers to; only its echoes can
     /// show the target has left them, as every radar has its own zones
