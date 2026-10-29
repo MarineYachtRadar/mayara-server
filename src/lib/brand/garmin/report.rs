@@ -2123,8 +2123,8 @@ mod tests {
     #[test]
     fn a_reported_motionscope_mode_maps_the_doppler_bands() {
         let mut legend = empty_legend();
-        legend.doppler_approaching = Some((120, 4));
-        legend.doppler_receding = Some((124, 4));
+        legend.doppler_approaching = Some((128, 4));
+        legend.doppler_receding = Some((132, 4));
         let mut range = RangeState {
             range_meters: 0,
             doppler: DopplerMode::None,
@@ -2132,10 +2132,11 @@ mod tests {
             gain_auto: false,
             wire_to_legend: wire_to_legend(&legend, true, false),
         };
+        assert_eq!(range.wire_to_legend[0xF0], 120);
 
         assert!(range.set_doppler(DopplerMode::Both, &legend, true));
-        assert_eq!(range.wire_to_legend[0xF0], 120);
-        assert_eq!(range.wire_to_legend[0xF8], 124);
+        assert_eq!(range.wire_to_legend[0xF0], 128);
+        assert_eq!(range.wire_to_legend[0xF8], 132);
         assert!(!range.set_doppler(DopplerMode::Both, &legend, true));
 
         assert!(range.set_doppler(DopplerMode::None, &legend, true));
