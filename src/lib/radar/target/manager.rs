@@ -33,10 +33,6 @@ const MARPA_CLICK_VARIANCE: f64 = 1250.0;
 /// Zone 0 is reserved for manual MARPA acquisition and never alarms.
 pub(super) const GUARD_ZONE_COUNT: u8 = 2;
 
-/// A manual target's update count after its first echo: the click itself
-/// counts as the first update.
-const MANUAL_FIRST_ECHO_UPDATES: u32 = 2;
-
 /// Index into a per-radar alarm array for a wire zone number, or `None`
 /// when the number is outside the guard zones (manual MARPA, or a value
 /// a brand backend should never produce).
@@ -452,7 +448,8 @@ impl TrackerManager {
     /// A manual target whose first echo lies in a zone was clicked there, so
     /// the user already knows about it: it does not alarm for that zone until
     /// its echo has left it and enters it again. Every radar has its own
-    /// zones, so only echoes from the radar it was clicked on show it left.
+    /// zones, so this holds only for the zones of the radar it was clicked
+    /// on; another radar of a merged set alarms for its zones as usual.
     fn alarm_on_zone_entry(&mut self, radar_key: &str, target_id: u64, in_zones: &[u8]) {
         let tracker = if self.merge_mode {
             self.shared_tracker.as_mut()
@@ -462,28 +459,25 @@ impl TrackerManager {
         let Some(target) = tracker.and_then(|t| t.get_target_mut(target_id)) else {
             return;
         };
-        if target.is_manual && target.update_count == MANUAL_FIRST_ECHO_UPDATES {
-            for idx in in_zones.iter().filter_map(|&z| guard_zone_index(z)) {
-                target.clicked_in_zones[idx] = true;
-            }
-            target.clicked_zones_radar = Some(radar_key.to_string());
-        } else if target
-            .clicked_zones_radar
-            .as_deref()
-            .is_none_or(|clicked| clicked == radar_key)
-        {
-            // A zone the echo has left is no longer one it was clicked in.
-            for (idx, clicked) in target.clicked_in_zones.iter_mut().enumerate() {
-                *clicked &= in_zones.iter().any(|&z| guard_zone_index(z) == Some(idx));
-            }
-            if !target.clicked_in_zones.contains(&true) {
-                target.clicked_zones_radar = None;
+        let clicked_here = target.click_radar.as_deref() == Some(radar_key);
+        if clicked_here {
+            if target.awaiting_click_echo {
+                target.awaiting_click_echo = false;
+                for idx in in_zones.iter().filter_map(|&z| guard_zone_index(z)) {
+                    target.clicked_in_zones[idx] = true;
+                }
+            } else {
+                // A zone the echo has left is no longer one it was clicked in.
+                for (idx, clicked) in target.clicked_in_zones.iter_mut().enumerate() {
+                    *clicked &= in_zones.iter().any(|&z| guard_zone_index(z) == Some(idx));
+                }
             }
         }
         // Overlapping zones report every zone the echo lies in; the one the
         // target already holds decides whether this is a return to it.
-        let unclicked =
-            |z: &u8| guard_zone_index(*z).is_some_and(|idx| !target.clicked_in_zones[idx]);
+        let unclicked = |z: &u8| {
+            guard_zone_index(*z).is_some_and(|idx| !(clicked_here && target.clicked_in_zones[idx]))
+        };
         let entered = target
             .source_zone
             .filter(|own| in_zones.contains(own) && unclicked(own))
@@ -2118,6 +2112,39 @@ mod tests {
         hit_in_zones(&mut manager, "nav1", 0, &[1, 2], 0);
         for i in 1..PROMOTING_HITS {
             hit_in_zone(&mut manager, "nav1", 0, 2, i);
+        }
+        assert!(notifications(&drain_sk_deltas(rx)).is_empty());
+    }
+
+    /// Clicked zones are the clicked radar's: another radar's zone 1 is a
+    /// zone of its own, which the target entering it is news for.
+    #[test]
+    fn guard_zone_alerts_for_a_merged_manual_target_entering_another_radars_zone() {
+        let (mut manager, rx) = make_test_manager_with_rx_mode(true);
+        click_at_first_hit(&mut manager, "nav1");
+        hit_in_zone(&mut manager, "nav1", 0, 1, 0);
+        hit_in_zones(&mut manager, "nav2", 0, &[], 1);
+        for i in 2..PROMOTING_HITS + 2 {
+            hit_in_zone(&mut manager, "nav2", 0, 1, i);
+        }
+        assert_eq!(
+            notifications(&drain_sk_deltas(rx)),
+            vec![(
+                "notifications.radar.nav2.guardZone.1".to_string(),
+                "alert".to_string()
+            )]
+        );
+    }
+
+    /// The zones the user clicked in are the clicked radar's, even when
+    /// another radar of a merged set saw the target first.
+    #[test]
+    fn guard_zone_stays_silent_for_a_merged_manual_target_first_seen_by_another_radar() {
+        let (mut manager, rx) = make_test_manager_with_rx_mode(true);
+        click_at_first_hit(&mut manager, "nav1");
+        hit_in_zones(&mut manager, "nav2", 0, &[], 0);
+        for i in 1..PROMOTING_HITS + 1 {
+            hit_in_zone(&mut manager, "nav1", 0, 1, i);
         }
         assert!(notifications(&drain_sk_deltas(rx)).is_empty());
     }

@@ -210,9 +210,12 @@ pub struct ActiveTarget {
     /// Guard zones a manual target was clicked in, by zone index, which it
     /// does not alarm for until its echo has left them
     pub clicked_in_zones: [bool; GUARD_ZONE_COUNT as usize],
-    /// Radar whose zones `clicked_in_zones` refers to; only its echoes can
-    /// show the target has left them, as every radar has its own zones
-    pub clicked_zones_radar: Option<String>,
+    /// Radar a manual target was clicked on, whose zones `clicked_in_zones`
+    /// refers to: every radar has its own zones
+    pub click_radar: Option<String>,
+    /// Whether `clicked_in_zones` still waits for the first echo from
+    /// `click_radar`, which tells the zones the target was clicked in
+    pub awaiting_click_echo: bool,
     /// Radar whose alarm announced this target in `source_zone`. The target
     /// holds that radar's zone occupied even when another radar of a merged
     /// set saw it last; cleared when it goes Lost, so a target found again in
@@ -261,7 +264,8 @@ impl ActiveTarget {
             is_manual,
             source_zone,
             clicked_in_zones: [false; GUARD_ZONE_COUNT as usize],
-            clicked_zones_radar: None,
+            click_radar: is_manual.then(|| candidate.radar_key.clone()),
+            awaiting_click_echo: is_manual,
             zone_alarm_radar: None,
             confirmed: false,
             last_radar_key: candidate.radar_key.clone(),
