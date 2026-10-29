@@ -61,6 +61,9 @@ pub(crate) fn new(
     // MotionScope / Doppler — Fantom-class radars only.
     if capabilities.has_motionscope() {
         new_list(ControlId::Doppler, &["Off", "Normal", "Approaching"]).build(&mut controls);
+        // Mayara's tracker acquires the Doppler echoes itself, so this needs
+        // no command on the radar.
+        new_list(ControlId::DopplerAutoTrack, &["Off", "On"]).build(&mut controls);
     }
 
     // Pulse expansion (xHD2+): expands pulse width for better small-target visibility.
@@ -229,5 +232,31 @@ mod tests {
             let controls = new("gar1234".to_string(), tx, &args, radar_type, &caps, false);
             assert_eq!(controls.auto_standby(), Some(Duration::from_secs(60)));
         }
+    }
+
+    /// A radar that shows MotionScope also offers to track its echoes as ARPA
+    /// targets, and one without it offers neither.
+    #[test]
+    fn doppler_auto_track_comes_with_motionscope() {
+        let args = Cli::parse_from(["mayara-server"]);
+        for (radar_type, caps) in [
+            (GarminRadarType::HD, GarminCapabilities::for_legacy_hd()),
+            (GarminRadarType::XHD, GarminCapabilities::empty()),
+        ] {
+            let tx = tokio::sync::broadcast::Sender::new(1);
+            let controls = new("gar1234".to_string(), tx, &args, radar_type, &caps, false);
+            assert!(!controls.contains_key(&ControlId::DopplerAutoTrack));
+        }
+        for controls in controls_for_every_model(&args) {
+            assert_eq!(
+                controls.contains_key(&ControlId::DopplerAutoTrack),
+                controls.contains_key(&ControlId::Doppler)
+            );
+        }
+        assert!(
+            controls_for_every_model(&args)
+                .iter()
+                .any(|c| c.contains_key(&ControlId::DopplerAutoTrack))
+        );
     }
 }
