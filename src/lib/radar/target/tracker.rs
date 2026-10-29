@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 use std::f64::consts::{FRAC_PI_2, TAU};
 
+use super::manager::GUARD_ZONE_COUNT;
 use super::motion::{ImmMotionModel, MotionModel};
 use super::{METERS_PER_DEGREE_LATITUDE, PositionCovariance, meters_per_degree_longitude};
 use crate::radar::GeoPosition;
@@ -206,9 +207,15 @@ pub struct ActiveTarget {
     /// Guard zone (1 or 2) this target occupies: the zone that acquired it,
     /// or the last zone a tracked target was announced entering
     pub source_zone: Option<u8>,
-    /// Guard zone a manual target was clicked in, which it does not alarm
-    /// until its echo has left it
-    pub clicked_in_zone: Option<u8>,
+    /// Guard zones a manual target was clicked in, by zone index, which it
+    /// does not alarm for until its echo has left them
+    pub clicked_in_zones: [bool; GUARD_ZONE_COUNT as usize],
+    /// Radar a manual target was clicked on, whose zones `clicked_in_zones`
+    /// refers to: every radar has its own zones
+    pub click_radar: Option<String>,
+    /// Whether `clicked_in_zones` still waits for the first echo from
+    /// `click_radar`, which tells the zones the target was clicked in
+    pub awaiting_click_echo: bool,
     /// Radar whose alarm announced this target in `source_zone`. The target
     /// holds that radar's zone occupied even when another radar of a merged
     /// set saw it last; cleared when it goes Lost, so a target found again in
@@ -256,7 +263,9 @@ impl ActiveTarget {
             status: TargetStatus::Acquiring,
             is_manual,
             source_zone,
-            clicked_in_zone: None,
+            clicked_in_zones: [false; GUARD_ZONE_COUNT as usize],
+            click_radar: is_manual.then(|| candidate.radar_key.clone()),
+            awaiting_click_echo: is_manual,
             zone_alarm_radar: None,
             confirmed: false,
             last_radar_key: candidate.radar_key.clone(),
