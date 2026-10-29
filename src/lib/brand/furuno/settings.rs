@@ -568,6 +568,10 @@ pub(crate) fn update_when_model_known(info: &mut RadarInfo, model: RadarModel, v
         };
         info.controls
             .add(new_list(ControlId::Doppler, doppler_options));
+        // Mayara's tracker acquires the Doppler echoes itself, so this needs
+        // no command on the radar.
+        info.controls
+            .add(new_list(ControlId::DopplerAutoTrack, &["Off", "On"]));
         // NXT radars encode rain as a distinct class on the wire when
         // Target Analyzer is active. Reserve a legend slot for it.
         info.set_has_rain_class(true);
@@ -1027,6 +1031,23 @@ mod tests {
             assert!(!has(controls, ControlId::ScanAverageMode));
         }
         assert!(!has(&controls_of(RadarModel::DRS4W), ControlId::SeaState));
+    }
+
+    /// A radar that colours Doppler echoes also offers to track them as ARPA
+    /// targets, and one without Target Analyzer offers neither.
+    #[test]
+    fn doppler_auto_track_comes_with_target_analyzer() {
+        use strum::IntoEnumIterator;
+
+        for model in RadarModel::iter() {
+            let controls = controls_of(model);
+            assert_eq!(
+                controls.contains_key(&ControlId::DopplerAutoTrack),
+                controls.contains_key(&ControlId::Doppler),
+                "{model}"
+            );
+        }
+        assert!(controls_of(RadarModel::DRS4DNXT).contains_key(&ControlId::DopplerAutoTrack));
     }
 
     /// A sector control holds radians, and rounds to the step it was built
