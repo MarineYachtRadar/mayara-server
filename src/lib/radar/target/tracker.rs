@@ -203,7 +203,8 @@ pub struct ActiveTarget {
     pub status: TargetStatus,
     /// Whether target was manually or automatically acquired
     pub is_manual: bool,
-    /// Which guard zone acquired this target (1 or 2), or None for manual/doppler
+    /// Guard zone (1 or 2) this target occupies: the zone that acquired it,
+    /// or the last zone a tracked target was announced entering
     pub source_zone: Option<u8>,
     /// Guard zone a manual target was clicked in, which it does not alarm
     /// until its echo has left it

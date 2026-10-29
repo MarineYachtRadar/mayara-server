@@ -1822,8 +1822,9 @@ mod tests {
     #[test]
     fn guard_zone_alarms_work_in_merged_mode() {
         // Merged mode routes every radar through one shared tracker, so
-        // occupancy is keyed by each target's last_radar_key rather than
-        // by which tracker it came from.
+        // occupancy is keyed by the radar that raised the target's alarm,
+        // or its last_radar_key before one is raised, rather than by
+        // which tracker it came from.
         let (mut manager, rx) = make_test_manager_with_rx_mode(true);
         feed_guard_zone_target(&mut manager, "nav1", 0, 1, PROMOTING_HITS);
 
