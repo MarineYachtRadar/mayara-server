@@ -890,7 +890,7 @@ fn carries_navigation(datagram: &[u8]) -> bool {
     text.lines().map(str::trim).any(|line| {
         line.rfind('*').is_some_and(|star| star + 3 <= line.len())
             && matches!(
-                parser.parse_sentence(line),
+                parse_nmea_sentence(&mut parser, line),
                 Ok(ParsedMessage::Rmc(_)
                     | ParsedMessage::Gll(_)
                     | ParsedMessage::Hdt(_)
@@ -1920,7 +1920,7 @@ impl NavigationData {
         let parser = self.nmea_parser.as_mut().unwrap();
         let sentence_error = |e: String| RadarError::ParseNmea0183(format!("{s}: {e}"));
 
-        match parser.parse_sentence(s) {
+        match parse_nmea_sentence(parser, s) {
             Ok(ParsedMessage::Rmc(rmc)) => {
                 check_rmc_motion(&rmc).map_err(sentence_error)?;
                 set_position(rmc.latitude, rmc.longitude, "nmea0183");
@@ -2095,6 +2095,46 @@ fn nmea_angle(degrees: Option<f64>, what: &str) -> Result<Option<f64>, String> {
         }
         d => Ok(d.map(f64::to_radians)),
     }
+}
+
+/// Parse an NMEA 0183 sentence, turning a proprietary `$PASHR` attitude report
+/// into `ParsedMessage::Hdt` once `nmea-parser` has verified its checksum.
+fn parse_nmea_sentence(
+    parser: &mut NmeaParser,
+    sentence: &str,
+) -> Result<ParsedMessage, ParseError> {
+    match parser.parse_sentence(sentence) {
+        Err(ParseError::UnsupportedSentenceType(e)) => {
+            pashr_hdt(sentence).unwrap_or(Err(ParseError::UnsupportedSentenceType(e)))
+        }
+        r => r,
+    }
+}
+
+fn pashr_hdt(sentence: &str) -> Option<Result<ParsedMessage, ParseError>> {
+    const HEADING: usize = 1;
+    let sentence = sentence
+        .find('$')
+        .map_or(sentence, |start| &sentence[start..]);
+    let (body, checksum) = sentence.rsplit_once('*')?;
+    if checksum.len() < 2 {
+        return None;
+    }
+    let body = body.strip_prefix("$PASHR,")?;
+    let mut fields = body.split(',');
+    let heading = fields.nth(HEADING)?;
+    if fields.next()? != "T" {
+        return None;
+    }
+    let heading_true = Some(heading)
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            s.parse::<f64>().map_err(|_| {
+                ParseError::InvalidSentence(format!("Failed to parse field {HEADING}: {s}"))
+            })
+        })
+        .transpose();
+    Some(heading_true.map(|heading_true| ParsedMessage::Hdt(gnss::HdtData { heading_true })))
 }
 
 /// A Signal K heading or course in radians: `Some(None)` for a null, which
@@ -2567,6 +2607,8 @@ mod tests {
         for sentence in [
             "$GPHDT,720.0,T*30",
             "$GPHDT,NaN,T*7A",
+            "$PASHR,085335.000,720.0,T,-01.26,+00.83,+00.00,0.101,0.113,0.267,1,0*3F",
+            "$PASHR,085335.000,NaN,T,-01.26,+00.83,+00.00,0.101,0.113,0.267,1,0*75",
             "$GPVTG,720.0,T,,M,6.0,N,11.1,K,A*3F",
             "$GPVTG,90.0,T,,M,-6.0,N,-11.1,K,A*03",
             "$GPVTG,90.0,T,,M,-6.0,N,11.1,K,A*2E",
@@ -2665,10 +2707,33 @@ mod tests {
     #[test]
     fn an_nmea_heading_is_stored_in_radians() {
         let _globals = nav_globals();
-        nmea0183_receiver()
-            .parse_nmea0183("$GPHDT,90.0,T*0C")
-            .unwrap();
-        assert!((get_heading_true().unwrap() - 90f64.to_radians()).abs() < 1e-9);
+        for (sentence, degrees) in [
+            ("$GPHDT,90.0,T*0C", 90.0_f64),
+            (
+                "$PASHR,085335.000,224.19,T,-01.26,+00.83,+00.00,0.101,0.113,0.267,1,0*06",
+                224.19,
+            ),
+        ] {
+            assert!(carries_navigation(sentence.as_bytes()), "{sentence}");
+            nmea0183_receiver().parse_nmea0183(sentence).unwrap();
+            assert!(
+                (get_heading_true().unwrap() - degrees.to_radians()).abs() < 1e-9,
+                "{sentence}"
+            );
+        }
+
+        for ignored in [
+            "$PASHR,085335.000,90.0,T,-01.26,+00.83,+00.00,0.101,0.113,0.267,1,0",
+            "$PASHR,085335.000,90.0,T,-01.26,+00.83,+00.00,0.101,0.113,0.267,1,0*0",
+            "$PASHR,ACK*3D",
+        ] {
+            assert!(!carries_navigation(ignored.as_bytes()), "{ignored}");
+            nmea0183_receiver().parse_nmea0183(ignored).unwrap();
+            assert!(
+                (get_heading_true().unwrap() - 224.19_f64.to_radians()).abs() < 1e-9,
+                "{ignored}"
+            );
+        }
     }
 
     #[test]
