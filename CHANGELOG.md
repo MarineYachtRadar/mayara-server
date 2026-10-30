@@ -5,6 +5,59 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 3.16.0 (2026-10-30)
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### 🚀 Features
+* feat(furuno): report lost radar signals and supply rails by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/789
+* feat(emulator): add an option to send sparse spokes by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/795
+* feat(emulator): colour moving targets in Doppler mode by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/797
+* feat(furuno): add auto sea mode and echo averaging by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/800
+* feat(furuno): send the vessel's heading to the radar by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/801
+* feat(emulator): follow the boat's position from Signal K by @dirkwa in https://github.com/MarineYachtRadar/mayara-server/pull/811
+* feat(emulator): show AIS vessels as radar echoes by @dirkwa in https://github.com/MarineYachtRadar/mayara-server/pull/813
+* feat(emulator): paint land from a GeoJSON file by @dirkwa in https://github.com/MarineYachtRadar/mayara-server/pull/814
+* feat(furuno): range in statute miles and kiloyards by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/810
+* feat(navdata): take AIS vessels from NMEA 0183 by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/816
+* feat(stream): send own ship's course and speed to clients by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/817
+* feat(gui): show data boxes for the targets that matter by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/821
+* feat(arpa): track moving vessels with Doppler, not the coast by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/822
+* feat(furuno): track Doppler echoes as ARPA targets by @dirkwa in https://github.com/MarineYachtRadar/mayara-server/pull/829
+* feat(arpa): track Doppler echoes on Raymarine and Garmin radars by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/834
+### 🐛 Fixes
+* fix(furuno): identify a DRS2D-NXT as one by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/788
+* fix(gui): fill spoke gaps only on radars that skip spokes by @dirkwa in https://github.com/MarineYachtRadar/mayara-server/pull/793
+* fix(emulator): keep the emulator from going off after 30 s by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/796
+* fix(radar): offer spoke processing only on radars that skip spokes by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/794
+* fix(furuno): fix settings on DRS-NXT radars by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/791
+* fix(furuno): offer the controls each pre-NXT DRS applies by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/792
+* fix(furuno): use the heading the radar sends with its spokes by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/802
+* fix(arpa): check track timeouts every revolution by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/803
+* fix(furuno): take each spoke frame's range unit from the frame by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/805
+* fix(furuno): plot echoes at the right distance in statute miles and kiloyards by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/809
+* fix(emulator): draw echoes at their real distance by @dirkwa in https://github.com/MarineYachtRadar/mayara-server/pull/812
+* fix(test): build the #722 rig with the emulator land option by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/819
+* fix(arpa): confirm fewer false targets and show their real speed by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/824
+* fix(arpa): answer an acquire request with the new target's id by @dirkwa in https://github.com/MarineYachtRadar/mayara-server/pull/827
+* fix(arpa): keep Doppler Auto Track on across a restart by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/833
+* fix(controls): keep target controls settable during a replay by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/836
+* fix(garmin): show MotionScope on a dual-range radar's range B by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/835
+* fix(arpa): alarm when a tracked target enters a guard zone by @dirkwa in https://github.com/MarineYachtRadar/mayara-server/pull/826
+* fix(navdata): allow sharing UDP navigation port by @jborburgh-fugro in https://github.com/MarineYachtRadar/mayara-server/pull/845
+* fix(arpa): don't alarm when a hand-acquired target clicked in overlapping zones leaves one by @dirkwa in https://github.com/MarineYachtRadar/mayara-server/pull/851
+* fix(emulator): paint land from a chart as a strong return by @dirkwa in https://github.com/MarineYachtRadar/mayara-server/pull/855
+### 📦 Dependencies
+* build(deps): bump the cargo-minor-patch group with 5 updates by @dependabot[bot] in https://github.com/MarineYachtRadar/mayara-server/pull/807
+### Other
+* build(test): optimise the test profile by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/823
+
+## New Contributors
+* @jborburgh-fugro made their first contribution in https://github.com/MarineYachtRadar/mayara-server/pull/845
+
+**Full Changelog**: https://github.com/MarineYachtRadar/mayara-server/compare/v3.15.0...v3.16.0
+
 ## 3.15.0 (2026-10-19)
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
