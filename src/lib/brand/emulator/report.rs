@@ -39,7 +39,7 @@ const DEG_TO_RAD: f64 = PI / 180.0;
 /// small boat far out shows as an arc rather than a speck or not at all.
 const HALF_BEAM_WIDTH: f64 = 1.0 * DEG_TO_RAD;
 /// Land returns strongly, but less than a ship's steel
-const LAND_INTENSITY: u8 = 12;
+const LAND_INTENSITY: u8 = 14;
 /// An echo is never shorter than this many pixels along a spoke, as a
 /// radar pulse has a length of its own.
 const MIN_ECHO_PIXELS: f64 = 2.0;
@@ -833,6 +833,16 @@ mod tests {
         assert_eq!(with_land(NO_ECHO, 8100.0, &land).intensity, 0);
     }
 
+    /// Land paints red on the default palette, as a strong return does,
+    /// not in the olive of a medium one.
+    #[test]
+    fn land_is_a_strong_return() {
+        assert_eq!(
+            with_land(NO_ECHO, 1000.0, &[(1000.0, 2000.0)]).intensity,
+            14
+        );
+    }
+
     /// Off land, and on a spoke without any, the echo passes unchanged.
     #[test]
     fn an_echo_off_land_passes_unchanged() {
@@ -847,8 +857,16 @@ mod tests {
         let land = [(1000.0, 2000.0)];
         let both = colors(DopplerMode::Both);
 
-        assert_eq!(both.pixel(with_land(echo(2.0), 1100.0, &land)), 40);
-        assert_eq!(both.pixel(with_land(echo(0.0), 1100.0, &land)), 14);
+        let ship = |closing_speed| Echo {
+            intensity: LAND_INTENSITY + 1,
+            closing_speed,
+        };
+
+        assert_eq!(both.pixel(with_land(ship(2.0), 1100.0, &land)), 40);
+        assert_eq!(
+            both.pixel(with_land(ship(0.0), 1100.0, &land)),
+            LAND_INTENSITY + 1
+        );
         let weak = Echo {
             intensity: LAND_INTENSITY - 1,
             closing_speed: 2.0,
