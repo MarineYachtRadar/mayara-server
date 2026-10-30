@@ -28,8 +28,8 @@ use crate::radar::CommonRadar;
 use crate::radar::SharedRadars;
 use crate::radar::SpokeBearing;
 use crate::radar::settings::{
-    ControlId, ControlValue, RANGE_UNITS_KILOYARDS, RANGE_UNITS_METRIC, RANGE_UNITS_NAUTICAL,
-    RANGE_UNITS_STATUTE,
+    ControlId, ControlUpdate, ControlValue, RANGE_UNITS_KILOYARDS, RANGE_UNITS_METRIC,
+    RANGE_UNITS_NAUTICAL, RANGE_UNITS_STATUTE,
 };
 use crate::radar::{
     DUAL_RANGE_A, DUAL_RANGE_B, Power, RadarError, RadarInfo, transmit_claim_after_request,
@@ -256,10 +256,10 @@ impl FurunoReportReceiver {
         let target = common.info.spokes_per_revolution.div_ceil(32) as usize;
         common.set_spoke_batch_threshold(target);
 
-        // In replay mode the saved control state already drives the LUT, so
-        // treat TA state as known from the start. In live mode we wait for
-        // either a `$NEF` reply or model identification to confirm whether
-        // the radar has TA at all.
+        // A replay has no `$NEF` to wait for, so its spokes flow from the
+        // start, decoded with Target Analyzer off until a client sets it. In
+        // live mode we wait for either a `$NEF` reply or model identification
+        // to confirm whether the radar has TA at all.
         let initial_ta_known = args.is_replay();
 
         FurunoReportReceiver {
@@ -478,6 +478,9 @@ impl FurunoReportReceiver {
                     match r {
                         Err(_) => {},
                         Ok(cv) => {
+                            if self.take_replayed_target_analyzer(&cv).await {
+                                continue;
+                            }
                             if let Some(ref mut cs) = self.command_sender {
                                 cs.dual_range_id = DUAL_RANGE_A;
                             }
@@ -498,6 +501,9 @@ impl FurunoReportReceiver {
                     match r {
                         Err(_) => {},
                         Ok(cv) => {
+                            if self.take_replayed_target_analyzer(&cv).await {
+                                continue;
+                            }
                             if let Some(ref mut cs) = self.command_sender {
                                 cs.dual_range_id = DUAL_RANGE_B;
                             }
@@ -1240,49 +1246,7 @@ impl FurunoReportReceiver {
                 } else {
                     2.0 // Rain
                 };
-
-                // Target Analyzer is shared between the ranges of a dual-range
-                // antenna: the firmware mirrors the state, and the radar only
-                // reports it for the range the controlling client addressed.
-                // Apply the report to both ranges so Range B's emission gate
-                // lifts even when the confirmation arrives as Range A.
-                let range_indices: &[u8] = if self.common_b.is_some() {
-                    &[0, 1]
-                } else {
-                    &[0]
-                };
-                for &range_idx in range_indices {
-                    let old_mode = self.doppler_wire_mode_for(range_idx as usize);
-                    self.common_for_range(range_idx)
-                        .set_value(&ControlId::Doppler, value);
-                    let new_mode = self.doppler_wire_mode_for(range_idx as usize);
-                    let key = if range_idx == 1 {
-                        &self.common_b.as_ref().unwrap().key
-                    } else {
-                        &self.common.key
-                    };
-                    if old_mode != new_mode {
-                        let low_power = self.model.is_low_power();
-                        let legend = if range_idx == 1 {
-                            self.common_b.as_ref().unwrap().info.get_legend()
-                        } else {
-                            self.common.info.get_legend()
-                        };
-                        self.wire_to_legend[range_idx as usize] =
-                            Self::wire_to_legend(&legend, new_mode, low_power);
-                        log::debug!("{}: Doppler wire mode changed to {:?}", key, new_mode);
-                    }
-                    // First `$NEF` confirms the TA state, so the LUT is now
-                    // trustworthy and spoke emission can resume.
-                    if !self.target_analyzer_known[range_idx as usize] {
-                        self.target_analyzer_known[range_idx as usize] = true;
-                        log::info!(
-                            "{}: Target Analyzer state confirmed (mode {:?}), spoke output enabled",
-                            key,
-                            self.doppler_wire_mode_for(range_idx as usize)
-                        );
-                    }
-                }
+                self.set_target_analyzer(value);
             }
 
             CommandId::Tune => {
@@ -2171,6 +2135,79 @@ impl FurunoReportReceiver {
         lut
     }
 
+    /// Take a confirmed Target Analyzer state, as `0` Off, `1` Target or
+    /// `2` Rain.
+    ///
+    /// Target Analyzer is shared between the ranges of a dual-range antenna:
+    /// the firmware mirrors the state, and the radar only reports it for the
+    /// range the controlling client addressed. Apply it to both ranges so
+    /// Range B's emission gate lifts even when the confirmation arrives as
+    /// Range A.
+    fn set_target_analyzer(&mut self, value: f64) {
+        let range_indices: &[u8] = if self.common_b.is_some() {
+            &[0, 1]
+        } else {
+            &[0]
+        };
+        for &range_idx in range_indices {
+            let old_mode = self.doppler_wire_mode_for(range_idx as usize);
+            self.common_for_range(range_idx)
+                .set_value(&ControlId::Doppler, value);
+            let new_mode = self.doppler_wire_mode_for(range_idx as usize);
+            let key = if range_idx == 1 {
+                &self.common_b.as_ref().unwrap().key
+            } else {
+                &self.common.key
+            };
+            if old_mode != new_mode {
+                let low_power = self.model.is_low_power();
+                let legend = if range_idx == 1 {
+                    self.common_b.as_ref().unwrap().info.get_legend()
+                } else {
+                    self.common.info.get_legend()
+                };
+                self.wire_to_legend[range_idx as usize] =
+                    Self::wire_to_legend(&legend, new_mode, low_power);
+                log::debug!("{}: Doppler wire mode changed to {:?}", key, new_mode);
+            }
+            // The first confirmation makes the LUT trustworthy, so spoke
+            // emission can resume.
+            if !self.target_analyzer_known[range_idx as usize] {
+                self.target_analyzer_known[range_idx as usize] = true;
+                log::info!(
+                    "{}: Target Analyzer state confirmed (mode {:?}), spoke output enabled",
+                    key,
+                    self.doppler_wire_mode_for(range_idx as usize)
+                );
+            }
+        }
+    }
+
+    /// In a replay no radar answers a Target Analyzer setting with `$NEF`, and
+    /// the spoke frames do not say whether it was on, so a client's setting
+    /// stands for the state the capture was recorded in. Returns whether
+    /// `update` was taken that way; one without a numeric value is refused.
+    async fn take_replayed_target_analyzer(&mut self, update: &ControlUpdate) -> bool {
+        let cv = &update.control_value;
+        if !self.common.replay || cv.id != ControlId::Doppler {
+            return false;
+        }
+        match cv.as_value().ok().and_then(|v| v.as_f64()) {
+            Some(value) => self.set_target_analyzer(value),
+            None => {
+                let e = RadarError::CannotSetControlId(cv.id);
+                let controls = &self.common.info.controls;
+                if let Err(e) = controls
+                    .send_error_to_client(update.reply_tx.clone(), cv, &e)
+                    .await
+                {
+                    log::warn!("{}: {}", self.common.key, e);
+                }
+            }
+        }
+        true
+    }
+
     /// Derive the wire-decoding mode from the current Doppler control value
     /// for the given range (0 = A, 1 = B). `0` (Off) → `Off`; any non-zero
     /// value (Target, Rain) → `On`.
@@ -2713,6 +2750,68 @@ mod tests {
             controls.get(&ControlId::Range).and_then(|c| c.value),
             Some(3219.)
         );
+    }
+
+    /// A replay takes a client's Target Analyzer setting as the state its
+    /// capture was recorded in, for both ranges, since no `$NEF` will come;
+    /// a live radar's setting waits for the radar to confirm it.
+    #[tokio::test]
+    async fn a_replay_decodes_doppler_once_a_client_sets_target_analyzer() {
+        let target = ControlValue::new(ControlId::Doppler, Value::from(1));
+        let on = |receiver: &FurunoReportReceiver| {
+            let legend = receiver.common.info.get_legend();
+            let low_power = receiver.model.is_low_power();
+            FurunoReportReceiver::wire_to_legend(&legend, DopplerWireMode::On, low_power)
+        };
+
+        let update = |control_value| ControlUpdate {
+            reply_tx: tokio::sync::mpsc::channel(1).0,
+            control_value,
+        };
+
+        let mut live = dual_range_receiver();
+        assert!(
+            !live
+                .take_replayed_target_analyzer(&update(target.clone()))
+                .await
+        );
+        assert_ne!(live.wire_to_legend[0], on(&live));
+
+        let mut replay = dual_range_receiver();
+        replay.common.replay = true;
+        assert!(replay.take_replayed_target_analyzer(&update(target)).await);
+        for range_idx in [0, 1] {
+            assert_eq!(replay.wire_to_legend[range_idx], on(&replay));
+            assert!(replay.target_analyzer_known[range_idx]);
+        }
+        let doppler = |common: &CommonRadar| {
+            common
+                .info
+                .controls
+                .get(&ControlId::Doppler)
+                .and_then(|c| c.value)
+        };
+        assert_eq!(doppler(&replay.common), Some(1.));
+        assert_eq!(doppler(replay.common_b.as_ref().unwrap()), Some(1.));
+    }
+
+    /// A replayed Target Analyzer setting that is not a number is refused
+    /// to the client, and the spokes stay decoded as before.
+    #[tokio::test]
+    async fn a_replay_refuses_a_target_analyzer_setting_without_a_number() {
+        let mut replay = dual_range_receiver();
+        replay.common.replay = true;
+        let before = replay.wire_to_legend;
+        let (reply_tx, mut reply_rx) = tokio::sync::mpsc::channel(1);
+        let update = ControlUpdate {
+            reply_tx,
+            control_value: ControlValue::new(ControlId::Doppler, Value::from("Target")),
+        };
+
+        assert!(replay.take_replayed_target_analyzer(&update).await);
+        let reply = reply_rx.try_recv().expect("a reply");
+        assert!(reply.error.is_some(), "{reply:?}");
+        assert_eq!(replay.wire_to_legend, before);
     }
 
     /// Channel 0 is the radar choosing for itself, which is auto rather than

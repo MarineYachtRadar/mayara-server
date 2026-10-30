@@ -142,21 +142,21 @@ jobs:
     - uses: taiki-e/install-action@v2.87.30
       with:
         tool: nextest
-    # The ARPA regression test replays a 13-minute voyage, too big for this
-    # repository; it lives with the other large recordings, and this fetches
-    # only its files. The commit is pinned to the one the checked-in baseline
-    # was scored on, so a change there cannot move the scores here.
-    - name: Fetch the ARPA regression recording
+    # The ARPA regression tests replay recordings too big for this
+    # repository; they live with the other large recordings, and this fetches
+    # only their files. The commit is pinned to the one the checked-in
+    # baselines were scored on, so a change there cannot move the scores here.
+    - name: Fetch the ARPA regression recordings
       run: |
         git init -q ../radar-recordings
         cd ../radar-recordings
         git remote add origin https://github.com/keesverruijt/radar-recordings.git
-        git sparse-checkout set --no-cone 'navico/halo/halo20plus-722*'
+        git sparse-checkout set --no-cone 'navico/halo/halo20plus-722*' 'furuno/moin/drs4dnxt-anchor-approaching*'
         git fetch -q --depth 1 --filter=blob:none origin "$RECORDINGS_REF"
         git checkout -q FETCH_HEAD
       env:
         GIT_LFS_SKIP_SMUDGE: "1"
-        RECORDINGS_REF: c24e26ad5e0997251ba114ecb4ee0e92fc10745f
+        RECORDINGS_REF: 3c13e26952a41061280fcd7473c761d07ef0b3a9
     - name: Run tests
       run: cargo nextest run --features pcap-replay
       env:
