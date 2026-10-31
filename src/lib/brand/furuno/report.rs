@@ -2186,15 +2186,16 @@ impl FurunoReportReceiver {
     /// In a replay no radar answers a Target Analyzer setting with `$NEF`, and
     /// the spoke frames do not say whether it was on, so a client's setting
     /// stands for the state the capture was recorded in. Returns whether
-    /// `update` was taken that way; one without a numeric value is refused.
+    /// `update` was taken that way; one that is not a value this model's
+    /// Doppler control offers is refused.
     async fn take_replayed_target_analyzer(&mut self, update: &ControlUpdate) -> bool {
         let cv = &update.control_value;
         if !self.common.replay || cv.id != ControlId::Doppler {
             return false;
         }
         match cv.as_value().ok().and_then(|v| v.as_f64()) {
-            Some(value) => self.set_target_analyzer(value),
-            None => {
+            Some(value) if self.offers_doppler_value(value) => self.set_target_analyzer(value),
+            _ => {
                 let e = RadarError::CannotSetControlId(cv.id);
                 let controls = &self.common.info.controls;
                 if let Err(e) = controls
@@ -2206,6 +2207,29 @@ impl FurunoReportReceiver {
             }
         }
         true
+    }
+
+    /// Whether `value` is one of the options of this model's Doppler control.
+    /// The live path has the radar refuse anything else; a replay has no
+    /// radar to do that, and any non-zero value would turn the Doppler
+    /// decoding on.
+    fn offers_doppler_value(&self, value: f64) -> bool {
+        if !value.is_finite() || value.fract() != 0.0 {
+            return false;
+        }
+        let option = value as i32;
+        self.common
+            .info
+            .controls
+            .get(&ControlId::Doppler)
+            .is_some_and(|control| match &control.item().valid_values {
+                Some(valid_values) => valid_values.contains(&option),
+                None => control
+                    .item()
+                    .descriptions
+                    .as_ref()
+                    .is_some_and(|options| options.contains_key(&option)),
+            })
     }
 
     /// Derive the wire-decoding mode from the current Doppler control value
@@ -2812,6 +2836,29 @@ mod tests {
         let reply = reply_rx.try_recv().expect("a reply");
         assert!(reply.error.is_some(), "{reply:?}");
         assert_eq!(replay.wire_to_legend, before);
+    }
+
+    /// A replayed Target Analyzer setting this model does not offer is
+    /// refused like one without a number, since any non-zero value would
+    /// otherwise turn the Doppler decoding on.
+    #[tokio::test]
+    async fn a_replay_refuses_a_target_analyzer_setting_the_model_does_not_offer() {
+        for value in [Value::from(7), Value::from(1.5), Value::from(-1)] {
+            let mut replay = dual_range_receiver();
+            replay.common.replay = true;
+            let before = replay.wire_to_legend;
+            let (reply_tx, mut reply_rx) = tokio::sync::mpsc::channel(1);
+            let update = ControlUpdate {
+                reply_tx,
+                control_value: ControlValue::new(ControlId::Doppler, value.clone()),
+            };
+
+            assert!(replay.take_replayed_target_analyzer(&update).await);
+            let reply = reply_rx.try_recv().expect("a reply");
+            assert!(reply.error.is_some(), "{value}: {reply:?}");
+            assert_eq!(replay.wire_to_legend, before, "{value}");
+            assert!(!replay.target_analyzer_known[0], "{value}");
+        }
     }
 
     /// Channel 0 is the radar choosing for itself, which is auto rather than
