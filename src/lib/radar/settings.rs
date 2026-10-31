@@ -855,6 +855,19 @@ impl SharedControls {
         self.controls.write().unwrap().insert(id, control);
     }
 
+    /// Lift the replay lock from a control that its brand applies to the
+    /// recording itself instead of sending it to a radar. A no-op when this
+    /// is not a replay, where the radar decides as usual.
+    pub(crate) fn settable_on_replay(&self, control_id: &ControlId) {
+        let mut locked = self.controls.write().unwrap();
+        if !locked.replay {
+            return;
+        }
+        if let Some(control) = locked.controls.get_mut(control_id) {
+            control.item.is_read_only = false;
+        }
+    }
+
     /// Replace a control's definition (auto flags, min/max, etc.) while
     /// preserving any runtime state (value, auto, enabled, …) that has
     /// already been set. Falls back to a plain `add` when the control
@@ -4690,6 +4703,41 @@ mod test {
                 .item
                 .is_read_only
         );
+        assert!(controls.get(&ControlId::Doppler).unwrap().item.is_read_only);
+    }
+
+    /// A brand that applies a command control to the recording itself can
+    /// let a replay's client set it; elsewhere the replay lock stays.
+    #[test]
+    fn a_replay_can_let_a_brand_handled_control_be_set() {
+        let args = Cli::parse_from(["my_program", "--replay"]);
+        let tx = tokio::sync::broadcast::Sender::new(10);
+        let mut controls = SharedControls::new("fur1234".to_string(), tx, &args, HashMap::new());
+        controls.add(new_list(ControlId::Doppler, &["Off", "Target"]));
+        controls.add(new_list(ControlId::BirdMode, &["Off", "Low"]));
+
+        controls.settable_on_replay(&ControlId::Doppler);
+
+        assert!(!controls.get(&ControlId::Doppler).unwrap().item.is_read_only);
+        assert!(
+            controls
+                .get(&ControlId::BirdMode)
+                .unwrap()
+                .item
+                .is_read_only
+        );
+    }
+
+    /// Outside a replay the radar decides, so nothing is unlocked.
+    #[test]
+    fn settable_on_replay_leaves_a_live_radar_alone() {
+        let args = Cli::parse_from(["my_program"]);
+        let tx = tokio::sync::broadcast::Sender::new(10);
+        let mut controls = SharedControls::new("fur1234".to_string(), tx, &args, HashMap::new());
+        controls.add(new_list(ControlId::Doppler, &["Off", "Target"]).read_only(true));
+
+        controls.settable_on_replay(&ControlId::Doppler);
+
         assert!(controls.get(&ControlId::Doppler).unwrap().item.is_read_only);
     }
 

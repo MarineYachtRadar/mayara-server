@@ -568,6 +568,10 @@ pub(crate) fn update_when_model_known(info: &mut RadarInfo, model: RadarModel, v
         };
         info.controls
             .add(new_list(ControlId::Doppler, doppler_options));
+        // A replay applies the Target Analyzer setting to the recording
+        // itself (FurunoReportReceiver::take_replayed_target_analyzer), so a
+        // client must be able to choose it there.
+        info.controls.settable_on_replay(&ControlId::Doppler);
         // Mayara's tracker acquires the Doppler echoes itself, so this needs
         // no command on the radar.
         info.controls
