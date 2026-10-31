@@ -6,7 +6,7 @@ use serde_json::{Number, Value};
 use std::cell::RefCell;
 use std::{
     borrow::Cow,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     convert::From,
     fmt::{self, Display},
     str::FromStr,
@@ -631,22 +631,34 @@ pub struct Controls {
     /// and sets are refused rather than sent into the void.
     #[serde(skip)]
     command_reachable: bool,
-}
 
-/// A copy of `control` as clients should see it: read-only if it is stored that
-/// way, or if it would be sent to a radar that cannot currently be commanded.
-///
-/// Derived on the way out rather than written into the control, so a radar
-/// going unreachable and coming back cannot leave a stale flag behind.
-fn effective(command_reachable: bool, control: &Control) -> Control {
-    let mut control = control.clone();
-    control.item.is_read_only |= !command_reachable
-        && control.item.control_id.get_destination() == ControlDestination::Command;
-
-    control
+    /// Command controls a replay applies to the recording itself, so they
+    /// stay settable whether or not the recorded radar's address is
+    /// reachable.
+    #[serde(skip)]
+    replay_local: HashSet<ControlId>,
 }
 
 impl Controls {
+    /// A copy of `control` as clients should see it: read-only if it is stored
+    /// that way, or if it would be sent to a radar that cannot currently be
+    /// commanded.
+    ///
+    /// Derived on the way out rather than written into the control, so a radar
+    /// going unreachable and coming back cannot leave a stale flag behind.
+    fn effective(&self, control: &Control) -> Control {
+        let mut control = control.clone();
+        control.item.is_read_only |=
+            !self.command_reachable && self.sent_to_radar(&control.item.control_id);
+
+        control
+    }
+
+    fn sent_to_radar(&self, control_id: &ControlId) -> bool {
+        control_id.get_destination() == ControlDestination::Command
+            && !self.replay_local.contains(control_id)
+    }
+
     fn insert(&mut self, control_id: ControlId, value: Control) {
         // A replay cannot reach a radar, but mayara's own target controls
         // still act on the recording, as `new_base` allows.
@@ -747,6 +759,7 @@ impl Controls {
             sk_client_tx,
             control_update_tx,
             command_reachable: true,
+            replay_local: HashSet::new(),
         }
     }
 }
@@ -859,12 +872,14 @@ impl SharedControls {
     /// recording itself instead of sending it to a radar. A no-op when this
     /// is not a replay, where the radar decides as usual.
     pub(crate) fn settable_on_replay(&self, control_id: &ControlId) {
-        let mut locked = self.controls.write().unwrap();
+        let mut guard = self.controls.write().unwrap();
+        let locked = &mut *guard;
         if !locked.replay {
             return;
         }
         if let Some(control) = locked.controls.get_mut(control_id) {
             control.item.is_read_only = false;
+            locked.replay_local.insert(*control_id);
         }
     }
 
@@ -892,12 +907,10 @@ impl SharedControls {
 
     pub fn get_controls(&self) -> HashMap<ControlId, Control> {
         let locked = self.controls.read().unwrap();
-        let reachable = locked.command_reachable;
-
         locked
             .controls
             .iter()
-            .map(|(id, control)| (*id, effective(reachable, control)))
+            .map(|(id, control)| (*id, locked.effective(control)))
             .collect()
     }
 
@@ -1224,10 +1237,7 @@ impl SharedControls {
                 .controls
                 .get(&ControlId::Range)
                 .expect("Range should always be set");
-            sk_delta.add_meta_for_control(
-                &locked.radar_id,
-                &effective(locked.command_reachable, range_control),
-            );
+            sk_delta.add_meta_for_control(&locked.radar_id, &locked.effective(range_control));
             log::debug!("meta: {:?}", sk_delta);
         }
         sk_delta.add_updates(vec![radar_control_value]);
@@ -1317,9 +1327,8 @@ impl SharedControls {
             // datagram to the radar read differently now. Ones that are stored
             // read-only anyway did not change, so clients need not hear of them.
             for (id, control) in locked.controls.iter() {
-                if id.get_destination() == ControlDestination::Command && !control.item.is_read_only
-                {
-                    delta.add_meta_for_control(&radar_id, &effective(reachable, control));
+                if locked.sent_to_radar(id) && !control.item.is_read_only {
+                    delta.add_meta_for_control(&radar_id, &locked.effective(control));
                 }
             }
         }
@@ -3941,6 +3950,11 @@ fn is_false(v: &bool) -> bool {
 }
 
 impl ControlDefinition {
+    #[cfg(test)]
+    pub(crate) fn is_read_only(&self) -> bool {
+        self.is_read_only
+    }
+
     #[allow(clippy::too_many_arguments)] // every field of ControlDefinition surfaces here; macro builders below depend on the shape
     fn new(
         control_id: ControlId,
@@ -4726,6 +4740,25 @@ mod test {
                 .item
                 .is_read_only
         );
+    }
+
+    /// A replay applies its replay-local controls to the recording, so they
+    /// stay settable when the recorded radar's address is unreachable from
+    /// here, while the other command controls still read as unreachable.
+    #[test]
+    fn a_replay_local_control_ignores_reachability() {
+        let args = Cli::parse_from(["my_program", "--replay"]);
+        let tx = tokio::sync::broadcast::Sender::new(10);
+        let mut controls = SharedControls::new("fur1234".to_string(), tx, &args, HashMap::new());
+        controls.add(new_list(ControlId::Doppler, &["Off", "Target"]));
+        controls.settable_on_replay(&ControlId::Doppler);
+
+        assert!(controls.set_command_reachable(false, "on another subnet"));
+
+        let all = controls.get_controls();
+        let read_only = |id: &ControlId| all.get(id).map(|c| c.item().is_read_only);
+        assert_eq!(read_only(&ControlId::Doppler), Some(false));
+        assert_eq!(read_only(&ControlId::Range), Some(true));
     }
 
     /// Outside a replay the radar decides, so nothing is unlocked.
