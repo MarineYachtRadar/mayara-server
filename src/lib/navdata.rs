@@ -894,9 +894,10 @@ fn carries_navigation(datagram: &[u8]) -> bool {
         line.rfind('*').is_some_and(|star| star + 3 <= line.len())
             && match parse_nmea_sentence(&mut parser, line) {
                 Ok(ParsedMessage::Rmc(rmc)) => {
-                    rmc.latitude.is_some()
-                        && rmc.longitude.is_some()
-                        && check_rmc_motion(&rmc).is_ok()
+                    check_rmc_motion(&rmc).is_ok()
+                        && ((rmc.latitude.is_some() && rmc.longitude.is_some())
+                            || (rmc.status_active == Some(true)
+                                && (rmc.bearing.is_some() || rmc.sog_knots.is_some())))
                 }
                 Ok(ParsedMessage::Gll(gll)) => gll.latitude.is_some() && gll.longitude.is_some(),
                 Ok(ParsedMessage::Hdt(hdt)) => {
@@ -2417,6 +2418,10 @@ mod tests {
     #[test]
     fn a_rejected_or_empty_value_carries_no_navigation() {
         assert!(carries_navigation(b"$GPHDT,224.2,T*33"));
+        // A fix's motion is used even without its position.
+        assert!(carries_navigation(
+            b"$GPRMC,123519,A,,,,,022.4,084.4,230394,003.1,W*53"
+        ));
         for sentence in [
             "$GPHDT,720.0,T*30",
             "$GPHDT,NaN,T*7A",
@@ -2427,6 +2432,7 @@ mod tests {
             "$GPRMC,123519,A,4807.038,N,01131.000,E,022.4,720.0,230394,003.1,W*67",
             "$GPRMC,123519,A,4807.038,N,01131.000,E,-1.0,084.4,230394,003.1,W*42",
             "$GPRMC,123519,V,,,,,,,230394,,,N*51",
+            "$GPRMC,123519,A,,,,,,,230394,,*24",
             "$GPGLL,,,,,123519,V,N*69",
         ] {
             assert!(!carries_navigation(sentence.as_bytes()), "{sentence}");
