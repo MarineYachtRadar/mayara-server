@@ -568,6 +568,10 @@ pub(crate) fn update_when_model_known(info: &mut RadarInfo, model: RadarModel, v
         };
         info.controls
             .add(new_list(ControlId::Doppler, doppler_options));
+        // A replay applies the Target Analyzer setting to the recording
+        // itself (FurunoReportReceiver::take_replayed_target_analyzer), so a
+        // client must be able to choose it there.
+        info.controls.settable_on_replay(&ControlId::Doppler);
         // Mayara's tracker acquires the Doppler echoes itself, so this needs
         // no command on the radar.
         info.controls
@@ -1048,6 +1052,31 @@ mod tests {
             );
         }
         assert!(controls_of(RadarModel::DRS4DNXT).contains_key(&ControlId::DopplerAutoTrack));
+    }
+
+    /// A replay applies Target Analyzer to the recording itself, so its
+    /// client can choose it there, while the controls that would go to a
+    /// radar stay locked. A live radar is left to decide as usual.
+    #[test]
+    fn a_replay_lets_its_client_choose_target_analyzer() {
+        let controls_for = |args: Cli| {
+            let mut info =
+                crate::radar::ui_strings::radar_info(crate::Brand::Furuno, &args, |id, tx| {
+                    new(id, tx, &args)
+                });
+            update_when_model_known(&mut info, RadarModel::DRS4DNXT, "1.00");
+            info.controls
+        };
+        let read_only =
+            |controls: &SharedControls, id| controls.get(&id).unwrap().item().is_read_only();
+
+        let replay = controls_for(Cli::parse_from(["mayara-server", "--replay"]));
+        assert!(!read_only(&replay, ControlId::Doppler));
+        assert!(read_only(&replay, ControlId::Gain));
+
+        let live = controls_for(Cli::parse_from(["mayara-server"]));
+        assert!(!read_only(&live, ControlId::Doppler));
+        assert!(!read_only(&live, ControlId::Gain));
     }
 
     /// A sector control holds radians, and rounds to the step it was built
