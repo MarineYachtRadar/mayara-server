@@ -87,6 +87,14 @@ tracking or an armed guard zone: a radar nobody is looking at stands down even w
 tracking. That is an accepted consequence, not an oversight — the radar is meant to come
 back only when a client asks for it.
 
+**Keeping watch with no display open** (#748). A boat that relies on ARPA or guard-zone
+alarms with the plotter closed sets **Auto standby** to **Off**. The radar then never stands
+down for want of a viewer, and ARPA keeps acquiring and tracking: idle requires Standby, so a
+transmitting radar is never idle and blob detection keeps running without a spoke
+subscriber. The 1 min default stays, so the magnetron is spared unless the user opts in.
+Off holds the radar up whether or not a guard zone is armed; there is no setting that stands
+it down only once the last zone is disarmed.
+
 The ranges of a dual-range radar share one antenna, so the decision is made **per
 antenna** and written to every range: the antenna stands down only when *every* range has
 auto standby enabled and has been unwatched for its own period. A range set to Off holds
@@ -145,6 +153,10 @@ Idle is computed **only** from `message_tx.receiver_count()` (in `RadarInfo::ref
 subscribe to that broadcast** — the data loop feeds its `BlobDetector` and pushes detected
 blobs over a *separate* mpsc channel (`blob_tx.try_send` in the spoke-processing loop),
 consumed by the target tracker. And the idle flag is exactly what **skips blob detection**.
+
+Today this cannot bite: idle also requires Standby, and a radar in Standby has nothing to
+track. It bites the moment idle is widened to cover a transmitting radar, as section 2
+contemplates:
 
 ⇒ If ARPA is tracking targets while no GUI is connected, `receiver_count == 0` → the radar
 idles → blob detection stops → **ARPA silently dies.** Any idle predicate must fold in an
