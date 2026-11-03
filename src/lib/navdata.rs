@@ -35,6 +35,10 @@ static MAGNETIC_VARIATION: AtomicF64 = AtomicF64::new(f64::NAN);
 /// magnetic+variation headings are ignored so a real true heading always wins.
 static TRUE_HEADING_AUTHORITATIVE: AtomicBool = AtomicBool::new(false);
 static POSITION_VALID: AtomicBool = AtomicBool::new(false);
+/// When the position held through void fixes stops being the boat's: the
+/// last good fix plus [`VOID_FIX_GRACE`]. Checked where the position is read,
+/// so a GPS that reports no fix and then falls silent still loses it on time.
+static POSITION_EXPIRES: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
 static POSITION_LAT: AtomicF64 = AtomicF64::new(f64::NAN);
 static POSITION_LON: AtomicF64 = AtomicF64::new(f64::NAN);
 static COG: AtomicF64 = AtomicF64::new(f64::NAN);
@@ -633,8 +637,19 @@ pub(crate) fn broadcast_heading(source: &str) {
     }
 }
 
+/// Whether a position is held at `now`. One held through void fixes past
+/// its expiry is dropped here.
+fn position_valid_at(now: std::time::Instant) -> bool {
+    let mut expires = POSITION_EXPIRES.lock().unwrap();
+    if expires.is_some_and(|at| now >= at) {
+        *expires = None;
+        POSITION_VALID.store(false, Ordering::Release);
+    }
+    POSITION_VALID.load(Ordering::Acquire)
+}
+
 pub fn get_radar_position() -> Option<GeoPosition> {
-    if POSITION_VALID.load(Ordering::Acquire) {
+    if position_valid_at(std::time::Instant::now()) {
         let lat = POSITION_LAT.load(Ordering::Acquire);
         let lon = POSITION_LON.load(Ordering::Acquire);
         return Some(GeoPosition::new(lat, lon));
@@ -683,7 +698,7 @@ pub(crate) fn withdraw_emulator_nav() {
 }
 
 pub fn get_position() -> (Option<f64>, Option<f64>) {
-    if POSITION_VALID.load(Ordering::Acquire) {
+    if position_valid_at(std::time::Instant::now()) {
         let lat = POSITION_LAT.load(Ordering::Acquire);
         let lon = POSITION_LON.load(Ordering::Acquire);
         log::trace!("navdata::get_position() -> lat={}, lon={}", lat, lon);
@@ -706,6 +721,7 @@ pub(crate) fn set_position(lat: Option<f64>, lon: Option<f64>, source: &str) {
         }
         let old_lat = POSITION_LAT.swap(lat, Ordering::AcqRel);
         let old_lon = POSITION_LON.swap(lon, Ordering::AcqRel);
+        *POSITION_EXPIRES.lock().unwrap() = None;
         let was_valid = POSITION_VALID.swap(true, Ordering::AcqRel);
         // Only broadcast on meaningful change — ~1m at the equator
         // (1e-5 deg ≈ 1.11 m). Avoids flooding subscribers with sub-meter
@@ -715,6 +731,7 @@ pub(crate) fn set_position(lat: Option<f64>, lon: Option<f64>, source: &str) {
             broadcast_position_update(lat, lon, source);
         }
     } else {
+        *POSITION_EXPIRES.lock().unwrap() = None;
         POSITION_VALID.store(false, Ordering::Release);
         if source != EMULATOR_SOURCE {
             update_external_nav(|nav| nav.position = None);
@@ -1945,7 +1962,8 @@ impl NavigationData {
 
     /// Take the position an RMC or GLL fix gives the boat. A void fix carries
     /// stale coordinates, if any, so it is never used; the last good position
-    /// is kept until the GPS has had no fix for [`VOID_FIX_GRACE`].
+    /// is kept until the GPS has had no fix for [`VOID_FIX_GRACE`], whether
+    /// or not anything else arrives.
     fn take_fix(
         &mut self,
         valid: Option<bool>,
@@ -1954,11 +1972,9 @@ impl NavigationData {
         now: std::time::Instant,
     ) -> Result<(), String> {
         if valid == Some(false) {
-            if self
-                .last_fix
-                .is_none_or(|at| now.saturating_duration_since(at) >= VOID_FIX_GRACE)
-            {
-                set_position(None, None, "nmea0183");
+            match self.last_fix.map(|at| at + VOID_FIX_GRACE) {
+                Some(expires) if now < expires => hold_position_until(expires),
+                _ => set_position(None, None, "nmea0183"),
             }
             return Ok(());
         }
@@ -2140,6 +2156,14 @@ fn check_rmc_motion(rmc: &gnss::RmcData) -> Result<(), String> {
 /// position it gave. A GPS can drop its fix for a moment, under a bridge or in
 /// a swell, and the radar picture should not lose its position each time.
 const VOID_FIX_GRACE: Duration = Duration::from_secs(60);
+
+/// Keep the position held now until `expires`, unless a fix replaces it first.
+fn hold_position_until(expires: std::time::Instant) {
+    let mut held = POSITION_EXPIRES.lock().unwrap();
+    if held.is_none() {
+        *held = Some(expires);
+    }
+}
 
 /// A position no GPS gives makes the sentence corrupt.
 fn check_nmea_position(lat: Option<f64>, lon: Option<f64>) -> Result<(), String> {
@@ -2645,7 +2669,7 @@ mod tests {
         let position = get_radar_position();
         assert!(position.is_some());
         receiver
-            .parse_nmea0183("$GPRMC,123519,V,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W*7D")
+            .parse_nmea0183("$GPRMC,123519,V,4907.038,N,01131.000,E,022.4,084.4,230394,003.1,W*7C")
             .unwrap();
 
         assert_eq!(get_radar_position(), position);
@@ -2675,6 +2699,32 @@ mod tests {
             .take_fix(Some(false), lat, lon, fix + VOID_FIX_GRACE)
             .unwrap();
         assert_eq!(get_radar_position(), None);
+    }
+
+    /// A GPS that reports no fix and then falls silent loses its position
+    /// once the grace is over, with no further sentence to tell.
+    #[test]
+    fn a_held_position_expires_with_nothing_more_received() {
+        let _globals = nav_globals();
+        let mut receiver = nmea0183_receiver();
+        let fix = std::time::Instant::now();
+        let (lat, lon) = (Some(48.1173), Some(11.5167));
+        receiver.take_fix(Some(true), lat, lon, fix).unwrap();
+        receiver
+            .take_fix(Some(false), lat, lon, fix + Duration::from_secs(1))
+            .unwrap();
+
+        assert!(position_valid_at(
+            fix + VOID_FIX_GRACE - Duration::from_secs(1)
+        ));
+        assert!(!position_valid_at(fix + VOID_FIX_GRACE));
+        assert_eq!(get_radar_position(), None, "and stays dropped");
+
+        receiver.take_fix(Some(true), lat, lon, fix).unwrap();
+        assert!(
+            position_valid_at(fix + VOID_FIX_GRACE * 2),
+            "a new fix clears the expiry"
+        );
     }
 
     /// A void GLL is no more a position than a void RMC.
