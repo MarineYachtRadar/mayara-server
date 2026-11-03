@@ -864,15 +864,16 @@ fn udp_broadcast_listener(addr: SocketAddr) -> std::io::Result<UdpSocket> {
     UdpSocket::from_std(socket.into())
 }
 
-/// `socket`, connected to the first sender of navigation data from `from` on,
-/// on `interface` when discovery is restricted to one. Connected, it hears
-/// only that sender, as a TCP connection would. Pending forever without a
-/// socket, so a select! branch on it never fires.
+/// `socket` once a sender of navigation data is heard on it from `from` on,
+/// on `interface` when discovery is restricted to one, with that sender. The
+/// socket is not connected to it: a boat can broadcast its GPS, its heading
+/// sensor and its AIS from different boxes, and each of them is heard (#818).
+/// Pending forever without a socket, so a select! branch on it never fires.
 async fn nmea0183_broadcaster(
     socket: Option<UdpSocket>,
     from: tokio::time::Instant,
     interface: Option<&str>,
-) -> std::io::Result<UdpSocket> {
+) -> std::io::Result<(UdpSocket, SocketAddr)> {
     let Some(socket) = socket else {
         return std::future::pending().await;
     };
@@ -883,8 +884,7 @@ async fn nmea0183_broadcaster(
             && is_on(interface, &sender)
             && carries_navigation(&buf[..len])
         {
-            socket.connect(sender).await?;
-            return Ok(socket);
+            return Ok((socket, sender));
         }
     }
 }
@@ -1113,9 +1113,10 @@ enum Stream {
     /// resolved so the cooldown logic can mark the server silent on close.
     /// For non-Signal K (e.g. raw NMEA 0183) it is `None`.
     Tcp(TcpStream, Option<SocketAddr>),
-    /// UDP, with how long it may stay quiet before discovery starts over;
-    /// `None` for an address the user gave, which is kept however quiet.
-    Udp(UdpSocket, Option<Duration>),
+    /// UDP, with how long it may stay quiet before discovery starts over
+    /// (`None` for an address the user gave, which is kept however quiet),
+    /// and the interface its senders must be on when that is restricted.
+    Udp(UdpSocket, Option<Duration>, Option<String>),
     /// Signal K WebSocket. `peer` carries the discovery-time SocketAddr; the
     /// url string is the WS endpoint URL for logging.
     WebSocket(WsStream, String, SocketAddr),
@@ -1129,6 +1130,44 @@ pub(crate) struct NavigationData {
     /// When an NMEA 0183 RMC or GLL last gave a valid position; see
     /// [`VOID_FIX_GRACE`].
     last_fix: Option<std::time::Instant>,
+    position_source: SourceLock,
+    heading_source: SourceLock,
+    motion_source: SourceLock,
+}
+
+/// How long the device mayara takes one kind of value from may go without
+/// giving one before another device's is used instead. It rides out a lost
+/// datagram or two from a device that sends once a second or less often.
+const SOURCE_TAKEOVER_AFTER: Duration = Duration::from_secs(10);
+
+/// The device on the network whose position, heading, or course and speed
+/// mayara uses. A boat with two GPS units or two compasses would otherwise
+/// see the value jump between them with every sentence.
+#[derive(Default)]
+struct SourceLock {
+    /// The device in use, and when it last gave a value.
+    held: Option<(SocketAddr, std::time::Instant)>,
+}
+
+impl SourceLock {
+    /// Whether `sender` may set the value: always when the sender is not
+    /// known, as on a TCP stream, and otherwise when it is the device in use
+    /// or that device has given nothing for [`SOURCE_TAKEOVER_AFTER`].
+    fn admits(&self, sender: Option<SocketAddr>, now: std::time::Instant) -> bool {
+        match (self.held, sender) {
+            (Some((held, last)), Some(sender)) => {
+                held == sender || now >= last + SOURCE_TAKEOVER_AFTER
+            }
+            _ => true,
+        }
+    }
+
+    /// Keep using `sender`, which has just given a value.
+    fn hold(&mut self, sender: Option<SocketAddr>, now: std::time::Instant) {
+        if let Some(sender) = sender {
+            self.held = Some((sender, now));
+        }
+    }
 }
 
 /// Set true the first time the current Signal K receive loop sees a real
@@ -1255,6 +1294,9 @@ impl NavigationData {
                 what: "NMEA0183",
                 nmea_parser: Some(NmeaParser::new()),
                 last_fix: None,
+                position_source: SourceLock::default(),
+                heading_source: SourceLock::default(),
+                motion_source: SourceLock::default(),
             },
             false => NavigationData {
                 args,
@@ -1262,6 +1304,9 @@ impl NavigationData {
                 what: "Signal K",
                 nmea_parser: None,
                 last_fix: None,
+                position_source: SourceLock::default(),
+                heading_source: SourceLock::default(),
+                motion_source: SourceLock::default(),
             },
         }
     }
@@ -1426,22 +1471,22 @@ impl NavigationData {
                         }
                     }
                 }
-                Ok(Stream::Udp(socket, quiet_limit)) => {
+                Ok(Stream::Udp(socket, quiet_limit, interface)) => {
                     log::info!(
-                        "Listening to {} data via UDP from {}",
+                        "Listening to {} data via UDP on {}",
                         self.what,
-                        // A discovered broadcaster is connected to; a given
-                        // address is only bound.
                         socket
-                            .peer_addr()
-                            .or_else(|_| socket.local_addr())
+                            .local_addr()
                             .map(|a| a.to_string())
                             .unwrap_or_else(|_| "<unknown>".to_string())
                     );
                     // NMEA0183-over-UDP has no Signal K own-ship probe so
                     // it's outside the backoff path: success or failure
                     // here doesn't update consecutive_no_nav.
-                    match self.receive_udp_loop(socket, quiet_limit, subsys).await {
+                    match self
+                        .receive_udp_loop(socket, quiet_limit, interface.as_deref(), subsys)
+                        .await
+                    {
                         Err(RadarError::Shutdown) => {
                             log::debug!("{} receive_loop shutdown", self.what);
                             return Ok(());
@@ -1601,9 +1646,18 @@ impl NavigationData {
                     r = Err(RadarError::IPAddressChanged);
                     break;
                 },
-                socket = &mut broadcaster => {
-                    r = socket
-                        .map(|socket| Stream::Udp(socket, Some(BROADCAST_QUIET_LIMIT)))
+                found = &mut broadcaster => {
+                    r = found
+                        .map(|(socket, sender)| {
+                            log::info!(
+                                "NMEA0183 heard from {sender}; taking every sender on UDP port {NMEA0183_UDP_PORT}"
+                            );
+                            Stream::Udp(
+                                socket,
+                                Some(BROADCAST_QUIET_LIMIT),
+                                interface.map(str::to_string),
+                            )
+                        })
                         .map_err(RadarError::from);
                     break;
                 },
@@ -1691,7 +1745,7 @@ impl NavigationData {
             }
             match udp_broadcast_listener(addr) {
                 Ok(stream) => {
-                    return Ok(Stream::Udp(stream, None));
+                    return Ok(Stream::Udp(stream, None, None));
                 }
                 Err(e) => {
                     log::trace!("Failed to bind {} to {addr}: {e}", self.what);
@@ -1911,10 +1965,13 @@ impl NavigationData {
 
     // Loop until we get an error, then just return the error
     // or Ok if we are to shutdown.
+    /// Take datagrams from every sender on `interface`, or from any sender
+    /// when that is not restricted, until `quiet_limit` passes with none.
     async fn receive_udp_loop(
         &mut self,
         socket: UdpSocket,
         quiet_limit: Option<Duration>,
+        interface: Option<&str>,
         subsys: &SubsystemHandle,
     ) -> Result<(), RadarError> {
         loop {
@@ -1927,11 +1984,12 @@ impl NavigationData {
                     match r {
                         Ok(()) => {
                             let mut buf = [0; 2000];
-                            let r = socket.try_recv(&mut buf);
+                            let r = socket.try_recv_from(&mut buf);
                             match r {
-                                Ok(len) => {
-                                    self.process_udp_buf(&buf[..len]);
+                                Ok((len, sender)) if is_on(interface, &sender) => {
+                                    self.process_udp_buf(&buf[..len], sender);
                                 },
+                                Ok(_) => {},
                                 Err(ref e) if e.kind() == ErrorKind::WouldBlock => {},
                                 Err(e) => { log::warn!("{}", e)}
                             }
@@ -1946,11 +2004,11 @@ impl NavigationData {
         }
     }
 
-    fn process_udp_buf(&mut self, buf: &[u8]) {
+    fn process_udp_buf(&mut self, buf: &[u8], sender: SocketAddr) {
         if let Ok(data) = String::from_utf8(buf.to_vec()) {
             for line in data.lines() {
                 if let Err(e) = if self.nmea0183_mode {
-                    self.parse_nmea0183(line)
+                    self.parse_nmea0183_at(line, Some(sender), std::time::Instant::now())
                 } else {
                     parse_signalk(line)
                 } {
@@ -1963,56 +2021,90 @@ impl NavigationData {
     /// Take the position an RMC or GLL fix gives the boat. A void fix carries
     /// stale coordinates, if any, so it is never used; the last good position
     /// is kept until the GPS has had no fix for [`VOID_FIX_GRACE`], whether
-    /// or not anything else arrives.
+    /// or not anything else arrives. Returns whether it gave a position.
     fn take_fix(
         &mut self,
         valid: Option<bool>,
         lat: Option<f64>,
         lon: Option<f64>,
         now: std::time::Instant,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         if valid == Some(false) {
             match self.last_fix.map(|at| at + VOID_FIX_GRACE) {
                 Some(expires) if now < expires => hold_position_until(expires),
                 _ => set_position(None, None, "nmea0183"),
             }
-            return Ok(());
+            return Ok(false);
         }
         check_nmea_position(lat, lon)?;
-        if lat.is_some() && lon.is_some() {
+        let fixed = lat.is_some() && lon.is_some();
+        if fixed {
             self.last_fix = Some(now);
         }
         set_position(lat, lon, "nmea0183");
-        Ok(())
+        Ok(fixed)
     }
 
     fn parse_nmea0183(&mut self, s: &str) -> Result<(), RadarError> {
+        self.parse_nmea0183_at(s, None, std::time::Instant::now())
+    }
+
+    /// Use a sentence from `sender`, when known, at `now`. Position, heading,
+    /// and course and speed are each taken from one device; see
+    /// [`SourceLock`].
+    fn parse_nmea0183_at(
+        &mut self,
+        s: &str,
+        sender: Option<SocketAddr>,
+        now: std::time::Instant,
+    ) -> Result<(), RadarError> {
         let parser = self.nmea_parser.as_mut().unwrap();
         let sentence_error = |e: String| RadarError::ParseNmea0183(format!("{s}: {e}"));
 
         match parse_nmea_sentence(parser, s) {
             Ok(ParsedMessage::Rmc(rmc)) => {
                 check_rmc_motion(&rmc).map_err(sentence_error)?;
-                let now = std::time::Instant::now();
-                self.take_fix(rmc.status_active, rmc.latitude, rmc.longitude, now)
-                    .map_err(sentence_error)?;
-                set_rmc_motion(&rmc);
+                if self.position_source.admits(sender, now)
+                    && self
+                        .take_fix(rmc.status_active, rmc.latitude, rmc.longitude, now)
+                        .map_err(sentence_error)?
+                {
+                    self.position_source.hold(sender, now);
+                }
+                if self.motion_source.admits(sender, now) && set_rmc_motion(&rmc) {
+                    self.motion_source.hold(sender, now);
+                }
             }
             Ok(ParsedMessage::Gll(gll)) => {
-                let now = std::time::Instant::now();
-                self.take_fix(gll.data_valid, gll.latitude, gll.longitude, now)
-                    .map_err(sentence_error)?;
+                if self.position_source.admits(sender, now)
+                    && self
+                        .take_fix(gll.data_valid, gll.latitude, gll.longitude, now)
+                        .map_err(sentence_error)?
+                {
+                    self.position_source.hold(sender, now);
+                }
             }
             Ok(ParsedMessage::Hdt(hdt)) => {
                 let heading = nmea_angle(hdt.heading_true, "heading").map_err(sentence_error)?;
-                set_heading_true(heading, "nmea0183");
+                if self.heading_source.admits(sender, now) {
+                    set_heading_true(heading, "nmea0183");
+                    if heading.is_some() {
+                        self.heading_source.hold(sender, now);
+                    }
+                }
             }
             Ok(ParsedMessage::Vtg(vtg)) => {
                 let cog = nmea_angle(vtg.cog_true, "course").map_err(sentence_error)?;
                 check_nmea_speed(vtg.sog_knots, "kn").map_err(sentence_error)?;
                 check_nmea_speed(vtg.sog_kph, "km/h").map_err(sentence_error)?;
-                set_cog(cog);
-                set_sog(vtg_sog(&vtg));
+                if self.motion_source.admits(sender, now) {
+                    let sog = vtg_sog(&vtg);
+                    set_cog(cog);
+                    set_sog(sog);
+                    if cog.is_some() || sog.is_some() {
+                        self.motion_source.hold(sender, now);
+                    }
+                }
             }
             // Our own transponder's reports are VDO, not VDM: never a target.
             Ok(ParsedMessage::VesselDynamicData(vdd))
@@ -2123,12 +2215,13 @@ const MAX_LONGITUDE_DEGREES: f64 = 180.0;
 /// A void fix (status `V`) withdraws course and speed, as its motion is not
 /// to be trusted, and one without a status changes neither. An active fix
 /// sets only the fields it carries, so one that leaves them empty does not
-/// erase what VTG reported.
-fn set_rmc_motion(rmc: &gnss::RmcData) {
+/// erase what VTG reported. Returns whether it gave a course or speed.
+fn set_rmc_motion(rmc: &gnss::RmcData) -> bool {
     match rmc.status_active {
         Some(false) => {
             set_cog(None);
             set_sog(None);
+            false
         }
         Some(true) => {
             if let Some(cog) = rmc.bearing {
@@ -2137,8 +2230,9 @@ fn set_rmc_motion(rmc: &gnss::RmcData) {
             if let Some(knots) = rmc.sog_knots {
                 set_sog(Some(knots * METERS_PER_SECOND_PER_KNOT));
             }
+            rmc.bearing.is_some() || rmc.sog_knots.is_some()
         }
-        None => {}
+        None => false,
     }
 }
 
@@ -2544,10 +2638,35 @@ mod tests {
         ais_sender.send_to(NMEA_AIS.as_bytes(), to).await.unwrap();
         nav_sender.send_to(NMEA_RMC.as_bytes(), to).await.unwrap();
 
-        let found = nmea0183_broadcaster(Some(listener), tokio::time::Instant::now(), None)
+        let (_, found) = nmea0183_broadcaster(Some(listener), tokio::time::Instant::now(), None)
             .await
             .unwrap();
-        assert_eq!(found.peer_addr().unwrap(), nav_sender.local_addr().unwrap());
+        assert_eq!(found, nav_sender.local_addr().unwrap());
+    }
+
+    /// Finding a broadcaster does not shut out the boat's other boxes: an AIS
+    /// receiver or heading sensor on another address is still heard (#818).
+    #[tokio::test]
+    async fn every_sender_is_heard_once_a_broadcaster_is_found() {
+        let listener = loopback_socket().await;
+        let to = listener.local_addr().unwrap();
+        let gps = loopback_socket().await;
+        let ais = loopback_socket().await;
+        gps.send_to(NMEA_RMC.as_bytes(), to).await.unwrap();
+        let (socket, _) = nmea0183_broadcaster(Some(listener), tokio::time::Instant::now(), None)
+            .await
+            .unwrap();
+
+        ais.send_to(NMEA_AIS.as_bytes(), to).await.unwrap();
+
+        let mut buf = [0; 2000];
+        let (len, sender) =
+            tokio::time::timeout(Duration::from_secs(1), socket.recv_from(&mut buf))
+                .await
+                .expect("the AIS receiver is heard")
+                .unwrap();
+        assert_eq!(sender, ais.local_addr().unwrap());
+        assert_eq!(&buf[..len], NMEA_AIS.as_bytes());
     }
 
     #[tokio::test]
@@ -2565,10 +2684,7 @@ mod tests {
             late.send_to(NMEA_RMC.as_bytes(), to).await.unwrap();
         };
         let (found, ()) = tokio::join!(search, send_late);
-        assert_eq!(
-            found.unwrap().peer_addr().unwrap(),
-            late.local_addr().unwrap()
-        );
+        assert_eq!(found.unwrap().1, late.local_addr().unwrap());
     }
 
     #[tokio::test]
@@ -2644,6 +2760,58 @@ mod tests {
     }
 
     const ACTIVE_RMC: &str = "$GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W*6A";
+
+    fn device(port: u16) -> Option<SocketAddr> {
+        Some(SocketAddr::from(([192, 168, 1, 10], port)))
+    }
+
+    /// A second GPS on the network does not pull the position back and forth;
+    /// it is used only once the first has given no fix for a while.
+    #[test]
+    fn a_second_gps_is_used_only_once_the_first_falls_silent() {
+        let _globals = nav_globals();
+        let mut receiver = nmea0183_receiver();
+        let start = std::time::Instant::now();
+        let other_rmc = "$GPRMC,123519,A,4907.038,N,01131.000,E,022.4,084.4,230394,003.1,W*6B";
+        receiver
+            .parse_nmea0183_at(ACTIVE_RMC, device(1), start)
+            .unwrap();
+        let first = get_radar_position();
+
+        let soon = start + SOURCE_TAKEOVER_AFTER - Duration::from_secs(1);
+        receiver
+            .parse_nmea0183_at(other_rmc, device(2), soon)
+            .unwrap();
+        assert_eq!(get_radar_position(), first);
+
+        receiver
+            .parse_nmea0183_at(other_rmc, device(2), start + SOURCE_TAKEOVER_AFTER)
+            .unwrap();
+        assert_ne!(get_radar_position(), first);
+        assert!(get_radar_position().is_some());
+    }
+
+    /// Each kind of value keeps to its own device: the heading comes from a
+    /// separate sensor while the GPS gives the position, and a second compass
+    /// is not mixed in.
+    #[test]
+    fn heading_and_position_each_keep_to_one_device() {
+        let _globals = nav_globals();
+        let mut receiver = nmea0183_receiver();
+        let now = std::time::Instant::now();
+        receiver
+            .parse_nmea0183_at(ACTIVE_RMC, device(1), now)
+            .unwrap();
+        receiver
+            .parse_nmea0183_at("$GPHDT,224.2,T*33", device(2), now)
+            .unwrap();
+        receiver
+            .parse_nmea0183_at("$GPHDT,230.0,T*34", device(3), now)
+            .unwrap();
+
+        assert!(get_radar_position().is_some());
+        assert!((get_heading_true().unwrap() - 224.2f64.to_radians()).abs() < 1e-9);
+    }
 
     fn nmea0183_receiver() -> NavigationData {
         NavigationData::new(cli(&["--nmea0183"]))
