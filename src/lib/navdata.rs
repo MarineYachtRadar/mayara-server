@@ -895,16 +895,19 @@ fn carries_navigation(datagram: &[u8]) -> bool {
             && match parse_nmea_sentence(&mut parser, line) {
                 Ok(ParsedMessage::Rmc(rmc)) => {
                     check_rmc_motion(&rmc).is_ok()
-                        && check_nmea_position(rmc.latitude, rmc.longitude).is_ok()
-                        && ((rmc.latitude.is_some() && rmc.longitude.is_some())
-                            || (rmc.status_active == Some(true)
-                                && (rmc.bearing.is_some() || rmc.sog_knots.is_some())))
+                        && match fix_position(rmc.status_active, rmc.latitude, rmc.longitude) {
+                            Ok((Some(_), Some(_))) => true,
+                            Ok(_) => {
+                                rmc.status_active == Some(true)
+                                    && (rmc.bearing.is_some() || rmc.sog_knots.is_some())
+                            }
+                            Err(_) => false,
+                        }
                 }
-                Ok(ParsedMessage::Gll(gll)) => {
-                    gll.latitude.is_some()
-                        && gll.longitude.is_some()
-                        && check_nmea_position(gll.latitude, gll.longitude).is_ok()
-                }
+                Ok(ParsedMessage::Gll(gll)) => matches!(
+                    fix_position(gll.data_valid, gll.latitude, gll.longitude),
+                    Ok((Some(_), Some(_)))
+                ),
                 Ok(ParsedMessage::Hdt(hdt)) => {
                     matches!(nmea_angle(hdt.heading_true, "heading"), Ok(Some(_)))
                 }
@@ -1943,13 +1946,15 @@ impl NavigationData {
         match parse_nmea_sentence(parser, s) {
             Ok(ParsedMessage::Rmc(rmc)) => {
                 check_rmc_motion(&rmc).map_err(sentence_error)?;
-                check_nmea_position(rmc.latitude, rmc.longitude).map_err(sentence_error)?;
-                set_position(rmc.latitude, rmc.longitude, "nmea0183");
+                let (lat, lon) = fix_position(rmc.status_active, rmc.latitude, rmc.longitude)
+                    .map_err(sentence_error)?;
+                set_position(lat, lon, "nmea0183");
                 set_rmc_motion(&rmc);
             }
             Ok(ParsedMessage::Gll(gll)) => {
-                check_nmea_position(gll.latitude, gll.longitude).map_err(sentence_error)?;
-                set_position(gll.latitude, gll.longitude, "nmea0183");
+                let (lat, lon) = fix_position(gll.data_valid, gll.latitude, gll.longitude)
+                    .map_err(sentence_error)?;
+                set_position(lat, lon, "nmea0183");
             }
             Ok(ParsedMessage::Hdt(hdt)) => {
                 let heading = nmea_angle(hdt.heading_true, "heading").map_err(sentence_error)?;
@@ -2098,6 +2103,21 @@ fn check_rmc_motion(rmc: &gnss::RmcData) -> Result<(), String> {
     }
     nmea_angle(rmc.bearing, "course")?;
     check_nmea_speed(rmc.sog_knots, "kn")
+}
+
+/// The position an RMC or GLL fix gives the boat. A void fix's position is
+/// stale, so it gives none and withdraws the one held, as a void RMC already
+/// withdraws course and speed.
+fn fix_position(
+    valid: Option<bool>,
+    lat: Option<f64>,
+    lon: Option<f64>,
+) -> Result<(Option<f64>, Option<f64>), String> {
+    if valid == Some(false) {
+        return Ok((None, None));
+    }
+    check_nmea_position(lat, lon)?;
+    Ok((lat, lon))
 }
 
 /// A position no GPS gives makes the sentence corrupt.
@@ -2458,6 +2478,8 @@ mod tests {
             "$GPGLL,,,,,123519,V,N*69",
             "$GPRMC,123519,A,9507.038,N,01131.000,E,022.4,084.4,230394,003.1,W*6A",
             "$GPGLL,4807.038,N,18131.000,E,123519,A*2D",
+            "$GPRMC,123519,V,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W*7D",
+            "$GPGLL,4807.038,N,01131.000,E,123519,V*32",
         ] {
             assert!(!carries_navigation(sentence.as_bytes()), "{sentence}");
         }
@@ -2592,7 +2614,7 @@ mod tests {
     }
 
     #[test]
-    fn a_void_rmc_fix_withdraws_course_and_speed() {
+    fn a_void_rmc_fix_withdraws_position_course_and_speed() {
         let _globals = nav_globals();
         let mut receiver = nmea0183_receiver();
         receiver.parse_nmea0183(ACTIVE_RMC).unwrap();
@@ -2600,8 +2622,21 @@ mod tests {
             .parse_nmea0183("$GPRMC,123519,V,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W*7D")
             .unwrap();
 
+        assert_eq!(get_radar_position(), None);
         assert_eq!(get_cog(), None);
         assert_eq!(get_sog(), None);
+    }
+
+    #[test]
+    fn a_void_gll_fix_withdraws_the_position() {
+        let _globals = nav_globals();
+        let mut receiver = nmea0183_receiver();
+        receiver.parse_nmea0183(ACTIVE_RMC).unwrap();
+        receiver
+            .parse_nmea0183("$GPGLL,4807.038,N,01131.000,E,123519,V*32")
+            .unwrap();
+
+        assert_eq!(get_radar_position(), None);
     }
 
     #[test]
@@ -2660,17 +2695,21 @@ mod tests {
     #[test]
     fn an_impossible_nmea_position_is_a_sentence_error() {
         let _globals = nav_globals();
+        let mut receiver = nmea0183_receiver();
+        receiver.parse_nmea0183(ACTIVE_RMC).unwrap();
+        let (position, cog) = (get_radar_position(), get_cog());
+        assert!(position.is_some() && cog.is_some());
         for sentence in [
             "$GPRMC,123519,A,9507.038,N,01131.000,E,022.4,084.4,230394,003.1,W*6A",
             "$GPGLL,4807.038,N,18131.000,E,123519,A*2D",
         ] {
-            let r = nmea0183_receiver().parse_nmea0183(sentence);
+            let r = receiver.parse_nmea0183(sentence);
             assert!(
                 matches!(r, Err(RadarError::ParseNmea0183(_))),
                 "{sentence}: {r:?}"
             );
-            assert_eq!(get_radar_position(), None, "{sentence} sets nothing");
-            assert_eq!(get_cog(), None, "{sentence}");
+            assert_eq!(get_radar_position(), position, "{sentence} changes nothing");
+            assert_eq!(get_cog(), cog, "{sentence}");
         }
     }
 
