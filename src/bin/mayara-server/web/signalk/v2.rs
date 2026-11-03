@@ -859,6 +859,7 @@ async fn set_control_value(
     let control_name = control_value.id.to_string();
 
     // Send the control request
+    state.radars.note_client_request(&radar_key, &control_value);
     if let Err(e) = controls.process_client_request(control_value, reply_tx) {
         return SignalKResponse::failed(StatusCode::BAD_REQUEST, e.to_string());
     }
@@ -1410,6 +1411,7 @@ async fn set_control_values(
         let id = control_value.id;
         let (reply_tx, mut reply_rx) = tokio::sync::mpsc::channel(1);
 
+        state.radars.note_client_request(&radar_key, &control_value);
         if let Err(e) = controls.process_client_request(control_value, reply_tx) {
             failures.push(format!("{:?}: {}", id, e));
             continue;
@@ -2081,6 +2083,7 @@ async fn handle_control_request(
             // the Furuno receiver in soft-idle until the next 5 s tick.
             radar.wake_up();
             let control_value: ControlValue = rcv.into();
+            radars.note_client_request(&radar.key(), &control_value);
             let result = radar
                 .controls
                 .process_client_request(control_value.clone(), reply_tx);
