@@ -2529,7 +2529,7 @@ mod tests {
             true,
         );
         info.controls.set_user_name(info.key());
-        settings::update_when_model_known(&mut info, model, "1.00");
+        settings::update_when_model_known(&mut info, model, "01.11");
         info
     }
 

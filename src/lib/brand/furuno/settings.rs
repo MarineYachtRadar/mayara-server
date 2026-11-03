@@ -159,9 +159,13 @@ struct Capabilities {
 
 /// Auto sea modes, in the order of the sea command's mode field.
 const SEA_MODES: &[&str] = &["Adaptive", "Coastal", "Channel"];
-/// The classic DRS only tells Coastal from the rest; Channel acts as
-/// Adaptive there.
-const CLASSIC_SEA_MODES: &[&str] = &["Adaptive", "Coastal"];
+/// Auto sea modes for firmware that does not apply Channel: the classic DRS
+/// treats it as Adaptive, and the DRS2D-NXT / DRS4D-NXT ignore it before
+/// [`CHANNEL_SEA_MODE_SINCE`].
+const SEA_MODES_WITHOUT_CHANNEL: &[&str] = &["Adaptive", "Coastal"];
+/// The DRS2D-NXT / DRS4D-NXT firmware version that added Channel, per
+/// Furuno's software history for those radars ("DRS 1.07").
+const CHANNEL_SEA_MODE_SINCE: (u32, u32) = (1, 7);
 
 fn capabilities(model: &RadarModel) -> Capabilities {
     match model {
@@ -275,7 +279,7 @@ fn capabilities(model: &RadarModel) -> Capabilities {
             tx_channel: false,
             watchman: false,
             pulse_width: true,
-            sea_modes: CLASSIC_SEA_MODES,
+            sea_modes: SEA_MODES_WITHOUT_CHANNEL,
             echo_average: false,
         },
         RadarModel::DRS4W => Capabilities {
@@ -584,9 +588,9 @@ pub(crate) fn update_when_model_known(info: &mut RadarInfo, model: RadarModel, v
         // intensity gradient instead of a single flat color.
         info.set_doppler_levels(16);
     }
-    if !cap.sea_modes.is_empty() {
-        info.controls
-            .add(new_list(ControlId::SeaState, cap.sea_modes));
+    let sea_modes = sea_modes(&model, cap.sea_modes, version);
+    if !sea_modes.is_empty() {
+        info.controls.add(new_list(ControlId::SeaState, sea_modes));
     }
     if cap.echo_average {
         info.controls.add(new_list(
@@ -615,6 +619,33 @@ pub(crate) fn update_when_model_known(info: &mut RadarInfo, model: RadarModel, v
     if cap.dual_range {
         info.dual_range = true;
     }
+}
+
+/// The auto sea modes `model` applies on firmware `version`.
+fn sea_modes(
+    model: &RadarModel,
+    modes: &'static [&'static str],
+    version: &str,
+) -> &'static [&'static str] {
+    let small_nxt = matches!(model, RadarModel::DRS2DNXT | RadarModel::DRS4DNXT);
+    if small_nxt && firmware_older_than(version, CHANNEL_SEA_MODE_SINCE) {
+        SEA_MODES_WITHOUT_CHANNEL
+    } else {
+        modes
+    }
+}
+
+/// Whether a `$N96` firmware version such as `01.05` is older than `since`.
+/// A version that does not parse, or the `00.00` a replay carries, names no
+/// firmware and counts as current.
+fn firmware_older_than(version: &str, since: (u32, u32)) -> bool {
+    let Some((major, minor)) = version.split_once('.') else {
+        return false;
+    };
+    let (Ok(major), Ok(minor)) = (major.trim().parse::<u32>(), minor.trim().parse::<u32>()) else {
+        return false;
+    };
+    (major, minor) != (0, 0) && (major, minor) < since
 }
 
 /// Range table for DRS-NXT series (in meters)
@@ -899,7 +930,7 @@ pub(crate) fn controls_for_every_model(args: &Cli) -> Vec<SharedControls> {
                 crate::radar::ui_strings::radar_info(crate::Brand::Furuno, args, |id, tx| {
                     new(id, tx, args)
                 });
-            update_when_model_known(&mut info, model, "1.00");
+            update_when_model_known(&mut info, model, "01.11");
             info.controls
         })
         .collect()
@@ -921,7 +952,7 @@ mod tests {
             crate::radar::ui_strings::radar_info(crate::Brand::Furuno, &args, |id, tx| {
                 new(id, tx, &args)
             });
-        update_when_model_known(&mut info, model, "1.00");
+        update_when_model_known(&mut info, model, "01.11");
         info.controls
     }
 
@@ -1037,6 +1068,34 @@ mod tests {
         assert!(!has(&controls_of(RadarModel::DRS4W), ControlId::SeaState));
     }
 
+    /// The DRS2D-NXT / DRS4D-NXT firmware applies Channel from 01.07 on; a
+    /// DRS4D-NXT on 01.05 keeps reporting the mode it had. The big NXT runs
+    /// another image and keeps all three.
+    #[test]
+    fn channel_sea_mode_needs_firmware_1_07_on_the_small_nxt() {
+        let modes = |model, version| {
+            let args = Cli::parse_from(["mayara-server"]);
+            let mut info =
+                crate::radar::ui_strings::radar_info(crate::Brand::Furuno, &args, |id, tx| {
+                    new(id, tx, &args)
+                });
+            update_when_model_known(&mut info, model, version);
+            info.controls
+                .get(&ControlId::SeaState)
+                .unwrap()
+                .item()
+                .max_value
+        };
+
+        for model in [RadarModel::DRS2DNXT, RadarModel::DRS4DNXT] {
+            assert_eq!(modes(model, "01.05"), Some(1.), "{model}: no Channel");
+            assert_eq!(modes(model, "01.07"), Some(2.), "{model}");
+            assert_eq!(modes(model, "01.11"), Some(2.), "{model}");
+            assert_eq!(modes(model, "00.00"), Some(2.), "{model}: a replay");
+        }
+        assert_eq!(modes(RadarModel::DRS6ANXT, "01.05"), Some(2.));
+    }
+
     /// A radar that colours Doppler echoes also offers to track them as ARPA
     /// targets, and one without Target Analyzer offers neither.
     #[test]
@@ -1064,7 +1123,7 @@ mod tests {
                 crate::radar::ui_strings::radar_info(crate::Brand::Furuno, &args, |id, tx| {
                     new(id, tx, &args)
                 });
-            update_when_model_known(&mut info, RadarModel::DRS4DNXT, "1.00");
+            update_when_model_known(&mut info, RadarModel::DRS4DNXT, "01.11");
             info.controls
         };
         let read_only =
@@ -1107,7 +1166,7 @@ mod tests {
             true,
         );
         info.controls.set_user_name(info.key());
-        update_when_model_known(&mut info, RadarModel::DRS4DNXT, "1.00");
+        update_when_model_known(&mut info, RadarModel::DRS4DNXT, "01.11");
 
         info.controls
             .set_sector(&ControlId::NoTransmitSector1, 100., 130., Some(true))
