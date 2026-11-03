@@ -7,7 +7,7 @@ use std::{
     collections::{HashMap, HashSet},
     future::Future,
     io::ErrorKind,
-    net::SocketAddr,
+    net::{Ipv4Addr, SocketAddr},
     pin::Pin,
     sync::{
         OnceLock, RwLock,
@@ -889,6 +889,19 @@ async fn nmea0183_broadcaster(
     }
 }
 
+/// Whether `sender` is on one of `networks`, or `networks` is `None` as
+/// discovery is not restricted to one interface. Looked up once for a run of
+/// datagrams, not for each of them.
+fn is_on_networks(networks: Option<&[(Ipv4Addr, Ipv4Addr)]>, sender: &SocketAddr) -> bool {
+    match (networks, sender) {
+        (None, _) => true,
+        (Some(networks), SocketAddr::V4(v4)) => networks
+            .iter()
+            .any(|(own, mask)| crate::network::match_ipv4(v4.ip(), own, mask)),
+        (Some(_), SocketAddr::V6(_)) => false,
+    }
+}
+
 fn is_on(interface: Option<&str>, sender: &SocketAddr) -> bool {
     match (interface, sender) {
         (None, _) => true,
@@ -1122,6 +1135,10 @@ pub(crate) struct NavigationData {
     heading_source: SourceLock,
     motion_source: SourceLock,
 }
+
+/// More devices than a boat has, so the parsers kept for them stay bounded
+/// however many addresses send.
+const MAX_SENDER_PARSERS: usize = 64;
 
 /// How long the device mayara takes one kind of value from may go without
 /// giving one before another device's is used instead. It rides out a lost
@@ -1987,6 +2004,7 @@ impl NavigationData {
         // another interface cannot keep a silent source alive.
         let quiet = tokio::time::sleep(quiet_limit.unwrap_or_default());
         tokio::pin!(quiet);
+        let networks = interface.map(crate::network::interface_networks);
         loop {
             tokio::select! { biased;
                 _ = subsys.on_shutdown_requested() => {
@@ -2000,7 +2018,7 @@ impl NavigationData {
                     r?;
                     let mut buf = [0; 2000];
                     match socket.try_recv_from(&mut buf) {
-                        Ok((len, sender)) if is_on(interface, &sender) => {
+                        Ok((len, sender)) if is_on_networks(networks.as_deref(), &sender) => {
                             if let Some(limit) = quiet_limit {
                                 quiet.as_mut().reset(tokio::time::Instant::now() + limit);
                             }
@@ -2033,27 +2051,47 @@ impl NavigationData {
     /// stale coordinates, if any, so it is never used; the last good position
     /// is kept until the GPS has had no fix for [`VOID_FIX_GRACE`], whether
     /// or not anything else arrives. A fix without coordinates is no better.
-    /// Returns whether it gave a position.
     fn take_fix(
         &mut self,
         valid: Option<bool>,
         lat: Option<f64>,
         lon: Option<f64>,
         now: std::time::Instant,
-    ) -> Result<bool, String> {
+    ) -> Result<(), String> {
         if valid != Some(false) {
             check_nmea_position(lat, lon)?;
             if let (Some(_), Some(_)) = (lat, lon) {
                 self.last_fix = Some(now);
                 set_position(lat, lon, "nmea0183");
-                return Ok(true);
+                return Ok(());
             }
         }
         match self.last_fix.map(|at| at + VOID_FIX_GRACE) {
             Some(expires) if now < expires => hold_position_until(expires),
             _ => set_position(None, None, "nmea0183"),
         }
-        Ok(false)
+        Ok(())
+    }
+
+    /// Take a fix from `sender` as [`take_fix`](Self::take_fix) does, if the
+    /// position is taken from it: see [`SourceLock::takes`].
+    fn take_position(
+        &mut self,
+        sender: Option<SocketAddr>,
+        valid: Option<bool>,
+        lat: Option<f64>,
+        lon: Option<f64>,
+        now: std::time::Instant,
+    ) -> Result<(), String> {
+        let gives = valid != Some(false) && lat.is_some() && lon.is_some();
+        if gives {
+            // Checked before the lock is taken, so a corrupt fix cannot take it.
+            check_nmea_position(lat, lon)?;
+        }
+        if self.position_source.takes(sender, now, gives) {
+            self.take_fix(valid, lat, lon, now)?;
+        }
+        Ok(())
     }
 
     fn parse_nmea0183(&mut self, s: &str) -> Result<(), RadarError> {
@@ -2070,7 +2108,15 @@ impl NavigationData {
         now: std::time::Instant,
     ) -> Result<(), RadarError> {
         let parser = match sender {
-            Some(sender) => self.sender_parsers.entry(sender.ip()).or_default(),
+            Some(sender) => {
+                if self.sender_parsers.len() >= MAX_SENDER_PARSERS
+                    && !self.sender_parsers.contains_key(&sender.ip())
+                {
+                    // Only messages still being put together are lost.
+                    self.sender_parsers.clear();
+                }
+                self.sender_parsers.entry(sender.ip()).or_default()
+            }
             None => self.nmea_parser.as_mut().unwrap(),
         };
         let sentence_error = |e: String| RadarError::ParseNmea0183(format!("{s}: {e}"));
@@ -2078,13 +2124,8 @@ impl NavigationData {
         match parse_nmea_sentence(parser, s) {
             Ok(ParsedMessage::Rmc(rmc)) => {
                 check_rmc_motion(&rmc).map_err(sentence_error)?;
-                if self.position_source.admits(sender, now)
-                    && self
-                        .take_fix(rmc.status_active, rmc.latitude, rmc.longitude, now)
-                        .map_err(sentence_error)?
-                {
-                    self.position_source.hold(sender, now);
-                }
+                self.take_position(sender, rmc.status_active, rmc.latitude, rmc.longitude, now)
+                    .map_err(sentence_error)?;
                 let gives = rmc_gives_motion(&rmc);
                 // A course and speed from two devices are never paired.
                 let new_source = gives && !self.motion_source.is_held_by(sender);
@@ -2097,13 +2138,8 @@ impl NavigationData {
                 }
             }
             Ok(ParsedMessage::Gll(gll)) => {
-                if self.position_source.admits(sender, now)
-                    && self
-                        .take_fix(gll.data_valid, gll.latitude, gll.longitude, now)
-                        .map_err(sentence_error)?
-                {
-                    self.position_source.hold(sender, now);
-                }
+                self.take_position(sender, gll.data_valid, gll.latitude, gll.longitude, now)
+                    .map_err(sentence_error)?;
             }
             Ok(ParsedMessage::Hdt(hdt)) => {
                 let heading = nmea_angle(hdt.heading_true, "heading").map_err(sentence_error)?;
@@ -2908,6 +2944,66 @@ mod tests {
 
         assert!(position.is_some());
         assert_eq!(get_radar_position(), position);
+    }
+
+    /// A void fix from a GPS that is not in use does not start withdrawing
+    /// the position the one in use gives.
+    #[test]
+    fn a_void_fix_from_another_gps_keeps_the_position() {
+        let _globals = nav_globals();
+        let mut receiver = nmea0183_receiver();
+        let start = std::time::Instant::now();
+        let void_rmc = "$GPRMC,123519,V,4907.038,N,01131.000,E,022.4,084.4,230394,003.1,W*7C";
+        receiver
+            .parse_nmea0183_at(ACTIVE_RMC, device(1), start)
+            .unwrap();
+        let position = get_radar_position();
+
+        receiver
+            .parse_nmea0183_at(void_rmc, device(2), start + SOURCE_TAKEOVER_AFTER)
+            .unwrap();
+
+        assert!(position.is_some());
+        assert_eq!(get_radar_position(), position);
+        assert!(position_valid_at(start + VOID_FIX_GRACE * 2));
+    }
+
+    /// Datagrams are told apart by the device that sent them.
+    #[test]
+    fn a_second_gps_heard_over_udp_does_not_move_the_position() {
+        let _globals = nav_globals();
+        let mut receiver = nmea0183_receiver();
+        let other_rmc = "$GPRMC,123519,A,4907.038,N,01131.000,E,022.4,084.4,230394,003.1,W*6B";
+        receiver.process_udp_buf(ACTIVE_RMC.as_bytes(), device(1).unwrap());
+        let first = get_radar_position();
+        receiver.process_udp_buf(other_rmc.as_bytes(), device(2).unwrap());
+
+        assert!(first.is_some());
+        assert_eq!(get_radar_position(), first);
+    }
+
+    /// A VTG from another device takes over the course and speed once the
+    /// one in use has gone quiet, and not before.
+    #[test]
+    fn vtg_from_a_second_device_waits_for_the_first_to_fall_silent() {
+        let _globals = nav_globals();
+        let mut receiver = nmea0183_receiver();
+        let start = std::time::Instant::now();
+        let other_vtg = "$GPVTG,180.0,T,,M,3.0,N,5.6,K,A*04";
+        receiver
+            .parse_nmea0183_at("$GPVTG,90.0,T,,M,6.0,N,11.1,K,A*03", device(1), start)
+            .unwrap();
+
+        let soon = start + SOURCE_TAKEOVER_AFTER - Duration::from_secs(1);
+        receiver
+            .parse_nmea0183_at(other_vtg, device(2), soon)
+            .unwrap();
+        assert!((get_cog().unwrap() - 90f64.to_radians()).abs() < 1e-9);
+
+        receiver
+            .parse_nmea0183_at(other_vtg, device(2), start + SOURCE_TAKEOVER_AFTER)
+            .unwrap();
+        assert!((get_cog().unwrap() - 180f64.to_radians()).abs() < 1e-9);
     }
 
     /// When another device takes over the course and speed, a value it does
