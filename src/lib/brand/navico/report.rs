@@ -25,7 +25,7 @@ use crate::brand::navico::info::{HaloHeadingPacket, HaloNavigationPacket, Inform
 use crate::brand::navico::{HALO_HEADING_INFO_ADDRESS, HaloMode};
 use crate::network;
 use crate::radar::MS_TO_KN;
-use crate::radar::settings::ControlId;
+use crate::radar::settings::{ControlError, ControlId, SharedControls};
 use crate::radar::spoke::GenericSpoke;
 use crate::radar::{
     BYTE_LOOKUP_LENGTH, CommonRadar, DopplerMode, Legend, Power, RadarError, RadarInfo,
@@ -303,6 +303,28 @@ struct SectorBlankingReport {
     enabled: u8,
     start_angle: i16,
     end_angle: i16,
+}
+
+/// Take the no-transmit sectors a radar reports. A radar without them, such
+/// as a 4G, still fills in the fields but has no controls for them, so they
+/// are passed over rather than refused on every report (#774).
+fn set_reported_sectors(
+    controls: &SharedControls,
+    blanking: &[SectorBlankingReport; 4],
+) -> Result<(), ControlError> {
+    for (i, sector) in super::BLANKING_SECTORS {
+        if !controls.contains_key(&sector) {
+            continue;
+        }
+        let blanking = &blanking[i];
+        controls.set_sector(
+            &sector,
+            blanking.start_angle as f64,
+            blanking.end_angle as f64,
+            Some(blanking.enabled > 0),
+        )?;
+    }
+    Ok(())
 }
 
 // 0xC406 StateInstallation is TLV-encoded (not fixed-layout).
@@ -1101,15 +1123,7 @@ impl NavicoReportReceiver {
             report.antenna_starboard as f64,
         );
 
-        for (i, sector) in super::BLANKING_SECTORS {
-            let blanking = &report.blanking[i];
-            self.common.info.controls.set_sector(
-                &sector,
-                blanking.start_angle as f64,
-                blanking.end_angle as f64,
-                Some(blanking.enabled > 0),
-            )?;
-        }
+        set_reported_sectors(&self.common.info.controls, &report.blanking)?;
 
         Ok(())
     }
@@ -1486,9 +1500,11 @@ fn error_name(code: u32) -> Option<&'static str> {
 mod tests {
     use super::{
         LookupDoppler, Model, NavicoReportReceiver, StateConfig, StateMode, StateProperties,
-        StateSetup, error_name, parse_radar_errors, wire_to_legend,
+        StateSetup, error_name, parse_radar_errors, set_reported_sectors, wire_to_legend,
     };
     use crate::radar::Legend;
+    use crate::radar::settings::{ControlId, new_sector};
+    use crate::radar::units::Units;
     use crate::util::{c_wide_string, decode_exact};
 
     fn state_report(sub_opcode: u8, len: usize) -> Vec<u8> {
@@ -1675,6 +1691,31 @@ mod tests {
         assert_eq!(c_wide_string(&report.build_time), "00:18:27 23");
         assert_eq!(report.radar_protocol_version, 2);
         assert_eq!(report.scanner_detail_supported, 0);
+    }
+
+    /// A radar without no-transmit sectors, such as a 4G, has its reported
+    /// sector fields passed over instead of refused on every report, while a
+    /// radar that has them still takes them.
+    #[test]
+    fn reported_sectors_without_controls_are_passed_over() {
+        let report: StateConfig = decode_exact(&HALO24_STATE_CONFIG).unwrap();
+        let args = clap::Parser::parse_from(["mayara-server"]);
+        let tx = tokio::sync::broadcast::Sender::new(1);
+        let mut controls = super::super::settings::new("nav1234".to_string(), tx, &args, None);
+        assert!(!controls.contains_key(&ControlId::NoTransmitSector1));
+
+        set_reported_sectors(&controls, &report.blanking).unwrap();
+
+        controls.add(
+            new_sector(ControlId::NoTransmitSector1, -180., 180.)
+                .wire_scale_factor(10., true)
+                .wire_offset(-1.)
+                .wire_units(Units::Degrees)
+                .has_enabled(),
+        );
+        set_reported_sectors(&controls, &report.blanking).unwrap();
+        let sector = controls.get(&ControlId::NoTransmitSector1).unwrap();
+        assert_eq!(sector.enabled, Some(true));
     }
 
     #[test]
