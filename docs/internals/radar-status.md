@@ -82,9 +82,14 @@ a state of the radar.
 
 "Watched" is deliberately narrow: a subscriber on the spoke broadcast (`message_tx`) — the
 GUI or any spoke WebSocket client, the `--output` stdout forwarder, or a running recording.
-Control PUTs, REST reads and the control WebSocket do **not** count. Neither does ARPA
-tracking or an armed guard zone: a radar nobody is looking at stands down even while it is
-tracking. That is an accepted consequence, not an oversight — the radar is meant to come
+Control PUTs, REST reads and the control WebSocket do **not** count, with one exception: a
+request for Transmit counts as watched from that moment, on every range of the antenna
+(`SharedRadars::note_client_request`). A client such as Freeboard-SK opens its spoke stream
+only once the radar transmits, so without this a radar nobody had watched for a while was
+sent back to Standby at the receiver's next tick (#859). A new spoke subscriber likewise
+clears stand-down at once (`SharedRadars::hold_up_antenna`) instead of at the next watchdog
+tick. ARPA tracking and an armed guard zone do not count either: a radar nobody is looking
+at stands down even while it is tracking. That is an accepted consequence, not an oversight — the radar is meant to come
 back only when a client asks for it.
 
 **Keeping watch with no display open** (#748). A boat that relies on ARPA or guard-zone
