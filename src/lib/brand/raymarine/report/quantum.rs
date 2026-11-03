@@ -306,29 +306,21 @@ pub(super) fn process_status_report(receiver: &mut RaymarineReportReceiver, data
     // resolves the range index against the range list, which yields zero
     // distance while that list is empty — and that zero is what add_spoke
     // would store as a spoke's physical range.
-    if receiver.common.info.ranges.is_empty() && receiver.hold_for_features() {
-        return;
+    //
+    // A radar whose ranges were restored from saved settings is visible
+    // already, so its reports go on being processed while it waits; only its
+    // control set waits (#775).
+    if !receiver.capabilities_settled {
+        if receiver.hold_for_features() {
+            if receiver.common.info.ranges.is_empty() {
+                return;
+            }
+        } else {
+            settle_capabilities(receiver);
+        }
     }
 
     if receiver.common.info.ranges.is_empty() {
-        // Past the hold, so the capability is settled and no client has seen
-        // this radar yet: the one moment at which the control set can be
-        // decided outright rather than corrected later (#709).
-        let base_model = receiver.base_model;
-        let doppler = receiver.common.info.doppler;
-        settings::offer_doppler_control(&mut receiver.common.info.controls, base_model, doppler);
-
-        // A 0x280030 Doppler status report can have arrived while the radar was
-        // held back, when there was no control for it to land on. Seed the
-        // control from what it said, so the radar does not appear with Doppler
-        // reading Off until the next one turns up.
-        if doppler {
-            let state = receiver.doppler;
-            receiver
-                .common
-                .set_value(&ControlId::Doppler, state as i32 as f64);
-        }
-
         let mut ranges = Ranges::empty();
 
         for (i, &range) in report.ranges.iter().enumerate() {
@@ -421,6 +413,26 @@ pub(super) fn process_status_report(receiver: &mut RaymarineReportReceiver, data
 /// was applied unconditionally and silently discarded the radar's own word.
 fn effective_doppler(features_seen: bool, reported: bool, from_table: bool) -> bool {
     if features_seen { reported } else { from_table }
+}
+
+/// Decide the control set from the radar's capabilities, once the wait for its
+/// features report is over: the one moment at which it can be decided outright
+/// rather than corrected later (#709). Controls are only ever added here.
+fn settle_capabilities(receiver: &mut RaymarineReportReceiver) {
+    receiver.capabilities_settled = true;
+    let base_model = receiver.base_model;
+    let doppler = receiver.common.info.doppler;
+    settings::offer_doppler_control(&mut receiver.common.info.controls, base_model, doppler);
+
+    // A 0x280030 Doppler status report can have arrived during the wait, when
+    // there was no control for it to land on. Seed the control from what it
+    // said, so the radar does not show Doppler Off until the next one turns up.
+    if doppler {
+        let state = receiver.doppler;
+        receiver
+            .common
+            .set_value(&ControlId::Doppler, state as i32 as f64);
+    }
 }
 
 pub(super) fn process_info_report(receiver: &mut RaymarineReportReceiver, data: &[u8]) {
@@ -518,9 +530,19 @@ pub(super) fn process_doppler_report(receiver: &mut RaymarineReportReceiver, dat
 
     log::trace!("{}: Doppler {} -> {doppler}", receiver.common.key, data[4]);
     receiver.doppler = doppler != 0;
-    receiver
+    // Before the control set is settled there is no control yet; the state is
+    // kept and seeds it (`settle_capabilities`). A radar that turned out to
+    // have no Doppler has no control to set at all.
+    if receiver
         .common
-        .set_value(&ControlId::Doppler, doppler as f64);
+        .info
+        .controls
+        .contains_key(&ControlId::Doppler)
+    {
+        receiver
+            .common
+            .set_value(&ControlId::Doppler, doppler as f64);
+    }
 }
 
 // ---------------------------------------------------------------------------
