@@ -1262,7 +1262,9 @@ impl SharedRadars {
     }
 
     fn hold_up_antenna_at(&self, key: &str, now: u64) {
-        let radars = self.radars.read().unwrap();
+        // The write lock waits out a watchdog verdict being computed, which
+        // would otherwise be stored over this one from the old watch time.
+        let radars = self.radars.write().unwrap();
         let Some(antenna) = radars.info.get(key).map(RadarInfo::antenna_key) else {
             return;
         };
@@ -3376,7 +3378,28 @@ mod tests {
         ] {
             radars.note_client_request_at(&radar.key(), &cv, request);
             assert!(radar.stand_down(), "{cv:?}");
+            radars.refresh_stand_down_at(request + PERIOD.as_millis() as u64 - 1);
+            assert!(radar.stand_down(), "{cv:?}");
         }
+    }
+
+    /// The handlers' entry point holds the antenna up as the timed one does.
+    #[test]
+    fn note_client_request_holds_the_antenna_up_now() {
+        let radars = SharedRadars::new();
+        let radar = radars
+            .add(test_helpers::radar_info(&radars, "859D", None))
+            .unwrap();
+        radar.mark_watched_at(0);
+        radars.refresh_stand_down_at(PERIOD.as_millis() as u64 + 1000);
+        assert!(radar.stand_down());
+
+        let transmit = ControlValue::new(ControlId::Power, Value::from(Power::Transmit as i32));
+        radars.note_client_request(&radar.key(), &transmit);
+
+        assert!(!radar.stand_down());
+        radars.refresh_stand_down();
+        assert!(!radar.stand_down(), "the watch time was renewed too");
     }
 
     /// A viewer opening the spoke stream holds the antenna up at once, not
