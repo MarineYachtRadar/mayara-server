@@ -1131,6 +1131,58 @@ mod tests {
         );
     }
 
+    /// The radar's own features report decides, not the part-number table,
+    /// for a radar whose ranges were restored too.
+    #[test]
+    fn a_quantum_with_saved_ranges_that_reports_no_doppler_gets_no_control() {
+        use crate::radar::range::{Range, Ranges};
+        use crate::radar::settings::ControlId;
+
+        let mut receiver = test_receiver(/*doppler=*/ false);
+        receiver
+            .common
+            .set_ranges(Ranges::new(vec![Range::new(1852, 0)]));
+        receiver.process_features(&features_report(false));
+        super::quantum::process_info_report(&mut receiver, &info_report("E70498"));
+
+        super::quantum::process_status_report(&mut receiver, &STATUS_REPORT);
+
+        assert!(!receiver.common.info.doppler);
+        assert!(
+            receiver
+                .common
+                .info
+                .controls
+                .get(&ControlId::Doppler)
+                .is_none()
+        );
+    }
+
+    /// A status report that comes before the features report does not decide
+    /// the control set; the first one after it does.
+    #[test]
+    fn the_doppler_control_waits_for_the_features_report() {
+        use crate::radar::settings::ControlId;
+
+        let mut receiver = test_receiver(/*doppler=*/ false);
+        super::quantum::process_info_report(&mut receiver, &info_report("E70498"));
+        let has_doppler = |r: &super::RaymarineReportReceiver| {
+            r.common.info.controls.get(&ControlId::Doppler).is_some()
+        };
+
+        super::quantum::process_status_report(&mut receiver, &STATUS_REPORT);
+        assert!(!has_doppler(&receiver), "not before the features report");
+
+        receiver.process_features(&features_report(true));
+        assert!(
+            !has_doppler(&receiver),
+            "the features report only records it"
+        );
+
+        super::quantum::process_status_report(&mut receiver, &STATUS_REPORT);
+        assert!(has_doppler(&receiver));
+    }
+
     // ----- holding a radar back until it says what it can do -----
 
     /// A radar is visible to clients once it has ranges, so a Quantum waits for

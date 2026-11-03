@@ -124,8 +124,10 @@ pub(crate) fn new(
 /// switch it cannot honour.
 ///
 /// Call this once, at the point where the radar stops being held back for its
-/// features report — by then the capability is settled and no client has seen
-/// the radar, so the control is only ever added and never has to be taken back.
+/// features report — by then the capability is settled, so the control is only
+/// ever added and never has to be taken back. A radar whose ranges were
+/// restored from saved settings is already visible then, so clients are sent
+/// the new definitions.
 ///
 /// Only a Quantum is ever offered one. No RD has Doppler, and
 /// [`super::command::rd`] could not encode the command if one did.
@@ -135,10 +137,10 @@ pub(crate) fn offer_doppler_control(
     doppler: bool,
 ) {
     if doppler && base_model == BaseModel::Quantum {
-        controls.add(new_list(ControlId::Doppler, &["Off", "On"]));
+        controls.add_announced(new_list(ControlId::Doppler, &["Off", "On"]));
         // Mayara's tracker acquires the Doppler echoes itself, so this needs
         // no command on the radar.
-        controls.add(new_list(ControlId::DopplerAutoTrack, &["Off", "On"]));
+        controls.add_announced(new_list(ControlId::DopplerAutoTrack, &["Off", "On"]));
     }
 }
 

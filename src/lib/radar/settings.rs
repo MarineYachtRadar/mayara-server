@@ -868,6 +868,19 @@ impl SharedControls {
         self.controls.write().unwrap().insert(id, control);
     }
 
+    /// Add a control to a radar that clients may already show, and send them
+    /// its definition, as they otherwise keep the control list they fetched.
+    pub(crate) fn add_announced(&mut self, control_builder: ControlBuilder) {
+        let (id, control) = control_builder.take();
+        let mut locked = self.controls.write().unwrap();
+        locked.insert(id, control);
+        let mut delta = SignalKDelta::new();
+        delta.add_meta_for_control(&locked.radar_id, &locked.effective(&locked.controls[&id]));
+        if let Err(e) = locked.sk_client_tx.send(delta) {
+            log::trace!("No client to announce control {} to: {}", id, e);
+        }
+    }
+
     /// Lift the replay lock from a control that its brand applies to the
     /// recording itself instead of sending it to a radar. A no-op when this
     /// is not a replay, where the radar decides as usual.
@@ -4245,6 +4258,20 @@ mod test {
         assert_eq!(read_only(&controls), Some(true));
         controls.set_command_reachable(true, "");
         assert_eq!(read_only(&controls), Some(true));
+    }
+
+    /// A control added once clients may hold the control list reaches them,
+    /// so they can show it without reconnecting.
+    #[test]
+    fn an_announced_control_reaches_clients() {
+        let (mut controls, mut sk_rx) = test_controls_with_deltas();
+
+        controls.add_announced(new_numeric(ControlId::Rain, 0., 100.));
+
+        assert!(controls.get_controls().contains_key(&ControlId::Rain));
+        let delta = sent_delta(&mut sk_rx);
+        assert!(delta.contains(&format!("radars.test.controls.{}", ControlId::Rain)));
+        assert!(delta.contains(r#""meta""#));
     }
 
     /// A control that turns up while the radar cannot be commanded must be
