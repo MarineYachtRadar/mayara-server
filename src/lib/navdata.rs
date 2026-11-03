@@ -895,19 +895,18 @@ fn carries_navigation(datagram: &[u8]) -> bool {
             && match parse_nmea_sentence(&mut parser, line) {
                 Ok(ParsedMessage::Rmc(rmc)) => {
                     check_rmc_motion(&rmc).is_ok()
-                        && match fix_position(rmc.status_active, rmc.latitude, rmc.longitude) {
-                            Ok((Some(_), Some(_))) => true,
-                            Ok(_) => {
-                                rmc.status_active == Some(true)
-                                    && (rmc.bearing.is_some() || rmc.sog_knots.is_some())
-                            }
-                            Err(_) => false,
-                        }
+                        && rmc.status_active != Some(false)
+                        && check_nmea_position(rmc.latitude, rmc.longitude).is_ok()
+                        && ((rmc.latitude.is_some() && rmc.longitude.is_some())
+                            || (rmc.status_active == Some(true)
+                                && (rmc.bearing.is_some() || rmc.sog_knots.is_some())))
                 }
-                Ok(ParsedMessage::Gll(gll)) => matches!(
-                    fix_position(gll.data_valid, gll.latitude, gll.longitude),
-                    Ok((Some(_), Some(_)))
-                ),
+                Ok(ParsedMessage::Gll(gll)) => {
+                    gll.data_valid != Some(false)
+                        && gll.latitude.is_some()
+                        && gll.longitude.is_some()
+                        && check_nmea_position(gll.latitude, gll.longitude).is_ok()
+                }
                 Ok(ParsedMessage::Hdt(hdt)) => {
                     matches!(nmea_angle(hdt.heading_true, "heading"), Ok(Some(_)))
                 }
@@ -1110,6 +1109,9 @@ pub(crate) struct NavigationData {
     nmea0183_mode: bool,
     what: &'static str,
     nmea_parser: Option<NmeaParser>,
+    /// When an NMEA 0183 RMC or GLL last gave a valid position; see
+    /// [`VOID_FIX_GRACE`].
+    last_fix: Option<std::time::Instant>,
 }
 
 /// Set true the first time the current Signal K receive loop sees a real
@@ -1235,12 +1237,14 @@ impl NavigationData {
                 nmea0183_mode: true,
                 what: "NMEA0183",
                 nmea_parser: Some(NmeaParser::new()),
+                last_fix: None,
             },
             false => NavigationData {
                 args,
                 nmea0183_mode: false,
                 what: "Signal K",
                 nmea_parser: None,
+                last_fix: None,
             },
         }
     }
@@ -1939,6 +1943,33 @@ impl NavigationData {
         }
     }
 
+    /// Take the position an RMC or GLL fix gives the boat. A void fix carries
+    /// stale coordinates, if any, so it is never used; the last good position
+    /// is kept until the GPS has had no fix for [`VOID_FIX_GRACE`].
+    fn take_fix(
+        &mut self,
+        valid: Option<bool>,
+        lat: Option<f64>,
+        lon: Option<f64>,
+        now: std::time::Instant,
+    ) -> Result<(), String> {
+        if valid == Some(false) {
+            if self
+                .last_fix
+                .is_none_or(|at| now.saturating_duration_since(at) >= VOID_FIX_GRACE)
+            {
+                set_position(None, None, "nmea0183");
+            }
+            return Ok(());
+        }
+        check_nmea_position(lat, lon)?;
+        if lat.is_some() && lon.is_some() {
+            self.last_fix = Some(now);
+        }
+        set_position(lat, lon, "nmea0183");
+        Ok(())
+    }
+
     fn parse_nmea0183(&mut self, s: &str) -> Result<(), RadarError> {
         let parser = self.nmea_parser.as_mut().unwrap();
         let sentence_error = |e: String| RadarError::ParseNmea0183(format!("{s}: {e}"));
@@ -1946,15 +1977,15 @@ impl NavigationData {
         match parse_nmea_sentence(parser, s) {
             Ok(ParsedMessage::Rmc(rmc)) => {
                 check_rmc_motion(&rmc).map_err(sentence_error)?;
-                let (lat, lon) = fix_position(rmc.status_active, rmc.latitude, rmc.longitude)
+                let now = std::time::Instant::now();
+                self.take_fix(rmc.status_active, rmc.latitude, rmc.longitude, now)
                     .map_err(sentence_error)?;
-                set_position(lat, lon, "nmea0183");
                 set_rmc_motion(&rmc);
             }
             Ok(ParsedMessage::Gll(gll)) => {
-                let (lat, lon) = fix_position(gll.data_valid, gll.latitude, gll.longitude)
+                let now = std::time::Instant::now();
+                self.take_fix(gll.data_valid, gll.latitude, gll.longitude, now)
                     .map_err(sentence_error)?;
-                set_position(lat, lon, "nmea0183");
             }
             Ok(ParsedMessage::Hdt(hdt)) => {
                 let heading = nmea_angle(hdt.heading_true, "heading").map_err(sentence_error)?;
@@ -2105,20 +2136,10 @@ fn check_rmc_motion(rmc: &gnss::RmcData) -> Result<(), String> {
     check_nmea_speed(rmc.sog_knots, "kn")
 }
 
-/// The position an RMC or GLL fix gives the boat. A void fix's position is
-/// stale, so it gives none and withdraws the one held, as a void RMC already
-/// withdraws course and speed.
-fn fix_position(
-    valid: Option<bool>,
-    lat: Option<f64>,
-    lon: Option<f64>,
-) -> Result<(Option<f64>, Option<f64>), String> {
-    if valid == Some(false) {
-        return Ok((None, None));
-    }
-    check_nmea_position(lat, lon)?;
-    Ok((lat, lon))
-}
+/// How long a GPS may report no fix before mayara stops using the last good
+/// position it gave. A GPS can drop its fix for a moment, under a bridge or in
+/// a swell, and the radar picture should not lose its position each time.
+const VOID_FIX_GRACE: Duration = Duration::from_secs(60);
 
 /// A position no GPS gives makes the sentence corrupt.
 fn check_nmea_position(lat: Option<f64>, lon: Option<f64>) -> Result<(), String> {
@@ -2613,30 +2634,61 @@ mod tests {
         assert!((get_sog().unwrap() - 22.4 * 1852.0 / 3600.0).abs() < 1e-9);
     }
 
+    /// A void fix's coordinates are stale, so they are never used. Its
+    /// course and speed are withdrawn at once, but the last good position is
+    /// kept: a GPS that drops its fix for a moment must not blank it.
     #[test]
-    fn a_void_rmc_fix_withdraws_position_course_and_speed() {
+    fn a_void_rmc_fix_keeps_the_last_position_but_withdraws_motion() {
         let _globals = nav_globals();
         let mut receiver = nmea0183_receiver();
         receiver.parse_nmea0183(ACTIVE_RMC).unwrap();
+        let position = get_radar_position();
+        assert!(position.is_some());
         receiver
             .parse_nmea0183("$GPRMC,123519,V,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W*7D")
             .unwrap();
 
-        assert_eq!(get_radar_position(), None);
+        assert_eq!(get_radar_position(), position);
         assert_eq!(get_cog(), None);
         assert_eq!(get_sog(), None);
     }
 
+    /// The last good position is kept through void fixes for
+    /// `VOID_FIX_GRACE`, and dropped by the first void fix after it.
     #[test]
-    fn a_void_gll_fix_withdraws_the_position() {
+    fn void_fixes_drop_the_position_once_the_grace_is_over() {
+        let _globals = nav_globals();
+        let mut receiver = nmea0183_receiver();
+        let fix = std::time::Instant::now();
+        let (lat, lon) = (Some(48.1173), Some(11.5167));
+        receiver.take_fix(Some(true), lat, lon, fix).unwrap();
+        let position = get_radar_position();
+        assert!(position.is_some());
+
+        let just_before = fix + VOID_FIX_GRACE - Duration::from_secs(1);
+        receiver
+            .take_fix(Some(false), lat, lon, just_before)
+            .unwrap();
+        assert_eq!(get_radar_position(), position, "still within the grace");
+
+        receiver
+            .take_fix(Some(false), lat, lon, fix + VOID_FIX_GRACE)
+            .unwrap();
+        assert_eq!(get_radar_position(), None);
+    }
+
+    /// A void GLL is no more a position than a void RMC.
+    #[test]
+    fn a_void_gll_fix_keeps_the_last_position() {
         let _globals = nav_globals();
         let mut receiver = nmea0183_receiver();
         receiver.parse_nmea0183(ACTIVE_RMC).unwrap();
+        let position = get_radar_position();
         receiver
-            .parse_nmea0183("$GPGLL,4807.038,N,01131.000,E,123519,V*32")
+            .parse_nmea0183("$GPGLL,4907.038,N,01131.000,E,123519,V*33")
             .unwrap();
 
-        assert_eq!(get_radar_position(), None);
+        assert_eq!(get_radar_position(), position);
     }
 
     #[test]
