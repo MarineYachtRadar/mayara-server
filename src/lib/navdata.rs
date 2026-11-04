@@ -7,7 +7,7 @@ use std::{
     collections::{HashMap, HashSet},
     future::Future,
     io::ErrorKind,
-    net::{Ipv4Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     pin::Pin,
     sync::{
         OnceLock, RwLock,
@@ -1130,7 +1130,7 @@ pub(crate) struct NavigationData {
     last_fix: Option<std::time::Instant>,
     /// A parser for each device heard on UDP, so the parts of a multipart
     /// AIS message are never paired with another receiver's.
-    sender_parsers: HashMap<std::net::IpAddr, NmeaParser>,
+    sender_parsers: HashMap<IpAddr, NmeaParser>,
     position_source: SourceLock,
     heading_source: SourceLock,
     motion_source: SourceLock,
@@ -1151,14 +1151,14 @@ const SOURCE_TAKEOVER_AFTER: Duration = Duration::from_secs(10);
 #[derive(Default)]
 struct SourceLock {
     /// The device in use, and when it last gave a value.
-    held: Option<(SocketAddr, std::time::Instant)>,
+    held: Option<(IpAddr, std::time::Instant)>,
 }
 
 impl SourceLock {
     /// Whether `sender` may set the value: always when the sender is not
     /// known, as on a TCP stream, and otherwise when it is the device in use
     /// or that device has given nothing for [`SOURCE_TAKEOVER_AFTER`].
-    fn admits(&self, sender: Option<SocketAddr>, now: std::time::Instant) -> bool {
+    fn admits(&self, sender: Option<IpAddr>, now: std::time::Instant) -> bool {
         match (self.held, sender) {
             (Some((held, last)), Some(sender)) => {
                 held == sender || now >= last + SOURCE_TAKEOVER_AFTER
@@ -1168,7 +1168,7 @@ impl SourceLock {
     }
 
     /// Keep using `sender`, which has just given a value.
-    fn hold(&mut self, sender: Option<SocketAddr>, now: std::time::Instant) {
+    fn hold(&mut self, sender: Option<IpAddr>, now: std::time::Instant) {
         if let Some(sender) = sender {
             self.held = Some((sender, now));
         }
@@ -1177,7 +1177,7 @@ impl SourceLock {
     /// Whether what `sender` says is used: a value it `gives` when it is
     /// admitted, and the lack of one only from the device in use, so another
     /// device cannot blank the value. A device that gives one keeps the lock.
-    fn takes(&mut self, sender: Option<SocketAddr>, now: std::time::Instant, gives: bool) -> bool {
+    fn takes(&mut self, sender: Option<IpAddr>, now: std::time::Instant, gives: bool) -> bool {
         let taken = self.admits(sender, now) && (gives || self.is_held_by(sender));
         if taken && gives {
             self.hold(sender, now);
@@ -1186,7 +1186,7 @@ impl SourceLock {
     }
 
     /// Whether `sender` is the device in use, or no device is told apart.
-    fn is_held_by(&self, sender: Option<SocketAddr>) -> bool {
+    fn is_held_by(&self, sender: Option<IpAddr>) -> bool {
         match (self.held, sender) {
             (Some((held, _)), Some(sender)) => held == sender,
             _ => true,
@@ -2037,7 +2037,7 @@ impl NavigationData {
         if let Ok(data) = String::from_utf8(buf.to_vec()) {
             for line in data.lines() {
                 if let Err(e) = if self.nmea0183_mode {
-                    self.parse_nmea0183_at(line, Some(sender), now)
+                    self.parse_nmea0183_at(line, Some(sender.ip()), now)
                 } else {
                     parse_signalk(line)
                 } {
@@ -2077,7 +2077,7 @@ impl NavigationData {
     /// position is taken from it: see [`SourceLock::takes`].
     fn take_position(
         &mut self,
-        sender: Option<SocketAddr>,
+        sender: Option<IpAddr>,
         valid: Option<bool>,
         lat: Option<f64>,
         lon: Option<f64>,
@@ -2098,24 +2098,25 @@ impl NavigationData {
         self.parse_nmea0183_at(s, None, std::time::Instant::now())
     }
 
-    /// Use a sentence from `sender`, when known, at `now`. Position, heading,
-    /// and course and speed are each taken from one device; see
-    /// [`SourceLock`].
+    /// Use a sentence from the device at `sender`, when known, at `now`.
+    /// Position, heading, and course and speed are each taken from one
+    /// device; see [`SourceLock`]. A device is known by its address alone,
+    /// as some gateways send each datagram from a fresh source port.
     fn parse_nmea0183_at(
         &mut self,
         s: &str,
-        sender: Option<SocketAddr>,
+        sender: Option<IpAddr>,
         now: std::time::Instant,
     ) -> Result<(), RadarError> {
         let parser = match sender {
             Some(sender) => {
                 if self.sender_parsers.len() >= MAX_SENDER_PARSERS
-                    && !self.sender_parsers.contains_key(&sender.ip())
+                    && !self.sender_parsers.contains_key(&sender)
                 {
                     // Only messages still being put together are lost.
                     self.sender_parsers.clear();
                 }
-                self.sender_parsers.entry(sender.ip()).or_default()
+                self.sender_parsers.entry(sender).or_default()
             }
             None => self.nmea_parser.as_mut().unwrap(),
         };
@@ -2804,7 +2805,7 @@ mod tests {
     /// Datagrams from the named interface's own subnet are used and hold the
     /// quiet limit off.
     #[tokio::test]
-    async fn traffic_on_the_interface_holds_off_the_quiet_limit() {
+    async fn traffic_on_the_interface_is_used_and_holds_off_the_quiet_limit() {
         use network_interface::{NetworkInterface, NetworkInterfaceConfig};
         use tokio_graceful_shutdown::Toplevel;
 
@@ -2821,16 +2822,14 @@ mod tests {
             eprintln!("skipped: no IPv4 loopback interface with a netmask");
             return;
         };
+        let _globals = nav_globals();
+        set_position(None, None, "test");
         let socket = loopback_socket().await;
         let to = socket.local_addr().unwrap();
         let other = loopback_socket().await;
         let chatter = tokio::spawn(async move {
             loop {
-                // Not navigation data, so the shared globals are left alone.
-                other
-                    .send_to(b"$GPTXT,01,01,02,u-blox*00", to)
-                    .await
-                    .unwrap();
+                other.send_to(NMEA_RMC.as_bytes(), to).await.unwrap();
                 sleep(Duration::from_millis(5)).await;
             }
         });
@@ -2852,6 +2851,7 @@ mod tests {
         .await
         .unwrap();
         chatter.abort();
+        assert!(get_radar_position().is_some());
     }
 
     /// Two listeners on the same host can bind the same UDP navigation port,
@@ -2901,8 +2901,13 @@ mod tests {
     const ACTIVE_RMC: &str = "$GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W*6A";
     const OTHER_RMC: &str = "$GPRMC,123519,A,4907.038,N,01131.000,E,022.4,084.4,230394,003.1,W*6B";
 
-    fn device(port: u16) -> Option<SocketAddr> {
-        Some(SocketAddr::from(([192, 168, 1, 10], port)))
+    fn device(n: u8) -> Option<IpAddr> {
+        Some(IpAddr::from([192, 168, 1, n]))
+    }
+
+    /// A datagram from `device(n)`, sent from `port`.
+    fn udp_from(n: u8, port: u16) -> SocketAddr {
+        SocketAddr::new(device(n).unwrap(), port)
     }
 
     /// A second GPS on the network does not pull the position back and forth;
@@ -3028,12 +3033,25 @@ mod tests {
         let _globals = nav_globals();
         let mut receiver = nmea0183_receiver();
         let start = std::time::Instant::now();
-        receiver.process_udp_buf(ACTIVE_RMC.as_bytes(), device(1).unwrap(), start);
+        receiver.process_udp_buf(ACTIVE_RMC.as_bytes(), udp_from(1, 10110), start);
         let first = get_radar_position();
-        receiver.process_udp_buf(OTHER_RMC.as_bytes(), device(2).unwrap(), start);
+        receiver.process_udp_buf(OTHER_RMC.as_bytes(), udp_from(2, 10110), start);
 
         assert!(first.is_some());
         assert_eq!(get_radar_position(), first);
+    }
+
+    #[test]
+    fn a_device_sending_from_a_fresh_port_is_still_the_one_in_use() {
+        let _globals = nav_globals();
+        let mut receiver = nmea0183_receiver();
+        let start = std::time::Instant::now();
+        receiver.process_udp_buf(ACTIVE_RMC.as_bytes(), udp_from(1, 50001), start);
+        let first = get_radar_position();
+        receiver.process_udp_buf(OTHER_RMC.as_bytes(), udp_from(1, 50002), start);
+
+        assert!(get_radar_position().is_some());
+        assert_ne!(get_radar_position(), first);
     }
 
     #[test]
@@ -3041,11 +3059,11 @@ mod tests {
         let _globals = nav_globals();
         let mut receiver = nmea0183_receiver();
         let start = std::time::Instant::now();
-        receiver.process_udp_buf(ACTIVE_RMC.as_bytes(), device(1).unwrap(), start);
+        receiver.process_udp_buf(ACTIVE_RMC.as_bytes(), udp_from(1, 10110), start);
         let first = get_radar_position();
         receiver.process_udp_buf(
             OTHER_RMC.as_bytes(),
-            device(2).unwrap(),
+            udp_from(2, 10110),
             start + SOURCE_TAKEOVER_AFTER,
         );
 
@@ -3115,7 +3133,7 @@ mod tests {
         init_ais_store(tokio::sync::broadcast::channel(16).0);
         let mut receiver = nmea0183_receiver();
         let now = std::time::Instant::now();
-        let other_ip = SocketAddr::from(([192, 168, 1, 11], 1));
+        let other_ip = udp_from(11, 10110);
         let stored = || {
             get_ais_store()
                 .unwrap()
@@ -3124,11 +3142,11 @@ mod tests {
                 .any(|v| v.mmsi == MMSI)
         };
 
-        receiver.process_udp_buf(first.as_bytes(), device(1).unwrap(), now);
+        receiver.process_udp_buf(first.as_bytes(), udp_from(1, 10110), now);
         receiver.process_udp_buf(second.as_bytes(), other_ip, now);
         assert!(!stored(), "another receiver's part completed the message");
 
-        receiver.process_udp_buf(second.as_bytes(), device(1).unwrap(), now);
+        receiver.process_udp_buf(second.as_bytes(), udp_from(1, 10110), now);
         assert!(stored());
     }
 
