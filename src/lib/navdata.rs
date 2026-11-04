@@ -1108,12 +1108,13 @@ pub(crate) struct NavigationData {
     nmea0183_mode: bool,
     what: &'static str,
     nmea_parser: Option<NmeaParser>,
-    /// When NMEA 0183 last gave a valid position, a heading, and a course or
+    /// When NMEA 0183 last gave a valid position, a heading, a course and a
     /// speed, so each can be withdrawn once its source stops giving it; see
     /// [`expire_stale_nav`](Self::expire_stale_nav).
     last_fix: Option<std::time::Instant>,
     last_heading: Option<std::time::Instant>,
-    last_motion: Option<std::time::Instant>,
+    last_cog: Option<std::time::Instant>,
+    last_sog: Option<std::time::Instant>,
     /// A parser for each device heard on UDP, so the parts of a multipart
     /// AIS message are never paired with another receiver's.
     sender_parsers: HashMap<IpAddr, NmeaParser>,
@@ -1312,7 +1313,8 @@ impl NavigationData {
                 nmea_parser: Some(NmeaParser::new()),
                 last_fix: None,
                 last_heading: None,
-                last_motion: None,
+                last_cog: None,
+                last_sog: None,
                 sender_parsers: HashMap::new(),
                 position_source: SourceLock::default(),
                 heading_source: SourceLock::default(),
@@ -1325,7 +1327,8 @@ impl NavigationData {
                 nmea_parser: None,
                 last_fix: None,
                 last_heading: None,
-                last_motion: None,
+                last_cog: None,
+                last_sog: None,
                 sender_parsers: HashMap::new(),
                 position_source: SourceLock::default(),
                 heading_source: SourceLock::default(),
@@ -1389,10 +1392,14 @@ impl NavigationData {
             }
             log::info!("NavData: listening for NMEA replay packets");
             let mut buf = Vec::with_capacity(1024);
+            let mut stale_check = tokio::time::interval(STALE_NAV_CHECK);
             loop {
                 tokio::select! { biased;
                     _ = subsys.on_shutdown_requested() => {
                         return Ok(());
+                    },
+                    _ = stale_check.tick() => {
+                        self.expire_stale_nav(std::time::Instant::now());
                     },
                     result = rx.recv_buf_from(&mut buf) => {
                         match result {
@@ -2115,9 +2122,21 @@ impl NavigationData {
         if stale(&mut self.last_heading, MOTION_STALE_AFTER) {
             set_heading_true(None, "nmea0183");
         }
-        if stale(&mut self.last_motion, MOTION_STALE_AFTER) {
+        if stale(&mut self.last_cog, MOTION_STALE_AFTER) {
             set_cog(None);
+        }
+        if stale(&mut self.last_sog, MOTION_STALE_AFTER) {
             set_sog(None);
+        }
+    }
+
+    /// Restart the clock of the course and of the speed, whichever was given.
+    fn renew_motion(&mut self, cog: Option<f64>, sog: Option<f64>, now: std::time::Instant) {
+        if cog.is_some() {
+            self.last_cog = Some(now);
+        }
+        if sog.is_some() {
+            self.last_sog = Some(now);
         }
     }
 
@@ -2127,7 +2146,8 @@ impl NavigationData {
         clear_own_ship_nav();
         self.last_fix = None;
         self.last_heading = None;
-        self.last_motion = None;
+        self.last_cog = None;
+        self.last_sog = None;
     }
 
     fn parse_nmea0183(&mut self, s: &str) -> Result<(), RadarError> {
@@ -2172,8 +2192,8 @@ impl NavigationData {
                         set_sog(None);
                     }
                     set_rmc_motion(&rmc);
-                    if gives {
-                        self.last_motion = Some(now);
+                    if rmc.status_active == Some(true) {
+                        self.renew_motion(rmc.bearing, rmc.sog_knots, now);
                     }
                 }
             }
@@ -2201,9 +2221,7 @@ impl NavigationData {
                 {
                     set_cog(cog);
                     set_sog(sog);
-                    if cog.is_some() || sog.is_some() {
-                        self.last_motion = Some(now);
-                    }
+                    self.renew_motion(cog, sog, now);
                 }
             }
             // Our own transponder's reports are VDO, not VDM: never a target.
@@ -3292,7 +3310,7 @@ mod tests {
 
     /// A heading sensor, or the source of course and speed, that stops while
     /// the receiver goes on hearing others has its values withdrawn after
-    /// `MOTION_STALE_AFTER`, each on its own clock.
+    /// `MOTION_STALE_AFTER`.
     #[test]
     fn a_heading_or_motion_that_stops_is_withdrawn() {
         let _globals = nav_globals();
@@ -3313,6 +3331,55 @@ mod tests {
             get_radar_position().is_some(),
             "the position has a longer clock"
         );
+    }
+
+    /// The heading, the course and the speed each age on their own clock: a
+    /// GPS that goes on giving a course does not keep a speed it no longer
+    /// sends, nor a compass's heading.
+    #[test]
+    fn heading_course_and_speed_each_age_on_their_own() {
+        let _globals = nav_globals();
+        let mut receiver = nmea0183_receiver();
+        let start = std::time::Instant::now();
+        let later = start + Duration::from_secs(5);
+        receiver
+            .parse_nmea0183_at("$GPHDT,224.2,T*33", None, start)
+            .unwrap();
+        receiver.parse_nmea0183_at(ACTIVE_RMC, None, start).unwrap();
+        receiver
+            .parse_nmea0183_at(
+                "$GPRMC,123519,A,4807.038,N,01131.000,E,,084.4,230394,003.1,W*40",
+                None,
+                later,
+            )
+            .unwrap();
+
+        receiver.expire_stale_nav(start + MOTION_STALE_AFTER);
+        assert_eq!(get_heading_true(), None);
+        assert_eq!(get_sog(), None);
+        assert!(get_cog().is_some(), "the course was given since");
+
+        receiver.expire_stale_nav(later + MOTION_STALE_AFTER);
+        assert_eq!(get_cog(), None);
+    }
+
+    /// Each good fix restarts the position's clock.
+    #[test]
+    fn a_later_fix_keeps_the_position_for_another_minute() {
+        let _globals = nav_globals();
+        let mut receiver = nmea0183_receiver();
+        let start = std::time::Instant::now();
+        let second = start + FIX_STALE_AFTER / 2;
+        receiver.parse_nmea0183_at(ACTIVE_RMC, None, start).unwrap();
+        receiver
+            .parse_nmea0183_at(ACTIVE_RMC, None, second)
+            .unwrap();
+
+        receiver.expire_stale_nav(start + FIX_STALE_AFTER);
+        assert!(get_radar_position().is_some());
+
+        receiver.expire_stale_nav(second + FIX_STALE_AFTER);
+        assert_eq!(get_radar_position(), None);
     }
 
     /// A void GLL is no more a position than a void RMC.
