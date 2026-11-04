@@ -1185,6 +1185,13 @@ impl SourceLock {
         taken
     }
 
+    /// Whether `sender` is a known device that is not the one in use, which
+    /// it also is when no device is in use yet: values set before then came
+    /// from a source that was not told apart, such as a TCP stream.
+    fn is_new(&self, sender: Option<IpAddr>) -> bool {
+        sender.is_some() && self.held.map(|(held, _)| held) != sender
+    }
+
     /// Whether `sender` is the device in use, or no device is told apart.
     fn is_held_by(&self, sender: Option<IpAddr>) -> bool {
         match (self.held, sender) {
@@ -2129,7 +2136,7 @@ impl NavigationData {
                     .map_err(sentence_error)?;
                 let gives = rmc_gives_motion(&rmc);
                 // A course and speed from two devices are never paired.
-                let new_source = gives && !self.motion_source.is_held_by(sender);
+                let new_source = gives && self.motion_source.is_new(sender);
                 if self.motion_source.takes(sender, now, gives) {
                     if new_source {
                         set_cog(None);
@@ -3113,6 +3120,27 @@ mod tests {
                 "$GPRMC,123519,A,4807.038,N,01131.000,E,,084.4,230394,003.1,W*40",
                 device(2),
                 start + SOURCE_TAKEOVER_AFTER,
+            )
+            .unwrap();
+
+        assert!(get_cog().is_some());
+        assert_eq!(get_sog(), None);
+    }
+
+    /// Nor is the first device heard over UDP paired with the speed a TCP
+    /// stream gave before it.
+    #[test]
+    fn the_first_udp_device_is_not_paired_with_a_tcp_speed() {
+        let _globals = nav_globals();
+        let mut receiver = nmea0183_receiver();
+        receiver.parse_nmea0183(ACTIVE_RMC).unwrap();
+        assert!(get_sog().is_some());
+
+        receiver
+            .parse_nmea0183_at(
+                "$GPRMC,123519,A,4807.038,N,01131.000,E,,084.4,230394,003.1,W*40",
+                device(1),
+                std::time::Instant::now(),
             )
             .unwrap();
 
