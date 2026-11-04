@@ -374,6 +374,13 @@ pub(crate) fn match_ipv4(addr: &Ipv4Addr, bcast: &Ipv4Addr, netmask: &Ipv4Addr) 
 
 /// Whether `ip` is on one of the subnets of the interface called `name`.
 pub(crate) fn is_on_interface(name: &str, ip: &Ipv4Addr) -> bool {
+    interface_networks(name)
+        .iter()
+        .any(|(own, mask)| match_ipv4(ip, own, mask))
+}
+
+/// The IPv4 networks interface `name` is on, as its own address and netmask.
+pub(crate) fn interface_networks(name: &str) -> Vec<(Ipv4Addr, Ipv4Addr)> {
     use network_interface::{NetworkInterface, NetworkInterfaceConfig};
 
     NetworkInterface::show()
@@ -381,10 +388,11 @@ pub(crate) fn is_on_interface(name: &str, ip: &Ipv4Addr) -> bool {
         .into_iter()
         .filter(|itf| itf.name == name)
         .flat_map(|itf| itf.addr)
-        .any(|addr| match (addr.ip(), addr.netmask()) {
-            (IpAddr::V4(own), Some(IpAddr::V4(mask))) => match_ipv4(ip, &own, &mask),
-            _ => false,
+        .filter_map(|addr| match (addr.ip(), addr.netmask()) {
+            (IpAddr::V4(own), Some(IpAddr::V4(mask))) => Some((own, mask)),
+            _ => None,
         })
+        .collect()
 }
 
 /// Whether a unicast command sent to `dst` would actually leave by the
