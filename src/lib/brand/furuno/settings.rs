@@ -384,6 +384,9 @@ fn capabilities(model: &RadarModel) -> Capabilities {
     }
 }
 
+/// Fits a radar's controls and ranges to its model once the model is known.
+/// Shows the model name, the serial number from its beacon's model report,
+/// the firmware `version`, and a default name if it has none yet.
 pub(crate) fn update_when_model_known(info: &mut RadarInfo, model: RadarModel, version: &str) {
     let model_name = model.to_string();
     log::debug!("update_when_model_known: {}", model_name);
@@ -1124,8 +1127,8 @@ mod tests {
         assert_eq!(sector.end_value.unwrap().to_degrees().round(), 130.);
     }
 
-    /// The serial the radar reported in its model report shows as its serial
-    /// number, not only as the tail of its name.
+    /// The serial the radar's beacon reported in its model report shows as
+    /// its serial number, not only as the tail of its name.
     #[test]
     fn the_reported_serial_shows_as_the_serial_number() {
         let radars = SharedRadars::new();
