@@ -54,6 +54,8 @@ fn test_args() -> Cli {
     }
 }
 
+/// The fixture's radar comes up as a Furuno DRS4D-NXT with Doppler, sends
+/// whole revolutions of spokes, and shows its serial on both ranges.
 #[tokio::test]
 async fn replay_furuno_drs4dnxt() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
