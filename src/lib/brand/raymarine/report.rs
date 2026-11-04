@@ -884,8 +884,15 @@ mod tests {
     /// Build a receiver without touching the network. `--replay` keeps the
     /// constructor from creating a command sender, and so from opening sockets.
     fn test_receiver(doppler: bool) -> super::RaymarineReportReceiver {
+        test_receiver_of(crate::brand::raymarine::BaseModel::Quantum, doppler)
+    }
+
+    fn test_receiver_of(
+        base_model: crate::brand::raymarine::BaseModel,
+        doppler: bool,
+    ) -> super::RaymarineReportReceiver {
         use crate::Cli;
-        use crate::brand::raymarine::{BaseModel, ExternalControllerWitness, settings};
+        use crate::brand::raymarine::{ExternalControllerWitness, settings};
         use crate::radar::SharedRadars;
         use clap::Parser;
         use std::sync::Arc;
@@ -893,14 +900,14 @@ mod tests {
         let args = Cli::parse_from(["mayara-server", "--replay"]);
         let mut info =
             crate::radar::ui_strings::radar_info(crate::Brand::Raymarine, &args, |id, tx| {
-                settings::new(id, tx, &args, BaseModel::Quantum)
+                settings::new(id, tx, &args, base_model)
             });
         info.doppler = doppler;
         super::RaymarineReportReceiver::new(
             &args,
             info,
             SharedRadars::new(),
-            BaseModel::Quantum,
+            base_model,
             Arc::new(ExternalControllerWitness::default()),
         )
     }
@@ -981,6 +988,22 @@ mod tests {
                 .is_some(),
             "...nor leave the control set it was built from without its control"
         );
+    }
+
+    /// An RD424D sold as E92131 sends that part number with its serial
+    /// appended, and must still be recognised once the whole info report has
+    /// been taken apart (#867).
+    #[test]
+    fn an_rd_info_report_with_the_other_part_number_names_the_radome() {
+        let mut receiver = test_receiver_of(crate::brand::raymarine::BaseModel::RD, false);
+        let mut data = vec![0u8; 36];
+        data[0..4].copy_from_slice(&0x0001_0006u32.to_le_bytes());
+        data[4..11].copy_from_slice(b"1280022");
+        data[20..33].copy_from_slice(b"E921311280022");
+
+        super::rd::process_info_report(&mut receiver, &data);
+
+        assert_eq!(receiver.model.as_ref().map(|m| m.name), Some("RD424D"));
     }
 
     fn info_report(part: &str) -> Vec<u8> {
