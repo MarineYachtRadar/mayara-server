@@ -2022,7 +2022,7 @@ impl NavigationData {
                             if let Some(limit) = quiet_limit {
                                 quiet.as_mut().reset(tokio::time::Instant::now() + limit);
                             }
-                            self.process_udp_buf(&buf[..len], sender);
+                            self.process_udp_buf(&buf[..len], sender, std::time::Instant::now());
                         },
                         Ok(_) => {},
                         Err(ref e) if e.kind() == ErrorKind::WouldBlock => {},
@@ -2033,11 +2033,11 @@ impl NavigationData {
         }
     }
 
-    fn process_udp_buf(&mut self, buf: &[u8], sender: SocketAddr) {
+    fn process_udp_buf(&mut self, buf: &[u8], sender: SocketAddr, now: std::time::Instant) {
         if let Ok(data) = String::from_utf8(buf.to_vec()) {
             for line in data.lines() {
                 if let Err(e) = if self.nmea0183_mode {
-                    self.parse_nmea0183_at(line, Some(sender), std::time::Instant::now())
+                    self.parse_nmea0183_at(line, Some(sender), now)
                 } else {
                     parse_signalk(line)
                 } {
@@ -2801,6 +2801,59 @@ mod tests {
         chatter.abort();
     }
 
+    /// Datagrams from the named interface's own subnet are used and hold the
+    /// quiet limit off.
+    #[tokio::test]
+    async fn traffic_on_the_interface_holds_off_the_quiet_limit() {
+        use network_interface::{NetworkInterface, NetworkInterfaceConfig};
+        use tokio_graceful_shutdown::Toplevel;
+
+        let Some(loopback) = NetworkInterface::show()
+            .unwrap_or_default()
+            .into_iter()
+            .find(|itf| {
+                itf.addr.iter().any(|a| {
+                    a.ip() == std::net::IpAddr::V4(Ipv4Addr::LOCALHOST) && a.netmask().is_some()
+                })
+            })
+            .map(|itf| itf.name)
+        else {
+            eprintln!("skipped: no IPv4 loopback interface with a netmask");
+            return;
+        };
+        let socket = loopback_socket().await;
+        let to = socket.local_addr().unwrap();
+        let other = loopback_socket().await;
+        let chatter = tokio::spawn(async move {
+            loop {
+                // Not navigation data, so the shared globals are left alone.
+                other
+                    .send_to(b"$GPTXT,01,01,02,u-blox*00", to)
+                    .await
+                    .unwrap();
+                sleep(Duration::from_millis(5)).await;
+            }
+        });
+
+        Toplevel::new(async move |subsys: &mut SubsystemHandle| {
+            let r = tokio::time::timeout(
+                Duration::from_millis(300),
+                nmea0183_receiver().receive_udp_loop(
+                    socket,
+                    Some(Duration::from_millis(50)),
+                    Some(&loopback),
+                    subsys,
+                ),
+            )
+            .await;
+            assert!(r.is_err(), "the quiet limit passed: {r:?}");
+        })
+        .handle_shutdown_requests(Duration::from_secs(1))
+        .await
+        .unwrap();
+        chatter.abort();
+    }
+
     /// Two listeners on the same host can bind the same UDP navigation port,
     /// as each of them should get the broadcasts.
     #[tokio::test]
@@ -2846,6 +2899,7 @@ mod tests {
     }
 
     const ACTIVE_RMC: &str = "$GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W*6A";
+    const OTHER_RMC: &str = "$GPRMC,123519,A,4907.038,N,01131.000,E,022.4,084.4,230394,003.1,W*6B";
 
     fn device(port: u16) -> Option<SocketAddr> {
         Some(SocketAddr::from(([192, 168, 1, 10], port)))
@@ -2973,13 +3027,30 @@ mod tests {
     fn a_second_gps_heard_over_udp_does_not_move_the_position() {
         let _globals = nav_globals();
         let mut receiver = nmea0183_receiver();
-        let other_rmc = "$GPRMC,123519,A,4907.038,N,01131.000,E,022.4,084.4,230394,003.1,W*6B";
-        receiver.process_udp_buf(ACTIVE_RMC.as_bytes(), device(1).unwrap());
+        let start = std::time::Instant::now();
+        receiver.process_udp_buf(ACTIVE_RMC.as_bytes(), device(1).unwrap(), start);
         let first = get_radar_position();
-        receiver.process_udp_buf(other_rmc.as_bytes(), device(2).unwrap());
+        receiver.process_udp_buf(OTHER_RMC.as_bytes(), device(2).unwrap(), start);
 
         assert!(first.is_some());
         assert_eq!(get_radar_position(), first);
+    }
+
+    #[test]
+    fn a_second_gps_heard_over_udp_takes_over_once_the_first_falls_silent() {
+        let _globals = nav_globals();
+        let mut receiver = nmea0183_receiver();
+        let start = std::time::Instant::now();
+        receiver.process_udp_buf(ACTIVE_RMC.as_bytes(), device(1).unwrap(), start);
+        let first = get_radar_position();
+        receiver.process_udp_buf(
+            OTHER_RMC.as_bytes(),
+            device(2).unwrap(),
+            start + SOURCE_TAKEOVER_AFTER,
+        );
+
+        assert!(get_radar_position().is_some());
+        assert_ne!(get_radar_position(), first);
     }
 
     /// A VTG from another device takes over the course and speed once the
@@ -3004,6 +3075,7 @@ mod tests {
             .parse_nmea0183_at(other_vtg, device(2), start + SOURCE_TAKEOVER_AFTER)
             .unwrap();
         assert!((get_cog().unwrap() - 180f64.to_radians()).abs() < 1e-9);
+        assert!((get_sog().unwrap() - 5.6 / 3.6).abs() < 1e-9);
     }
 
     /// When another device takes over the course and speed, a value it does
@@ -3034,25 +3106,30 @@ mod tests {
     /// one receiver's second part does not complete another's first.
     #[test]
     fn multipart_ais_is_assembled_per_device() {
+        // A static report of its own, so no other test can have stored it.
+        const MMSI: &str = "244008670";
         let first =
-            "!AIVDM,2,1,1,A,55?MbV02;H;s<HtKR20EHE:0@T4@Dn2222222216L961O5Gf0NSQEp6ClRp8,0*1C";
+            "!AIVDM,2,1,1,A,53`e6oP2;H;s<HtKR20EHE:0@T4@Dn2222222216L961O5Gf0NSQEp6ClRp8,0*60";
         let second = "!AIVDM,2,2,1,A,88888888880,2*25";
+        let _globals = nav_globals();
+        init_ais_store(tokio::sync::broadcast::channel(16).0);
         let mut receiver = nmea0183_receiver();
-        let mut parse = |s: &str, from: Option<SocketAddr>| {
-            let parser = receiver
-                .sender_parsers
-                .entry(from.unwrap().ip())
-                .or_default();
-            parse_nmea_sentence(parser, s).unwrap()
+        let now = std::time::Instant::now();
+        let other_ip = SocketAddr::from(([192, 168, 1, 11], 1));
+        let stored = || {
+            get_ais_store()
+                .unwrap()
+                .get_all_active()
+                .iter()
+                .any(|v| v.mmsi == MMSI)
         };
-        let other_ip = Some(SocketAddr::from(([192, 168, 1, 11], 1)));
 
-        parse(first, device(1));
-        assert!(matches!(parse(second, other_ip), ParsedMessage::Incomplete));
-        assert!(matches!(
-            parse(second, device(1)),
-            ParsedMessage::VesselStaticData(_)
-        ));
+        receiver.process_udp_buf(first.as_bytes(), device(1).unwrap(), now);
+        receiver.process_udp_buf(second.as_bytes(), other_ip, now);
+        assert!(!stored(), "another receiver's part completed the message");
+
+        receiver.process_udp_buf(second.as_bytes(), device(1).unwrap(), now);
+        assert!(stored());
     }
 
     /// Each kind of value keeps to its own device: the heading comes from a
