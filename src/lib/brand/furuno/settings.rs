@@ -630,7 +630,8 @@ pub(crate) fn update_when_model_known(info: &mut RadarInfo, model: RadarModel, v
     }
 }
 
-/// The auto sea modes `model` applies on firmware `version`.
+/// The small NXT runs its own firmware image, which applied Channel only
+/// from [`CHANNEL_SEA_MODE_SINCE`] on; offered earlier, the radar ignores it.
 fn sea_modes(
     model: &RadarModel,
     modes: &'static [&'static str],
@@ -1089,27 +1090,30 @@ mod tests {
                     new(id, tx, &args)
                 });
             update_when_model_known(&mut info, model, version);
-            info.controls
+            let descriptions = info
+                .controls
                 .get(&ControlId::SeaState)
                 .unwrap()
                 .item()
-                .max_value
+                .descriptions
+                .clone()
+                .unwrap();
+            let mut modes: Vec<_> = descriptions.into_iter().collect();
+            modes.sort();
+            modes.into_iter().map(|(_, name)| name).collect::<Vec<_>>()
         };
+        let all = ["Adaptive", "Coastal", "Channel"];
 
         for model in [RadarModel::DRS2DNXT, RadarModel::DRS4DNXT] {
-            assert_eq!(modes(model, "01.05"), Some(1.), "{model}: no Channel");
-            assert_eq!(modes(model, "01.07"), Some(2.), "{model}");
-            assert_eq!(modes(model, "01.11"), Some(2.), "{model}");
-            assert_eq!(modes(model, "00.00"), Some(2.), "{model}: a replay");
+            assert_eq!(modes(model, "01.05"), ["Adaptive", "Coastal"], "{model}");
+            assert_eq!(modes(model, "01.07"), all, "{model}");
+            assert_eq!(modes(model, "01.11"), all, "{model}");
+            assert_eq!(modes(model, "00.00"), all, "{model}: a replay");
             for unparseable in ["", "01", "x.05", "01.x"] {
-                assert_eq!(
-                    modes(model, unparseable),
-                    Some(2.),
-                    "{model}: {unparseable:?}"
-                );
+                assert_eq!(modes(model, unparseable), all, "{model}: {unparseable:?}");
             }
         }
-        assert_eq!(modes(RadarModel::DRS6ANXT, "01.05"), Some(2.));
+        assert_eq!(modes(RadarModel::DRS6ANXT, "01.05"), all);
     }
 
     /// A radar that colours Doppler echoes also offers to track them as ARPA
