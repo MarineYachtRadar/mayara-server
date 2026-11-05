@@ -1400,6 +1400,15 @@ impl FurunoReportReceiver {
     /// that (yet).
     fn parse_modules(&mut self, values: &[&str]) {
         if self.model_known {
+            // The modules are asked for with every round of report requests,
+            // so a radar restarted with new firmware, as after an update,
+            // reports its new version here once mayara is back in session.
+            // A line cut off at the end of a session carries no version.
+            if let Some((_, version)) =
+                model_and_version(values).filter(|(_, version)| !version.is_empty())
+            {
+                self.show_firmware_version(version);
+            }
             return;
         }
         self.model_known = true; // We set this even if we can't parse the model, there is no point in logging errors many times.
@@ -1469,6 +1478,20 @@ impl FurunoReportReceiver {
                 .unwrap_or_else(|| { "unknown".to_string() }),
             values
         );
+    }
+
+    /// Shows `version` on both ranges. A radar whose model was never
+    /// recognised has no firmware control, and nothing to show it on.
+    fn show_firmware_version(&self, version: &str) {
+        for common in std::iter::once(&self.common).chain(self.common_b.as_ref()) {
+            if let Ok(Some(_)) = common
+                .info
+                .controls
+                .set_string(&ControlId::FirmwareVersion, version.to_string())
+            {
+                log::info!("{}: Radar firmware version {}", common.key, version);
+            }
+        }
     }
 
     async fn start_multicast_socket(&mut self) -> io::Result<()> {
@@ -2583,6 +2606,49 @@ mod tests {
                 Some(expected)
             );
         }
+    }
+
+    /// A radar that restarts with new firmware reports its modules again, and
+    /// both ranges show the version it reports then.
+    #[tokio::test]
+    async fn a_firmware_update_shows_once_the_radar_reports_its_modules_again() {
+        let mut receiver = dual_range_receiver();
+        receiver
+            .process_report("$N96,0359360-01.05,0359358-01.01,0359359-01.01,0359361-01.05,,,")
+            .unwrap();
+        receiver
+            .process_report("$N96,0359360-01.11,0359358-01.01,0359359-01.01,0359361-01.08,,,")
+            .unwrap();
+
+        for (common, range) in [
+            (&receiver.common, "Range A"),
+            (receiver.common_b.as_ref().unwrap(), "Range B"),
+        ] {
+            let firmware = common
+                .info
+                .controls
+                .get(&ControlId::FirmwareVersion)
+                .unwrap();
+            assert_eq!(firmware.description.as_deref(), Some("01.11"), "{range}");
+        }
+    }
+
+    /// A module report cut off before its version leaves the version shown.
+    #[tokio::test]
+    async fn a_cut_off_module_report_keeps_the_firmware_version() {
+        let mut receiver = nxt_receiver();
+        receiver
+            .process_report("$N96,0359360-01.11,0359358-01.01,0359359-01.01,0359361-01.08,,,")
+            .unwrap();
+        receiver.process_report("$N96,0359360-").unwrap();
+
+        let firmware = receiver
+            .common
+            .info
+            .controls
+            .get(&ControlId::FirmwareVersion)
+            .unwrap();
+        assert_eq!(firmware.description.as_deref(), Some("01.11"));
     }
 
     /// Both ranges of a dual-range NXT show the serial its beacon reported
