@@ -1101,6 +1101,13 @@ mod tests {
             assert_eq!(modes(model, "01.07"), Some(2.), "{model}");
             assert_eq!(modes(model, "01.11"), Some(2.), "{model}");
             assert_eq!(modes(model, "00.00"), Some(2.), "{model}: a replay");
+            for unparseable in ["", "01", "x.05", "01.x"] {
+                assert_eq!(
+                    modes(model, unparseable),
+                    Some(2.),
+                    "{model}: {unparseable:?}"
+                );
+            }
         }
         assert_eq!(modes(RadarModel::DRS6ANXT, "01.05"), Some(2.));
     }
