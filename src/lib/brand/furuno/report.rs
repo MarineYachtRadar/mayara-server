@@ -1402,8 +1402,11 @@ impl FurunoReportReceiver {
         if self.model_known {
             // The modules are asked for with every round of report requests,
             // so a radar restarted with new firmware, as after an update,
-            // reports its new version here within seconds.
-            if let Some((_, version)) = model_and_version(values) {
+            // reports its new version here once mayara is back in session.
+            // A line cut off at the end of a session carries no version.
+            if let Some((_, version)) =
+                model_and_version(values).filter(|(_, version)| !version.is_empty())
+            {
                 self.show_firmware_version(version);
             }
             return;
@@ -2628,6 +2631,24 @@ mod tests {
                 .unwrap();
             assert_eq!(firmware.description.as_deref(), Some("01.11"), "{range}");
         }
+    }
+
+    /// A module report cut off before its version leaves the version shown.
+    #[tokio::test]
+    async fn a_cut_off_module_report_keeps_the_firmware_version() {
+        let mut receiver = nxt_receiver();
+        receiver
+            .process_report("$N96,0359360-01.11,0359358-01.01,0359359-01.01,0359361-01.08,,,")
+            .unwrap();
+        receiver.process_report("$N96,0359360-").unwrap();
+
+        let firmware = receiver
+            .common
+            .info
+            .controls
+            .get(&ControlId::FirmwareVersion)
+            .unwrap();
+        assert_eq!(firmware.description.as_deref(), Some("01.11"));
     }
 
     /// Both ranges of a dual-range NXT show the serial its beacon reported
