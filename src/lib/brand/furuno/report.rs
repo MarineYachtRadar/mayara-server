@@ -2532,7 +2532,7 @@ mod tests {
         model: RadarModel,
     ) -> RadarInfo {
         let mut info = beacon_info(radars, args, dual);
-        settings::update_when_model_known(&mut info, model, "1.00");
+        settings::update_when_model_known(&mut info, model, "01.11");
         info
     }
 

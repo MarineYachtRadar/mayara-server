@@ -855,7 +855,7 @@ mod tests {
         );
         // The discovery path names the radar before the model report arrives.
         info.controls.set_user_name(info.key());
-        settings::update_when_model_known(&mut info, model, "1.00");
+        settings::update_when_model_known(&mut info, model, "01.11");
 
         let mut command = Command::new(&info, model.is_nxt());
         let wire = Wire::default();
