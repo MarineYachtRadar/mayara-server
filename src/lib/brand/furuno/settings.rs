@@ -384,10 +384,19 @@ fn capabilities(model: &RadarModel) -> Capabilities {
     }
 }
 
+/// Fits a radar's controls and ranges to its model once the model is known.
+/// Shows the model name, the serial number from its beacon's model report,
+/// the firmware `version`, and a default name if it has none yet.
 pub(crate) fn update_when_model_known(info: &mut RadarInfo, model: RadarModel, version: &str) {
     let model_name = model.to_string();
     log::debug!("update_when_model_known: {}", model_name);
     info.controls.set_model_name(model_name.to_string());
+
+    if let Some(serial_no) = info.serial_no.as_ref() {
+        info.controls
+            .set_string(&ControlId::SerialNumber, serial_no.to_string())
+            .expect("SerialNumber");
+    }
 
     if info.controls.user_name() == info.key() {
         let mut user_name = model_name.to_string();
@@ -1116,6 +1125,39 @@ mod tests {
         let sector = info.controls.get(&ControlId::NoTransmitSector1).unwrap();
         assert_eq!(sector.value.unwrap().to_degrees().round(), 100.);
         assert_eq!(sector.end_value.unwrap().to_degrees().round(), 130.);
+    }
+
+    /// The serial the radar's beacon reported in its model report shows as
+    /// its serial number, not only as the tail of its name.
+    #[test]
+    fn the_reported_serial_shows_as_the_serial_number() {
+        let radars = SharedRadars::new();
+        let args = Cli::parse_from(["mayara-server"]);
+        let addr = SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 2), 10000);
+        let mut info = RadarInfo::new(
+            &radars,
+            &args,
+            crate::Brand::Furuno,
+            Some("6424"),
+            None,
+            Some("A"),
+            PIXEL_VALUES,
+            SPOKES,
+            SPOKE_LEN,
+            addr,
+            Ipv4Addr::new(10, 0, 0, 1),
+            addr,
+            addr,
+            addr,
+            |id, tx| new(id, tx, &args),
+            true,
+            true,
+        );
+        info.controls.set_user_name(info.key());
+        update_when_model_known(&mut info, RadarModel::DRS4DNXT, "1.00");
+
+        let serial = info.controls.get(&ControlId::SerialNumber).unwrap();
+        assert_eq!(serial.description.as_deref(), Some("6424"));
     }
 
     /// A control is seeded with its default before the unit conversion, so
