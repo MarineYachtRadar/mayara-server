@@ -7,6 +7,7 @@
 
 mod common;
 
+use mayara::radar::settings::ControlId;
 use mayara::{Cli, replay};
 use std::path::Path;
 use std::time::Duration;
@@ -53,6 +54,8 @@ fn test_args() -> Cli {
     }
 }
 
+/// The fixture's radar comes up as a Furuno DRS4D-NXT with Doppler, sends
+/// whole revolutions of spokes, and shows its serial on both ranges.
 #[tokio::test]
 async fn replay_furuno_drs4dnxt() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -97,6 +100,18 @@ async fn replay_furuno_drs4dnxt() {
                             )
                             .await;
                             common::assert_spokes(&info, &spokes);
+
+                            // Both ranges show the serial the beacon's model
+                            // report names.
+                            let keys = radars.get_keys();
+                            assert_eq!(keys.len(), 2, "two ranges: {keys:?}");
+                            for key in &keys {
+                                let serial = radars
+                                    .get_by_key(key)
+                                    .and_then(|info| info.controls.get(&ControlId::SerialNumber))
+                                    .and_then(|control| control.description);
+                                assert_eq!(serial.as_deref(), Some("6424"), "{key}");
+                            }
 
                             break;
                         }

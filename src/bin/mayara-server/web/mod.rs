@@ -656,6 +656,7 @@ async fn spokes_handler(
             let shutdown_rx = state.shutdown_tx.subscribe();
             let radar_message_rx = radar.message_tx.subscribe();
             radar.wake_up();
+            state.radars.hold_up_antenna(&params.id);
             // finalize the upgrade process by returning upgrade callback.
             // we can customize the callback by sending additional info such as address.
             let ws = if state.args.no_websocket_compression {

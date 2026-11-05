@@ -2508,8 +2508,15 @@ mod tests {
         dual: Option<&str>,
         model: RadarModel,
     ) -> RadarInfo {
+        let mut info = beacon_info(radars, args, dual);
+        settings::update_when_model_known(&mut info, model, "01.11");
+        info
+    }
+
+    /// The radar info as its beacon creates it, before `$N96` names the model.
+    fn beacon_info(radars: &SharedRadars, args: &Cli, dual: Option<&str>) -> RadarInfo {
         let addr = SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 2), 10000);
-        let mut info = RadarInfo::new(
+        let info = RadarInfo::new(
             radars,
             args,
             crate::Brand::Furuno,
@@ -2529,7 +2536,6 @@ mod tests {
             true,
         );
         info.controls.set_user_name(info.key());
-        settings::update_when_model_known(&mut info, model, "01.11");
         info
     }
 
@@ -2576,6 +2582,31 @@ mod tests {
                 receiver.common.info.controls.model_name().as_deref(),
                 Some(expected)
             );
+        }
+    }
+
+    /// Both ranges of a dual-range NXT show the serial its beacon reported
+    /// once `$N96` names the model.
+    #[tokio::test]
+    async fn the_reported_serial_shows_on_both_ranges() {
+        let radars = SharedRadars::new();
+        let args = Cli::parse_from(["mayara-server"]);
+        let info = beacon_info(&radars, &args, Some("A"));
+        let info_b = beacon_info(&radars, &args, Some("B"));
+        let mut receiver =
+            FurunoReportReceiver::new(&args, radars.clone(), info, RadarModel::DRS4DNXT);
+        receiver.set_range_b(&args, &radars, info_b);
+
+        receiver
+            .process_report("$N96,0359360-01.11,0359358-01.01,0359359-01.01,0359361-01.08,,,")
+            .unwrap();
+
+        for (common, range) in [
+            (&receiver.common, "Range A"),
+            (receiver.common_b.as_ref().unwrap(), "Range B"),
+        ] {
+            let serial = common.info.controls.get(&ControlId::SerialNumber).unwrap();
+            assert_eq!(serial.description.as_deref(), Some("TEST0001"), "{range}");
         }
     }
 

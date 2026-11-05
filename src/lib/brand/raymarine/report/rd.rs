@@ -913,6 +913,9 @@ mod tests {
         assert_eq!(model_from_serial("E921421220193").unwrap().name, "RD418HD");
         // NUL-padded fields arrive here already truncated and match exactly.
         assert_eq!(model_from_serial("E92130").unwrap().name, "RD418D");
+        // An RD424D reporting its other part number (issue #867).
+        assert_eq!(model_from_serial("E921311280022").unwrap().name, "RD424D");
+        assert_eq!(model_from_serial("E92129").unwrap().name, "RD418D");
         assert_eq!(model_from_serial("E70498").unwrap().name, "Quantum Q24D");
         // Numeric E-series fields are no model; the caller falls back.
         assert!(model_from_serial("1234567").is_none());

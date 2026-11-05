@@ -868,6 +868,19 @@ impl SharedControls {
         self.controls.write().unwrap().insert(id, control);
     }
 
+    /// Add a control to a radar that clients may already show, and send them
+    /// its definition, as they otherwise keep the control list they fetched.
+    pub(crate) fn add_announced(&mut self, control_builder: ControlBuilder) {
+        let (id, control) = control_builder.take();
+        let mut locked = self.controls.write().unwrap();
+        locked.insert(id, control);
+        let mut delta = SignalKDelta::new();
+        delta.add_meta_for_control(&locked.radar_id, &locked.effective(&locked.controls[&id]));
+        if let Err(e) = locked.sk_client_tx.send(delta) {
+            log::trace!("No client to announce control {} to: {}", id, e);
+        }
+    }
+
     /// Lift the replay lock from a control that its brand applies to the
     /// recording itself instead of sending it to a radar. A no-op when this
     /// is not a replay, where the radar decides as usual.
@@ -3408,6 +3421,24 @@ impl Control {
             ));
         }
 
+        // A numeric control's valid_values are points on a continuum, so a
+        // value between two of them means the nearest one. Radars report
+        // ranges that are in no table at all — a Navico driving its range
+        // from a chart overlay sweeps whatever suits the chart, 9888 m
+        // between the 4 and 6 nm entries — and clients should not each
+        // have to work out what that means. Snapped before the bounds are
+        // checked, as they are the ends of the same list: a Navico 4G on
+        // 50 m, with mayara showing its ranges in nautical miles, is on the
+        // shortest of them, 1/32 nm, not below it (#773).
+        //
+        // Only for numbers. An Enum's valid_values are distinct options,
+        // where "nearest" has no meaning: Power lists [1, 2] for Standby
+        // and Transmit, and rounding a stray 4 to the closest entry would
+        // start the radar transmitting.
+        if self.item.data_type == ControlDataType::Number {
+            value = self.snap_to_valid_value(value);
+        }
+
         // RANGE MAPPING
         if let (Some(min_value), Some(max_value)) = (self.item.min_value, self.item.max_value) {
             if self.item.wire_offset.unwrap_or(0.) == -1.
@@ -3447,21 +3478,6 @@ impl Control {
             }
         }
         log::trace!("{} map value to rounded {}", self.item.control_id, value);
-
-        // A numeric control's valid_values are points on a continuum, so a
-        // value between two of them means the nearest one. Radars report
-        // ranges that are in no table at all — a Navico driving its range
-        // from a chart overlay sweeps whatever suits the chart, 9888 m
-        // between the 4 and 6 nm entries — and clients should not each
-        // have to work out what that means.
-        //
-        // Only for numbers. An Enum's valid_values are distinct options,
-        // where "nearest" has no meaning: Power lists [1, 2] for Standby
-        // and Transmit, and rounding a stray 4 to the closest entry would
-        // start the radar transmitting.
-        if self.item.data_type == ControlDataType::Number {
-            value = self.snap_to_valid_value(value);
-        }
 
         if let Some(av) = auto_value {
             let si = self.item.wire_units.map(|u| u.to_si(av).1).unwrap_or(av);
@@ -4247,6 +4263,20 @@ mod test {
         assert_eq!(read_only(&controls), Some(true));
     }
 
+    /// A control added once clients may hold the control list reaches them,
+    /// so they can show it without reconnecting.
+    #[test]
+    fn an_announced_control_reaches_clients() {
+        let (mut controls, mut sk_rx) = test_controls_with_deltas();
+
+        controls.add_announced(new_numeric(ControlId::Rain, 0., 100.));
+
+        assert!(controls.get_controls().contains_key(&ControlId::Rain));
+        let delta = sent_delta(&mut sk_rx);
+        assert!(delta.contains(&format!("radars.test.controls.{}", ControlId::Rain)));
+        assert!(delta.contains(r#""meta""#));
+    }
+
     /// A control that turns up while the radar cannot be commanded must be
     /// born read-only, rather than looking settable until the next transition.
     #[test]
@@ -4360,6 +4390,32 @@ mod test {
 
         range.set(14816., None, None, None).unwrap();
         assert_eq!(range.value, Some(14816.), "a settable value is untouched");
+    }
+
+    /// A range the radar reports just outside the steps of the units mayara
+    /// shows is on the nearest of them: a Navico 4G on 50 m, shown in
+    /// nautical miles, is on 1/32 nm, not refused as below it (#773).
+    #[test]
+    fn a_reported_range_beyond_the_listed_steps_is_snapped_not_refused() {
+        let mut controls = test_controls();
+        controls.add(new_list(
+            ControlId::RangeUnits,
+            &["Nautical", "Metric", "Mixed"],
+        ));
+        let mut ranges = Ranges::from_range(50, 1852);
+        ranges.nautical.retain(|r| r.distance() > 50);
+        controls.set_valid_ranges(&ranges);
+        controls
+            .set_value(&ControlId::RangeUnits, Value::from(RANGE_UNITS_NAUTICAL))
+            .unwrap();
+        let range = |controls: &SharedControls| controls.get(&ControlId::Range).unwrap();
+        assert_eq!(range(&controls).item.min_value, Some(57.));
+
+        controls
+            .set_value(&ControlId::Range, Value::from(50))
+            .unwrap();
+
+        assert_eq!(range(&controls).value, Some(57.));
     }
 
     /// Ties go to the lower value so the result does not depend on the

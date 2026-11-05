@@ -247,6 +247,12 @@ pub(crate) struct RaymarineReportReceiver {
     reported_unknown: HashMap<u32, bool>,
     features: FeatureFlags,
     features_seen: bool,
+    /// Whether the control set has been decided from the radar's
+    /// capabilities. Decided once, after the wait for the features report;
+    /// from then on the capability is frozen so the two cannot disagree.
+    /// Not the same as the radar having ranges: those can be restored from
+    /// saved settings before the radar has said a word (#775).
+    pub(super) capabilities_settled: bool,
     status_reports_without_features: u8,
     first_status_without_features: Option<Instant>,
     /// True while the radar's last status report indicated a self-test fault
@@ -357,6 +363,7 @@ impl RaymarineReportReceiver {
             reported_unknown: HashMap::new(),
             features: FeatureFlags::default(),
             features_seen: false,
+            capabilities_settled: false,
             status_reports_without_features: 0,
             first_status_without_features: None,
             self_test_fault: false,
@@ -749,18 +756,16 @@ impl RaymarineReportReceiver {
             // and process_info_report() honours that rather than overwriting
             // it afterwards (#709).
             //
-            // Unless the radar has already been published, which only happens
-            // when the wait for this very report was given up on. The control
-            // set was decided from the table at that point, and changing the
+            // Unless the control set has already been decided, which only
+            // happens when the wait for this very report was given up on. It
+            // was decided from the table at that point, and changing the
             // capability now would leave the two disagreeing — a Doppler switch
             // on a radar that says it has none, or the reverse. So the table's
             // answer stands for the session and this report is noted, not
             // applied.
-            if !self.common.info.ranges.is_empty()
-                && features.has_doppler() != self.common.info.doppler
-            {
+            if self.capabilities_settled && features.has_doppler() != self.common.info.doppler {
                 log::warn!(
-                    "{}: features report arrived after the radar was published; \
+                    "{}: features report arrived after the controls were settled; \
                      keeping doppler={} from the part number rather than {} from \
                      the radar, so the capability and the controls agree",
                     self.common.key,
@@ -879,8 +884,15 @@ mod tests {
     /// Build a receiver without touching the network. `--replay` keeps the
     /// constructor from creating a command sender, and so from opening sockets.
     fn test_receiver(doppler: bool) -> super::RaymarineReportReceiver {
+        test_receiver_of(crate::brand::raymarine::BaseModel::Quantum, doppler)
+    }
+
+    fn test_receiver_of(
+        base_model: crate::brand::raymarine::BaseModel,
+        doppler: bool,
+    ) -> super::RaymarineReportReceiver {
         use crate::Cli;
-        use crate::brand::raymarine::{BaseModel, ExternalControllerWitness, settings};
+        use crate::brand::raymarine::{ExternalControllerWitness, settings};
         use crate::radar::SharedRadars;
         use clap::Parser;
         use std::sync::Arc;
@@ -888,14 +900,14 @@ mod tests {
         let args = Cli::parse_from(["mayara-server", "--replay"]);
         let mut info =
             crate::radar::ui_strings::radar_info(crate::Brand::Raymarine, &args, |id, tx| {
-                settings::new(id, tx, &args, BaseModel::Quantum)
+                settings::new(id, tx, &args, base_model)
             });
         info.doppler = doppler;
         super::RaymarineReportReceiver::new(
             &args,
             info,
             SharedRadars::new(),
-            BaseModel::Quantum,
+            base_model,
             Arc::new(ExternalControllerWitness::default()),
         )
     }
@@ -927,9 +939,10 @@ mod tests {
         );
     }
 
-    /// After the radar is published the part number's answer is frozen, because
-    /// the control set was built from it and the two must not disagree. Only
-    /// reachable when the wait for the features report was given up on.
+    /// Once the control set is settled the part number's answer is frozen,
+    /// because the control set was built from it and the two must not
+    /// disagree. Only reachable when the wait for the features report was given
+    /// up on.
     #[test]
     fn a_features_report_after_publication_does_not_move_the_capability() {
         use crate::radar::range::{Range, Ranges};
@@ -938,13 +951,14 @@ mod tests {
         use crate::radar::settings::ControlId;
 
         let mut receiver = test_receiver(/*doppler=*/ true);
-        // Publishing a radar means offering its controls and giving it ranges,
+        // Publishing a radar means settling its controls and giving it ranges,
         // which is what process_status_report does at the release point.
         settings::offer_doppler_control(
             &mut receiver.common.info.controls,
             BaseModel::Quantum,
             true,
         );
+        receiver.capabilities_settled = true;
         receiver
             .common
             .set_ranges(Ranges::new(vec![Range::new(1852, 0)]));
@@ -974,6 +988,22 @@ mod tests {
                 .is_some(),
             "...nor leave the control set it was built from without its control"
         );
+    }
+
+    /// An RD424D sold as E92131 sends that part number with its serial
+    /// appended, and must still be recognised once the whole info report has
+    /// been taken apart (#867).
+    #[test]
+    fn an_rd_info_report_with_the_other_part_number_names_the_radome() {
+        let mut receiver = test_receiver_of(crate::brand::raymarine::BaseModel::RD, false);
+        let mut data = vec![0u8; 36];
+        data[0..4].copy_from_slice(&0x0001_0006u32.to_le_bytes());
+        data[4..11].copy_from_slice(b"1280022");
+        data[20..33].copy_from_slice(b"E921311280022");
+
+        super::rd::process_info_report(&mut receiver, &data);
+
+        assert_eq!(receiver.model.as_ref().map(|m| m.name), Some("RD424D"));
     }
 
     fn info_report(part: &str) -> Vec<u8> {
@@ -1089,6 +1119,91 @@ mod tests {
             Some(1.0),
             "the Doppler state reported during the hold must reach the control"
         );
+    }
+
+    /// After a restart a Quantum's ranges come from saved settings, so it is
+    /// visible before it has said what it can do. Its control set must still
+    /// wait for the features report, and get the Doppler control the radar
+    /// says it has (#775).
+    #[test]
+    fn a_quantum_with_saved_ranges_still_gets_its_doppler_control() {
+        use crate::radar::range::{Range, Ranges};
+        use crate::radar::settings::ControlId;
+
+        let mut receiver = test_receiver(/*doppler=*/ false);
+        receiver
+            .common
+            .set_ranges(Ranges::new(vec![Range::new(1852, 0)]));
+        receiver.process_features(&features_report(true));
+        super::quantum::process_info_report(&mut receiver, &info_report("E70498"));
+        super::quantum::process_doppler_report(&mut receiver, &doppler_status_report(true));
+
+        super::quantum::process_status_report(&mut receiver, &STATUS_REPORT);
+
+        assert!(receiver.common.info.doppler);
+        assert_eq!(
+            receiver
+                .common
+                .info
+                .controls
+                .get(&ControlId::Doppler)
+                .and_then(|c| c.value())
+                .and_then(|v| v.as_f64()),
+            Some(1.0),
+            "the Doppler control is offered, with the state the radar reported"
+        );
+    }
+
+    /// The radar's own features report decides, not the part-number table,
+    /// for a radar whose ranges were restored too.
+    #[test]
+    fn a_quantum_with_saved_ranges_that_reports_no_doppler_gets_no_control() {
+        use crate::radar::range::{Range, Ranges};
+        use crate::radar::settings::ControlId;
+
+        let mut receiver = test_receiver(/*doppler=*/ false);
+        receiver
+            .common
+            .set_ranges(Ranges::new(vec![Range::new(1852, 0)]));
+        receiver.process_features(&features_report(false));
+        super::quantum::process_info_report(&mut receiver, &info_report("E70498"));
+
+        super::quantum::process_status_report(&mut receiver, &STATUS_REPORT);
+
+        assert!(!receiver.common.info.doppler);
+        assert!(
+            receiver
+                .common
+                .info
+                .controls
+                .get(&ControlId::Doppler)
+                .is_none()
+        );
+    }
+
+    /// A status report that comes before the features report does not decide
+    /// the control set; the first one after it does.
+    #[test]
+    fn the_doppler_control_waits_for_the_features_report() {
+        use crate::radar::settings::ControlId;
+
+        let mut receiver = test_receiver(/*doppler=*/ false);
+        super::quantum::process_info_report(&mut receiver, &info_report("E70498"));
+        let has_doppler = |r: &super::RaymarineReportReceiver| {
+            r.common.info.controls.get(&ControlId::Doppler).is_some()
+        };
+
+        super::quantum::process_status_report(&mut receiver, &STATUS_REPORT);
+        assert!(!has_doppler(&receiver), "not before the features report");
+
+        receiver.process_features(&features_report(true));
+        assert!(
+            !has_doppler(&receiver),
+            "the features report only records it"
+        );
+
+        super::quantum::process_status_report(&mut receiver, &STATUS_REPORT);
+        assert!(has_doppler(&receiver));
     }
 
     // ----- holding a radar back until it says what it can do -----

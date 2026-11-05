@@ -1251,6 +1251,42 @@ impl SharedRadars {
         self.refresh_stand_down_at(now_millis());
     }
 
+    /// Count the antenna that `key` is a range of as watched from now on, and
+    /// let its brand receiver hold it up at once rather than after the next
+    /// watchdog tick. A viewer that just opened the spoke stream, or a client
+    /// that just asked for Transmit, gets the full `AutoStandby` period
+    /// before the radar stands down: such a client opens its spoke stream
+    /// only once the radar transmits.
+    pub fn hold_up_antenna(&self, key: &str) {
+        self.hold_up_antenna_at(key, now_millis());
+    }
+
+    fn hold_up_antenna_at(&self, key: &str, now: u64) {
+        // The write lock waits out a watchdog verdict being computed, which
+        // would otherwise be stored over this one from the old watch time.
+        let radars = self.radars.write().unwrap();
+        let Some(antenna) = radars.info.get(key).map(RadarInfo::antenna_key) else {
+            return;
+        };
+        for range in radars.info.values().filter(|r| r.antenna_key() == antenna) {
+            range.mark_watched_at(now);
+            range.set_stand_down(false);
+        }
+    }
+
+    /// A client's control request for radar `key` is about to be sent: one
+    /// that asks for Transmit holds the antenna up, see
+    /// [`hold_up_antenna`](Self::hold_up_antenna).
+    pub fn note_client_request(&self, key: &str, cv: &ControlValue) {
+        self.note_client_request_at(key, cv, now_millis());
+    }
+
+    fn note_client_request_at(&self, key: &str, cv: &ControlValue, now: u64) {
+        if asks_to_transmit(cv) {
+            self.hold_up_antenna_at(key, now);
+        }
+    }
+
     fn refresh_stand_down_at(&self, now: u64) {
         let radars = self.radars.read().unwrap();
         let mut antennas: HashMap<&str, Vec<&RadarInfo>> = HashMap::new();
@@ -1626,14 +1662,24 @@ pub(crate) fn transmit_claim_after_request(
     range: i32,
     cv: &ControlValue,
 ) -> Option<i32> {
-    if cv.id != ControlId::Power {
-        return current;
-    }
-    match cv.as_value().ok().and_then(|v| Power::from_value(&v).ok()) {
+    match requested_power(cv) {
         Some(Power::Transmit) => Some(range),
         Some(_) => None,
         None => current,
     }
+}
+
+/// The power state a control request asks for, if it is a Power request with
+/// a value mayara knows.
+fn requested_power(cv: &ControlValue) -> Option<Power> {
+    if cv.id != ControlId::Power {
+        return None;
+    }
+    cv.as_value().ok().and_then(|v| Power::from_value(&v).ok())
+}
+
+fn asks_to_transmit(cv: &ControlValue) -> bool {
+    requested_power(cv) == Some(Power::Transmit)
 }
 
 /// After the radar reported its power: the claim ends once the radar is in
@@ -1652,8 +1698,9 @@ pub(crate) fn transmit_claim_after_report(current: Option<i32>, reported: Power)
 /// so every one of them must agree: a range set to Off, or watched more
 /// recently than its period, holds the whole antenna up.
 ///
-/// "Watched" is the spoke-broadcast subscriber count only, by design: control
-/// PUTs and REST reads do not keep a radar transmitting, and neither does ARPA
+/// "Watched" is the spoke-broadcast subscriber count, plus a client's request
+/// for Transmit ([`SharedRadars::note_client_request`]), by design: other
+/// control PUTs and REST reads do not keep a radar transmitting, and neither does ARPA
 /// tracking or an armed guard zone — a radar nobody is looking at stands down
 /// even while it is tracking. See docs/internals/radar-status.md.
 fn antenna_should_stand_down(ranges: &[(Option<Duration>, Duration)]) -> bool {
@@ -3282,6 +3329,99 @@ mod tests {
 
         assert!(pair.stand_down());
         assert!(!other.stand_down());
+    }
+
+    /// A client that asks a radar nobody watched to transmit gets the whole
+    /// Auto standby period to open its spoke stream (#859), on every range of
+    /// the antenna; only after that, still unwatched, does it stand down.
+    #[test]
+    fn a_transmit_request_holds_a_stood_down_antenna_up() {
+        let radars = SharedRadars::new();
+        let a = radars
+            .add(test_helpers::radar_info(&radars, "859A", Some("A")))
+            .unwrap();
+        let b = radars
+            .add(test_helpers::radar_info(&radars, "859A", Some("B")))
+            .unwrap();
+        a.mark_watched_at(0);
+        b.mark_watched_at(0);
+        let period = PERIOD.as_millis() as u64;
+        let request = period + 1000;
+        radars.refresh_stand_down_at(request);
+        assert!(a.stand_down() && b.stand_down());
+
+        let transmit = ControlValue::new(ControlId::Power, Value::from(Power::Transmit as i32));
+        radars.note_client_request_at(&b.key(), &transmit, request);
+        assert!(!a.stand_down() && !b.stand_down());
+
+        radars.refresh_stand_down_at(request + period - 1);
+        assert!(!a.stand_down() && !b.stand_down());
+        radars.refresh_stand_down_at(request + period);
+        assert!(a.stand_down() && b.stand_down());
+    }
+
+    /// Only a request for Transmit holds the antenna up: asking for Standby,
+    /// or setting any other control, is no reason to keep it transmitting.
+    #[test]
+    fn other_requests_leave_stand_down_alone() {
+        let radars = SharedRadars::new();
+        let radar = radars
+            .add(test_helpers::radar_info(&radars, "859B", None))
+            .unwrap();
+        radar.mark_watched_at(0);
+        let request = PERIOD.as_millis() as u64 + 1000;
+        radars.refresh_stand_down_at(request);
+
+        for cv in [
+            ControlValue::new(ControlId::Power, Value::from(Power::Standby as i32)),
+            ControlValue::new(ControlId::Gain, Value::from(Power::Transmit as i32)),
+        ] {
+            radars.note_client_request_at(&radar.key(), &cv, request);
+            assert!(radar.stand_down(), "{cv:?}");
+            radars.refresh_stand_down_at(request + PERIOD.as_millis() as u64 - 1);
+            assert!(radar.stand_down(), "{cv:?}");
+        }
+    }
+
+    /// The handlers' entry point holds the antenna up as the timed one does.
+    #[test]
+    fn note_client_request_holds_the_antenna_up_now() {
+        let radars = SharedRadars::new();
+        let radar = radars
+            .add(test_helpers::radar_info(&radars, "859D", None))
+            .unwrap();
+        radar.mark_watched_at(0);
+        radars.refresh_stand_down_at(PERIOD.as_millis() as u64 + 1000);
+        assert!(radar.stand_down());
+
+        let transmit = ControlValue::new(ControlId::Power, Value::from(Power::Transmit as i32));
+        radars.note_client_request(&radar.key(), &transmit);
+
+        assert!(!radar.stand_down());
+        radars.refresh_stand_down();
+        assert!(!radar.stand_down(), "the watch time was renewed too");
+    }
+
+    /// A viewer opening the spoke stream holds the antenna up at once, not
+    /// only once the watchdog next sees it subscribed.
+    #[test]
+    fn hold_up_antenna_clears_stand_down_on_every_range() {
+        let radars = SharedRadars::new();
+        let a = radars
+            .add(test_helpers::radar_info(&radars, "859C", Some("A")))
+            .unwrap();
+        let b = radars
+            .add(test_helpers::radar_info(&radars, "859C", Some("B")))
+            .unwrap();
+        a.mark_watched_at(0);
+        b.mark_watched_at(0);
+        let later = PERIOD.as_millis() as u64 + 1000;
+        radars.refresh_stand_down_at(later);
+
+        radars.hold_up_antenna_at(&a.key(), later);
+
+        assert!(!a.stand_down() && !b.stand_down());
+        assert_eq!(b.unwatched_for_at(later), Duration::ZERO);
     }
 
     mod test_helpers {

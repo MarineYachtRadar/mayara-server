@@ -168,8 +168,10 @@ impl RaymarineModel {
                 false,
                 "RD424HD",
             ),
-            "E92130" => (BaseModel::RD, true, 512, false, "RD418D"),
-            "E92132" => (BaseModel::RD, true, 512, false, "RD424D"),
+            // Each digital radome was sold under two part numbers; the radar
+            // reports whichever it carries (#867).
+            "E92129" | "E92130" => (BaseModel::RD, true, 512, false, "RD418D"),
+            "E92131" | "E92132" => (BaseModel::RD, true, 512, false, "RD424D"),
 
             _ => return None,
         };
