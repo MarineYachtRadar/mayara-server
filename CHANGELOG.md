@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 3.17.0 (2026-11-05)
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### 🚀 Features
+* feat(navdata): take true heading from NMEA PASHR by @jborburgh-fugro in https://github.com/MarineYachtRadar/mayara-server/pull/846
+### 🐛 Fixes
+* fix(furuno): show Doppler when replaying a Target Analyzer recording by @dirkwa in https://github.com/MarineYachtRadar/mayara-server/pull/853
+* fix(navdata): skip a sender of only corrupt navigation data by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/850
+* fix(controls): snap a reported range off the steps by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/862
+* fix(navico): don't log sectors a 4G doesn't have by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/863
+* fix(raymarine): offer Doppler after a restart by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/864
+* fix(radar): don't undo a client's Transmit at once by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/866
+* fix(raymarine): know RD radomes E92129 and E92131 by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/869
+* fix(navdata): hear every NMEA 0183 device on UDP by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/868
+* fix(navdata): drop NMEA nav once its source stops by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/870
+* fix(furuno): show the serial number the radar reports by @dirkwa in https://github.com/MarineYachtRadar/mayara-server/pull/871
+* fix(furuno): show a radar's new firmware after an update by @dirkwa in https://github.com/MarineYachtRadar/mayara-server/pull/874
+* fix(furuno): offer Channel sea mode only on firmware 1.07+ by @dirkwa in https://github.com/MarineYachtRadar/mayara-server/pull/872
+### 📦 Dependencies
+* build(deps): bump the cargo-minor-patch group with 2 updates by @dependabot[bot] in https://github.com/MarineYachtRadar/mayara-server/pull/858
+### Other
+* docs(status): explain a headless radar watch by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/865
+
+
+**Full Changelog**: https://github.com/MarineYachtRadar/mayara-server/compare/v3.16.0...v3.17.0
+
 ## 3.16.0 (2026-10-30)
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
