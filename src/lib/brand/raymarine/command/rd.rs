@@ -73,11 +73,12 @@ pub async fn set_control(
     value: f64,
     controls: &SharedControls,
 ) -> Result<(), RadarError> {
+    let frames = control_frames(&command.info.ranges, cv, value, controls)?;
     if power_request_must_wake(cv, controls.get_status()) {
         super::super::send_wake_burst(&command.info.nic_addr, &super::super::rd_wake_packets())
             .await;
     }
-    for cmd in control_frames(&command.info.ranges, cv, value, controls)? {
+    for cmd in frames {
         log::info!("{}: Send command {:02X?}", command.info.key(), cmd);
         command.send(&cmd).await?;
     }
