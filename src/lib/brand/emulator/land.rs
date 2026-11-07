@@ -13,7 +13,8 @@ const HALF_LONGITUDE_DEGREES: f64 = 180.0;
 const FULL_LONGITUDE_DEGREES: f64 = 360.0;
 
 /// How far into land the radar sees from where its beam reaches the coast,
-/// in meters. Low land behind the shore line returns little.
+/// in meters, before the land's height varies it. Low land behind the
+/// shore line returns little.
 pub(crate) const LAND_DEPTH: f64 = 400.0;
 
 /// The land areas of a GeoJSON file: the rings of its polygons, each a

@@ -12,6 +12,7 @@ use crate::radar::{
 };
 use crate::{Brand, Cli};
 
+mod coast_echo;
 mod command;
 mod land;
 mod report;
