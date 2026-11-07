@@ -92,7 +92,11 @@ pub async fn set_control(
             // waking it — never when we are putting it to sleep. Harmless when
             // the radar is already awake.
             if power != Power::Off {
-                super::super::send_wake_burst(&command.info.nic_addr).await;
+                super::super::send_wake_burst(
+                    &command.info.nic_addr,
+                    &super::super::quantum_wake_packets(),
+                )
+                .await;
             }
             let code = power_mode_code(power);
             two_byte_command(&mut cmd, &[0x10, 0x00], code as u16);

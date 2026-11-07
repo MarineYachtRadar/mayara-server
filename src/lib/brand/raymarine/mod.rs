@@ -803,6 +803,10 @@ const RAYMARINE_WOL_RADAR: [u8; 102] = [
 /// MarineYachtRadar/mayara-server#160.
 const WOL_WAKE_BURST: usize = 8;
 
+/// How many wake literals an E-series Classic MFD sends in one go, as captured
+/// from an E120.
+const RD_WAKE_LITERAL_BURST: usize = 10;
+
 /// Raymarine MFDs emit their radar traffic with IP TTL 10, and an Axiom acting
 /// as a radar's WiFi access point only relays packets whose TTL is > 1 (router
 /// semantics: TTL 1 means link-local only). Send our wake bursts *and* our
@@ -813,15 +817,34 @@ const WOL_WAKE_BURST: usize = 8;
 pub(super) const RAYMARINE_RELAY_TTL: u32 = 10;
 
 /// Gap between the packets of an on-demand wake burst, matching the ~20 ms
-/// spacing observed from an Axiom.
+/// spacing observed from an Axiom and an E120.
 const WAKE_BURST_SPACING: Duration = Duration::from_millis(20);
 
-/// Send the WOL wake burst the way an Axiom does when the user presses "On":
-/// [`WOL_WAKE_BURST`] magic packets [`WAKE_BURST_SPACING`] apart to the wired
-/// beacon group, with [`RAYMARINE_RELAY_TTL`] so an Axiom relaying to a WiFi
-/// radar forwards them. Failures are logged, not returned — the caller's mode
-/// command should still go out.
-async fn send_wake_burst(nic_addr: &Ipv4Addr) {
+/// What an Axiom sends a Quantum when the user presses "On": a burst of
+/// [`WOL_WAKE_BURST`] magic packets.
+fn quantum_wake_packets() -> Vec<&'static [u8]> {
+    std::iter::repeat_n(&RAYMARINE_WOL_RADAR[..], WOL_WAKE_BURST).collect()
+}
+
+/// What is sent to wake an RD radome. An E-series Classic MFD, of the RD's own
+/// generation, sends only the wake literal, as a burst of
+/// [`RD_WAKE_LITERAL_BURST`]; an Axiom, which wakes every model alike, follows
+/// the literal with magic packets, so those are sent as well. No capture shows
+/// a sleeping RD answering either yet (#867).
+fn rd_wake_packets() -> Vec<&'static [u8]> {
+    std::iter::repeat_n(&RAYMARINE_WAKE_RADAR[..], RD_WAKE_LITERAL_BURST)
+        .chain(std::iter::repeat_n(
+            &RAYMARINE_WOL_RADAR[..],
+            WOL_WAKE_BURST,
+        ))
+        .collect()
+}
+
+/// Send `packets` [`WAKE_BURST_SPACING`] apart to the wired beacon group, with
+/// [`RAYMARINE_RELAY_TTL`] so an Axiom relaying to a WiFi radar forwards them.
+/// Failures are logged, not returned — the caller's mode command should still
+/// go out.
+async fn send_wake_burst(nic_addr: &Ipv4Addr, packets: &[&[u8]]) {
     let SocketAddr::V4(addr) = RAYMARINE_BEACON_ADDRESS else {
         return;
     };
@@ -830,14 +853,14 @@ async fn send_wake_burst(nic_addr: &Ipv4Addr) {
             if let Err(e) = sock.set_multicast_ttl_v4(RAYMARINE_RELAY_TTL) {
                 log::warn!("via {}: wake burst TTL: {}", nic_addr, e);
             }
-            for _ in 0..WOL_WAKE_BURST {
-                if let Err(e) = sock.send(&RAYMARINE_WOL_RADAR).await {
+            for packet in packets {
+                if let Err(e) = sock.send(packet).await {
                     log::warn!("via {}: wake burst send failed: {}", nic_addr, e);
                     return;
                 }
                 tokio::time::sleep(WAKE_BURST_SPACING).await;
             }
-            log::info!("via {}: sent WOL wake burst", nic_addr);
+            log::info!("via {}: sent wake burst", nic_addr);
         }
         Err(e) => log::warn!("via {}: wake burst socket: {}", nic_addr, e),
     }
@@ -934,6 +957,24 @@ mod tests {
             raymarine_beacon_groups(&[]),
             "--allow-wifi must not change the set of Raymarine beacon groups"
         );
+    }
+
+    #[test]
+    fn an_rd_is_woken_with_the_literal_burst_then_magic_packets() {
+        let packets = super::rd_wake_packets();
+        let (literals, wols) = packets.split_at(super::RD_WAKE_LITERAL_BURST);
+
+        assert!(literals.iter().all(|p| *p == super::RAYMARINE_WAKE_RADAR));
+        assert_eq!(wols.len(), super::WOL_WAKE_BURST);
+        assert!(wols.iter().all(|p| *p == super::RAYMARINE_WOL_RADAR));
+    }
+
+    #[test]
+    fn a_quantum_is_woken_with_magic_packets_alone() {
+        let packets = super::quantum_wake_packets();
+
+        assert_eq!(packets.len(), super::WOL_WAKE_BURST);
+        assert!(packets.iter().all(|p| *p == super::RAYMARINE_WOL_RADAR));
     }
 
     #[test]
