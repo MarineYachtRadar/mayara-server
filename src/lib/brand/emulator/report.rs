@@ -7,6 +7,7 @@ use tokio_graceful_shutdown::SubsystemHandle;
 
 use super::command::Command;
 use super::land::{Coast, LAND_DEPTH};
+use super::marks;
 use super::world::{Echo, EmulatorWorld, TURN_RADIUS, TurnProgress};
 use super::{
     EMULATOR_RANGES, EMULATOR_SPOKE_LEN, EMULATOR_SPOKES, get_initial_position, spoke_step,
@@ -95,7 +96,13 @@ impl EmulatorReportReceiver {
         let common = CommonRadar::new(args, key, info, radars, control_update_rx, false, arpa_tx);
 
         // Create the world simulation
-        let world = EmulatorWorld::new(initial_pos);
+        let mut world = EmulatorWorld::new(initial_pos);
+        if let Some(path) = args.emulator_marks.as_deref() {
+            match marks::load(path) {
+                Ok(marks) => world.set_marks(marks),
+                Err(e) => log::error!("Emulator: no marks: {e}"),
+            }
+        }
         let coast = args
             .emulator_land
             .as_deref()
@@ -432,6 +439,7 @@ impl EmulatorReportReceiver {
         self.world.update_cache(
             &self.boat_position,
             meters_per_pixel(self.current_range) * MIN_ECHO_PIXELS,
+            spoke_range(self.current_range) as f64,
         );
         let legend = self.common.info.get_legend();
         let doppler = DopplerColors::new(

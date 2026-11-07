@@ -54,6 +54,7 @@ fn test_args() -> Cli {
         emulator: false,
         emulator_sparse_spokes: false,
         emulator_land: None,
+        emulator_marks: None,
         merge_targets: false,
         no_websocket_compression: false,
         mdns_hostname: None,

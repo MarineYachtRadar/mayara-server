@@ -225,6 +225,12 @@ pub struct Cli {
     #[arg(long, requires = "emulator")]
     pub emulator_land: Option<std::path::PathBuf>,
 
+    /// GeoJSON file with the buoys and beacons around the emulator's boat,
+    /// as Point or MultiPoint features: each echoes as a small fixed
+    /// target, weakly when its `echo` property is "weak"
+    #[arg(long, requires = "emulator")]
+    pub emulator_marks: Option<std::path::PathBuf>,
+
     /// Merge targets from multiple radars into a single shared target list
     #[arg(long, default_value_t = false)]
     pub merge_targets: bool,
