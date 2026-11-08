@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 3.17.1 (2026-11-08)
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### 🚀 Features
+* feat(emulator): echo buoys and beacons from a chart by @dirkwa in https://github.com/MarineYachtRadar/mayara-server/pull/880
+* feat(emulator): paint land ragged and patchy as a radar does by @dirkwa in https://github.com/MarineYachtRadar/mayara-server/pull/881
+### 🐛 Fixes
+* fix(emulator): build the tests again on main by @dirkwa in https://github.com/MarineYachtRadar/mayara-server/pull/884
+### 📦 Dependencies
+* build(deps): bump rtnetlink from 0.23.0 to 0.24.0 by @dependabot[bot] in https://github.com/MarineYachtRadar/mayara-server/pull/878
+* build(deps): bump the cargo-minor-patch group with 2 updates by @dependabot[bot] in https://github.com/MarineYachtRadar/mayara-server/pull/877
+
+
+**Full Changelog**: https://github.com/MarineYachtRadar/mayara-server/compare/v3.17.0...v3.17.1
+
 ## 3.17.0 (2026-11-05)
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
