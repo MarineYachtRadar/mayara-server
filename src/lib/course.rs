@@ -133,12 +133,12 @@ pub async fn fetch_route(id: &str, accept_invalid_certs: bool) -> Result<Value, 
 
 const ROUTE_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// One client for every route read, so its connection to the upstream is
-/// reused. The certificate policy comes from the command line and does not
-/// change during a run.
+/// One client per certificate policy, so the connection to the upstream is
+/// reused and a request never runs on a client with another policy.
 fn route_client(accept_invalid_certs: bool) -> Result<&'static reqwest::Client, RouteFetchError> {
-    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    if let Some(client) = CLIENT.get() {
+    static CLIENTS: [OnceLock<reqwest::Client>; 2] = [OnceLock::new(), OnceLock::new()];
+    let slot = &CLIENTS[usize::from(accept_invalid_certs)];
+    if let Some(client) = slot.get() {
         return Ok(client);
     }
     let client = reqwest::Client::builder()
@@ -146,7 +146,7 @@ fn route_client(accept_invalid_certs: bool) -> Result<&'static reqwest::Client, 
         .timeout(ROUTE_FETCH_TIMEOUT)
         .build()
         .map_err(|e| RouteFetchError::Unreachable(e.to_string()))?;
-    Ok(CLIENT.get_or_init(|| client))
+    Ok(slot.get_or_init(|| client))
 }
 
 #[cfg(test)]
