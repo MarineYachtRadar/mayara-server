@@ -509,15 +509,13 @@ const ROUTE_RETRY_MAX_MS = 60000;
 
 // Reads the whole route the course follows. Without it, or while mayara has no
 // Signal K REST API to ask, the PPI still draws the current leg, which the
-// Course API values carry on their own. A failure that may pass (mayara not
-// yet connected upstream, the server busy) is tried again, more slowly each
-// time; a route the server does not have is not, and its old points go.
+// Course API values carry on their own. A failed read drops the old points,
+// which may no longer be the route, and is tried again, more slowly each time.
 async function loadRoute(href, attempt) {
   const load = ++routeLoad;
   const id = routeId(href);
   if (!id) return;
   const current = () => load === routeLoad;
-  let mayPass = true;
   try {
     const response = await apiFetch(
       apiBase(`/signalk/v2/api/resources/routes/${encodeURIComponent(id)}`)
@@ -530,15 +528,14 @@ async function loadRoute(href, attempt) {
       return;
     }
     console.log(`Route ${id} unavailable: HTTP ${response.status}`);
-    mayPass = [408, 429].includes(response.status) || response.status >= 500;
-    if (!mayPass && current()) {
-      activeRoute = { href, route: null };
-      updateCoursePlot();
-    }
   } catch (err) {
     console.log("Route unavailable:", err);
   }
-  if (mayPass && current()) {
+  if (current()) {
+    if (activeRoute.route) {
+      activeRoute = { href, route: null };
+      updateCoursePlot();
+    }
     const delay = Math.min(ROUTE_RETRY_MS * 2 ** attempt, ROUTE_RETRY_MAX_MS);
     setTimeout(() => {
       if (current()) loadRoute(href, attempt + 1);
