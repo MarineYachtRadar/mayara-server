@@ -17,6 +17,7 @@ use utoipa::ToSchema;
 pub mod ais;
 pub mod brand;
 pub mod config;
+pub mod course;
 pub mod locator;
 pub mod navdata;
 pub mod network;

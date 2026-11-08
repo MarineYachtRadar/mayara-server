@@ -195,6 +195,20 @@ impl SignalKDelta {
         self.updates.push(delta_update);
     }
 
+    /// Add an own-ship Course API value (`navigation.course.*`).
+    pub fn add_course_update(&mut self, path: &str, value: serde_json::Value, source: &str) {
+        let delta_update = DeltaUpdate {
+            timestamp: Some(Utc::now()),
+            source: Some(source.to_string()),
+            meta: Vec::new(),
+            values: vec![DeltaValue::Course {
+                path: path.to_string(),
+                value,
+            }],
+        };
+        self.updates.push(delta_update);
+    }
+
     /// Tell a connecting client that this run is not saving radar settings.
     ///
     /// Sent on connect rather than once at startup, because it describes a
@@ -435,6 +449,15 @@ enum DeltaValue {
         /// The value for that path.
         value: serde_json::Value,
     },
+    /// Own-ship active course from the Signal K Course API, relayed in the
+    /// shape the upstream server published it, or `null` once there is none.
+    Course {
+        /// `navigation.course.activeRoute`, `.nextPoint` or `.previousPoint`.
+        #[schema(example = "navigation.course.nextPoint")]
+        path: String,
+        /// The Course API value for that path.
+        value: serde_json::Value,
+    },
     /// Signal K `notifications.*` alarm. Payload shape matches the
     /// notification value defined in the Signal K spec.
     Notification {
@@ -493,6 +516,7 @@ impl DeltaValue {
             DeltaValue::Navigation { path, .. } => path,
             DeltaValue::NavigationPosition { path, .. } => path,
             DeltaValue::Ais { path, .. } => path,
+            DeltaValue::Course { path, .. } => path,
             DeltaValue::Notification { path, .. } => path,
         }
     }
