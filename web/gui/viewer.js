@@ -120,9 +120,12 @@ var showRoute = (() => {
 })();
 
 // Course API values by path, as mayara relays them from Signal K, and the
-// points of the active route once read for the href they belong to.
+// active route resource once read for the href it belongs to.
 const course = new Map();
-var activeRoute = { href: null, points: null };
+var activeRoute = { href: null, route: null };
+// Bumped on every route read and when the course is forgotten, so an answer
+// that arrives late is dropped rather than drawn over a newer one.
+var routeLoad = 0;
 
 // Heading readout preference: show magnetic instead of true when both exist.
 // Display-only — never affects plotting, which always uses the true heading.
@@ -464,9 +467,7 @@ function subscribeToHeading() {
   headingSocket.onclose = () => {
     // The course arrives on this socket too, and mayara sends it again on
     // reconnect; one that ended meanwhile would otherwise stay drawn.
-    course.clear();
-    activeRoute = { href: null, points: null };
-    updateCoursePlot();
+    forgetCourse();
     onHeadingLost();
     const delay = reconnectDelay(headingReconnectAttempts);
     headingReconnectAttempts += 1;
@@ -485,38 +486,63 @@ function onCourseValue(path, value) {
   }
   const href = course.get("navigation.course.activeRoute")?.href ?? null;
   if (href !== activeRoute.href) {
-    activeRoute = { href, points: null };
-    loadRoutePoints(href);
+    activeRoute = { href, route: null };
+    loadRoute(href, 0);
   }
   updateCoursePlot();
 }
 
+function forgetCourse() {
+  course.clear();
+  activeRoute = { href: null, route: null };
+  routeLoad += 1;
+  updateCoursePlot();
+}
+
+const ROUTE_RETRY_MS = 2000;
+const ROUTE_RETRY_MAX_MS = 60000;
+
 // Reads the whole route once per href. Without it, or while mayara has no
 // Signal K REST API to ask, the PPI still draws the current leg, which the
-// Course API values carry on their own.
-async function loadRoutePoints(href) {
+// Course API values carry on their own. A failure that may pass (mayara not
+// yet connected upstream, the server busy) is tried again, more slowly each
+// time; a route the server does not have is not.
+async function loadRoute(href, attempt) {
+  const load = ++routeLoad;
   const id = routeId(href);
   if (!id) return;
+  const current = () => load === routeLoad;
+  let mayPass = true;
   try {
     const response = await apiFetch(
       apiBase(`/signalk/v2/api/resources/routes/${encodeURIComponent(id)}`)
     );
-    if (!response.ok) {
-      console.log(`Route ${id} unavailable: HTTP ${response.status}`);
+    if (response.ok) {
+      const route = await response.json();
+      if (!current()) return;
+      activeRoute = { href, route };
+      updateCoursePlot();
       return;
     }
-    const route = await response.json();
-    if (activeRoute.href !== href) return;
-    const reverse = course.get("navigation.course.activeRoute")?.reverse === true;
-    activeRoute = { href, points: routePoints(route, reverse) };
-    updateCoursePlot();
+    console.log(`Route ${id} unavailable: HTTP ${response.status}`);
+    mayPass = response.status >= 500;
   } catch (err) {
     console.log("Route unavailable:", err);
   }
+  if (mayPass && current()) {
+    const delay = Math.min(ROUTE_RETRY_MS * 2 ** attempt, ROUTE_RETRY_MAX_MS);
+    setTimeout(() => {
+      if (current()) loadRoute(href, attempt + 1);
+    }, delay);
+  }
 }
 
+// Route points are taken in sailing order on every update, so turning the
+// route round needs no new read.
 function updateCoursePlot() {
-  ppi?.setCoursePlot(coursePlot(course, activeRoute.points));
+  const reverse = course.get("navigation.course.activeRoute")?.reverse === true;
+  const points = activeRoute.route ? routePoints(activeRoute.route, reverse) : null;
+  ppi?.setCoursePlot(coursePlot(course, points));
 }
 
 // ---------------------------------------------------------------------------
