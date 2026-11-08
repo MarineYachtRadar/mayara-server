@@ -14,6 +14,7 @@ use crate::{Brand, Cli};
 
 mod command;
 mod land;
+mod marks;
 mod report;
 mod settings;
 

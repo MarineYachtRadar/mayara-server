@@ -61,6 +61,7 @@ Command Line Options
 | `--multiple-radar`    | Keep searching for additional radars after finding one                                 |
 | `--emulator`          | Use built-in radar emulator instead of real radar discovery                            |
 | `--emulator-land <FILE>` | GeoJSON land areas (Polygon/MultiPolygon) the emulator paints around the boat, e.g. a chart's land layer |
+| `--emulator-marks <FILE>` | GeoJSON buoys and beacons (Point/MultiPoint) the emulator echoes as small fixed targets; a feature with `"echo": "weak"` returns weakly, as a withy does |
 
 ### Target Tracking
 
