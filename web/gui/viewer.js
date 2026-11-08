@@ -511,7 +511,7 @@ const ROUTE_RETRY_MAX_MS = 60000;
 // Signal K REST API to ask, the PPI still draws the current leg, which the
 // Course API values carry on their own. A failure that may pass (mayara not
 // yet connected upstream, the server busy) is tried again, more slowly each
-// time; a route the server does not have is not.
+// time; a route the server does not have is not, and its old points go.
 async function loadRoute(href, attempt) {
   const load = ++routeLoad;
   const id = routeId(href);
@@ -530,7 +530,11 @@ async function loadRoute(href, attempt) {
       return;
     }
     console.log(`Route ${id} unavailable: HTTP ${response.status}`);
-    mayPass = response.status === 429 || response.status >= 500;
+    mayPass = [408, 429].includes(response.status) || response.status >= 500;
+    if (!mayPass && current()) {
+      activeRoute = { href, route: null };
+      updateCoursePlot();
+    }
   } catch (err) {
     console.log("Route unavailable:", err);
   }
