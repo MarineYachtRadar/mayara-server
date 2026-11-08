@@ -5,7 +5,7 @@ use num_traits::FromPrimitive;
 use tokio::time::{Instant, interval};
 use tokio_graceful_shutdown::SubsystemHandle;
 
-use super::coast_echo::{CoastEcho, widen_by_beam};
+use super::coast_echo::{COAST_FRAY, CoastEcho, widen_by_beam};
 use super::command::Command;
 use super::land::{Coast, LAND_DEPTH};
 use super::world::{Echo, EmulatorWorld, TURN_RADIUS, TurnProgress};
@@ -494,25 +494,14 @@ impl EmulatorReportReceiver {
         let spoke_angle_deg = (spoke_angle as f64 / EMULATOR_SPOKES as f64) * 360.0;
         let world_bearing_rad = (self.boat_heading + spoke_angle_deg) * DEG_TO_RAD;
 
-        // Precompute sin/cos for this spoke (used for all pixels)
-        let sin_b = world_bearing_rad.sin();
-        let cos_b = world_bearing_rad.cos();
-
-        let meters_per_pixel = meters_per_pixel(self.current_range);
-        let boats = self.world.boats_on_spoke(sin_b, cos_b, HALF_BEAM_WIDTH);
-        let land = self.coast.on(world_bearing_rad);
-
-        // Generate spoke data directly as bytes (one byte per pixel, 4-bit intensity)
-        let mut data: Vec<u8> = Vec::with_capacity(EMULATOR_SPOKE_LEN);
-
-        for pixel in 0..EMULATOR_SPOKE_LEN {
-            let distance = pixel as f64 * meters_per_pixel;
-            let echo = self.world.echo_fast(sin_b, cos_b, distance, &boats);
-            let land_return = coast_echo.at(sin_b, cos_b, distance, land);
-            data.push(doppler.pixel(with_land(echo, land_return)));
-        }
-
-        data
+        spoke_pixels(
+            &self.world,
+            &self.coast,
+            coast_echo,
+            doppler,
+            world_bearing_rad,
+            meters_per_pixel(self.current_range),
+        )
     }
 
     /// Take the AIS vessels the navigation source reported since the last
@@ -528,6 +517,29 @@ impl EmulatorReportReceiver {
         self.coast
             .refresh(&self.boat_position, spoke_range(self.current_range) as f64);
     }
+}
+
+/// The pixels of a spoke at true bearing `bearing`, in radians: boats,
+/// marks and land as the radar sees them, one byte each.
+fn spoke_pixels(
+    world: &EmulatorWorld,
+    coast: &CoastView,
+    coast_echo: &CoastEcho,
+    doppler: &DopplerColors,
+    bearing: f64,
+    meters_per_pixel: f64,
+) -> GenericSpoke {
+    let (sin_b, cos_b) = bearing.sin_cos();
+    let boats = world.boats_on_spoke(sin_b, cos_b, HALF_BEAM_WIDTH);
+    let land = coast.on(bearing);
+    (0..EMULATOR_SPOKE_LEN)
+        .map(|pixel| {
+            let distance = pixel as f64 * meters_per_pixel;
+            let echo = world.echo_fast(sin_b, cos_b, distance, &boats);
+            let land_return = coast_echo.at(sin_b, cos_b, distance, land);
+            doppler.pixel(with_land(echo, land_return))
+        })
+        .collect()
 }
 
 /// The land's return where it is stronger than `echo`; a ship alongside a
@@ -562,8 +574,11 @@ impl CoastView {
     /// the boat at `boat`.
     fn refresh(&mut self, boat: &GeoPosition, reach: f64) {
         if let Some(coast) = &self.coast {
-            self.spokes =
-                widen_by_beam(&coast.spokes(boat, EMULATOR_SPOKES, reach), HALF_BEAM_WIDTH);
+            // Land just past the reach can fray inwards into it
+            self.spokes = widen_by_beam(
+                &coast.spokes(boat, EMULATOR_SPOKES, reach + COAST_FRAY),
+                HALF_BEAM_WIDTH,
+            );
         }
     }
 
@@ -857,6 +872,47 @@ mod tests {
             closing_speed: 2.0,
         };
         assert_eq!(both.pixel(with_land(weak, LAND_INTENSITY)), LAND_INTENSITY);
+    }
+
+    /// A generated spoke towards land shows the land's return from about
+    /// where the chart has the shore, and a spoke away from it shows none.
+    #[test]
+    fn a_spoke_towards_land_paints_it() {
+        let boat = GeoPosition::new(53.2, 5.3);
+        let land = serde_json::json!({
+            "type": "Polygon",
+            "coordinates": [[[5.29, 53.209], [5.31, 53.209], [5.31, 53.22], [5.29, 53.22], [5.29, 53.209]]]
+        });
+        let path =
+            std::env::temp_dir().join(format!("mayara-spoke-{}.geojson", std::process::id()));
+        std::fs::write(&path, land.to_string()).unwrap();
+        let mut view = CoastView::new(Some(Coast::load(&path).unwrap()));
+        std::fs::remove_file(&path).unwrap();
+        let range = 2000;
+        view.refresh(&boat, spoke_range(range) as f64);
+        let mut world = EmulatorWorld::new(boat);
+        world.show_test_scenario(false);
+        world.update_cache(&boat, 1.0);
+        let mpp = meters_per_pixel(range);
+        let echo = CoastEcho::new(&boat, mpp, LAND_DEPTH, LAND_INTENSITY, HALF_BEAM_WIDTH, 0);
+        let spoke = |bearing| {
+            spoke_pixels(
+                &world,
+                &view,
+                &echo,
+                &colors(DopplerMode::None),
+                bearing,
+                mpp,
+            )
+        };
+
+        let north = spoke(0.0);
+        let shore = (1002.0 / mpp) as usize;
+        let lit = |pixels: &[u8]| pixels.iter().filter(|&&v| v > 0).count();
+        assert_eq!(lit(&north[..shore - (COAST_FRAY / mpp) as usize - 1]), 0);
+        assert!(lit(&north[shore..]) > 10, "{north:?}");
+        assert!(north.iter().all(|&v| v <= LAND_INTENSITY));
+        assert_eq!(lit(&spoke(PI)), 0);
     }
 
     fn colors(mode: DopplerMode) -> DopplerColors {

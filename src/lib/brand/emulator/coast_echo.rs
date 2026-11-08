@@ -10,7 +10,7 @@ use crate::radar::GeoPosition;
 const METERS_PER_DEGREE_LAT: f64 = 111_320.0;
 
 /// How far the painted shore wanders either side of the chart's, in meters
-const COAST_FRAY: f64 = 150.0;
+pub(crate) const COAST_FRAY: f64 = 150.0;
 /// The size of the patches land returns in, in meters: dunes, dykes,
 /// buildings, trees
 const LAND_PATCH: f64 = 90.0;
@@ -33,6 +33,11 @@ const SOLID: f64 = 0.8;
 /// How far apart patches lie in strength; value noise alone bunches
 /// around the middle
 const CONTRAST: f64 = 2.2;
+/// How much the coarse patches weigh in a patch's strength; the fine
+/// detail makes up the rest
+const PATCH_WEIGHT: f64 = 0.65;
+/// Sine and cosine of the angle the finer noise grids are turned by
+const DETAIL_TURN: (f64, f64) = (0.6, 0.8);
 /// The weakest return a patch shows with
 const WEAKEST: u8 = 3;
 
@@ -83,17 +88,36 @@ impl CoastEcho {
     }
 
     /// The return at `distance` meters along a spoke at bearing (`sin_b`,
-    /// `cos_b`) whose stretches over land are `land`; 0 off land and in its
-    /// gaps.
+    /// `cos_b`) whose stretches over land are `land`, sorted by where they
+    /// begin; 0 off land and in its gaps. Where the beam sees several
+    /// shores at once, the strongest return shows.
     pub(crate) fn at(&self, sin_b: f64, cos_b: f64, distance: f64, land: &[(f64, f64)]) -> u8 {
-        let Some(&(enter, leave)) = land
-            .iter()
-            .find(|&&(enter, leave)| distance >= enter - COAST_FRAY && distance < leave)
-        else {
-            return 0;
-        };
-        let (x, y) = self.ground(sin_b, cos_b, distance);
+        let mut ground = None;
+        let mut strongest = 0;
+        for &(enter, leave) in land {
+            if distance < enter - COAST_FRAY {
+                break;
+            }
+            if distance >= leave {
+                continue;
+            }
+            let ground = *ground.get_or_insert_with(|| self.ground(sin_b, cos_b, distance));
+            strongest =
+                strongest.max(self.shore_return(sin_b, cos_b, distance, ground, (enter, leave)));
+        }
+        strongest
+    }
 
+    /// The return at `distance` meters along the spoke, at `(x, y)` on the
+    /// ground, from land the beam enters and leaves at `stretch`
+    fn shore_return(
+        &self,
+        sin_b: f64,
+        cos_b: f64,
+        distance: f64,
+        (x, y): (f64, f64),
+        (enter, leave): (f64, f64),
+    ) -> u8 {
         // Thin land, a sandbank or a dyke, never frays away entirely
         let fray = ((noise(x, y, 2.0 * self.patch, EDGE_SEED) - 0.5) * 2.0 * COAST_FRAY)
             .min((leave - enter) / 2.0);
@@ -138,7 +162,11 @@ impl CoastEcho {
     /// north, so the patterns stay put wherever the boat goes
     fn ground(&self, sin_b: f64, cos_b: f64, distance: f64) -> (f64, f64) {
         let lat = self.boat.1 + distance * cos_b / METERS_PER_DEGREE_LAT;
-        let lon = self.boat.0 + distance * sin_b / self.meters_per_degree_lon;
+        // The same longitude for a point whichever side of the antimeridian
+        // the boat is on
+        let lon = (self.boat.0 + distance * sin_b / self.meters_per_degree_lon + 180.0)
+            .rem_euclid(360.0)
+            - 180.0;
         (
             lon * METERS_PER_DEGREE_LAT * lat.to_radians().cos(),
             lat * METERS_PER_DEGREE_LAT,
@@ -149,17 +177,20 @@ impl CoastEcho {
     fn texture(&self, x: f64, y: f64) -> f64 {
         // Each finer grid turned against the coarser one, so their squares
         // do not line up into a visible weave
-        let (dx, dy) = (0.8 * x - 0.6 * y, 0.6 * x + 0.8 * y);
-        let (fx, fy) = (0.6 * x + 0.8 * y, 0.8 * y - 0.6 * x);
-        let patches = 0.65 * noise(x, y, self.patch, PATCH_SEED)
-            + 0.35 * noise(dx, dy, self.patch / 2.0, DETAIL_SEED);
+        let (sin_t, cos_t) = DETAIL_TURN;
+        let (dx, dy) = (cos_t * x - sin_t * y, sin_t * x + cos_t * y);
+        let (fx, fy) = (cos_t * x + sin_t * y, cos_t * y - sin_t * x);
+        let patches = PATCH_WEIGHT * noise(x, y, self.patch, PATCH_SEED)
+            + (1.0 - PATCH_WEIGHT) * noise(dx, dy, self.patch / 2.0, DETAIL_SEED);
         let flicker = noise(fx, fy, self.patch / 2.0, FLICKER_SEED ^ self.rotation) - 0.5;
         0.5 + CONTRAST * (patches - 0.5) + FLICKER * flicker
     }
 }
 
 /// Spreads each spoke's land over the spokes within `half_beam` radians to
-/// either side, as the beam's width paints land beside where it lies.
+/// either side, as the beam's width paints land beside where it lies. Each
+/// shore keeps its own stretch, sorted by where it begins, so a nearer one
+/// beside the spoke does not hide a farther one on it.
 pub(crate) fn widen_by_beam(spokes: &[Vec<(f64, f64)>], half_beam: f64) -> Vec<Vec<(f64, f64)>> {
     let count = spokes.len();
     let reach = (half_beam / TAU * count as f64).round() as usize;
@@ -169,15 +200,9 @@ pub(crate) fn widen_by_beam(spokes: &[Vec<(f64, f64)>], half_beam: f64) -> Vec<V
                 .flat_map(|i| &spokes[(spoke + count + i - reach) % count])
                 .copied()
                 .collect();
-            stretches.sort_by(|a, b| a.0.total_cmp(&b.0));
-            let mut merged: Vec<(f64, f64)> = Vec::with_capacity(stretches.len());
-            for (enter, leave) in stretches {
-                match merged.last_mut() {
-                    Some(last) if enter <= last.1 => last.1 = last.1.max(leave),
-                    _ => merged.push((enter, leave)),
-                }
-            }
-            merged
+            stretches.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+            stretches.dedup();
+            stretches
         })
         .collect()
 }
@@ -339,8 +364,44 @@ mod tests {
         assert!(same >= 38, "{same} of 40");
     }
 
+    /// A shore beside the spoke, nearer than the one on it, does not hide
+    /// the farther shore: both return.
+    #[test]
+    fn a_nearer_shore_beside_the_spoke_leaves_the_farther_one_showing() {
+        let echo = coast(0);
+        let far_only = [(2000.0, 3000.0)];
+        let both = [(1000.0, 1100.0), (2000.0, 3000.0)];
+        let shows = |land: &[(f64, f64)]| {
+            (0..100)
+                .filter(|p| echo.at(0.0, 1.0, 2000.0 + *p as f64 * 5.0, land) > 0)
+                .count()
+        };
+
+        assert!(shows(&far_only) > 0);
+        assert_eq!(shows(&both), shows(&far_only));
+    }
+
+    /// Land just across the antimeridian returns the same whichever side
+    /// of it the boat is on.
+    #[test]
+    fn the_pattern_holds_across_the_antimeridian() {
+        let east = GeoPosition::new(-17.0, 179.995);
+        let west = GeoPosition::new(-17.0, -179.995);
+        let from = |boat: &GeoPosition| CoastEcho::new(boat, 5.0, DEPTH, STRONGEST, 0.0, 0);
+        // `west` lies about 1065 m east of `east`
+        let apart = (0.01 * METERS_PER_DEGREE_LAT * (-17.0_f64).to_radians().cos()).round();
+        let mut same = 0;
+        for d in 0..40 {
+            let d = d as f64 * 5.0;
+            let a = from(&east).at(1.0, 0.0, apart + 500.0 + d, &[(apart + 500.0, 3000.0)]);
+            let b = from(&west).at(1.0, 0.0, 500.0 + d, &[(500.0, 3000.0 - apart)]);
+            same += usize::from(a == b);
+        }
+        assert!(same >= 38, "{same} of 40");
+    }
+
     /// Land shows on the spokes to either side of where it lies, as far as
-    /// half the beam, and keeps its nearest edge.
+    /// half the beam.
     #[test]
     fn the_beam_widens_land_to_either_side() {
         let mut spokes = vec![Vec::new(); 360];
@@ -351,7 +412,10 @@ mod tests {
 
         assert!(wide[97].is_empty());
         assert_eq!(wide[98], vec![(1000.0, 1200.0)]);
-        assert_eq!(wide[100], vec![(900.0, 1200.0), (3000.0, 3100.0)]);
+        assert_eq!(
+            wide[100],
+            vec![(900.0, 1100.0), (1000.0, 1200.0), (3000.0, 3100.0)]
+        );
         assert_eq!(wide[103], vec![(900.0, 1100.0), (3000.0, 3100.0)]);
         assert!(wide[104].is_empty());
     }
