@@ -38,6 +38,7 @@ import { WebGPURenderer } from "./render_webgpu.js";
 import { WebGLRenderer } from "./render_webgl.js";
 import { PPI } from "./ppi.js";
 import { TargetDataBoxes } from "./data-boxes.js";
+import { COURSE_PATHS, routeId, routePoints, coursePlot } from "./route.js";
 import { startTourIfFirstVisit } from "./tour.js";
 import "./app-dock.js";
 
@@ -108,6 +109,20 @@ var showAis = (() => {
     return true;
   }
 })();
+
+// Active-route overlay enabled state (client-only toggle, persists in localStorage)
+var showRoute = (() => {
+  try {
+    return localStorage.getItem("mayaraShowRoute") !== "false";
+  } catch {
+    return true;
+  }
+})();
+
+// Course API values by path, as mayara relays them from Signal K, and the
+// points of the active route once read for the href they belong to.
+const course = new Map();
+var activeRoute = { href: null, points: null };
 
 // Heading readout preference: show magnetic instead of true when both exist.
 // Display-only — never affects plotting, which always uses the true heading.
@@ -287,6 +302,9 @@ window.onload = async function () {
   // Create AIS lozenge (bottom-left, toggles vessels.* subscription)
   createAisLozenge();
 
+  // Create route lozenge (right of the AIS lozenge, toggles the active route)
+  createRouteLozenge();
+
   // Create VRM/EBL lozenge (above AIS lozenge) - cycles through marker states
   createVrmEblLozenge();
 
@@ -361,6 +379,8 @@ function subscribeToHeading() {
         // Own-ship motion gives the AIS data boxes their CPA/TCPA
         { path: "navigation.courseOverGroundTrue", period: 1000 },
         { path: "navigation.speedOverGround", period: 1000 },
+        // The active route, drawn on the PPI
+        ...COURSE_PATHS.map((path) => ({ path })),
       ],
     };
     headingSocket.send(JSON.stringify(subscription));
@@ -373,7 +393,9 @@ function subscribeToHeading() {
         for (const update of data.updates) {
           if (update.values) {
             for (const value of update.values) {
-              if (value.path === "navigation.headingTrue") {
+              if (COURSE_PATHS.includes(value.path)) {
+                onCourseValue(value.path, value.value);
+              } else if (value.path === "navigation.headingTrue") {
                 trueHeading = value.value; // Already in radians
                 haveSignalKHeading = true;
                 if (
@@ -440,6 +462,11 @@ function subscribeToHeading() {
   };
 
   headingSocket.onclose = () => {
+    // The course arrives on this socket too, and mayara sends it again on
+    // reconnect; one that ended meanwhile would otherwise stay drawn.
+    course.clear();
+    activeRoute = { href: null, points: null };
+    updateCoursePlot();
     onHeadingLost();
     const delay = reconnectDelay(headingReconnectAttempts);
     headingReconnectAttempts += 1;
@@ -448,6 +475,48 @@ function subscribeToHeading() {
     );
     setTimeout(subscribeToHeading, delay);
   };
+}
+
+function onCourseValue(path, value) {
+  if (value == null) {
+    course.delete(path);
+  } else {
+    course.set(path, value);
+  }
+  const href = course.get("navigation.course.activeRoute")?.href ?? null;
+  if (href !== activeRoute.href) {
+    activeRoute = { href, points: null };
+    loadRoutePoints(href);
+  }
+  updateCoursePlot();
+}
+
+// Reads the whole route once per href. Without it, or while mayara has no
+// Signal K REST API to ask, the PPI still draws the current leg, which the
+// Course API values carry on their own.
+async function loadRoutePoints(href) {
+  const id = routeId(href);
+  if (!id) return;
+  try {
+    const response = await apiFetch(
+      apiBase(`/signalk/v2/api/resources/routes/${encodeURIComponent(id)}`)
+    );
+    if (!response.ok) {
+      console.log(`Route ${id} unavailable: HTTP ${response.status}`);
+      return;
+    }
+    const route = await response.json();
+    if (activeRoute.href !== href) return;
+    const reverse = course.get("navigation.course.activeRoute")?.reverse === true;
+    activeRoute = { href, points: routePoints(route, reverse) };
+    updateCoursePlot();
+  } catch (err) {
+    console.log("Route unavailable:", err);
+  }
+}
+
+function updateCoursePlot() {
+  ppi?.setCoursePlot(coursePlot(course, activeRoute.points));
 }
 
 // ---------------------------------------------------------------------------
@@ -1092,6 +1161,7 @@ function onHeadingReceived() {
     toggleBtn.title = "Click to toggle: Heading Up / North Up";
   }
   updateAisLozenge();
+  updateRouteLozenge();
   updateHeadingDisplayToggle();
 }
 
@@ -1142,6 +1212,7 @@ function onHeadingLost() {
     toggleBtn.title = "Heading data required for North Up mode";
   }
   updateAisLozenge();
+  updateRouteLozenge();
 }
 
 // Create the power lozenge on the viewer
@@ -1515,6 +1586,59 @@ function updateAisLozenge() {
   lozenge.title = noHeading
     ? "AIS unavailable — no heading source to position targets"
     : "Click to toggle AIS overlay";
+}
+
+function createRouteLozenge() {
+  const container = document.querySelector(".myr_ppi");
+  if (!container) return;
+
+  const lozenge = document.createElement("div");
+  lozenge.id = "myr_route_lozenge";
+  lozenge.className = "myr_route_lozenge";
+
+  const routeBtn = document.createElement("button");
+  routeBtn.className = "myr_route_lozenge_button";
+  // Three waypoints joined by legs
+  routeBtn.innerHTML = `<svg class="myr_route_icon" viewBox="0 0 24 24">
+    <path d="M4 19 L11 8 L20 13"/>
+    <circle cx="4" cy="19" r="2"/>
+    <circle cx="11" cy="8" r="2"/>
+    <circle cx="20" cy="13" r="2.5"/>
+  </svg>`;
+  routeBtn.addEventListener("click", toggleRouteOverlay);
+
+  lozenge.appendChild(routeBtn);
+  container.appendChild(lozenge);
+
+  ppi?.setShowRoute(showRoute);
+  updateCoursePlot();
+  updateRouteLozenge();
+}
+
+function toggleRouteOverlay() {
+  // Inert without a heading reference, as AIS is: nothing can be placed.
+  if (ppi && !ppi.hasHeading()) return;
+  showRoute = !showRoute;
+  try {
+    localStorage.setItem("mayaraShowRoute", String(showRoute));
+  } catch {
+    // ignore quota errors
+  }
+  ppi?.setShowRoute(showRoute);
+  updateRouteLozenge();
+}
+
+function updateRouteLozenge() {
+  const lozenge = document.getElementById("myr_route_lozenge");
+  if (!lozenge) return;
+  lozenge.classList.toggle("myr_route_on", showRoute);
+  lozenge.classList.toggle("myr_route_off", !showRoute);
+
+  const noHeading = ppi ? !ppi.hasHeading() : false;
+  lozenge.classList.toggle("myr_route_disabled", noHeading);
+  lozenge.title = noHeading
+    ? "Route unavailable — no heading source to place it"
+    : "Click to toggle the active route";
 }
 
 // VRM/EBL lozenge - cycles through marker visibility states. Click steps
