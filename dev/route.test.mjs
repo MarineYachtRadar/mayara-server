@@ -28,6 +28,8 @@ const at = (latitude, longitude) => ({ position: { latitude, longitude } });
 test("A route href names its route; anything else names none", () => {
   assert.equal(routeId("/resources/routes/ac3a3b2d-07e8-4f25-92bc-98e7c92f7f1a"), "ac3a3b2d-07e8-4f25-92bc-98e7c92f7f1a");
   assert.equal(routeId("/resources/waypoints/abc"), null);
+  assert.equal(routeId("/resources/routes/harbour.entry"), "harbour.entry");
+  assert.equal(routeId("/resources/routes/.."), null);
   assert.equal(routeId("/resources/routes/../../vessels"), null);
   assert.equal(routeId(null), null);
 });

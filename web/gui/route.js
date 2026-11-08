@@ -14,8 +14,8 @@ const COURSE_PATHS = [
  * @param {string|null|undefined} href
  */
 function routeId(href) {
-  const match = /^\/resources\/routes\/([A-Za-z0-9_-]+)$/.exec(href ?? "");
-  return match ? match[1] : null;
+  const match = /^\/resources\/routes\/([A-Za-z0-9._-]+)$/.exec(href ?? "");
+  return match && !/^\.+$/.test(match[1]) ? match[1] : null;
 }
 
 /**

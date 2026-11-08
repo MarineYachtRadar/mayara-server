@@ -90,10 +90,10 @@ pub enum RouteFetchError {
 /// Route ids are UUIDs on a stock server; a provider may use other names, but
 /// never anything that could step out of `resources/routes/`.
 fn is_route_id(id: &str) -> bool {
-    !id.is_empty()
+    !id.chars().all(|c| c == '.')
         && id
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
 }
 
 /// Where the upstream serves route `id`, from the REST base its discovery
@@ -206,7 +206,9 @@ mod tests {
     fn only_plain_route_ids_are_asked_for() {
         assert!(is_route_id("ac3a3b2d-07e8-4f25-92bc-98e7c92f7f1a"));
         assert!(is_route_id("harbour_entry"));
+        assert!(is_route_id("harbour.entry"));
         assert!(!is_route_id(""));
+        assert!(!is_route_id("."));
         assert!(!is_route_id(".."));
         assert!(!is_route_id("a/../../v1"));
         assert!(!is_route_id("a?x=1"));
