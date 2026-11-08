@@ -93,6 +93,7 @@ impl CoastEcho {
     /// shores at once, the strongest return shows.
     pub(crate) fn at(&self, sin_b: f64, cos_b: f64, distance: f64, land: &[(f64, f64)]) -> u8 {
         let mut ground = None;
+        let mut texture = None;
         let mut strongest = 0;
         for &(enter, leave) in land {
             if distance < enter - COAST_FRAY {
@@ -102,41 +103,42 @@ impl CoastEcho {
                 continue;
             }
             let ground = *ground.get_or_insert_with(|| self.ground(sin_b, cos_b, distance));
-            strongest =
-                strongest.max(self.shore_return(sin_b, cos_b, distance, ground, (enter, leave)));
+            let Some((into, reach)) = self.inland(distance, ground, (enter, leave)) else {
+                continue;
+            };
+            let texture =
+                *texture.get_or_insert_with(|| self.beam_texture(sin_b, cos_b, distance, ground));
+            strongest = strongest.max(self.land_return(texture, into, reach));
         }
         strongest
     }
 
-    /// The return at `distance` meters along the spoke, at `(x, y)` on the
-    /// ground, from land the beam enters and leaves at `stretch`
-    fn shore_return(
+    /// How far into land the point `distance` meters along the spoke, at
+    /// `(x, y)` on the ground, lies from the shore the beam meets at
+    /// `enter`, and how far in the beam reaches there; `None` off it.
+    fn inland(
         &self,
-        sin_b: f64,
-        cos_b: f64,
         distance: f64,
         (x, y): (f64, f64),
         (enter, leave): (f64, f64),
-    ) -> u8 {
+    ) -> Option<(f64, f64)> {
         // Thin land, a sandbank or a dyke, never frays away entirely
         let fray = ((noise(x, y, 2.0 * self.patch, EDGE_SEED) - 0.5) * 2.0 * COAST_FRAY)
             .min((leave - enter) / 2.0);
-        let shore = enter + fray;
+        let into = distance - (enter + fray);
         let reach = self.depth
             * lerp(
                 DEPTH_SPREAD.0,
                 DEPTH_SPREAD.1,
                 noise(x, y, 4.0 * self.patch, DEPTH_SEED),
             );
-        let into = distance - shore;
-        if into < 0.0 || into >= reach {
-            return 0;
-        }
+        (0.0..reach).contains(&into).then_some((into, reach))
+    }
 
-        // The beam returns the strongest patch anywhere across its width,
-        // so patches far out stretch sideways as on a real radar
-        let texture = self
-            .beam_offsets
+    /// The strongest patch anywhere across the beam's width, so patches far
+    /// out stretch sideways as on a real radar
+    fn beam_texture(&self, sin_b: f64, cos_b: f64, distance: f64, centre: (f64, f64)) -> f64 {
+        self.beam_offsets
             .iter()
             .map(|&(sin_d, cos_d)| {
                 self.ground(
@@ -145,9 +147,14 @@ impl CoastEcho {
                     distance,
                 )
             })
-            .chain(std::iter::once((x, y)))
+            .chain(std::iter::once(centre))
             .map(|(x, y)| self.texture(x, y))
-            .fold(0.0, f64::max);
+            .fold(0.0, f64::max)
+    }
+
+    /// The return of ground of `texture`, `into` meters in from the shore
+    /// of land the beam reaches `reach` meters into
+    fn land_return(&self, texture: f64, into: f64, reach: f64) -> u8 {
         let shore_face = SHORE_BOOST * (1.0 - into / self.patch).max(0.0);
         let fade = 1.0 - into / reach * (1.0 - FAR_SHARE);
         let strength = (texture + shore_face) * fade;
@@ -167,8 +174,13 @@ impl CoastEcho {
         let lon = (self.boat.0 + distance * sin_b / self.meters_per_degree_lon + 180.0)
             .rem_euclid(360.0)
             - 180.0;
+        // East of the whole degree nearest, so the grid keeps its shape
+        // far from Greenwich and near the poles; the seams every degree
+        // fall between unrelated patches and do not show
+        let degree = lon.round();
         (
-            lon * METERS_PER_DEGREE_LAT * lat.to_radians().cos(),
+            degree * METERS_PER_DEGREE_LAT
+                + (lon - degree) * METERS_PER_DEGREE_LAT * lat.to_radians().cos(),
             lat * METERS_PER_DEGREE_LAT,
         )
     }
@@ -398,6 +410,29 @@ mod tests {
             same += usize::from(a == b);
         }
         assert!(same >= 38, "{same} of 40");
+    }
+
+    /// The ground keeps its distances far from Greenwich at high latitude:
+    /// 100 m north moves a point about 100 m north and hardly east.
+    #[test]
+    fn the_ground_keeps_its_shape_at_high_latitude() {
+        let echo = CoastEcho::new(
+            &GeoPosition::new(75.0, 170.3),
+            5.0,
+            DEPTH,
+            STRONGEST,
+            0.0,
+            0,
+        );
+        let (x0, y0) = echo.ground(0.0, 1.0, 1000.0);
+        let (x1, y1) = echo.ground(0.0, 1.0, 1100.0);
+        let (x2, y2) = echo.ground(1.0, 0.0, 100.0);
+        let (xc, yc) = echo.ground(0.0, 1.0, 0.0);
+
+        assert!((x1 - x0).abs() < 2.0, "north shears east by {}", x1 - x0);
+        assert!((y1 - y0 - 100.0).abs() < 0.1);
+        assert!((x2 - xc - 100.0).abs() < 1.0, "east {}", x2 - xc);
+        assert!((y2 - yc).abs() < 0.1);
     }
 
     /// Land shows on the spokes to either side of where it lies, as far as
