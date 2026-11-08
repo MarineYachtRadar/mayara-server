@@ -1549,6 +1549,20 @@ mod test {
         let mut delta = course_delta();
         delta.apply_subscriptions(&mut subs);
         assert!(delta.build().is_none());
+
+        let mut subs = ActiveSubscriptions::new(Subscribe::SelfOnly);
+        subs.subscribe(Subscription {
+            subscribe: vec![path("navigation.headingTrue")],
+        })
+        .unwrap();
+        let mut delta = course_delta();
+        delta.apply_subscriptions(&mut subs);
+        let sent = serde_json::to_value(delta.build().unwrap()).unwrap();
+        assert_eq!(
+            sent["updates"].as_array().unwrap().len(),
+            2,
+            "a self client gets the course from its baseline, null included"
+        );
     }
 
     fn throttled_path(
