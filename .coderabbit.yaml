@@ -47,6 +47,12 @@ reviews:
     # don't touch it.
     - '!CHANGELOG.md'
 
+  # Code here explains itself and comments say why, not what, so the
+  # docstring coverage check would only ask for echo comments.
+  pre_merge_checks:
+    docstrings:
+      mode: 'off'
+
   high_level_summary_instructions: |
     Write summaries in present tense. Describe what the code does, not
     what it did. Skip filler like "This PR" — go straight to the change.
