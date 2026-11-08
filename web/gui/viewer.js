@@ -484,9 +484,14 @@ function onCourseValue(path, value) {
   } else {
     course.set(path, value);
   }
-  const href = course.get("navigation.course.activeRoute")?.href ?? null;
-  if (href !== activeRoute.href) {
-    activeRoute = { href, route: null };
+  if (path === "navigation.course.activeRoute") {
+    const href = value?.href ?? null;
+    if (href !== activeRoute.href) {
+      activeRoute = { href, route: null };
+    }
+    // Read again on every change, not only a new href: a route edited in
+    // place is picked up with the next course update, and an answer meant
+    // for an earlier value is dropped.
     loadRoute(href, 0);
   }
   updateCoursePlot();
@@ -502,7 +507,7 @@ function forgetCourse() {
 const ROUTE_RETRY_MS = 2000;
 const ROUTE_RETRY_MAX_MS = 60000;
 
-// Reads the whole route once per href. Without it, or while mayara has no
+// Reads the whole route the course follows. Without it, or while mayara has no
 // Signal K REST API to ask, the PPI still draws the current leg, which the
 // Course API values carry on their own. A failure that may pass (mayara not
 // yet connected upstream, the server busy) is tried again, more slowly each
@@ -525,7 +530,7 @@ async function loadRoute(href, attempt) {
       return;
     }
     console.log(`Route ${id} unavailable: HTTP ${response.status}`);
-    mayPass = response.status >= 500;
+    mayPass = response.status === 429 || response.status >= 500;
   } catch (err) {
     console.log("Route unavailable:", err);
   }
