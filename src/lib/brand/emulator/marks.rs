@@ -15,77 +15,78 @@ pub(crate) struct Mark {
     pub strong: bool,
 }
 
+/// The marks of a file, and how many of its points could not be placed
+#[derive(Debug, Default, PartialEq)]
+pub(crate) struct Marks {
+    pub marks: Vec<Mark>,
+    /// Points without a numeric longitude and latitude in range, as a
+    /// projected export gives
+    pub unusable: usize,
+}
+
 /// Takes every Point and MultiPoint in a FeatureCollection, a Feature or a
 /// bare geometry, and skips anything else. A feature whose `echo` property
-/// is `"weak"` returns weakly; every other mark returns strongly. Points
-/// outside longitude and latitude, as a projected export would give, are
-/// left out with a warning.
-pub(crate) fn load(path: &Path) -> Result<Vec<Mark>, String> {
+/// is `"weak"` returns weakly; every other mark returns strongly. A file
+/// none of whose points can be placed is refused, saying why.
+pub(crate) fn load(path: &Path) -> Result<Marks, String> {
     let text = std::fs::read_to_string(path)
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     let value: Value =
         serde_json::from_str(&text).map_err(|e| format!("{} is not JSON: {e}", path.display()))?;
-    let (marks, off_globe) = from_geojson(&value);
-    if off_globe > 0 {
-        log::warn!(
-            "{}: left out {off_globe} points not in longitude and latitude",
+    let found = from_geojson(&value);
+    match (found.marks.is_empty(), found.unusable) {
+        (true, 0) => Err(format!("{} holds no points", path.display())),
+        (true, unusable) => Err(format!(
+            "none of the {unusable} points in {} has a longitude and latitude",
             path.display()
-        );
+        )),
+        _ => Ok(found),
     }
-    if marks.is_empty() {
-        return Err(format!(
-            "{} holds no points in longitude and latitude",
-            path.display()
-        ));
-    }
-    Ok(marks)
 }
 
-/// The marks, and how many points lay outside longitude and latitude
-fn from_geojson(value: &Value) -> (Vec<Mark>, usize) {
-    let mut marks = Vec::new();
-    collect_marks(value, true, &mut marks);
-    let before = marks.len();
-    marks.retain(|mark| {
-        (-90.0..=90.0).contains(&mark.position.lat())
-            && (-180.0..=180.0).contains(&mark.position.lon())
-    });
-    let off_globe = before - marks.len();
-    (marks, off_globe)
+fn from_geojson(value: &Value) -> Marks {
+    let mut found = Marks::default();
+    collect_marks(value, true, &mut found);
+    found
 }
 
-fn collect_marks(value: &Value, strong: bool, marks: &mut Vec<Mark>) {
+fn collect_marks(value: &Value, strong: bool, found: &mut Marks) {
     match value.get("type").and_then(Value::as_str) {
         Some("FeatureCollection") => {
             for feature in value["features"].as_array().into_iter().flatten() {
-                collect_marks(feature, strong, marks);
+                collect_marks(feature, strong, found);
             }
         }
         Some("Feature") => {
             let weak = value["properties"]["echo"].as_str() == Some("weak");
-            collect_marks(&value["geometry"], !weak, marks);
+            collect_marks(&value["geometry"], !weak, found);
         }
         Some("GeometryCollection") => {
             for geometry in value["geometries"].as_array().into_iter().flatten() {
-                collect_marks(geometry, strong, marks);
+                collect_marks(geometry, strong, found);
             }
         }
-        Some("Point") => push_point(&value["coordinates"], strong, marks),
+        Some("Point") => push_point(&value["coordinates"], strong, found),
         Some("MultiPoint") => {
             for point in value["coordinates"].as_array().into_iter().flatten() {
-                push_point(point, strong, marks);
+                push_point(point, strong, found);
             }
         }
         _ => {}
     }
 }
 
-fn push_point(point: &Value, strong: bool, marks: &mut Vec<Mark>) {
-    if let (Some(lon), Some(lat)) = (point[0].as_f64(), point[1].as_f64()) {
-        marks.push(Mark {
-            position: GeoPosition::new(lat, lon),
-            strong,
-        });
+fn push_point(point: &Value, strong: bool, found: &mut Marks) {
+    match (point[0].as_f64(), point[1].as_f64()) {
+        (Some(lon), Some(lat))
+            if (-180.0..=180.0).contains(&lon) && (-90.0..=90.0).contains(&lat) =>
+        {
+            found.marks.push(Mark {
+                position: GeoPosition::new(lat, lon),
+                strong,
+            });
+        }
+        _ => found.unusable += 1,
     }
 }
 
@@ -96,7 +97,7 @@ mod tests {
 
     #[test]
     fn points_become_marks_and_other_geometry_is_skipped() {
-        let (marks, off_globe) = from_geojson(&json!({
+        let found = from_geojson(&json!({
             "type": "FeatureCollection",
             "features": [
                 {"type": "Feature", "properties": {"OBJL": 17},
@@ -112,9 +113,12 @@ mod tests {
             ]
         }));
 
-        assert_eq!(off_globe, 1, "a projected point is left out");
         assert_eq!(
-            marks,
+            found.unusable, 2,
+            "a projected point and one in text are left out"
+        );
+        assert_eq!(
+            found.marks,
             vec![
                 Mark {
                     position: GeoPosition::new(53.2, 5.3),
@@ -146,13 +150,36 @@ mod tests {
         assert!(loaded.unwrap_err().contains("holds no points"));
     }
 
+    fn load_text(name: &str, text: &str) -> Result<Marks, String> {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(name);
+        std::fs::write(&path, text).unwrap();
+        load(&path)
+    }
+
+    /// A file mixing usable and projected points loads the usable ones and
+    /// counts the rest, so the emulator can warn of them.
     #[test]
-    fn a_file_in_projected_coordinates_is_refused() {
-        let path =
-            std::env::temp_dir().join(format!("mayara-marks-utm-{}.geojson", std::process::id()));
-        std::fs::write(&path, r#"{"type":"Point","coordinates":[500000,5700000]}"#).unwrap();
-        let loaded = load(&path);
-        std::fs::remove_file(&path).unwrap();
-        assert!(loaded.unwrap_err().contains("in longitude and latitude"));
+    fn a_projected_point_beside_usable_ones_is_counted() {
+        let found = load_text(
+            "mixed.geojson",
+            r#"{"type":"MultiPoint","coordinates":[[5.3,53.2],[500000,5700000]]}"#,
+        )
+        .unwrap();
+        assert_eq!(found.marks.len(), 1);
+        assert_eq!(found.unusable, 1);
+    }
+
+    #[test]
+    fn a_file_in_projected_coordinates_is_refused_saying_why() {
+        let refused = load_text(
+            "utm.geojson",
+            r#"{"type":"MultiPoint","coordinates":[[500000,5700000],[500100,5700100]]}"#,
+        )
+        .unwrap_err();
+        assert!(
+            refused.contains("none of the 2 points") && refused.contains("longitude and latitude"),
+            "{refused}"
+        );
     }
 }

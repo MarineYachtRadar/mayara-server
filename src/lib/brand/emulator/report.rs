@@ -99,7 +99,16 @@ impl EmulatorReportReceiver {
         let mut world = EmulatorWorld::new(initial_pos);
         if let Some(path) = args.emulator_marks.as_deref() {
             match marks::load(path) {
-                Ok(marks) => world.set_marks(marks),
+                Ok(found) => {
+                    if found.unusable > 0 {
+                        log::warn!(
+                            "Emulator: left out {} marks without a longitude and latitude in {}",
+                            found.unusable,
+                            path.display()
+                        );
+                    }
+                    world.set_marks(found.marks);
+                }
                 Err(e) => log::error!("Emulator: no marks: {e}"),
             }
         }
