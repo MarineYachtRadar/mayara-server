@@ -149,9 +149,18 @@ pub(crate) fn get_upstream_http_base() -> Option<String> {
 }
 
 fn set_upstream_http_base(url: &str) {
+    store_upstream_http_base(Some(url.to_string()));
+}
+
+/// Forget the REST base once the connection it was discovered for has ended.
+pub(crate) fn clear_upstream_http_base() {
+    store_upstream_http_base(None);
+}
+
+fn store_upstream_http_base(url: Option<String>) {
     let lock = UPSTREAM_HTTP_BASE.get_or_init(|| std::sync::RwLock::new(None));
     if let Ok(mut guard) = lock.write() {
-        *guard = Some(url.to_string());
+        *guard = url;
     }
 }
 

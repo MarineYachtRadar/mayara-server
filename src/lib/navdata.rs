@@ -1393,6 +1393,9 @@ impl NavigationData {
         // and position so the GUI shows "no data" instead of a frozen value
         // that keeps drifting from reality until the connection comes back.
         clear_own_ship_nav();
+        // The next connection may reach a server without a REST API, or
+        // another server; until its discovery says otherwise, there is none.
+        crate::signalk::clear_upstream_http_base();
         let delivered = SIGNALK_DELIVERED_DATA.swap(false, std::sync::atomic::Ordering::SeqCst);
         let own_ship = SIGNALK_OWN_SHIP_NAV_SEEN.swap(false, std::sync::atomic::Ordering::SeqCst);
         if own_ship {

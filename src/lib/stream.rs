@@ -1502,6 +1502,55 @@ mod test {
         assert_eq!(delta.updates[0].values.len(), 1);
     }
 
+    /// The active course reaches a client that asked for it in the shape the
+    /// Course API gave it, its withdrawal (`null`) included, and stays away
+    /// from one that did not ask.
+    #[test]
+    fn course_values_go_to_subscribers_as_published() {
+        let next = serde_json::json!({ "position": { "latitude": -18.1, "longitude": 178.4 } });
+        let course_delta = || {
+            let mut delta = SignalKDelta::new();
+            delta.add_course_update("navigation.course.nextPoint", next.clone(), "signalk");
+            delta.add_course_update(
+                "navigation.course.activeRoute",
+                serde_json::Value::Null,
+                "signalk",
+            );
+            delta
+        };
+
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
+        subs.subscribe(Subscription {
+            subscribe: vec![path("navigation.course.*")],
+        })
+        .unwrap();
+        let mut delta = course_delta();
+        delta.apply_subscriptions(&mut subs);
+        let sent = serde_json::to_value(delta.build().unwrap()).unwrap();
+        let values: Vec<_> = sent["updates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|u| u["values"][0].clone())
+            .collect();
+        assert_eq!(
+            values,
+            vec![
+                serde_json::json!({ "path": "navigation.course.nextPoint", "value": next }),
+                serde_json::json!({ "path": "navigation.course.activeRoute", "value": null }),
+            ]
+        );
+
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
+        subs.subscribe(Subscription {
+            subscribe: vec![path("navigation.headingTrue")],
+        })
+        .unwrap();
+        let mut delta = course_delta();
+        delta.apply_subscriptions(&mut subs);
+        assert!(delta.build().is_none());
+    }
+
     fn throttled_path(
         p: &str,
         policy: Policy,
