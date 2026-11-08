@@ -19,9 +19,31 @@ pub(crate) struct Mark {
 #[derive(Debug, Default, PartialEq)]
 pub(crate) struct Marks {
     pub marks: Vec<Mark>,
-    /// Points without a numeric longitude and latitude in range, as a
-    /// projected export gives
-    pub unusable: usize,
+    /// Points whose coordinates are not two numbers
+    pub malformed: usize,
+    /// Points outside longitude and latitude, as a projected export gives
+    pub out_of_range: usize,
+}
+
+impl Marks {
+    /// What was left out and why, if anything was
+    pub(crate) fn left_out(&self) -> Option<String> {
+        let reasons: Vec<String> = [
+            (self.malformed, "coordinates that are not numbers"),
+            (
+                self.out_of_range,
+                "coordinates outside longitude and latitude, as in a projected export",
+            ),
+        ]
+        .into_iter()
+        .filter(|&(count, _)| count > 0)
+        .map(|(count, why)| {
+            let points = if count == 1 { "point" } else { "points" };
+            format!("{count} {points} with {why}")
+        })
+        .collect();
+        (!reasons.is_empty()).then(|| reasons.join(" and "))
+    }
 }
 
 /// Takes every Point and MultiPoint in a FeatureCollection, a Feature or a
@@ -34,14 +56,13 @@ pub(crate) fn load(path: &Path) -> Result<Marks, String> {
     let value: Value =
         serde_json::from_str(&text).map_err(|e| format!("{} is not JSON: {e}", path.display()))?;
     let found = from_geojson(&value);
-    match (found.marks.is_empty(), found.unusable) {
-        (true, 0) => Err(format!("{} holds no points", path.display())),
-        (true, unusable) => Err(format!(
-            "none of the {unusable} points in {} has a longitude and latitude",
-            path.display()
-        )),
-        _ => Ok(found),
+    if !found.marks.is_empty() {
+        return Ok(found);
     }
+    Err(match found.left_out() {
+        Some(left_out) => format!("{} holds no usable points: {left_out}", path.display()),
+        None => format!("{} holds no points", path.display()),
+    })
 }
 
 fn from_geojson(value: &Value) -> Marks {
@@ -86,7 +107,8 @@ fn push_point(point: &Value, strong: bool, found: &mut Marks) {
                 strong,
             });
         }
-        _ => found.unusable += 1,
+        (Some(_), Some(_)) => found.out_of_range += 1,
+        _ => found.malformed += 1,
     }
 }
 
@@ -113,10 +135,8 @@ mod tests {
             ]
         }));
 
-        assert_eq!(
-            found.unusable, 2,
-            "a projected point and one in text are left out"
-        );
+        assert_eq!(found.malformed, 1, "a point in text is left out");
+        assert_eq!(found.out_of_range, 1, "a projected point is left out");
         assert_eq!(
             found.marks,
             vec![
@@ -167,7 +187,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(found.marks.len(), 1);
-        assert_eq!(found.unusable, 1);
+        assert_eq!(found.out_of_range, 1);
+        assert_eq!(found.malformed, 0);
     }
 
     #[test]
@@ -178,7 +199,22 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            refused.contains("none of the 2 points") && refused.contains("longitude and latitude"),
+            refused.contains("2 points with coordinates outside longitude and latitude"),
+            "{refused}"
+        );
+        assert!(!refused.contains("not numbers"), "{refused}");
+    }
+
+    #[test]
+    fn a_file_with_malformed_coordinates_is_refused_saying_why() {
+        let refused = load_text(
+            "text.geojson",
+            r#"{"type":"MultiPoint","coordinates":[["5.3","53.2"],[5.3],[500000,5700000]]}"#,
+        )
+        .unwrap_err();
+        assert!(
+            refused.contains("2 points with coordinates that are not numbers")
+                && refused.contains("1 point with coordinates outside"),
             "{refused}"
         );
     }

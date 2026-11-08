@@ -100,12 +100,8 @@ impl EmulatorReportReceiver {
         if let Some(path) = args.emulator_marks.as_deref() {
             match marks::load(path) {
                 Ok(found) => {
-                    if found.unusable > 0 {
-                        log::warn!(
-                            "Emulator: left out {} marks without a longitude and latitude in {}",
-                            found.unusable,
-                            path.display()
-                        );
+                    if let Some(left_out) = found.left_out() {
+                        log::warn!("Emulator: {} left out {left_out}", path.display());
                     }
                     world.set_marks(found.marks);
                 }
