@@ -293,12 +293,9 @@ fn update_ais_vessel(context: &str, updates: &Value) {
 /// and seed the AIS store with everything it knows. Without this, the store
 /// only fills as upstream pushes per-vessel deltas (~5-60s per vessel) and
 /// a freshly-connected GUI sees the overlay trickle in over minutes.
-/// Best-effort: any failure (no upstream URL, unreachable, malformed JSON)
+/// Best-effort: any failure (unreachable, malformed JSON)
 /// is logged at debug and ignored; per-vessel WS deltas will fill the gap.
-pub(crate) async fn seed_ais_from_upstream(accept_invalid_certs: bool) {
-    let Some(base) = crate::signalk::get_upstream_http_base() else {
-        return;
-    };
+pub(crate) async fn seed_ais_from_upstream(base: &str, accept_invalid_certs: bool) {
     let Some(store) = get_ais_store() else {
         return;
     };
