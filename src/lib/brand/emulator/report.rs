@@ -905,7 +905,7 @@ mod tests {
         view.refresh(&boat, spoke_range(range) as f64);
         let mut world = EmulatorWorld::new(boat);
         world.show_test_scenario(false);
-        world.update_cache(&boat, 1.0);
+        world.update_cache(&boat, 1.0, f64::INFINITY);
         let mpp = meters_per_pixel(range);
         let echo = CoastEcho::new(&boat, mpp, LAND_DEPTH, LAND_INTENSITY, HALF_BEAM_WIDTH, 0);
         let spoke = |bearing| {
