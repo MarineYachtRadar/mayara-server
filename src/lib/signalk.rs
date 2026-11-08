@@ -148,10 +148,6 @@ pub(crate) fn get_upstream_http_base() -> Option<String> {
         .and_then(|guard| guard.clone())
 }
 
-fn set_upstream_http_base(url: &str) {
-    store_upstream_http_base(Some(url.to_string()));
-}
-
 /// Forget the REST base once the connection it was discovered for has ended.
 pub(crate) fn clear_upstream_http_base() {
     store_upstream_http_base(None);
@@ -394,6 +390,7 @@ async fn connect_transport(
         Transport::Tcp => {
             let stream = TcpStream::connect(addr).await.map_err(RadarError::Io)?;
             log::info!("Connected to Signal K via TCP: {}", addr);
+            clear_upstream_http_base();
             Ok(Connection::Tcp(stream, addr))
         }
         Transport::HttpDiscovery => connect_via_discovery(addr, false, accept_invalid_certs).await,
@@ -417,10 +414,17 @@ async fn connect_via_discovery(
         discovery.server_version
     );
 
-    if let Some(http) = discovery.http_url.as_deref() {
-        set_upstream_http_base(http);
-    }
+    let connection = connect_discovered(&discovery, addr, accept_invalid_certs).await?;
+    // Only the server mayara is now connected to may answer REST reads.
+    store_upstream_http_base(discovery.http_url.clone());
+    Ok(connection)
+}
 
+async fn connect_discovered(
+    discovery: &DiscoveryResult,
+    addr: SocketAddr,
+    accept_invalid_certs: bool,
+) -> Result<Connection, RadarError> {
     // Prefer WebSocket: it is the only Signal K transport that can carry
     // authentication, so any future auth work will want to land there.
     if let Some(ref ws_url) = discovery.ws_url {
@@ -796,6 +800,89 @@ impl rustls::client::danger::ServerCertVerifier for NoVerifier {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Answer one `GET /signalk` on a local port with `endpoints`.
+    async fn serve_discovery(endpoints: String) -> SocketAddr {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0u8; 1024];
+            let _ = tokio::io::AsyncReadExt::read(&mut stream, &mut request).await;
+            let body = format!(
+                r#"{{"endpoints":{{"v1":{{"version":"2.37.0",{endpoints}}}}},"server":{{"id":"test","version":"2.37.0"}}}}"#
+            );
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        });
+        addr
+    }
+
+    /// A port nothing listens on.
+    async fn closed_port() -> u16 {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        listener.local_addr().unwrap().port()
+    }
+
+    // The REST base is process-wide state, so the steps that touch it run as one.
+    #[tokio::test]
+    async fn rest_base_belongs_to_the_connected_server_only() {
+        clear_upstream_http_base();
+
+        let dead = closed_port().await;
+        let failing = serve_discovery(format!(
+            r#""signalk-http":"http://127.0.0.1:{dead}/signalk/v1/api/","signalk-tcp":"tcp://127.0.0.1:{dead}""#
+        ))
+        .await;
+        assert!(connect_via_discovery(failing, false, false).await.is_err());
+        assert_eq!(
+            get_upstream_http_base(),
+            None,
+            "a server mayara could not connect to answers no REST reads"
+        );
+
+        let stream_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let stream_port = stream_listener.local_addr().unwrap().port();
+        let working = serve_discovery(format!(
+            r#""signalk-http":"http://127.0.0.1:{stream_port}/signalk/v1/api/","signalk-tcp":"tcp://127.0.0.1:{stream_port}""#
+        ))
+        .await;
+        assert!(connect_via_discovery(working, false, false).await.is_ok());
+        assert_eq!(
+            get_upstream_http_base(),
+            Some(format!("http://127.0.0.1:{stream_port}/signalk/v1/api/"))
+        );
+
+        let tcp_only =
+            serve_discovery(format!(r#""signalk-tcp":"tcp://127.0.0.1:{stream_port}""#)).await;
+        assert!(connect_via_discovery(tcp_only, false, false).await.is_ok());
+        assert_eq!(
+            get_upstream_http_base(),
+            None,
+            "a server without a REST API leaves none behind from the last one"
+        );
+
+        store_upstream_http_base(Some("http://10.0.0.5:3000/signalk/v1/api/".to_string()));
+        assert!(
+            connect_transport(
+                SocketAddr::from(([127, 0, 0, 1], stream_port)),
+                Transport::Tcp,
+                false
+            )
+            .await
+            .is_ok()
+        );
+        assert_eq!(
+            get_upstream_http_base(),
+            None,
+            "a plain tcp: stream has no REST API"
+        );
+        drop(stream_listener);
+    }
 
     // -- parse_discovery_response tests --
 
