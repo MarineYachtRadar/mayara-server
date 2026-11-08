@@ -5,6 +5,7 @@ use num_traits::FromPrimitive;
 use tokio::time::{Instant, interval};
 use tokio_graceful_shutdown::SubsystemHandle;
 
+use super::coast_echo::{COAST_FRAY, CoastEcho, widen_by_beam};
 use super::command::Command;
 use super::land::{Coast, LAND_DEPTH};
 use super::marks;
@@ -39,7 +40,7 @@ const DEG_TO_RAD: f64 = PI / 180.0;
 /// over that much of the picture to either side, as on a real radar, so a
 /// small boat far out shows as an arc rather than a speck or not at all.
 const HALF_BEAM_WIDTH: f64 = 1.0 * DEG_TO_RAD;
-/// Land returns strongly, but less than a ship's steel
+/// Land's strongest patches return strongly, but less than a ship's steel
 const LAND_INTENSITY: u8 = 14;
 /// An echo is never shorter than this many pixels along a spoke, as a
 /// radar pulse has a length of its own.
@@ -454,9 +455,18 @@ impl EmulatorReportReceiver {
             self.doppler_threshold,
         );
 
+        let coast_echo = CoastEcho::new(
+            &self.boat_position,
+            meters_per_pixel(self.current_range),
+            LAND_DEPTH,
+            LAND_INTENSITY,
+            HALF_BEAM_WIDTH,
+            self.rotation_count,
+        );
+
         let mut rotation_ended = false;
         for _ in 0..SPOKES_PER_BATCH {
-            let spoke_data = self.generate_spoke(self.current_spoke, &doppler);
+            let spoke_data = self.generate_spoke(self.current_spoke, &doppler, &coast_echo);
 
             // Heading in `EMULATOR_SPOKES`-units, matching the convention
             // every brand's normalized `add_spoke` heading uses now.
@@ -486,30 +496,25 @@ impl EmulatorReportReceiver {
         rotation_ended
     }
 
-    fn generate_spoke(&self, spoke_angle: u16, doppler: &DopplerColors) -> GenericSpoke {
+    fn generate_spoke(
+        &self,
+        spoke_angle: u16,
+        doppler: &DopplerColors,
+        coast_echo: &CoastEcho,
+    ) -> GenericSpoke {
         // Convert spoke angle to world bearing
         // Spoke 0 = boat heading, increases clockwise
         let spoke_angle_deg = (spoke_angle as f64 / EMULATOR_SPOKES as f64) * 360.0;
         let world_bearing_rad = (self.boat_heading + spoke_angle_deg) * DEG_TO_RAD;
 
-        // Precompute sin/cos for this spoke (used for all pixels)
-        let sin_b = world_bearing_rad.sin();
-        let cos_b = world_bearing_rad.cos();
-
-        let meters_per_pixel = meters_per_pixel(self.current_range);
-        let boats = self.world.boats_on_spoke(sin_b, cos_b, HALF_BEAM_WIDTH);
-        let land = self.coast.on(world_bearing_rad);
-
-        // Generate spoke data directly as bytes (one byte per pixel, 4-bit intensity)
-        let mut data: Vec<u8> = Vec::with_capacity(EMULATOR_SPOKE_LEN);
-
-        for pixel in 0..EMULATOR_SPOKE_LEN {
-            let distance = pixel as f64 * meters_per_pixel;
-            let echo = self.world.echo_fast(sin_b, cos_b, distance, &boats);
-            data.push(doppler.pixel(with_land(echo, distance, land)));
-        }
-
-        data
+        spoke_pixels(
+            &self.world,
+            &self.coast,
+            coast_echo,
+            doppler,
+            world_bearing_rad,
+            meters_per_pixel(self.current_range),
+        )
     }
 
     /// Take the AIS vessels the navigation source reported since the last
@@ -527,16 +532,35 @@ impl EmulatorReportReceiver {
     }
 }
 
-/// The echo at `distance` meters along a spoke whose stretches over land
-/// are `land`: the land's return, unless `echo` is stronger, as a ship
-/// alongside a quay is.
-fn with_land(echo: Echo, distance: f64, land: &[(f64, f64)]) -> Echo {
-    let on_land = land
-        .iter()
-        .any(|&(enter, leave)| distance >= enter && distance < leave.min(enter + LAND_DEPTH));
-    if on_land && echo.intensity < LAND_INTENSITY {
+/// The pixels of a spoke at true bearing `bearing`, in radians: boats,
+/// marks and land as the radar sees them, one byte each.
+fn spoke_pixels(
+    world: &EmulatorWorld,
+    coast: &CoastView,
+    coast_echo: &CoastEcho,
+    doppler: &DopplerColors,
+    bearing: f64,
+    meters_per_pixel: f64,
+) -> GenericSpoke {
+    let (sin_b, cos_b) = bearing.sin_cos();
+    let boats = world.boats_on_spoke(sin_b, cos_b, HALF_BEAM_WIDTH);
+    let land = coast.on(bearing);
+    (0..EMULATOR_SPOKE_LEN)
+        .map(|pixel| {
+            let distance = pixel as f64 * meters_per_pixel;
+            let echo = world.echo_fast(sin_b, cos_b, distance, &boats);
+            let land_return = coast_echo.at(sin_b, cos_b, distance, land);
+            doppler.pixel(with_land(echo, land_return))
+        })
+        .collect()
+}
+
+/// The land's return where it is stronger than `echo`; a ship alongside a
+/// quay shows on it.
+fn with_land(echo: Echo, land_return: u8) -> Echo {
+    if land_return > echo.intensity {
         Echo {
-            intensity: LAND_INTENSITY,
+            intensity: land_return,
             closing_speed: 0.0,
         }
     } else {
@@ -563,7 +587,11 @@ impl CoastView {
     /// the boat at `boat`.
     fn refresh(&mut self, boat: &GeoPosition, reach: f64) {
         if let Some(coast) = &self.coast {
-            self.spokes = coast.spokes(boat, EMULATOR_SPOKES, reach);
+            // Land just past the reach can fray inwards into it
+            self.spokes = widen_by_beam(
+                &coast.spokes(boat, EMULATOR_SPOKES, reach + COAST_FRAY),
+                HALF_BEAM_WIDTH,
+            );
         }
     }
 
@@ -829,45 +857,17 @@ mod tests {
         closing_speed: 0.0,
     };
 
-    /// Land returns from where the beam reaches it, for `LAND_DEPTH` meters
-    /// or to where it leaves the land, whichever comes first.
-    #[test]
-    fn land_returns_from_the_shore_to_its_depth() {
-        let land = [(1000.0, 5000.0), (8000.0, 8100.0)];
-
-        assert_eq!(with_land(NO_ECHO, 999.0, &land).intensity, 0);
-        assert_eq!(with_land(NO_ECHO, 1000.0, &land).intensity, LAND_INTENSITY);
-        assert_eq!(
-            with_land(NO_ECHO, 1000.0 + LAND_DEPTH - 1.0, &land).intensity,
-            LAND_INTENSITY
-        );
-        assert_eq!(with_land(NO_ECHO, 1000.0 + LAND_DEPTH, &land).intensity, 0);
-        assert_eq!(with_land(NO_ECHO, 8050.0, &land).intensity, LAND_INTENSITY);
-        assert_eq!(with_land(NO_ECHO, 8100.0, &land).intensity, 0);
-    }
-
-    /// Land paints red on the default palette, as a strong return does,
-    /// not in the olive of a medium one.
-    #[test]
-    fn land_is_a_strong_return() {
-        assert_eq!(
-            with_land(NO_ECHO, 1000.0, &[(1000.0, 2000.0)]).intensity,
-            14
-        );
-    }
-
     /// Off land, and on a spoke without any, the echo passes unchanged.
     #[test]
     fn an_echo_off_land_passes_unchanged() {
-        assert_eq!(with_land(echo(2.0), 500.0, &[]), echo(2.0));
-        assert_eq!(with_land(echo(2.0), 500.0, &[(1000.0, 2000.0)]), echo(2.0));
+        assert_eq!(with_land(echo(2.0), 0), echo(2.0));
+        assert_eq!(with_land(NO_ECHO, 0), NO_ECHO);
     }
 
     /// A ship stronger than the land shows on it, Doppler colour and all;
     /// a weaker one disappears into the land's return.
     #[test]
     fn a_ship_stronger_than_the_land_shows_on_it() {
-        let land = [(1000.0, 2000.0)];
         let both = colors(DopplerMode::Both);
 
         let ship = |closing_speed| Echo {
@@ -875,16 +875,57 @@ mod tests {
             closing_speed,
         };
 
-        assert_eq!(both.pixel(with_land(ship(2.0), 1100.0, &land)), 40);
+        assert_eq!(both.pixel(with_land(ship(2.0), LAND_INTENSITY)), 40);
         assert_eq!(
-            both.pixel(with_land(ship(0.0), 1100.0, &land)),
+            both.pixel(with_land(ship(0.0), LAND_INTENSITY)),
             LAND_INTENSITY + 1
         );
         let weak = Echo {
             intensity: LAND_INTENSITY - 1,
             closing_speed: 2.0,
         };
-        assert_eq!(both.pixel(with_land(weak, 1100.0, &land)), LAND_INTENSITY);
+        assert_eq!(both.pixel(with_land(weak, LAND_INTENSITY)), LAND_INTENSITY);
+    }
+
+    /// A generated spoke towards land shows the land's return from about
+    /// where the chart has the shore, and a spoke away from it shows none.
+    #[test]
+    fn a_spoke_towards_land_paints_it() {
+        let boat = GeoPosition::new(53.2, 5.3);
+        let land = serde_json::json!({
+            "type": "Polygon",
+            "coordinates": [[[5.29, 53.209], [5.31, 53.209], [5.31, 53.22], [5.29, 53.22], [5.29, 53.209]]]
+        });
+        let path =
+            std::env::temp_dir().join(format!("mayara-spoke-{}.geojson", std::process::id()));
+        std::fs::write(&path, land.to_string()).unwrap();
+        let mut view = CoastView::new(Some(Coast::load(&path).unwrap()));
+        std::fs::remove_file(&path).unwrap();
+        let range = 2000;
+        view.refresh(&boat, spoke_range(range) as f64);
+        let mut world = EmulatorWorld::new(boat);
+        world.show_test_scenario(false);
+        world.update_cache(&boat, 1.0);
+        let mpp = meters_per_pixel(range);
+        let echo = CoastEcho::new(&boat, mpp, LAND_DEPTH, LAND_INTENSITY, HALF_BEAM_WIDTH, 0);
+        let spoke = |bearing| {
+            spoke_pixels(
+                &world,
+                &view,
+                &echo,
+                &colors(DopplerMode::None),
+                bearing,
+                mpp,
+            )
+        };
+
+        let north = spoke(0.0);
+        let shore = (1002.0 / mpp) as usize;
+        let lit = |pixels: &[u8]| pixels.iter().filter(|&&v| v > 0).count();
+        assert_eq!(lit(&north[..shore - (COAST_FRAY / mpp) as usize - 1]), 0);
+        assert!(lit(&north[shore..]) > 10, "{north:?}");
+        assert!(north.iter().all(|&v| v <= LAND_INTENSITY));
+        assert_eq!(lit(&spoke(PI)), 0);
     }
 
     fn colors(mode: DopplerMode) -> DopplerColors {
