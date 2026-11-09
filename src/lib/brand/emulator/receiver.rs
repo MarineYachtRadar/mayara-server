@@ -111,6 +111,11 @@ impl Receiver {
             // out at the strength they would show without it
             strength -= (self.sea_level() / FULL_SCALE * SEA_CONTROL_AT_BOAT * close_in).floor();
         }
+        // Clutter too weak to stand out stays in the background, which gain
+        // brings up only as the receiver's sparse noise
+        if echo.intensity == 0 && strength < DETECTION {
+            strength = 0.0;
+        }
 
         let gain = self.gain_level();
         let noise_share = ((gain - NOISE_FROM_GAIN) / (FULL_SCALE - NOISE_FROM_GAIN)).max(0.0)
@@ -301,6 +306,29 @@ mod tests {
         assert_eq!(quiet_near + quiet_far, 0);
         assert!(loud_far > 100, "{loud_far}");
         assert!(loud_near > 50, "{loud_near}");
+    }
+
+    /// Full gain over a moderate sea lights only a speckle far out, not
+    /// every pixel the faint clutter reaches.
+    #[test]
+    fn full_gain_leaves_the_far_sea_mostly_dark() {
+        let receiver = Receiver {
+            sea_auto: true,
+            ..manual(FULL_SCALE, 0.0)
+        };
+        let (_, far) = lit(&receiver, 1);
+        let far_pixels = SPOKES as usize * (PIXELS - (1500.0 / STEP) as usize);
+        assert!(far < far_pixels / 20, "{far} of {far_pixels}");
+    }
+
+    /// A faint echo is lifted by gain like any other.
+    #[test]
+    fn gain_lifts_the_faintest_echo() {
+        let receiver = Receiver {
+            sea_state: 0.0,
+            ..manual(FULL_SCALE, 0.0)
+        };
+        assert_eq!(receiver.pixel(echo(1), 3000.0, 0, 300, 0).intensity, 7);
     }
 
     /// Auto gain is the neutral gain whatever the manual value was.
