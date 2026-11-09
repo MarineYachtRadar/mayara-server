@@ -521,7 +521,9 @@ async function loadRoute(href, attempt) {
   const current = () => load === routeLoad;
   try {
     const response = await apiFetch(
-      apiBase(`/signalk/v2/api/resources/routes/${encodeURIComponent(id)}`)
+      apiBase(`/signalk/v2/api/resources/routes/${encodeURIComponent(id)}`),
+      // A cached copy would hide the edits the timed refresh is there to pick up.
+      { cache: "no-store" }
     );
     if (response.ok) {
       const route = await response.json();
