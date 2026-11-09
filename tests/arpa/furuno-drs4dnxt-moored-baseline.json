@@ -1,0 +1,18 @@
+{
+  "all.ids_broadcast": 26.0,
+  "false.track_ids": 3.0,
+  "false.track_seconds": 188.842,
+  "kiapa_nui.coverage": 0.9180327868852459,
+  "kiapa_nui.position_error_m": 72.01673317026422,
+  "kiapa_nui.settled_sog_error_ms": 1.1072504992048187,
+  "kiapa_nui.sog_error_at_promotion_ms": 4.823336396396268,
+  "kiapa_nui.track_ids": 8.0,
+  "land.max_sog_ms": 0.0,
+  "land.track_ids": 0.0,
+  "land.track_seconds": 0.0,
+  "mmsi_368383510.coverage": 1.0,
+  "mmsi_368383510.position_error_m": 20.958676361834453,
+  "mmsi_368383510.settled_sog_error_ms": 0.11693044960976183,
+  "mmsi_368383510.sog_error_at_promotion_ms": 0.6858759357413756,
+  "mmsi_368383510.track_ids": 8.0
+}

@@ -2145,6 +2145,11 @@ impl FurunoReportReceiver {
                 continue; // separator bytes 0x3D..=0x3F stay 0 (transparent)
             }
             let sub = (b >> 2) as u8; // 0..=15 intensity within band
+            // The stationary band's 16 levels span the whole TA-off ramp, as
+            // TimeZero stretches each band over its own palette. Read as the
+            // same raw byte instead, they would reach only the lower half of
+            // the ramp, under ARPA's threshold (#831).
+            let stationary = stationary_lut[(b * PIXEL_VALUES as u16 / BAND_TOP_OFFSET) as usize];
             // Rain band
             if rain_count > 0 {
                 lut[(RAIN_BASE + b) as usize] = rain_start + sub * rain_count / 16;
@@ -2153,17 +2158,14 @@ impl FurunoReportReceiver {
                 // stationary intensity ramp so rain is still visible.
                 lut[(RAIN_BASE + b) as usize] = stationary_lut[(STATIONARY_BASE + b) as usize];
             }
-            // Stationary band: reuse the TA-off intensity mapping for the
-            // equivalent raw byte (b + 0x40).
-            lut[(STATIONARY_BASE + b) as usize] = stationary_lut[(STATIONARY_BASE + b) as usize];
+            lut[(STATIONARY_BASE + b) as usize] = stationary;
             // Approaching band
             if appr_count > 0 {
                 lut[(APPROACHING_BASE + b) as usize] = appr_start + sub * appr_count / 16;
             } else {
                 // No approaching slot available: fall through to the stationary
                 // intensity ramp so approaching targets are still visible.
-                lut[(APPROACHING_BASE + b) as usize] =
-                    stationary_lut[(STATIONARY_BASE + b) as usize];
+                lut[(APPROACHING_BASE + b) as usize] = stationary;
             }
         }
         // Byte 0 is always transparent; explicitly restate for clarity.
@@ -3601,15 +3603,30 @@ mod tests {
         assert_eq!(lut[0x04], rain_start);
         assert_eq!(lut[0x3C], rain_start);
 
-        // Stationary band: reuses the TA-off intensity ramp for the same
-        // raw byte value.
+        // Stationary band: its lowest level is no echo and its highest
+        // the strongest echo the radar reports with Target Analyzer off.
         let off = FurunoReportReceiver::wire_to_legend(&legend, DopplerWireMode::Off, false);
-        assert_eq!(lut[0x40], off[0x40]);
-        assert_eq!(lut[0x7C], off[0x7C]);
+        assert_eq!(lut[0x40], 0);
+        assert_eq!(lut[0x7C], off[PIXEL_VALUES as usize]);
 
         // Approaching band
         assert_eq!(lut[0x80], appr_start);
         assert_eq!(lut[0xBC], appr_start);
+    }
+
+    /// With Target Analyzer on, a moored boat's echo must reach the ARPA
+    /// threshold as it does with Target Analyzer off. A DRS4D-NXT's ordinary
+    /// echoes spread over the whole ramp with it off, but only over its lower
+    /// half with it on, so not one of them could be acquired (#831).
+    #[test]
+    fn wire_to_legend_on_spreads_stationary_echoes_over_the_whole_ramp() {
+        let legend = nxt_ta_legend();
+        let lut = FurunoReportReceiver::wire_to_legend(&legend, DopplerWireMode::On, false);
+
+        let levels: Vec<u8> = (0x40..=0x7C).step_by(4).map(|b| lut[b]).collect();
+        assert!(levels.windows(2).all(|w| w[0] < w[1]), "{levels:?}");
+        assert!(levels[8] > legend.pixel_colors / 2, "{levels:?}");
+        assert_eq!(levels[15], legend.pixel_colors - 1);
     }
 
     #[test]
