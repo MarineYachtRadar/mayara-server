@@ -30,13 +30,13 @@ function routePoints(route, reverse) {
   const coordinates = route?.feature?.geometry?.coordinates;
   if (!Array.isArray(coordinates)) return [];
   const meta = route.feature.properties?.coordinatesMeta;
-  const points = coordinates
-    .map((c, i) => ({
-      longitude: c?.[0],
-      latitude: c?.[1],
-      name: (Array.isArray(meta) && meta[i]?.name) || null,
-    }))
-    .filter((p) => Number.isFinite(p.latitude) && Number.isFinite(p.longitude));
+  const points = coordinates.map((c, i) => ({
+    longitude: c?.[0],
+    latitude: c?.[1],
+    name: (Array.isArray(meta) && meta[i]?.name) || null,
+  }));
+  // Dropping a bad point would shift every later one off its `pointIndex`.
+  if (!points.every((p) => Number.isFinite(p.latitude) && Number.isFinite(p.longitude))) return [];
   return reverse ? points.reverse() : points;
 }
 

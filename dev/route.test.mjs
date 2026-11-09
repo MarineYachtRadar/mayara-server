@@ -44,6 +44,9 @@ test("Route points come in sailing order, reversed when the route is", () => {
   assert.equal(ROUTE.feature.geometry.coordinates[0][0], 178.3, "the route itself is left alone");
 
   assert.deepEqual(routePoints({}, false), []);
+  const broken = structuredClone(ROUTE);
+  broken.feature.geometry.coordinates[0] = [null, -18.2];
+  assert.deepEqual(routePoints(broken, false), [], "a bad point would shift the indices after it");
 });
 
 test("No next point is no course to draw", () => {
