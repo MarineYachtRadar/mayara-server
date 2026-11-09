@@ -108,3 +108,19 @@ test("A route that disagrees with the next point is not drawn", () => {
   assert.equal(plot.nextIndex, null);
   assert.equal(plot.next.name, "Course destination");
 });
+
+test("A next point on the antimeridian matches its route point written as -180", () => {
+  const points = [
+    { latitude: -16.5, longitude: 179.9, name: "East" },
+    { latitude: -16.6, longitude: -180, name: "Meridian" },
+  ];
+  const plot = coursePlot(
+    course({
+      "navigation.course.activeRoute": { href: "/resources/routes/x", pointIndex: 1 },
+      "navigation.course.nextPoint": at(-16.6, 180),
+    }),
+    points
+  );
+  assert.equal(plot.nextIndex, 1);
+  assert.equal(plot.next.name, "Meridian");
+});

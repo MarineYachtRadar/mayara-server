@@ -41,12 +41,13 @@ function routePoints(route, reverse) {
 }
 
 // About a centimetre, so the same point read through JSON twice still matches.
+// Longitudes are compared around the globe, as -180 and 180 are one meridian.
 const SAME_POSITION_DEGREES = 1e-7;
 
 function samePosition(a, b) {
   return (
     Math.abs(a.latitude - b.latitude) < SAME_POSITION_DEGREES &&
-    Math.abs(a.longitude - b.longitude) < SAME_POSITION_DEGREES
+    Math.abs(((a.longitude - b.longitude + 540) % 360) - 180) < SAME_POSITION_DEGREES
   );
 }
 
