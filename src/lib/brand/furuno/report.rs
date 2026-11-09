@@ -4,9 +4,8 @@ use std::f64::consts::TAU;
 use std::io;
 use std::net::SocketAddr;
 use std::time::Duration;
-use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
-use tokio::io::ReadHalf;
+use tokio::io::{AsyncBufRead, AsyncBufReadExt};
 use tokio::net::{TcpSocket, TcpStream};
 use tokio::time::{Instant, sleep, sleep_until};
 use tokio_graceful_shutdown::SubsystemHandle;
@@ -387,7 +386,9 @@ impl FurunoReportReceiver {
         };
         // self.common.command_sender.init(&mut writer).await?;
 
-        let mut line = String::new();
+        // Outlives each select! round, so a report the spoke branch interrupts
+        // is finished by the next read instead of lost.
+        let mut line = Vec::new();
         let mut deadline = Instant::now() + self.report_request_interval;
         let mut first_report_received = false;
 
@@ -443,15 +444,15 @@ impl FurunoReportReceiver {
 
                 Some(r) = conditional_read(&mut reader, &mut line) => {
                     match r {
-                        Ok(len) => {
-                            if len > 2 {
+                        Ok(true) => {
+                            if line.len() > 2 {
                                 // The report stream is shared by both ranges of a
                                 // dual-range radar, so a report keeps both alive.
                                 self.common.info.mark_input();
                                 if let Some(ref cb) = self.common_b {
                                     cb.info.mark_input();
                                 }
-                                if let Err(e) = self.process_report(&line) {
+                                if let Err(e) = self.process_report(&String::from_utf8_lossy(&line)) {
                                     log::error!("{}: {}", self.common.key, e);
                                 } else if !first_report_received {
                                     if let Some(ref mut cs) = self.command_sender {
@@ -466,6 +467,19 @@ impl FurunoReportReceiver {
                                 // EchoFormat control; process_frame() detects and decodes Tile.
                             }
                             line.clear();
+                        }
+                        Ok(false) => {
+                            if !line.is_empty() {
+                                log::warn!(
+                                    "{}: dropping a report cut off by the end of the session: {:?}",
+                                    self.common.key,
+                                    String::from_utf8_lossy(&line)
+                                );
+                            }
+                            return Err(RadarError::Io(io::Error::new(
+                                io::ErrorKind::UnexpectedEof,
+                                "the radar closed the control session",
+                            )));
                         }
                         Err(e) => {
                             log::error!("{}: receive error: {}", self.common.key, e);
@@ -2421,12 +2435,20 @@ async fn conditional_receive(
     }
 }
 
-async fn conditional_read(
-    reader: &mut Option<BufReader<ReadHalf<TcpStream>>>,
-    line: &mut String,
-) -> Option<io::Result<usize>> {
+/// Reads the rest of a report into `line`: `Ok(true)` once it holds the whole
+/// report, `Ok(false)` once the radar has closed the session, leaving in
+/// `line` whatever the end cut off. Cancel safe: a read that loses a
+/// `select!` keeps what it has read in `line` for the next one to finish.
+async fn conditional_read<R: AsyncBufRead + Unpin>(
+    reader: &mut Option<R>,
+    line: &mut Vec<u8>,
+) -> Option<io::Result<bool>> {
     match reader {
-        Some(s) => Some(s.read_line(line).await),
+        Some(s) => Some(
+            s.read_until(b'\n', line)
+                .await
+                .map(|_| line.ends_with(b"\n")),
+        ),
         None => None,
     }
 }
@@ -2518,6 +2540,7 @@ mod tests {
     use crate::radar::Legend;
     use clap::Parser;
     use std::net::{Ipv4Addr, SocketAddrV4};
+    use tokio::io::AsyncWriteExt;
 
     /// An NXT's radar info with its model known; `dual` names its range.
     fn nxt_info(radars: &SharedRadars, args: &Cli, dual: Option<&str>) -> RadarInfo {
@@ -3404,6 +3427,65 @@ mod tests {
         // A bare `$N96`, or an entry that is not a part number at all.
         assert!(model_and_version(&[]).is_none());
         assert!(model_and_version(&["0359360"]).is_none());
+    }
+
+    /// A report the radar sends in two parts arrives whole, even when the
+    /// spoke stream wins the `select!` while the second part is on its way.
+    #[tokio::test]
+    async fn a_report_interrupted_between_its_parts_arrives_whole() {
+        let (mut radar, client) = tokio::io::duplex(64);
+        let mut reader = Some(BufReader::new(client));
+        let mut line = Vec::new();
+
+        radar.write_all(b"$N96,0359360-01.1").await.unwrap();
+        tokio::select! {
+            _ = conditional_read(&mut reader, &mut line) => panic!("half a report read as whole"),
+            _ = tokio::task::yield_now() => {}
+        }
+        radar.write_all(b"1,0359358-01.01\r\n").await.unwrap();
+
+        let read = conditional_read(&mut reader, &mut line).await;
+        assert!(matches!(read, Some(Ok(true))));
+        assert_eq!(line, b"$N96,0359360-01.11,0359358-01.01\r\n");
+    }
+
+    /// A report the end of the session cuts off is not taken for a whole one:
+    /// a firmware version of `01.1` would show for `01.11`.
+    #[tokio::test]
+    async fn a_report_cut_off_by_the_end_of_the_session_is_not_whole() {
+        let (mut radar, client) = tokio::io::duplex(64);
+        let mut reader = Some(BufReader::new(client));
+        let mut line = Vec::new();
+
+        radar.write_all(b"$N96,0359360-01.1").await.unwrap();
+        drop(radar);
+
+        let read = conditional_read(&mut reader, &mut line).await;
+        assert!(matches!(read, Some(Ok(false))));
+        assert_eq!(line, b"$N96,0359360-01.1");
+    }
+
+    /// The read after the last report says the radar has closed the session,
+    /// rather than returning an empty report again and again.
+    #[tokio::test]
+    async fn the_end_of_the_session_is_noticed_after_the_last_report() {
+        let (mut radar, client) = tokio::io::duplex(64);
+        let mut reader = Some(BufReader::new(client));
+        let mut line = Vec::new();
+
+        radar.write_all(b"$N69,2,0,0,60,300,0\r\n").await.unwrap();
+        drop(radar);
+
+        assert!(matches!(
+            conditional_read(&mut reader, &mut line).await,
+            Some(Ok(true))
+        ));
+        line.clear();
+        assert!(matches!(
+            conditional_read(&mut reader, &mut line).await,
+            Some(Ok(false))
+        ));
+        assert!(line.is_empty());
     }
 
     /// A radar that keeps dropping the control session must be backed off
