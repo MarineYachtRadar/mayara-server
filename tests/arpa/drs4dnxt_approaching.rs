@@ -49,6 +49,25 @@ const VOYAGE: rig::Voyage = rig::Voyage {
 
 /// Plays the recording with `configure` applied to ranges A and B once they
 /// are found, and holds the range A scores to `baseline`.
+#[allow(dead_code)] // each scenario file plays one of the two
 pub(crate) async fn run(configure: fn(&RadarInfo, &RadarInfo), baseline: &'static str) {
     rig::run(&VOYAGE, configure, baseline).await;
+}
+
+/// The same recording scored on the two boats lying moored within range A
+/// that send AIS. Neither moves.
+const MOORED: rig::Voyage = rig::Voyage {
+    vessels: &[
+        // KIAPA NUI, 137 m off.
+        ("kiapa_nui", &[367589460]),
+        // No name in its AIS, 381 m off.
+        ("mmsi_368383510", &[368383510]),
+    ],
+    ..VOYAGE
+};
+
+/// As [`run`], scoring the moored boats.
+#[allow(dead_code)] // each scenario file plays one of the two
+pub(crate) async fn run_moored(configure: fn(&RadarInfo, &RadarInfo), baseline: &'static str) {
+    rig::run(&MOORED, configure, baseline).await;
 }
