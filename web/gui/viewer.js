@@ -506,6 +506,9 @@ function forgetCourse() {
 
 const ROUTE_RETRY_MS = 2000;
 const ROUTE_RETRY_MAX_MS = 60000;
+// A waypoint moved away from the current leg changes no course value, so the
+// route is read again on a timer to pick up such an edit.
+const ROUTE_REFRESH_MS = 30000;
 
 // Reads the whole route the course follows. Without it, or while mayara has no
 // Signal K REST API to ask, the PPI still draws the current leg, which the
@@ -525,6 +528,9 @@ async function loadRoute(href, attempt) {
       if (!current()) return;
       activeRoute = { href, route };
       updateCoursePlot();
+      setTimeout(() => {
+        if (current()) loadRoute(href, 0);
+      }, ROUTE_REFRESH_MS);
       return;
     }
     console.log(`Route ${id} unavailable: HTTP ${response.status}`);
