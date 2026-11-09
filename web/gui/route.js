@@ -88,14 +88,15 @@ function coursePlot(course, points) {
     Number.isInteger(index) &&
     index >= 0 &&
     index < points.length;
-  // A route read between an edit and the Course API's update can hold a
-  // different point at the index, so the point counts only where it lies.
+  // A route read between an edit and the Course API's update can disagree
+  // with the course, so it is drawn only while its point at the index lies
+  // at the next point.
   const atNext = onRoute && samePosition(points[index], next);
 
   return {
     next: { ...next, name: (atNext && points[index].name) || nextPoint?.name || null },
     previous: position(course.get("navigation.course.previousPoint")),
-    route: onRoute ? points : [],
+    route: atNext ? points : [],
     nextIndex: atNext ? index : null,
   };
 }
