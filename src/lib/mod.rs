@@ -17,6 +17,7 @@ use utoipa::ToSchema;
 pub mod ais;
 pub mod brand;
 pub mod config;
+pub mod course;
 pub mod locator;
 pub mod navdata;
 pub mod network;
@@ -999,11 +1000,11 @@ pub async fn start_session(
                     _ = subsys.on_shutdown_requested() => break,
                     _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {},
                 }
-                if crate::signalk::get_upstream_http_base().is_some() {
+                if let Some(base) = crate::signalk::get_upstream_http_base() {
                     let own_ship_latched = navdata::get_own_ship_context().is_some();
                     let deadline_passed = tokio::time::Instant::now() >= own_ship_wait_deadline;
                     if own_ship_latched || deadline_passed {
-                        navdata::seed_ais_from_upstream(accept_invalid_certs).await;
+                        navdata::seed_ais_from_upstream(&base, accept_invalid_certs).await;
                         break;
                     }
                 }

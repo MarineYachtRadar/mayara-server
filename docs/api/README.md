@@ -46,6 +46,7 @@ mayara-server --openapi
 | POST   | `/signalk/v2/api/vessels/self/radars/{id}/targets`           | Acquire target at position; answers with the new target's `targetId` |
 | DELETE | `/signalk/v2/api/vessels/self/radars/{id}/targets/{tid}`     | Delete tracked target                              |
 | GET    | `/signalk/v2/api/vessels/self/radars/resources/openapi.json` | OpenAPI specification                              |
+| GET    | `/signalk/v2/api/resources/routes/{id}`                      | A route from the upstream Signal K server, for drawing the active route (needs a `ws:`/`wss:` or discovered upstream) |
 
 ### WebSocket Streams
 
@@ -155,7 +156,7 @@ show controls that no longer match the radar.
 | Prefix           | Data                                    | Context   |
 | ---------------- | --------------------------------------- | --------- |
 | `radars.*`       | radar controls and ARPA targets         | own-ship  |
-| `navigation.*`   | own-ship heading, position, COG/SOG     | own-ship  |
+| `navigation.*`   | own-ship heading, position, COG/SOG, and the active course (`navigation.course.activeRoute`, `.nextPoint`, `.previousPoint`, relayed from the upstream Signal K Course API) | own-ship  |
 | `notifications.*`| radar alarms and reachability           | own-ship  |
 | `vessels.*`      | AIS vessels                             | other     |
 

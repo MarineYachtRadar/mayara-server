@@ -24,6 +24,7 @@ use tokio_tungstenite::tungstenite::Message;
 use crate::{
     Cli,
     ais::AisVesselStore,
+    course,
     radar::{GeoPosition, RadarError},
     stream::SignalKDelta,
 };
@@ -126,6 +127,16 @@ fn broadcast_position_update(lat: f64, lon: f64, source: &str) {
     if let Some(tx) = NAV_BROADCAST_TX.get() {
         let mut delta = SignalKDelta::new();
         delta.add_position_update(lat, lon, source);
+        let _ = tx.send(delta);
+    }
+}
+
+/// Broadcast a Course API value (or its withdrawal, as `null`) to subscribed
+/// clients.
+fn broadcast_course_update(path: &str, value: Value) {
+    if let Some(tx) = NAV_BROADCAST_TX.get() {
+        let mut delta = SignalKDelta::new();
+        delta.add_course_update(path, value, "signalk");
         let _ = tx.send(delta);
     }
 }
@@ -282,12 +293,9 @@ fn update_ais_vessel(context: &str, updates: &Value) {
 /// and seed the AIS store with everything it knows. Without this, the store
 /// only fills as upstream pushes per-vessel deltas (~5-60s per vessel) and
 /// a freshly-connected GUI sees the overlay trickle in over minutes.
-/// Best-effort: any failure (no upstream URL, unreachable, malformed JSON)
+/// Best-effort: any failure (unreachable, malformed JSON)
 /// is logged at debug and ignored; per-vessel WS deltas will fill the gap.
-pub(crate) async fn seed_ais_from_upstream(accept_invalid_certs: bool) {
-    let Some(base) = crate::signalk::get_upstream_http_base() else {
-        return;
-    };
+pub(crate) async fn seed_ais_from_upstream(base: &str, accept_invalid_certs: bool) {
     let Some(store) = get_ais_store() else {
         return;
     };
@@ -730,6 +738,9 @@ pub(crate) fn set_position(lat: Option<f64>, lon: Option<f64>, source: &str) {
 /// own-ship nav was ever received, so a transport that never carried nav
 /// (e.g. anonymous tcp on a hidden-vessels server) doesn't churn broadcasts.
 pub(crate) fn clear_own_ship_nav() {
+    for path in course::clear() {
+        broadcast_course_update(path, Value::Null);
+    }
     // A fixed installation keeps knowing where it is when an upstream goes
     // away: the position came from the command line, not from the peer that
     // just dropped, and clearing it would leave the radar with nothing.
@@ -937,6 +948,18 @@ fn carries_navigation(datagram: &[u8]) -> bool {
 /// Subscription for own-ship navigation data only
 const SUBSCRIBE_SELF: &str = "{\"context\":\"vessels.self\",\"subscribe\":[{\"path\":\"navigation.headingTrue\"},{\"path\":\"navigation.headingMagnetic\"},{\"path\":\"navigation.magneticVariation\"},{\"path\":\"navigation.position\"},{\"path\":\"navigation.speedOverGround\"},{\"path\":\"navigation.courseOverGroundTrue\"}]}\r\n";
 
+/// The own ship's active course from the Signal K Course API. Its own
+/// `vessels.self` subscription rather than part of `SUBSCRIBE_VESSELS`, so
+/// another vessel's course never reaches the AIS store, where a delta carrying
+/// only unknown paths would still create a vessel.
+const SUBSCRIBE_COURSE: &str = concat!(
+    "{\"context\":\"vessels.self\",\"subscribe\":[",
+    "{\"path\":\"navigation.course.activeRoute\"},",
+    "{\"path\":\"navigation.course.nextPoint\"},",
+    "{\"path\":\"navigation.course.previousPoint\"}",
+    "]}\r\n"
+);
+
 /// Additional subscription for all vessels (sent after own-ship context is known),
 /// limited to the paths the AIS store reads. A `*` path makes the server stream
 /// every path of every vessel, which on a busy boat is most of its output.
@@ -988,6 +1011,8 @@ enum SignalKSubscription {
     /// Own-ship and AIS paths in one subscription; sent instead of the two
     /// above when the hello names our vessel.
     Vessels,
+    /// Own-ship active course; sent with the first own-ship subscription.
+    Course,
 }
 
 impl SignalKSubscription {
@@ -996,6 +1021,7 @@ impl SignalKSubscription {
             Self::OwnShip => SUBSCRIBE_SELF,
             Self::AllVessels => SUBSCRIBE_ALL,
             Self::Vessels => SUBSCRIBE_VESSELS,
+            Self::Course => SUBSCRIBE_COURSE,
         }
     }
 }
@@ -1364,6 +1390,9 @@ impl NavigationData {
         // and position so the GUI shows "no data" instead of a frozen value
         // that keeps drifting from reality until the connection comes back.
         clear_own_ship_nav();
+        // The next connection may reach a server without a REST API, or
+        // another server; until its discovery says otherwise, there is none.
+        crate::signalk::clear_upstream_http_base();
         let delivered = SIGNALK_DELIVERED_DATA.swap(false, std::sync::atomic::Ordering::SeqCst);
         let own_ship = SIGNALK_OWN_SHIP_NAV_SEEN.swap(false, std::sync::atomic::Ordering::SeqCst);
         if own_ship {
@@ -1897,9 +1926,9 @@ impl NavigationData {
             log::debug!("{} received hello, will subscribe", self.what);
             if let Some(context) = hello_self_context(line) {
                 set_own_ship_context(&context);
-                return vec![SignalKSubscription::Vessels];
+                return vec![SignalKSubscription::Vessels, SignalKSubscription::Course];
             }
-            return vec![SignalKSubscription::OwnShip];
+            return vec![SignalKSubscription::OwnShip, SignalKSubscription::Course];
         }
 
         // Any non-hello line is a real delta. Marking delivered_data here
@@ -2594,6 +2623,11 @@ fn apply_signalk_value(values_entry: &Value, source: &str) {
         "navigation.courseOverGroundTrue" => {
             if let Some(cog) = signalk_angle(path, value) {
                 set_cog(cog);
+            }
+        }
+        _ if course::is_course_path(path) => {
+            if course::set(path, value) {
+                broadcast_course_update(path, value.clone());
             }
         }
         _ => {

@@ -30,6 +30,7 @@ use super::super::{Message, Web, WebSocket, WebSocketUpgrade};
 use mayara::{
     Brand, Expectation, InterfaceApi, NetworkCheck,
     config::{Consent, KnownRadar, SettingsStorage},
+    course::RouteFetchError,
     navdata,
     radar::{
         GeoPosition, Legend, RadarError, RadarInfo, SharedRadars,
@@ -56,6 +57,7 @@ const RADAR_CONTROLS_URI: &str = "/signalk/v2/api/vessels/self/radars/{radar_id}
 const RADAR_CONTROL_URI: &str =
     "/signalk/v2/api/vessels/self/radars/{radar_id}/controls/{control_id}";
 const RADAR_TARGETS_URI: &str = "/signalk/v2/api/vessels/self/radars/{radar_id}/targets";
+const ROUTE_URI: &str = "/signalk/v2/api/resources/routes/{id}";
 const RADAR_TARGET_URI: &str = "/signalk/v2/api/vessels/self/radars/{radar_id}/targets/{target_id}";
 
 /// How long a control PUT waits for the radar to object before it reports
@@ -96,6 +98,7 @@ const CONTROL_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_mil
         acquire_target,
         delete_target,
         control_stream_docs,
+        get_route,
     ),
     components(schemas(
         RadarControlIdParam,
@@ -145,6 +148,7 @@ pub(crate) fn routes(axum: axum::Router<Web>) -> axum::Router<Web> {
         )
         .route(RADAR_TARGETS_URI, get(get_targets).post(acquire_target))
         .route(RADAR_TARGET_URI, axum::routing::delete(delete_target))
+        .route(ROUTE_URI, get(get_route))
         .route(OPENAPI_URI, get(openapi_json))
         .merge(SwaggerUi::new("/swagger-ui").config(SwaggerConfig::new([OPENAPI_URI])))
 }
@@ -475,6 +479,44 @@ async fn get_status(State(state): State<Web>) -> Response {
         state.radars.known_radars(),
     ))
     .into_response()
+}
+
+#[utoipa::path(
+    get,
+    path = "/signalk/v2/api/resources/routes/{id}",
+    summary = "Read a route from the upstream Signal K server",
+    description = "Passes a Signal K Resources API route through from the Signal K server mayara \
+                   takes its navigation from, so the GUI can draw the whole active route \
+                   (`navigation.course.activeRoute.href` on the stream) on the PPI. Available \
+                   only when that server was found through its discovery endpoint.",
+    params(("id" = String, Path, description = "Route id, the last part of the route's href")),
+    responses(
+        (status = 200, description = "The route, as the Signal K server returned it"),
+        (status = 400, description = "Not a route id"),
+        (status = 502, description = "The Signal K server could not be reached"),
+        (status = 503, description = "No Signal K server with a REST API is known")
+    ),
+    tag = "Configuration"
+)]
+async fn get_route(Path(id): Path<String>, State(state): State<Web>) -> Response {
+    let response = match mayara::course::fetch_route(&id, state.args.accept_invalid_certs).await {
+        Ok(route) => Json(route).into_response(),
+        Err(RouteFetchError::BadId) => {
+            SignalKResponse::failed(StatusCode::BAD_REQUEST, format!("'{id}' is not a route id"))
+        }
+        Err(RouteFetchError::NoUpstream) => SignalKResponse::failed(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "No Signal K server with a REST API is known",
+        ),
+        Err(RouteFetchError::Upstream(status)) => SignalKResponse::failed(
+            StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY),
+            format!("The Signal K server answered {status}"),
+        ),
+        Err(RouteFetchError::Unreachable(e)) => SignalKResponse::failed(StatusCode::BAD_GATEWAY, e),
+    };
+    // The GUI reads the route again to pick up edits, and a route missing now
+    // may be created a moment later; a stored answer would hide either.
+    ([(axum::http::header::CACHE_CONTROL, "no-store")], response).into_response()
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -2157,7 +2199,8 @@ async fn handle_subscription(
 ///
 /// The paths handled here are the navigation paths `stream::is_navigation_path`
 /// knows can be paced; the two lists say the same thing and have to keep
-/// saying it.
+/// saying it. The active course rides along: it changes rarely, so a client
+/// that subscribes needs it now, not at the next waypoint.
 async fn send_navigation(
     socket: &mut WebSocket,
     subscriptions: &mut ActiveSubscriptions,
@@ -2190,6 +2233,11 @@ async fn send_navigation(
         && let Some(sog) = navdata::get_sog()
     {
         delta.add_navigation_update("navigation.speedOverGround", sog, "mayara");
+    }
+    for (path, value) in mayara::course::current() {
+        if due(subscriptions, path) {
+            delta.add_course_update(path, value, "signalk");
+        }
     }
 
     if let Some(d) = delta.build() {

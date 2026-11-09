@@ -38,6 +38,10 @@ const MIN_INSET_RADIUS_FRACTION = 0.8;
 // spoke is written at its own raw `spoke.bearing`, which is exact per spoke.
 const HEADING_SMOOTH_ALPHA = 0.1;
 
+// Plotter magenta for the active route, darker than the second VRM/EBL's so
+// the two stay apart.
+const ROUTE_COLOR = "#d040b0";
+
 // Overlay redraw threshold for live heading motion, in radians (~0.5°).
 // Below this the overlay keeps its last paint; above it a redraw is
 // scheduled so head-up AIS/ARPA placement and north-up zones/rose track
@@ -280,6 +284,10 @@ class PPI {
     // AIS vessels: Map of mmsi -> vessel data
     this.aisVessels = new Map();
     this.showAis = true; // Default to showing AIS vessels
+
+    // Active course to draw, from route.js coursePlot(); null when none
+    this.coursePlot = null;
+    this.showRoute = true;
 
     // Own-ship course (rad true) and speed (m/s), for AIS CPA/TCPA
     this.ownShipCourse = null;
@@ -813,6 +821,23 @@ class PPI {
   }
 
   /**
+   * Set the active course to draw (from route.js coursePlot), or null
+   */
+  setCoursePlot(plot) {
+    this.coursePlot = plot;
+    this.#drawOverlay();
+  }
+
+  /**
+   * Set whether to show the active route
+   * @param {boolean} show
+   */
+  setShowRoute(show) {
+    this.showRoute = show;
+    this.#drawOverlay();
+  }
+
+  /**
    * Clear all AIS vessels from the display
    */
   clearAisVessels() {
@@ -1322,6 +1347,12 @@ class PPI {
     if (this.editingSectorIndex !== null) {
       const sector = this.noTransmitSectors[this.editingSectorIndex];
       this.#drawSectorDragHandles(ctx, sector);
+    }
+
+    // The route goes under the targets: an echo on the track line matters
+    // more than the line.
+    if (this.showRoute) {
+      this.#drawRoute(ctx, range);
     }
 
     // Draw ARPA targets
@@ -1876,6 +1907,92 @@ class PPI {
     ctx.restore();
   }
 
+  // Screen position of a lat/lon, placed the way AIS vessels are so a buoy on
+  // the route lands on its echo. Null while own position is unknown.
+  #screenOf(point, heading, pixelsPerMeter) {
+    if (this.ownShipLat == null || this.ownShipLon == null) return null;
+    const { bearing, distance } = bearingDistance(
+      this.ownShipLat,
+      this.ownShipLon,
+      point.latitude,
+      point.longitude
+    );
+    const angle = bearing - heading + this.#displayRotation();
+    const pixelDist = distance * pixelsPerMeter;
+    return {
+      x: this.center_x + pixelDist * Math.sin(angle),
+      y: this.center_y - pixelDist * Math.cos(angle),
+    };
+  }
+
+  #drawRoute(ctx, range) {
+    const plot = this.coursePlot;
+    if (!plot || !range || range <= 0) return;
+    const heading = this.#displayHeadingRad();
+    if (heading === null) return;
+
+    const pixelsPerMeter = this.beam_length / range;
+    const at = (p) => this.#screenOf(p, heading, pixelsPerMeter);
+    const next = at(plot.next);
+    if (!next) return;
+    const route = plot.route.map(at);
+    const previous = plot.previous ? at(plot.previous) : null;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(this.center_x, this.center_y, this.beam_length, 0, 2 * Math.PI);
+    ctx.clip();
+    ctx.strokeStyle = ROUTE_COLOR;
+    ctx.fillStyle = ROUTE_COLOR;
+    ctx.lineCap = "round";
+
+    if (route.length > 1) {
+      ctx.setLineDash([8, 6]);
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      route.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    if (previous) {
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(previous.x, previous.y);
+      ctx.lineTo(next.x, next.y);
+      ctx.stroke();
+    }
+
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(this.center_x, this.center_y);
+    ctx.lineTo(next.x, next.y);
+    ctx.stroke();
+
+    route.forEach((p, i) => {
+      if (i === plot.nextIndex) return;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 3, 0, 2 * Math.PI);
+      ctx.fill();
+    });
+
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(next.x, next.y, 8, 0, 2 * Math.PI);
+    ctx.stroke();
+
+    if (plot.next.name) {
+      ctx.font = "12px/1 Verdana, Geneva, sans-serif";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.shadowColor = "black";
+      ctx.shadowBlur = 3;
+      ctx.fillText(plot.next.name, next.x + 12, next.y);
+    }
+
+    ctx.restore();
+  }
+
   /**
    * Draw IMO-style vessel symbol (isoceles triangle pointing in direction of travel)
    */
@@ -1916,6 +2033,10 @@ class PPI {
   setOwnShipPosition(lat, lon) {
     this.ownShipLat = lat;
     this.ownShipLon = lon;
+    // Waypoints stay put while the boat moves, so the route has to follow.
+    if (this.coursePlot && this.showRoute) {
+      this.#drawOverlay();
+    }
     this.onTrackedChange?.();
   }
 

@@ -573,6 +573,89 @@ div.myr_ppi {
 }
 
 /* ============================================
+   Route Lozenge - active route toggle (bottom-left, right of AIS)
+   ============================================ */
+
+.myr_route_lozenge {
+  position: absolute;
+  bottom: 20px;
+  left: 66px; /* Right of AIS lozenge (20px + 36px + 2 x 2px border + 6px gap) */
+  display: flex;
+  align-items: stretch;
+  height: 36px;
+  background: rgba(0, 0, 0, 0.7);
+  border: 2px solid #446;
+  border-radius: 18px;
+  z-index: 100;
+  overflow: hidden;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.myr_route_lozenge_button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  padding: 0;
+  background: #2a2a2a;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.myr_route_lozenge_button:hover {
+  background: #333;
+}
+
+.myr_route_lozenge_button:active {
+  transform: scale(0.95);
+}
+
+.myr_route_lozenge_button:focus-visible {
+  outline: 2px solid #d040b0;
+  outline-offset: 2px;
+}
+
+.myr_route_icon {
+  width: 20px;
+  height: 20px;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
+  stroke: #666;
+}
+
+.myr_route_icon circle {
+  fill: #666;
+  stroke: none;
+}
+
+.myr_route_lozenge.myr_route_on .myr_route_lozenge_button {
+  background: #42193a;
+}
+
+.myr_route_lozenge.myr_route_on .myr_route_icon {
+  stroke: #d040b0;
+}
+
+.myr_route_lozenge.myr_route_on .myr_route_icon circle {
+  fill: #d040b0;
+}
+
+/* No heading reference: the route can't be placed, so the toggle is inert. */
+.myr_route_lozenge.myr_route_disabled {
+  opacity: 0.5;
+  border-color: #666666;
+}
+
+.myr_route_lozenge.myr_route_disabled .myr_route_lozenge_button {
+  cursor: not-allowed;
+  background: rgba(50, 50, 50, 0.6);
+}
+
+/* ============================================
    VRM/EBL Lozenge - VRM/EBL marker toggle (bottom-left, above AIS)
    ============================================ */
 

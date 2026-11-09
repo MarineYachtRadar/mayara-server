@@ -38,6 +38,7 @@ import { WebGPURenderer } from "./render_webgpu.js";
 import { WebGLRenderer } from "./render_webgl.js";
 import { PPI } from "./ppi.js";
 import { TargetDataBoxes } from "./data-boxes.js";
+import { COURSE_PATHS, routeId, routePoints, coursePlot } from "./route.js";
 import { startTourIfFirstVisit } from "./tour.js";
 import "./app-dock.js";
 
@@ -108,6 +109,23 @@ var showAis = (() => {
     return true;
   }
 })();
+
+// Active-route overlay enabled state (client-only toggle, persists in localStorage)
+var showRoute = (() => {
+  try {
+    return localStorage.getItem("mayaraShowRoute") !== "false";
+  } catch {
+    return true;
+  }
+})();
+
+// Course API values by path, as mayara relays them from Signal K, and the
+// active route resource once read for the href it belongs to.
+const course = new Map();
+var activeRoute = { href: null, route: null };
+// Bumped on every route read and when the course is forgotten, so an answer
+// that arrives late is dropped rather than drawn over a newer one.
+var routeLoad = 0;
 
 // Heading readout preference: show magnetic instead of true when both exist.
 // Display-only — never affects plotting, which always uses the true heading.
@@ -287,6 +305,9 @@ window.onload = async function () {
   // Create AIS lozenge (bottom-left, toggles vessels.* subscription)
   createAisLozenge();
 
+  // Create route lozenge (right of the AIS lozenge, toggles the active route)
+  createRouteLozenge();
+
   // Create VRM/EBL lozenge (above AIS lozenge) - cycles through marker states
   createVrmEblLozenge();
 
@@ -361,6 +382,8 @@ function subscribeToHeading() {
         // Own-ship motion gives the AIS data boxes their CPA/TCPA
         { path: "navigation.courseOverGroundTrue", period: 1000 },
         { path: "navigation.speedOverGround", period: 1000 },
+        // The active route, drawn on the PPI
+        ...COURSE_PATHS.map((path) => ({ path })),
       ],
     };
     headingSocket.send(JSON.stringify(subscription));
@@ -373,7 +396,9 @@ function subscribeToHeading() {
         for (const update of data.updates) {
           if (update.values) {
             for (const value of update.values) {
-              if (value.path === "navigation.headingTrue") {
+              if (COURSE_PATHS.includes(value.path)) {
+                onCourseValue(value.path, value.value);
+              } else if (value.path === "navigation.headingTrue") {
                 trueHeading = value.value; // Already in radians
                 haveSignalKHeading = true;
                 if (
@@ -440,6 +465,9 @@ function subscribeToHeading() {
   };
 
   headingSocket.onclose = () => {
+    // The course arrives on this socket too, and mayara sends it again on
+    // reconnect; one that ended meanwhile would otherwise stay drawn.
+    forgetCourse();
     onHeadingLost();
     const delay = reconnectDelay(headingReconnectAttempts);
     headingReconnectAttempts += 1;
@@ -448,6 +476,87 @@ function subscribeToHeading() {
     );
     setTimeout(subscribeToHeading, delay);
   };
+}
+
+function onCourseValue(path, value) {
+  if (value == null) {
+    course.delete(path);
+  } else {
+    course.set(path, value);
+  }
+  if (path === "navigation.course.activeRoute") {
+    const href = value?.href ?? null;
+    if (href !== activeRoute.href) {
+      activeRoute = { href, route: null };
+    }
+    // Read again on every change, not only a new href: a route edited in
+    // place is picked up with the next course update, and an answer meant
+    // for an earlier value is dropped.
+    loadRoute(href, 0);
+  }
+  updateCoursePlot();
+}
+
+function forgetCourse() {
+  course.clear();
+  activeRoute = { href: null, route: null };
+  routeLoad += 1;
+  updateCoursePlot();
+}
+
+const ROUTE_RETRY_MS = 2000;
+const ROUTE_RETRY_MAX_MS = 60000;
+// A waypoint moved away from the current leg changes no course value, so the
+// route is read again on a timer to pick up such an edit.
+const ROUTE_REFRESH_MS = 30000;
+
+// Reads the whole route the course follows. Without it, or while mayara has no
+// Signal K REST API to ask, the PPI still draws the current leg, which the
+// Course API values carry on their own. A failed read drops the old points,
+// which may no longer be the route, and is tried again, more slowly each time.
+async function loadRoute(href, attempt) {
+  const load = ++routeLoad;
+  const id = routeId(href);
+  if (!id) return;
+  const current = () => load === routeLoad;
+  try {
+    const response = await apiFetch(
+      apiBase(`/signalk/v2/api/resources/routes/${encodeURIComponent(id)}`),
+      // A cached copy would hide the edits the timed refresh is there to pick up.
+      { cache: "no-store" }
+    );
+    if (response.ok) {
+      const route = await response.json();
+      if (!current()) return;
+      activeRoute = { href, route };
+      updateCoursePlot();
+      setTimeout(() => {
+        if (current()) loadRoute(href, 0);
+      }, ROUTE_REFRESH_MS);
+      return;
+    }
+    console.log(`Route ${id} unavailable: HTTP ${response.status}`);
+  } catch (err) {
+    console.log("Route unavailable:", err);
+  }
+  if (current()) {
+    if (activeRoute.route) {
+      activeRoute = { href, route: null };
+      updateCoursePlot();
+    }
+    const delay = Math.min(ROUTE_RETRY_MS * 2 ** attempt, ROUTE_RETRY_MAX_MS);
+    setTimeout(() => {
+      if (current()) loadRoute(href, attempt + 1);
+    }, delay);
+  }
+}
+
+// Route points are taken in sailing order on every update, so turning the
+// route round needs no new read.
+function updateCoursePlot() {
+  const reverse = course.get("navigation.course.activeRoute")?.reverse === true;
+  const points = activeRoute.route ? routePoints(activeRoute.route, reverse) : null;
+  ppi?.setCoursePlot(coursePlot(course, points));
 }
 
 // ---------------------------------------------------------------------------
@@ -1092,6 +1201,7 @@ function onHeadingReceived() {
     toggleBtn.title = "Click to toggle: Heading Up / North Up";
   }
   updateAisLozenge();
+  updateRouteLozenge();
   updateHeadingDisplayToggle();
 }
 
@@ -1142,6 +1252,7 @@ function onHeadingLost() {
     toggleBtn.title = "Heading data required for North Up mode";
   }
   updateAisLozenge();
+  updateRouteLozenge();
 }
 
 // Create the power lozenge on the viewer
@@ -1515,6 +1626,59 @@ function updateAisLozenge() {
   lozenge.title = noHeading
     ? "AIS unavailable — no heading source to position targets"
     : "Click to toggle AIS overlay";
+}
+
+function createRouteLozenge() {
+  const container = document.querySelector(".myr_ppi");
+  if (!container) return;
+
+  const lozenge = document.createElement("div");
+  lozenge.id = "myr_route_lozenge";
+  lozenge.className = "myr_route_lozenge";
+
+  const routeBtn = document.createElement("button");
+  routeBtn.className = "myr_route_lozenge_button";
+  // Three waypoints joined by legs
+  routeBtn.innerHTML = `<svg class="myr_route_icon" viewBox="0 0 24 24">
+    <path d="M4 19 L11 8 L20 13"/>
+    <circle cx="4" cy="19" r="2"/>
+    <circle cx="11" cy="8" r="2"/>
+    <circle cx="20" cy="13" r="2.5"/>
+  </svg>`;
+  routeBtn.addEventListener("click", toggleRouteOverlay);
+
+  lozenge.appendChild(routeBtn);
+  container.appendChild(lozenge);
+
+  ppi?.setShowRoute(showRoute);
+  updateCoursePlot();
+  updateRouteLozenge();
+}
+
+function toggleRouteOverlay() {
+  // Inert without a heading reference, as AIS is: nothing can be placed.
+  if (ppi && !ppi.hasHeading()) return;
+  showRoute = !showRoute;
+  try {
+    localStorage.setItem("mayaraShowRoute", String(showRoute));
+  } catch {
+    // ignore quota errors
+  }
+  ppi?.setShowRoute(showRoute);
+  updateRouteLozenge();
+}
+
+function updateRouteLozenge() {
+  const lozenge = document.getElementById("myr_route_lozenge");
+  if (!lozenge) return;
+  lozenge.classList.toggle("myr_route_on", showRoute);
+  lozenge.classList.toggle("myr_route_off", !showRoute);
+
+  const noHeading = ppi ? !ppi.hasHeading() : false;
+  lozenge.classList.toggle("myr_route_disabled", noHeading);
+  lozenge.title = noHeading
+    ? "Route unavailable — no heading source to place it"
+    : "Click to toggle the active route";
 }
 
 // VRM/EBL lozenge - cycles through marker visibility states. Click steps

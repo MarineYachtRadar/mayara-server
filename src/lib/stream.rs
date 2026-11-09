@@ -195,6 +195,20 @@ impl SignalKDelta {
         self.updates.push(delta_update);
     }
 
+    /// Add an own-ship Course API value (`navigation.course.*`).
+    pub fn add_course_update(&mut self, path: &str, value: serde_json::Value, source: &str) {
+        let delta_update = DeltaUpdate {
+            timestamp: Some(Utc::now()),
+            source: Some(source.to_string()),
+            meta: Vec::new(),
+            values: vec![DeltaValue::Course {
+                path: path.to_string(),
+                value,
+            }],
+        };
+        self.updates.push(delta_update);
+    }
+
     /// Tell a connecting client that this run is not saving radar settings.
     ///
     /// Sent on connect rather than once at startup, because it describes a
@@ -435,6 +449,15 @@ enum DeltaValue {
         /// The value for that path.
         value: serde_json::Value,
     },
+    /// Own-ship active course from the Signal K Course API, relayed in the
+    /// shape the upstream server published it, or `null` once there is none.
+    Course {
+        /// `navigation.course.activeRoute`, `.nextPoint` or `.previousPoint`.
+        #[schema(example = "navigation.course.nextPoint")]
+        path: String,
+        /// The Course API value for that path.
+        value: serde_json::Value,
+    },
     /// Signal K `notifications.*` alarm. Payload shape matches the
     /// notification value defined in the Signal K spec.
     Notification {
@@ -493,6 +516,7 @@ impl DeltaValue {
             DeltaValue::Navigation { path, .. } => path,
             DeltaValue::NavigationPosition { path, .. } => path,
             DeltaValue::Ais { path, .. } => path,
+            DeltaValue::Course { path, .. } => path,
             DeltaValue::Notification { path, .. } => path,
         }
     }
@@ -1476,6 +1500,69 @@ mod test {
         // is_subscribed_path the update list would be empty here.
         assert_eq!(delta.updates.len(), 1);
         assert_eq!(delta.updates[0].values.len(), 1);
+    }
+
+    /// The active course reaches a client that asked for it in the shape the
+    /// Course API gave it, its withdrawal (`null`) included, and stays away
+    /// from one that did not ask.
+    #[test]
+    fn course_values_go_to_subscribers_as_published() {
+        let next = serde_json::json!({ "position": { "latitude": -18.1, "longitude": 178.4 } });
+        let course_delta = || {
+            let mut delta = SignalKDelta::new();
+            delta.add_course_update("navigation.course.nextPoint", next.clone(), "signalk");
+            delta.add_course_update(
+                "navigation.course.activeRoute",
+                serde_json::Value::Null,
+                "signalk",
+            );
+            delta
+        };
+
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
+        subs.subscribe(Subscription {
+            subscribe: vec![path("navigation.course.*")],
+        })
+        .unwrap();
+        let mut delta = course_delta();
+        delta.apply_subscriptions(&mut subs);
+        let sent = serde_json::to_value(delta.build().unwrap()).unwrap();
+        let values: Vec<_> = sent["updates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|u| u["values"][0].clone())
+            .collect();
+        assert_eq!(
+            values,
+            vec![
+                serde_json::json!({ "path": "navigation.course.nextPoint", "value": next }),
+                serde_json::json!({ "path": "navigation.course.activeRoute", "value": null }),
+            ]
+        );
+
+        let mut subs = ActiveSubscriptions::new(Subscribe::None);
+        subs.subscribe(Subscription {
+            subscribe: vec![path("navigation.headingTrue")],
+        })
+        .unwrap();
+        let mut delta = course_delta();
+        delta.apply_subscriptions(&mut subs);
+        assert!(delta.build().is_none());
+
+        let mut subs = ActiveSubscriptions::new(Subscribe::SelfOnly);
+        subs.subscribe(Subscription {
+            subscribe: vec![path("navigation.headingTrue")],
+        })
+        .unwrap();
+        let mut delta = course_delta();
+        delta.apply_subscriptions(&mut subs);
+        let sent = serde_json::to_value(delta.build().unwrap()).unwrap();
+        assert_eq!(
+            sent["updates"].as_array().unwrap().len(),
+            2,
+            "a self client gets the course from its baseline, null included"
+        );
     }
 
     fn throttled_path(
