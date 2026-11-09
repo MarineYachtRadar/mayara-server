@@ -1,7 +1,7 @@
-// For a viewer who may watch the radar but not change it, such as a guest on a
-// Signal K server that allows read-only access. Gain, sea and range then act
-// on this screen only: they reshape the picture the radar sends and leave the
-// radar, and every other screen, as they are.
+// For a viewer of the emulator who may watch it but not change it, such as a
+// guest of the read-only demo. Gain, sea and range then act on this screen
+// only: they reshape the picture the emulator sends and leave it, and every
+// other screen, as they are. A real radar is never handled this way.
 
 /** The controls a viewer can still set for their own screen. */
 const LOCAL_CONTROLS = new Set(["gain", "sea", "range"]);

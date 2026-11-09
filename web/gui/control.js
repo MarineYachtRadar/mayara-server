@@ -54,6 +54,10 @@ let radarCallbacks = [];
 let controlCallbacks = [];
 let streamMessageCallbacks = [];
 let playbackMode = false;
+// Only the emulator lets a viewer who may not change it set gain, sea and
+// range on their own screen: a real radar's picture is its own to set.
+let emulated = false;
+const EMULATOR_BRAND = "Emulator";
 let acquireTargetMode = false;
 let acquireTargetModeCallbacks = [];
 let acquireTargetModeTimer = null;
@@ -1715,7 +1719,7 @@ async function sendControlToServer(controlId, message) {
 
   const { ok, status } = await apiSetControl(radarId, controlId, message);
   if (ok) return;
-  if (!refusesChanges(status)) {
+  if (!emulated || !refusesChanges(status)) {
     markControlUnconfirmed(controlId, "Could not reach mayara to set this");
     return;
   }
@@ -2010,6 +2014,7 @@ async function loadRadar(id) {
     // Server marks playback radars via the `replay` flag. Fall back to the
     // legacy `playback-` key prefix for older recordings or stale clients.
     playbackMode = (radarInfo && radarInfo.replay === true) || isPlaybackRadar(id);
+    emulated = radarInfo?.brand === EMULATOR_BRAND;
     console.log(
       `Loading radar: ${radarId}${playbackMode ? " (playback mode)" : ""}`
     );
