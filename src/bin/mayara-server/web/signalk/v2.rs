@@ -494,7 +494,8 @@ async fn get_status(State(state): State<Web>) -> Response {
         (status = 200, description = "The route, as the Signal K server returned it"),
         (status = 400, description = "Not a route id"),
         (status = 502, description = "The Signal K server could not be reached"),
-        (status = 503, description = "No Signal K server with a REST API is known")
+        (status = 503, description = "No Signal K server with a REST API is known, or mayara \
+                                      followed another one while the route was read")
     ),
     tag = "Configuration"
 )]
@@ -513,6 +514,11 @@ async fn get_route(Path(id): Path<String>, State(state): State<Web>) -> Response
             format!("The Signal K server answered {status}"),
         ),
         Err(RouteFetchError::Unreachable(e)) => SignalKResponse::failed(StatusCode::BAD_GATEWAY, e),
+        // The GUI reads again, from the server now followed.
+        Err(RouteFetchError::Switched) => SignalKResponse::failed(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "mayara followed another Signal K server while the route was read",
+        ),
     };
     // The GUI reads the route again to pick up edits, and a route missing now
     // may be created a moment later; a stored answer would hide either.

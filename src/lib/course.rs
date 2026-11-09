@@ -85,6 +85,9 @@ pub enum RouteFetchError {
     Upstream(u16),
     /// The upstream could not be reached or did not answer with JSON.
     Unreachable(String),
+    /// mayara followed another Signal K server while the route was read, so
+    /// the answer may not be the route that is now active.
+    Switched,
 }
 
 /// Route ids are UUIDs on a stock server; a provider may use other names, but
@@ -111,9 +114,38 @@ pub async fn fetch_route(id: &str, accept_invalid_certs: bool) -> Result<Value, 
     if !is_route_id(id) {
         return Err(RouteFetchError::BadId);
     }
+    // Taken before the base, so a base stored meanwhile counts as a change.
+    let generation = crate::signalk::upstream_generation();
     let base = crate::signalk::get_upstream_http_base().ok_or(RouteFetchError::NoUpstream)?;
-    let url = route_url(&base, id).ok_or(RouteFetchError::NoUpstream)?;
+    fetch_route_from(&base, id, accept_invalid_certs, || {
+        crate::signalk::upstream_generation() == generation
+    })
+    .await
+}
 
+/// Read route `id` from the server at REST base `base`, and give the answer
+/// only if `still_followed` says that server is still the one followed once
+/// it has answered.
+async fn fetch_route_from(
+    base: &str,
+    id: &str,
+    accept_invalid_certs: bool,
+    still_followed: impl Fn() -> bool,
+) -> Result<Value, RouteFetchError> {
+    let url = route_url(base, id).ok_or(RouteFetchError::NoUpstream)?;
+    let answer = read_route(url, accept_invalid_certs).await;
+    // Even a refusal from a server mayara has left says nothing about the
+    // route now active.
+    if !still_followed() {
+        return Err(RouteFetchError::Switched);
+    }
+    answer
+}
+
+async fn read_route(
+    url: reqwest::Url,
+    accept_invalid_certs: bool,
+) -> Result<Value, RouteFetchError> {
     // A cache between mayara and the Signal K server must not answer with a
     // route from before an edit.
     let mut request = route_client(accept_invalid_certs)?
@@ -157,6 +189,65 @@ fn route_client(accept_invalid_certs: bool) -> Result<&'static reqwest::Client, 
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// A Signal K server that answers one request with `route`, running
+    /// `on_request` first. Gives its REST base, and the request it was sent.
+    async fn upstream(
+        route: &'static str,
+        on_request: impl FnOnce() + Send + 'static,
+    ) -> (String, tokio::task::JoinHandle<String>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}/signalk/v1/api/", listener.local_addr().unwrap());
+        let served = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = vec![0; 4096];
+            let n = stream.read(&mut request).await.unwrap();
+            on_request();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                 Content-Length: {}\r\nConnection: close\r\n\r\n{route}",
+                route.len()
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+            String::from_utf8_lossy(&request[..n]).into_owned()
+        });
+        (base, served)
+    }
+
+    /// A route answered by the server mayara left while it was being read
+    /// is not passed on: the GUI would draw it as the active route of the
+    /// server it now follows (#889).
+    #[tokio::test]
+    async fn a_route_from_a_server_mayara_has_left_is_not_given() {
+        let switched = Arc::new(AtomicBool::new(false));
+        let switch = switched.clone();
+        let (base, _) = upstream(r#"{"name":"old"}"#, move || {
+            switch.store(true, Ordering::SeqCst)
+        })
+        .await;
+
+        let read = fetch_route_from(&base, "r1", false, || !switched.load(Ordering::SeqCst)).await;
+        assert_eq!(read, Err(RouteFetchError::Switched));
+    }
+
+    /// The route is read past any cache between mayara and the server, so
+    /// an edit shows with the next read.
+    #[tokio::test]
+    async fn a_route_is_read_fresh_from_the_server_still_followed() {
+        let (base, served) = upstream(r#"{"name":"r1"}"#, || {}).await;
+
+        let read = fetch_route_from(&base, "r1", false, || true).await;
+        assert_eq!(read, Ok(json!({ "name": "r1" })));
+        let request = served.await.unwrap().to_ascii_lowercase();
+        assert!(
+            request.starts_with("get /signalk/v2/api/resources/routes/r1 "),
+            "{request}"
+        );
+        assert!(request.contains("cache-control: no-cache"), "{request}");
+    }
 
     // The course is process-wide state, so the tests that touch it run as one.
     #[test]

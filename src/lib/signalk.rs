@@ -141,6 +141,14 @@ pub(crate) enum Connection {
 static UPSTREAM_HTTP_BASE: std::sync::OnceLock<std::sync::RwLock<Option<String>>> =
     std::sync::OnceLock::new();
 
+/// Moves on each time the REST base is stored or cleared, so a read can tell
+/// whether the server it asked is still the one mayara follows.
+static UPSTREAM_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub(crate) fn upstream_generation() -> u64 {
+    UPSTREAM_GENERATION.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 pub(crate) fn get_upstream_http_base() -> Option<String> {
     UPSTREAM_HTTP_BASE
         .get()
@@ -157,6 +165,9 @@ fn store_upstream_http_base(url: Option<String>) {
     let lock = UPSTREAM_HTTP_BASE.get_or_init(|| std::sync::RwLock::new(None));
     if let Ok(mut guard) = lock.write() {
         *guard = url;
+        // Under the lock: a reader that sees the new base sees the new
+        // generation too.
+        UPSTREAM_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
@@ -880,6 +891,14 @@ mod tests {
             get_upstream_http_base(),
             None,
             "a plain tcp: stream has no REST API"
+        );
+
+        let generation = upstream_generation();
+        clear_upstream_http_base();
+        assert_ne!(
+            upstream_generation(),
+            generation,
+            "a read begun before the base changed can tell"
         );
         drop(stream_listener);
     }
