@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::io::{self, Read};
+use std::io::{self, BufReader, Read};
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::Path;
 use std::time::Duration;
@@ -68,17 +68,28 @@ const ETHERTYPE_IPV4: u16 = 0x0800;
 /// UDP IP protocol number.
 const IP_PROTO_UDP: u8 = 17;
 
-/// Read a file, decompressing it when it is gzipped.
-fn read_maybe_gzip(path: &Path) -> io::Result<Vec<u8>> {
-    if path.extension().is_some_and(|e| e == "gz") {
-        let file = fs::File::open(path)?;
-        let mut decoder = flate2::read::GzDecoder::new(file);
-        let mut buf = Vec::new();
-        decoder.read_to_end(&mut buf)?;
-        Ok(buf)
+/// Pcap global header: magic(4) + version(4) + thiszone(4) + sigfigs(4) +
+/// snaplen(4) + linktype(4).
+const PCAP_HEADER_LEN: usize = 24;
+/// Pcap record header: ts_sec(4) + ts_frac(4) + incl_len(4) + orig_len(4).
+const RECORD_HEADER_LEN: usize = 16;
+
+/// Open a file, decompressing it as it is read when it is gzipped.
+fn open_maybe_gzip(path: &Path) -> io::Result<Box<dyn Read>> {
+    let file = fs::File::open(path)?;
+    Ok(if path.extension().is_some_and(|e| e == "gz") {
+        Box::new(flate2::read::GzDecoder::new(file))
     } else {
-        fs::read(path)
-    }
+        Box::new(file)
+    })
+}
+
+/// Read a file, decompressing it when it is gzipped.
+#[cfg(any(test, feature = "pcap-replay"))]
+fn read_maybe_gzip(path: &Path) -> io::Result<Vec<u8>> {
+    let mut data = Vec::new();
+    open_maybe_gzip(path)?.read_to_end(&mut data)?;
+    Ok(data)
 }
 
 /// Parse a pcap or NND file (optionally gzipped) and return all UDP packets.
@@ -94,27 +105,52 @@ pub fn parse_file(path: &Path) -> io::Result<Vec<PcapPacket>> {
 /// Unix epoch, that every packet's timestamp counts from. An NND file has
 /// no such anchor and gives zero.
 pub fn parse_file_anchored(path: &Path) -> io::Result<(Vec<PcapPacket>, Duration)> {
-    let data = read_maybe_gzip(path)?;
+    // A pcap is parsed as it is read. The capture of a busy radar runs to
+    // hundreds of megabytes, and holding it whole next to the packets taken
+    // from it would need twice that.
+    let mut file = BufReader::new(open_maybe_gzip(path)?);
+    let mut head = Vec::with_capacity(PCAP_HEADER_LEN);
+    (&mut file)
+        .take(PCAP_HEADER_LEN as u64)
+        .read_to_end(&mut head)?;
 
-    if crate::nnd::is_nnd(&data) {
-        return Ok((crate::nnd::parse_bytes(&data, path)?, Duration::ZERO));
+    if crate::nnd::is_nnd(&head) {
+        file.read_to_end(&mut head)?;
+        return Ok((crate::nnd::parse_bytes(&head, path)?, Duration::ZERO));
     }
 
-    parse_bytes_anchored(&data)
+    parse_anchored(head.as_slice().chain(file))
 }
 
 /// Parse pcap data from a byte slice.
 #[cfg(test)]
 pub(crate) fn parse_bytes(data: &[u8]) -> io::Result<Vec<PcapPacket>> {
-    parse_bytes_anchored(data).map(|(packets, _)| packets)
+    parse_anchored(data).map(|(packets, _)| packets)
 }
 
-fn parse_bytes_anchored(data: &[u8]) -> io::Result<(Vec<PcapPacket>, Duration)> {
-    if data.len() < 24 {
+/// Read the whole of `buf` from `input`, or say that the input ended first:
+/// a capture cut short mid-record ends with what it held whole. Only a read
+/// of nothing is the end; an error, such as a gzip stream that breaks off,
+/// is passed on rather than taken for one.
+fn read_whole(input: &mut impl Read, mut buf: &mut [u8]) -> io::Result<bool> {
+    while !buf.is_empty() {
+        match input.read(buf) {
+            Ok(0) => return Ok(false),
+            Ok(n) => buf = &mut buf[n..],
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(true)
+}
+
+fn parse_anchored(mut input: impl Read) -> io::Result<(Vec<PcapPacket>, Duration)> {
+    let mut header = [0u8; PCAP_HEADER_LEN];
+    if !read_whole(&mut input, &mut header)? {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "pcap too short"));
     }
 
-    let magic = u32::from_le_bytes(data[0..4].try_into().unwrap());
+    let magic = u32::from_le_bytes(header[0..4].try_into().unwrap());
     let (swap, nanoseconds) = match magic {
         PCAP_MAGIC_LE => (false, false),
         PCAP_MAGIC_BE => (true, false),
@@ -128,13 +164,12 @@ fn parse_bytes_anchored(data: &[u8]) -> io::Result<(Vec<PcapPacket>, Duration)> 
         }
     };
 
-    let read_u32 = |off: usize| -> u32 {
-        let v = u32::from_le_bytes(data[off..off + 4].try_into().unwrap());
+    let read_u32 = |bytes: &[u8], off: usize| -> u32 {
+        let v = u32::from_le_bytes(bytes[off..off + 4].try_into().unwrap());
         if swap { v.swap_bytes() } else { v }
     };
 
-    // Global header: magic(4) + version(4) + thiszone(4) + sigfigs(4) + snaplen(4) + linktype(4)
-    let link_type = read_u32(20);
+    let link_type = read_u32(&header, 20);
     if link_type != LINKTYPE_ETHERNET {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -154,24 +189,26 @@ fn parse_bytes_anchored(data: &[u8]) -> io::Result<(Vec<PcapPacket>, Duration)> 
 
     let mut packets = Vec::new();
     let mut fragments: HashMap<FragmentKey, FragmentSet> = HashMap::new();
-    let mut offset = 24;
     let mut first_ts: Option<(u32, u32)> = None;
+    let mut record = [0u8; RECORD_HEADER_LEN];
+    let mut pkt_data = Vec::new();
 
-    while offset + 16 <= data.len() {
-        let ts_sec = read_u32(offset);
-        let ts_frac = read_u32(offset + 4);
-        let incl_len = read_u32(offset + 8) as usize;
-        let _orig_len = read_u32(offset + 12);
-        offset += 16;
+    while read_whole(&mut input, &mut record)? {
+        let ts_sec = read_u32(&record, 0);
+        let ts_frac = read_u32(&record, 4);
+        let incl_len = read_u32(&record, 8) as usize;
 
-        if offset + incl_len > data.len() {
+        // Read through `take`, so a corrupt length allocates no more than the
+        // file still holds.
+        pkt_data.clear();
+        (&mut input)
+            .take(incl_len as u64)
+            .read_to_end(&mut pkt_data)?;
+        if pkt_data.len() < incl_len {
             break; // truncated
         }
 
-        let pkt_data = &data[offset..offset + incl_len];
-        offset += incl_len;
-
-        let Some(part) = parse_ip_part(pkt_data) else {
+        let Some(part) = parse_ip_part(&pkt_data) else {
             continue;
         };
 
@@ -517,7 +554,7 @@ mod tests {
             p.timestamp += start;
         }
 
-        let (parsed, anchor) = parse_bytes_anchored(&encode_packets(&packets)).expect("parse");
+        let (parsed, anchor) = parse_anchored(encode_packets(&packets).as_slice()).expect("parse");
 
         assert_eq!(anchor, start);
         let offsets: Vec<_> = parsed.iter().map(|p| p.timestamp).collect();
@@ -526,7 +563,7 @@ mod tests {
 
     #[test]
     fn an_empty_capture_has_no_anchor() {
-        let (parsed, anchor) = parse_bytes_anchored(&encode_packets(&[])).expect("parse");
+        let (parsed, anchor) = parse_anchored(encode_packets(&[]).as_slice()).expect("parse");
 
         assert!(parsed.is_empty());
         assert_eq!(anchor, Duration::ZERO);
@@ -738,6 +775,44 @@ mod tests {
         ]))
         .expect("parse");
         assert!(with_hole.is_empty(), "a hole means no datagram");
+    }
+
+    /// A capture that stops mid-record, as one does when it is stopped or
+    /// the disk fills, still gives every record before the cut. A record
+    /// whose length runs past the end of the file is not read as a packet,
+    /// and is not allocated at that length either.
+    #[test]
+    fn a_capture_cut_short_keeps_its_whole_records() {
+        let datagram = udp_datagram(10024, 10024, &[0x5A; 100]);
+
+        let mut cut = pcap_of(&[frame(1, 0, false, &datagram), frame(2, 0, false, &datagram)]);
+        cut.truncate(cut.len() - 10);
+        assert_eq!(parse_bytes(&cut).expect("parse").len(), 1);
+
+        let mut corrupt = pcap_of(&[frame(1, 0, false, &datagram)]);
+        corrupt.extend_from_slice(&[0x00; 8]); // ts_sec, ts_usec
+        corrupt.extend_from_slice(&u32::MAX.to_le_bytes()); // incl_len
+        corrupt.extend_from_slice(&u32::MAX.to_le_bytes()); // orig_len
+        corrupt.extend_from_slice(&[0x00; 64]);
+        assert_eq!(parse_bytes(&corrupt).expect("parse").len(), 1);
+    }
+
+    /// A gzipped capture whose stream breaks off is an error, not a capture
+    /// that happened to end there: replaying part of it as if it were the
+    /// whole would pass for a good run.
+    #[test]
+    fn a_broken_gzip_capture_is_an_error() {
+        let datagram = udp_datagram(10024, 10024, &[0x5A; 100]);
+        let frames: Vec<Vec<u8>> = (0..50).map(|i| frame(i, 0, false, &datagram)).collect();
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        std::io::Write::write_all(&mut gz, &pcap_of(&frames)).unwrap();
+        let mut gz = gz.finish().unwrap();
+        gz.truncate(gz.len() / 2);
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("broken.pcap.gz");
+        fs::write(&path, gz).expect("write");
+        assert!(parse_file(&path).is_err());
     }
 
     /// A capture can hold the same fragment twice; the second copy must not be
