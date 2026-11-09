@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 3.17.2 (2026-11-09)
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### 🚀 Features
+* feat(gui): show the active Signal K route on the radar by @dirkwa in https://github.com/MarineYachtRadar/mayara-server/pull/885
+
+
+**Full Changelog**: https://github.com/MarineYachtRadar/mayara-server/compare/v3.17.1...v3.17.2
+
 ## 3.17.1 (2026-11-08)
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
