@@ -210,6 +210,7 @@ mod tests {
         assert!(!is_route_id(""));
         assert!(!is_route_id("."));
         assert!(!is_route_id(".."));
+        assert!(!is_route_id("..."));
         assert!(!is_route_id("a/../../v1"));
         assert!(!is_route_id("a?x=1"));
     }
