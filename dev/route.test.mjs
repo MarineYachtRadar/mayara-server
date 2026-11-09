@@ -94,3 +94,17 @@ test("Route points that do not fit the point index are not drawn", () => {
   assert.equal(plot.nextIndex, null);
   assert.equal(plot.previous, null);
 });
+
+test("A route point at the index that is not the next point is not taken for it", () => {
+  const points = routePoints(ROUTE, false);
+  const plot = coursePlot(
+    course({
+      "navigation.course.activeRoute": { href: "/resources/routes/x", pointIndex: 1 },
+      "navigation.course.nextPoint": { ...at(-18.13, 178.42), name: "Anchorage" },
+    }),
+    points
+  );
+  assert.equal(plot.route, points);
+  assert.equal(plot.nextIndex, null);
+  assert.equal(plot.next.name, "Anchorage");
+});

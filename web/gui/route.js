@@ -40,6 +40,16 @@ function routePoints(route, reverse) {
   return reverse ? points.reverse() : points;
 }
 
+// About a centimetre, so the same point read through JSON twice still matches.
+const SAME_POSITION_DEGREES = 1e-7;
+
+function samePosition(a, b) {
+  return (
+    Math.abs(a.latitude - b.latitude) < SAME_POSITION_DEGREES &&
+    Math.abs(a.longitude - b.longitude) < SAME_POSITION_DEGREES
+  );
+}
+
 function position(point) {
   const p = point?.position;
   return p && Number.isFinite(p.latitude) && Number.isFinite(p.longitude)
@@ -78,11 +88,14 @@ function coursePlot(course, points) {
     Number.isInteger(index) &&
     index >= 0 &&
     index < points.length;
+  // A route read between an edit and the Course API's update can hold a
+  // different point at the index, so the point counts only where it lies.
+  const atNext = onRoute && samePosition(points[index], next);
 
   return {
-    next: { ...next, name: (onRoute && points[index].name) || nextPoint?.name || null },
+    next: { ...next, name: (atNext && points[index].name) || nextPoint?.name || null },
     previous: position(course.get("navigation.course.previousPoint")),
     route: onRoute ? points : [],
-    nextIndex: onRoute ? index : null,
+    nextIndex: atNext ? index : null,
   };
 }
