@@ -500,7 +500,12 @@ async fn get_status(State(state): State<Web>) -> Response {
 )]
 async fn get_route(Path(id): Path<String>, State(state): State<Web>) -> Response {
     match mayara::course::fetch_route(&id, state.args.accept_invalid_certs).await {
-        Ok(route) => Json(route).into_response(),
+        // The GUI reads the route again to pick up edits, which a stored copy would hide.
+        Ok(route) => (
+            [(axum::http::header::CACHE_CONTROL, "no-store")],
+            Json(route),
+        )
+            .into_response(),
         Err(RouteFetchError::BadId) => {
             SignalKResponse::failed(StatusCode::BAD_REQUEST, format!("'{id}' is not a route id"))
         }
