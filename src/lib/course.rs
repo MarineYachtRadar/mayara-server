@@ -114,7 +114,11 @@ pub async fn fetch_route(id: &str, accept_invalid_certs: bool) -> Result<Value, 
     let base = crate::signalk::get_upstream_http_base().ok_or(RouteFetchError::NoUpstream)?;
     let url = route_url(&base, id).ok_or(RouteFetchError::NoUpstream)?;
 
-    let mut request = route_client(accept_invalid_certs)?.get(url);
+    // A cache between mayara and the Signal K server must not answer with a
+    // route from before an edit.
+    let mut request = route_client(accept_invalid_certs)?
+        .get(url)
+        .header(reqwest::header::CACHE_CONTROL, "no-cache");
     if let Some(token) = crate::signalk::get_signalk_token() {
         request = request.bearer_auth(token);
     }
