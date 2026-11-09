@@ -126,4 +126,15 @@ test("A next point on the antimeridian matches its route point written as -180",
   );
   assert.equal(plot.nextIndex, 1);
   assert.equal(plot.next.name, "Meridian");
+
+  const flipped = [points[0], { ...points[1], longitude: 180 }];
+  const reciprocal = coursePlot(
+    course({
+      "navigation.course.activeRoute": { href: "/resources/routes/x", pointIndex: 1 },
+      "navigation.course.nextPoint": at(-16.6, -180),
+    }),
+    flipped
+  );
+  assert.equal(reciprocal.route, flipped);
+  assert.equal(reciprocal.nextIndex, 1);
 });
