@@ -241,7 +241,7 @@ fn noise(x: f64, y: f64, cell: f64, seed: u64) -> f64 {
 
 /// A value in [0, 1) for each grid point, from a 64-bit mix of its
 /// coordinates
-fn lattice(ix: i64, iy: i64, seed: u64) -> f64 {
+pub(crate) fn lattice(ix: i64, iy: i64, seed: u64) -> f64 {
     let mut h = (ix as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)
         ^ (iy as u64).wrapping_mul(0xc2b2_ae3d_27d4_eb4f)
         ^ seed.wrapping_mul(0x1656_67b1_9e37_79f9);

@@ -1,0 +1,316 @@
+//! What the emulated receiver makes of the returns: the clutter the sea
+//! around the boat throws back, the sea control that suppresses it close
+//! in, and the gain that lifts or sinks every echo and, turned up, the
+//! receiver's own noise.
+
+use super::coast_echo::lattice;
+use super::world::Echo;
+
+/// The strongest echo a pixel can show
+const MAX_INTENSITY: f64 = 15.0;
+/// A return weaker than this does not stand out from the background, and
+/// the radar shows nothing there
+const DETECTION: f64 = 1.5;
+/// Gain and sea are set from 0 to 100
+const FULL_SCALE: f64 = 100.0;
+/// Where gain changes nothing
+const NEUTRAL_GAIN: f64 = 50.0;
+/// How many steps of intensity full gain adds, and no gain takes away:
+/// turned down, even a ship fades
+const GAIN_LIFT: f64 = 6.0;
+const GAIN_CUT: f64 = 12.0;
+/// Above this gain the receiver's own noise starts to speckle the picture
+const NOISE_FROM_GAIN: f64 = 65.0;
+/// The share of pixels noise lights at full gain
+const NOISE_SHARE_AT_FULL_GAIN: f64 = 0.02;
+/// How strong noise shows before gain lifts it
+const NOISE_INTENSITY: f64 = 2.0;
+
+/// How strong the sea's return is right by the boat, in a moderate sea
+const SEA_CLUTTER_AT_BOAT: f64 = 7.0;
+/// How far out, in meters, sea clutter falls to about a third
+const SEA_CLUTTER_RANGE: f64 = 500.0;
+/// How much full sea control takes off close in; as clutter, it fades
+/// with range, so far targets keep their strength
+const SEA_CONTROL_AT_BOAT: f64 = 24.0;
+/// What sea control auto settles on: enough to clear most of the clutter
+const AUTO_SEA: f64 = 45.0;
+
+const CLUTTER_SEED: u64 = 0xc1a7_0001;
+const NOISE_SEED: u64 = 0xc1a7_0002;
+
+/// The gain and sea settings, as the radar's controls report them
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Receiver {
+    pub gain: f64,
+    pub gain_auto: bool,
+    pub sea: f64,
+    pub sea_auto: bool,
+    /// How much the sea around the boat returns, 0 for a flat calm
+    sea_state: f64,
+}
+
+impl Default for Receiver {
+    fn default() -> Self {
+        Receiver {
+            gain: NEUTRAL_GAIN,
+            gain_auto: true,
+            sea: AUTO_SEA,
+            sea_auto: true,
+            sea_state: 1.0,
+        }
+    }
+}
+
+impl Receiver {
+    /// A receiver on a flat calm, which adds nothing to what it is given
+    #[cfg(test)]
+    pub(crate) fn calm() -> Self {
+        Receiver {
+            sea_state: 0.0,
+            ..Receiver::default()
+        }
+    }
+
+    fn gain_level(&self) -> f64 {
+        if self.gain_auto {
+            NEUTRAL_GAIN
+        } else {
+            self.gain
+        }
+    }
+
+    fn sea_level(&self) -> f64 {
+        if self.sea_auto { AUTO_SEA } else { self.sea }
+    }
+
+    /// The echo shown at pixel `pixel` of spoke `spoke`, `distance` meters
+    /// out, in rotation `rotation`, for what came back there.
+    pub(crate) fn pixel(
+        &self,
+        echo: Echo,
+        distance: f64,
+        spoke: u16,
+        pixel: usize,
+        rotation: u32,
+    ) -> Echo {
+        let close_in = (-distance / SEA_CLUTTER_RANGE).exp();
+        let speckle = |seed: u64| lattice(spoke as i64, pixel as i64, seed ^ rotation as u64);
+
+        // Sea clutter flickers from sweep to sweep: an exponential speckle
+        // around its mean, as the waves move
+        let clutter =
+            self.sea_state * SEA_CLUTTER_AT_BOAT * close_in * -(1.0 - speckle(CLUTTER_SEED)).ln();
+        let (mut strength, closing_speed) = if clutter > echo.intensity as f64 {
+            (clutter, 0.0)
+        } else {
+            (echo.intensity as f64, echo.closing_speed)
+        };
+        if strength > 0.0 {
+            // In whole steps, so sea control leaves land and ships further
+            // out at the strength they would show without it
+            strength -= (self.sea_level() / FULL_SCALE * SEA_CONTROL_AT_BOAT * close_in).floor();
+        }
+
+        let gain = self.gain_level();
+        let noise_share = ((gain - NOISE_FROM_GAIN) / (FULL_SCALE - NOISE_FROM_GAIN)).max(0.0)
+            * NOISE_SHARE_AT_FULL_GAIN;
+        if strength <= 0.0 && speckle(NOISE_SEED) < noise_share {
+            strength = NOISE_INTENSITY;
+        }
+        if strength <= 0.0 {
+            return Echo {
+                intensity: 0,
+                closing_speed: 0.0,
+            };
+        }
+
+        let shift = if gain >= NEUTRAL_GAIN {
+            (gain - NEUTRAL_GAIN) / (FULL_SCALE - NEUTRAL_GAIN) * GAIN_LIFT
+        } else {
+            (gain - NEUTRAL_GAIN) / NEUTRAL_GAIN * GAIN_CUT
+        };
+        let lifted = strength + shift;
+        if lifted < DETECTION {
+            return Echo {
+                intensity: 0,
+                closing_speed: 0.0,
+            };
+        }
+        let shown = lifted.round().min(MAX_INTENSITY) as u8;
+        Echo {
+            intensity: shown,
+            closing_speed,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SPOKES: u16 = 512;
+    const PIXELS: usize = 200;
+    /// Meters per pixel in the test pictures
+    const STEP: f64 = 10.0;
+
+    fn echo(intensity: u8) -> Echo {
+        Echo {
+            intensity,
+            closing_speed: 0.0,
+        }
+    }
+
+    /// How many pixels of an empty sea light up, close in and further out,
+    /// over one rotation
+    fn lit(receiver: &Receiver, rotation: u32) -> (usize, usize) {
+        let mut near = 0;
+        let mut far = 0;
+        for spoke in 0..SPOKES {
+            for pixel in 0..PIXELS {
+                let distance = pixel as f64 * STEP;
+                if receiver
+                    .pixel(echo(0), distance, spoke, pixel, rotation)
+                    .intensity
+                    > 0
+                {
+                    if distance < 500.0 {
+                        near += 1;
+                    } else if distance >= 1500.0 {
+                        far += 1;
+                    }
+                }
+            }
+        }
+        (near, far)
+    }
+
+    fn manual(gain: f64, sea: f64) -> Receiver {
+        Receiver {
+            gain,
+            gain_auto: false,
+            sea,
+            sea_auto: false,
+            ..Receiver::default()
+        }
+    }
+
+    /// On a calm sea at the neutral gain without sea control every echo
+    /// shows as it came back.
+    #[test]
+    fn a_calm_neutral_receiver_passes_echoes_unchanged() {
+        let calm = Receiver {
+            sea_state: 0.0,
+            ..manual(NEUTRAL_GAIN, 0.0)
+        };
+        for intensity in 2..=15 {
+            let moving = Echo {
+                intensity,
+                closing_speed: 3.0,
+            };
+            assert_eq!(calm.pixel(moving, 800.0, 7, 80, 1), moving);
+        }
+    }
+
+    /// Without sea control the sea lights up close to the boat and hardly
+    /// at all further out; sea control clears it close in.
+    #[test]
+    fn sea_clutter_lies_close_in_and_sea_control_clears_it() {
+        let (near, far) = lit(&manual(NEUTRAL_GAIN, 0.0), 1);
+        assert!(near > 1000, "clutter close in: {near}");
+        assert!(far < near / 20, "little far out: {far} vs {near}");
+
+        let (cleared, _) = lit(&manual(NEUTRAL_GAIN, 100.0), 1);
+        assert!(cleared < near / 10, "sea control: {cleared} vs {near}");
+
+        let (auto, _) = lit(&Receiver::default(), 1);
+        assert!(auto < near / 3, "auto sea clears most: {auto} vs {near}");
+    }
+
+    /// The clutter changes from one sweep to the next, as waves do.
+    #[test]
+    fn sea_clutter_flickers_between_rotations() {
+        let receiver = manual(NEUTRAL_GAIN, 0.0);
+        let changed = (0..PIXELS)
+            .filter(|&pixel| {
+                let at = |rotation| {
+                    receiver
+                        .pixel(echo(0), pixel as f64 * 2.0, 3, pixel, rotation)
+                        .intensity
+                };
+                at(1) != at(2)
+            })
+            .count();
+        assert!(changed > PIXELS / 4, "{changed}");
+    }
+
+    /// Too much sea control also takes away a small boat close in, as on a
+    /// real radar; far out it is untouched.
+    #[test]
+    fn full_sea_control_hides_a_weak_echo_close_in_only() {
+        let receiver = Receiver {
+            sea_state: 0.0,
+            ..manual(NEUTRAL_GAIN, 100.0)
+        };
+        assert_eq!(receiver.pixel(echo(6), 50.0, 0, 5, 0).intensity, 0);
+        assert_eq!(receiver.pixel(echo(6), 5000.0, 0, 500, 0).intensity, 6);
+    }
+
+    /// Auto sea leaves land a nautical mile out at full strength.
+    #[test]
+    fn auto_sea_leaves_land_a_mile_out_as_it_is() {
+        let receiver = Receiver::calm();
+        assert_eq!(receiver.pixel(echo(14), 1852.0, 0, 185, 0).intensity, 14);
+        assert!(receiver.pixel(echo(14), 100.0, 0, 10, 0).intensity < 14);
+    }
+
+    /// Gain lifts and sinks every echo: turned right down even a ship
+    /// barely shows, turned up a weak beacon shows strongly.
+    #[test]
+    fn gain_lifts_and_sinks_echoes() {
+        let at = |gain: f64, intensity| {
+            Receiver {
+                sea_state: 0.0,
+                ..manual(gain, 0.0)
+            }
+            .pixel(echo(intensity), 3000.0, 0, 300, 0)
+            .intensity
+        };
+        assert_eq!(at(NEUTRAL_GAIN, 6), 6);
+        assert!(at(100.0, 6) > 6);
+        assert_eq!(at(100.0, 14), 15);
+        assert_eq!(at(0.0, 6), 0, "a beacon vanishes");
+        assert!(at(0.0, 15) <= 3, "a ship barely shows");
+        assert!(at(25.0, 11) < 11 && at(25.0, 11) > 0);
+    }
+
+    /// Turned up past the noise, gain speckles empty water; below it the
+    /// water stays dark.
+    #[test]
+    fn high_gain_brings_up_noise() {
+        let quiet = Receiver {
+            sea_state: 0.0,
+            ..manual(NOISE_FROM_GAIN, 0.0)
+        };
+        let loud = Receiver {
+            sea_state: 0.0,
+            ..manual(FULL_SCALE, 0.0)
+        };
+        let (quiet_near, quiet_far) = lit(&quiet, 1);
+        let (loud_near, loud_far) = lit(&loud, 1);
+        assert_eq!(quiet_near + quiet_far, 0);
+        assert!(loud_far > 100, "{loud_far}");
+        assert!(loud_near > 50, "{loud_near}");
+    }
+
+    /// Auto gain is the neutral gain whatever the manual value was.
+    #[test]
+    fn auto_gain_ignores_the_manual_value() {
+        let auto = Receiver {
+            gain: 0.0,
+            gain_auto: true,
+            ..Receiver::calm()
+        };
+        assert_eq!(auto.pixel(echo(9), 3000.0, 0, 300, 0).intensity, 9);
+    }
+}

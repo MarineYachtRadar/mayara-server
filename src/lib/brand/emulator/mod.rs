@@ -16,6 +16,7 @@ mod coast_echo;
 mod command;
 mod land;
 mod marks;
+mod receiver;
 mod report;
 mod settings;
 

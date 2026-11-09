@@ -9,6 +9,7 @@ use super::coast_echo::{COAST_FRAY, CoastEcho, widen_by_beam};
 use super::command::Command;
 use super::land::{Coast, LAND_DEPTH};
 use super::marks;
+use super::receiver::Receiver;
 use super::world::{Echo, EmulatorWorld, TURN_RADIUS, TurnProgress};
 use super::{
     EMULATOR_RANGES, EMULATOR_SPOKE_LEN, EMULATOR_SPOKES, get_initial_position, spoke_step,
@@ -42,6 +43,8 @@ const DEG_TO_RAD: f64 = PI / 180.0;
 const HALF_BEAM_WIDTH: f64 = 1.0 * DEG_TO_RAD;
 /// Land's strongest patches return strongly, but less than a ship's steel
 const LAND_INTENSITY: u8 = 14;
+/// Gain and sea travel as 0 to 255 on the wire, and are set as 0 to 100
+const PERCENT_TO_WIRE: f64 = 2.55;
 /// An echo is never shorter than this many pixels along a spoke, as a
 /// radar pulse has a length of its own.
 const MIN_ECHO_PIXELS: f64 = 2.0;
@@ -74,6 +77,7 @@ pub(crate) struct EmulatorReportReceiver {
     spoke_step: u16,
     doppler_mode: DopplerMode,
     doppler_threshold: f64, // m/s
+    receiver: Receiver,
     last_update: Instant,
     rotation_count: u32,
 }
@@ -138,6 +142,7 @@ impl EmulatorReportReceiver {
             spoke_step: spoke_step(args),
             doppler_mode: DopplerMode::None,
             doppler_threshold: DEFAULT_DOPPLER_THRESHOLD,
+            receiver: Receiver::default(),
             last_update: Instant::now(),
             rotation_count: 0,
         }
@@ -158,6 +163,7 @@ impl EmulatorReportReceiver {
             &ControlId::DopplerSpeedThreshold,
             self.doppler_threshold * CM_PER_M,
         );
+        self.report_receiver();
 
         // Calculate interval for spoke batches
         // 2048 spokes / 32 per batch = 64 batches per rotation
@@ -256,6 +262,24 @@ impl EmulatorReportReceiver {
                     self.common
                         .set_value(&ControlId::DopplerSpeedThreshold, threshold * CM_PER_M);
                 }
+            }
+            ControlId::Gain => {
+                if let Ok(gain) = cv.as_f64() {
+                    self.receiver.gain = gain;
+                }
+                if let Some(auto) = cv.auto {
+                    self.receiver.gain_auto = auto;
+                }
+                self.report_receiver();
+            }
+            ControlId::Sea => {
+                if let Ok(sea) = cv.as_f64() {
+                    self.receiver.sea = sea;
+                }
+                if let Some(auto) = cv.auto {
+                    self.receiver.sea_auto = auto;
+                }
+                self.report_receiver();
             }
             _ => {
                 // Forward other control updates to command sender
@@ -507,14 +531,31 @@ impl EmulatorReportReceiver {
         let spoke_angle_deg = (spoke_angle as f64 / EMULATOR_SPOKES as f64) * 360.0;
         let world_bearing_rad = (self.boat_heading + spoke_angle_deg) * DEG_TO_RAD;
 
-        spoke_pixels(
-            &self.world,
-            &self.coast,
+        Sweep {
+            world: &self.world,
+            coast: &self.coast,
             coast_echo,
+            receiver: &self.receiver,
             doppler,
-            world_bearing_rad,
-            meters_per_pixel(self.current_range),
-        )
+            meters_per_pixel: meters_per_pixel(self.current_range),
+            rotation: self.rotation_count,
+        }
+        .spoke(spoke_angle, world_bearing_rad)
+    }
+
+    /// Report the gain and sea settings the picture is drawn with
+    fn report_receiver(&mut self) {
+        let receiver = self.receiver;
+        self.common.set_value_auto(
+            &ControlId::Gain,
+            receiver.gain * PERCENT_TO_WIRE,
+            u8::from(receiver.gain_auto),
+        );
+        self.common.set_value_auto(
+            &ControlId::Sea,
+            receiver.sea * PERCENT_TO_WIRE,
+            u8::from(receiver.sea_auto),
+        );
     }
 
     /// Take the AIS vessels the navigation source reported since the last
@@ -532,27 +573,37 @@ impl EmulatorReportReceiver {
     }
 }
 
-/// The pixels of a spoke at true bearing `bearing`, in radians: boats,
-/// marks and land as the radar sees them, one byte each.
-fn spoke_pixels(
-    world: &EmulatorWorld,
-    coast: &CoastView,
-    coast_echo: &CoastEcho,
-    doppler: &DopplerColors,
-    bearing: f64,
+/// Everything one sweep of the beam draws with
+struct Sweep<'a> {
+    world: &'a EmulatorWorld,
+    coast: &'a CoastView,
+    coast_echo: &'a CoastEcho,
+    receiver: &'a Receiver,
+    doppler: &'a DopplerColors,
     meters_per_pixel: f64,
-) -> GenericSpoke {
-    let (sin_b, cos_b) = bearing.sin_cos();
-    let boats = world.boats_on_spoke(sin_b, cos_b, HALF_BEAM_WIDTH);
-    let land = coast.on(bearing);
-    (0..EMULATOR_SPOKE_LEN)
-        .map(|pixel| {
-            let distance = pixel as f64 * meters_per_pixel;
-            let echo = world.echo_fast(sin_b, cos_b, distance, &boats);
-            let land_return = coast_echo.at(sin_b, cos_b, distance, land);
-            doppler.pixel(with_land(echo, land_return))
-        })
-        .collect()
+    rotation: u32,
+}
+
+impl Sweep<'_> {
+    /// The pixels of spoke `spoke`, at true bearing `bearing` in radians:
+    /// boats, marks, land and the sea as the radar sees them, one byte each.
+    fn spoke(&self, spoke: u16, bearing: f64) -> GenericSpoke {
+        let (sin_b, cos_b) = bearing.sin_cos();
+        let boats = self.world.boats_on_spoke(sin_b, cos_b, HALF_BEAM_WIDTH);
+        let land = self.coast.on(bearing);
+        (0..EMULATOR_SPOKE_LEN)
+            .map(|pixel| {
+                let distance = pixel as f64 * self.meters_per_pixel;
+                let echo = self.world.echo_fast(sin_b, cos_b, distance, &boats);
+                let land_return = self.coast_echo.at(sin_b, cos_b, distance, land);
+                let echo = with_land(echo, land_return);
+                let shown = self
+                    .receiver
+                    .pixel(echo, distance, spoke, pixel, self.rotation);
+                self.doppler.pixel(shown)
+            })
+            .collect()
+    }
 }
 
 /// The land's return where it is stronger than `echo`; a ship alongside a
@@ -908,15 +959,20 @@ mod tests {
         world.update_cache(&boat, 1.0, f64::INFINITY);
         let mpp = meters_per_pixel(range);
         let echo = CoastEcho::new(&boat, mpp, LAND_DEPTH, LAND_INTENSITY, HALF_BEAM_WIDTH, 0);
-        let spoke = |bearing| {
-            spoke_pixels(
-                &world,
-                &view,
-                &echo,
-                &colors(DopplerMode::None),
-                bearing,
-                mpp,
-            )
+        let receiver = Receiver::calm();
+        let doppler = colors(DopplerMode::None);
+        let sweep = Sweep {
+            world: &world,
+            coast: &view,
+            coast_echo: &echo,
+            receiver: &receiver,
+            doppler: &doppler,
+            meters_per_pixel: mpp,
+            rotation: 0,
+        };
+        let spoke = |bearing: f64| {
+            let spoke = (bearing / TAU * EMULATOR_SPOKES as f64) as u16;
+            sweep.spoke(spoke, bearing)
         };
 
         let north = spoke(0.0);
