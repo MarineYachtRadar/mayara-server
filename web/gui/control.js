@@ -42,6 +42,7 @@ import {
 } from "./api.js";
 import { setZoneEditMode, setZoneCreateMode, setRectCreateMode, setSectorEditMode, updateZoneForEditing, updateRectForEditing } from "./viewer.js";
 import { SpokeProcessingMode } from "./spoke_processor.js";
+import { localView, refusesChanges } from "./local-view.js";
 
 const { div, label, input, button, select, option, span } = van.tags;
 
@@ -1690,6 +1691,11 @@ async function sendControlToServer(controlId, message) {
     return;
   }
 
+  if (localView.active && localView.handles(controlId)) {
+    showLocally(controlId, message);
+    return;
+  }
+
   console.log(`Sending control: ${controlId} = ${JSON.stringify(message)}`);
 
   if (reportedControls.has(controlId)) {
@@ -1707,9 +1713,39 @@ async function sendControlToServer(controlId, message) {
     );
   }
 
-  if (!(await apiSetControl(radarId, controlId, message))) {
+  const { ok, status } = await apiSetControl(radarId, controlId, message);
+  if (ok) return;
+  if (!refusesChanges(status)) {
     markControlUnconfirmed(controlId, "Could not reach mayara to set this");
+    return;
   }
+
+  clearConfirmationTimer(controlId);
+  if (!localView.active) {
+    localView.activate();
+    myr_error_message?.raise(VIEW_ONLY_MESSAGE);
+  }
+  if (localView.handles(controlId)) {
+    showLocally(controlId, message);
+  } else {
+    markControlUnconfirmed(controlId, VIEW_ONLY_REASON);
+  }
+}
+
+const VIEW_ONLY_REASON = "This login may watch the radar but not change it";
+const VIEW_ONLY_MESSAGE =
+  "You may watch this radar but not change it. Gain, sea and range now change this screen only.";
+
+/** Applies a setting to this screen's picture instead of the radar. */
+function showLocally(controlId, message) {
+  const { units, ...settings } = message;
+  const cv = localView.set({
+    ...myr_control_values[controlId],
+    ...settings,
+    id: controlId,
+  });
+  confirmControl(controlId);
+  setControlValue(cv);
 }
 
 // ============================================================================
@@ -1840,7 +1876,7 @@ function connectStateStream(streamUrl, radarIdParam) {
 
                 const cv = { ...item.value, id: controlId };
                 confirmControl(controlId);
-                setControlValue(cv);
+                setControlValue(localView.radarReported(cv));
               }
               // Notify stream message callbacks for all values (targets, etc.)
               streamMessageCallbacks.forEach((cb) => {
@@ -2122,6 +2158,12 @@ function zoomIn() {
 
   const { controlId, currentValue, validValues } = info;
 
+  if (localView.active) {
+    const next = localView.nextRange(validValues, Number(currentValue), false);
+    if (next !== undefined) sendControlToServer(controlId, { value: next });
+    return;
+  }
+
   // Find current index
   const currentIndex = validValues.findIndex(
     (v) => Number(v) === Number(currentValue)
@@ -2149,6 +2191,12 @@ function zoomOut() {
   if (!info || info.validValues.length === 0) return;
 
   const { controlId, currentValue, validValues } = info;
+
+  if (localView.active) {
+    const next = localView.nextRange(validValues, Number(currentValue), true);
+    if (next !== undefined) sendControlToServer(controlId, { value: next });
+    return;
+  }
 
   // Find current index
   const currentIndex = validValues.findIndex(

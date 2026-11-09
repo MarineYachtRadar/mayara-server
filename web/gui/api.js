@@ -455,7 +455,8 @@ export async function acquireTarget(radarId, bearing, distance) {
  * @param {string} radarId - The radar ID
  * @param {string} controlId - The control ID (e.g., "power", "gain", "range")
  * @param {any} body - The value to set (type depends on control)
- * @returns {Promise<boolean>} True if successful
+ * @returns {Promise<{ok: boolean, status: number}>} Whether it was set, and
+ *   the HTTP status (0 when mayara could not be reached)
  */
 export async function setControl(radarId, controlId, body) {
   await detectMode();
@@ -476,18 +477,18 @@ export async function setControl(radarId, controlId, body) {
 
     if (response.ok) {
       console.log(`Control ${controlId} set successfully`);
-      return true;
+      return { ok: true, status: response.status };
     } else {
       const errorText = await response.text();
       console.error(
         `Control command failed: ${response.status} ${response.statusText} for ${url}`,
         errorText
       );
-      return false;
+      return { ok: false, status: response.status };
     }
   } catch (e) {
     console.error(`Control command error: ${e}`);
-    return false;
+    return { ok: false, status: 0 };
   }
 }
 
