@@ -47,6 +47,8 @@ const AIS_COAST_MS: u64 = 120_000;
 const SETTLED_MS: u64 = 60_000;
 /// Coverage is counted in bins of this length.
 const COVERAGE_BIN_MS: u64 = 10_000;
+/// A track this close to the antenna is on own ship, or on a boat alongside.
+const OWN_SHIP_M: f64 = 50.0;
 const EARTH_RADIUS_M: f64 = 6_371_000.0;
 
 fn recordings(voyage: &Voyage) -> Option<PathBuf> {
@@ -417,6 +419,17 @@ fn score(
     scores.insert("land.track_ids".into(), (land_ids.len() as f64, lower));
     scores.insert("land.track_seconds".into(), (seconds(&land_ids), lower));
     scores.insert("land.max_sog_ms".into(), (land_sog, lower));
+    // A track on own ship reads CPA 0 and sets off a collision alarm (#848).
+    let own_ship_ids = label
+        .keys()
+        .filter(|id| {
+            tracking(**id).any(|s| {
+                let (n, e) = offset_m(own_at(s.t), (s.lat, s.lon));
+                n.hypot(e) < OWN_SHIP_M
+            })
+        })
+        .count();
+    scores.insert("own_ship.track_ids".into(), (own_ship_ids as f64, lower));
     let created: BTreeSet<u64> = samples.iter().map(|s| s.id).collect();
     scores.insert("all.ids_broadcast".into(), (created.len() as f64, lower));
     scores

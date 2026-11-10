@@ -14,5 +14,6 @@
   "mmsi_368383510.position_error_m": 21.574926371531642,
   "mmsi_368383510.settled_sog_error_ms": 0.14001978029226939,
   "mmsi_368383510.sog_error_at_promotion_ms": 0.6544230416928442,
-  "mmsi_368383510.track_ids": 5.0
+  "mmsi_368383510.track_ids": 5.0,
+  "own_ship.track_ids": 0.0
 }

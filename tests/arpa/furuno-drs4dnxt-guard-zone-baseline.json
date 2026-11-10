@@ -1,0 +1,19 @@
+{
+  "all.ids_broadcast": 34.0,
+  "false.track_ids": 31.0,
+  "false.track_seconds": 1045.566,
+  "kiapa_nui.coverage": 0.6666666666666666,
+  "kiapa_nui.position_error_m": 73.77862331301789,
+  "kiapa_nui.settled_sog_error_ms": 0.331397905380491,
+  "kiapa_nui.sog_error_at_promotion_ms": 8.540705793433549,
+  "kiapa_nui.track_ids": 1.0,
+  "land.max_sog_ms": 21.392986433332887,
+  "land.track_ids": 29.0,
+  "land.track_seconds": 941.1620000000001,
+  "mmsi_368383510.coverage": 0.7142857142857143,
+  "mmsi_368383510.position_error_m": 26.26394905987284,
+  "mmsi_368383510.settled_sog_error_ms": 0.07908184090164502,
+  "mmsi_368383510.sog_error_at_promotion_ms": 0.4908525950323494,
+  "mmsi_368383510.track_ids": 2.0,
+  "own_ship.track_ids": 0.0
+}
