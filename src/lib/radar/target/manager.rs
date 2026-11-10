@@ -66,6 +66,8 @@ pub struct SpokeContext {
     /// Whether DopplerAutoTrack is enabled (track approaching and receding
     /// Doppler targets everywhere)
     pub doppler_auto_track: bool,
+    /// Whether the radar is shore-based, with no own ship around it
+    pub stationary: bool,
 }
 
 impl SpokeContext {
@@ -347,10 +349,15 @@ impl TrackerManager {
             _ => None,
         };
 
-        // Determine candidate source: guard zone takes priority, then Doppler
-        // auto-track of anything approaching or receding, then Anywhere
-        // (matches existing targets only, no new acquisition).
-        let source = if let Some(&zone_id) = msg.blob.in_guard_zones.first() {
+        // Determine candidate source: an echo that may be own ship's takes
+        // priority, then guard zone, then Doppler auto-track of anything
+        // approaching or receding, then Anywhere (matches existing targets
+        // only, no new acquisition).
+        let near_own_ship = !ctx.stationary
+            && blob_to_polar(&msg.blob, ctx).is_some_and(|(_, d)| d < OWN_SHIP_ECHO_M);
+        let source = if near_own_ship {
+            CandidateSource::OwnShip
+        } else if let Some(&zone_id) = msg.blob.in_guard_zones.first() {
             CandidateSource::GuardZone(zone_id)
         } else if msg.blob.has_doppler && msg.context.doppler_auto_track {
             CandidateSource::Doppler
@@ -853,6 +860,13 @@ impl TrackerManager {
     }
 }
 
+/// An echo whose centre is closer than this to the antenna (meters) may be
+/// own ship, or a boat made fast alongside: it starts no target and settles
+/// none still acquiring, though it still follows a confirmed target that came
+/// this close. On a DRS4D-NXT at anchor such an echo sat 9 to 10 m off in
+/// every sweep and drew tracks of moored boats onto it (#848).
+const OWN_SHIP_ECHO_M: f64 = 30.0;
+
 /// True bearing (radians, 0 = north) and range (meters) of a blob's centre
 /// as seen from the radar. `None` when the spoke carried no heading.
 fn blob_to_polar(blob: &CompletedBlob, ctx: &SpokeContext) -> Option<(f64, f64)> {
@@ -1099,7 +1113,109 @@ mod tests {
             angle: bearing,
             max_target_speed_ms: SpokeContext::max_speed_from_mode(0), // Normal mode
             doppler_auto_track: false,
+            stationary: false,
         }
+    }
+
+    /// Feeds a 10 m blob `pixel` pixels out on a spoke of 512 pixels over
+    /// `range` metres, due north, in guard zone 1.
+    fn feed_blob(manager: &mut TrackerManager, time: u64, pixel: usize, range: u32) {
+        manager.process_blob(BlobMessage {
+            radar_key: "test".to_string(),
+            blob: make_blob(0, pixel, 10.0),
+            context: SpokeContext {
+                range,
+                ..make_context(time, 0)
+            },
+        });
+    }
+
+    /// An echo a few metres from the antenna may be own ship, or a boat made
+    /// fast alongside, and is there every sweep: it starts no target, even in
+    /// a guard zone (#848). An echo 30 m off is already outside that range.
+    #[test]
+    fn own_ships_echo_starts_no_target() {
+        let mut manager = make_test_manager(false);
+        let count = |m: &TrackerManager| {
+            m.per_radar_trackers
+                .get("test")
+                .map_or(0, |t| t.active_count())
+        };
+
+        feed_blob(&mut manager, 1_000, 5, 1000); // 9.8 m
+        assert_eq!(count(&manager), 0);
+
+        feed_blob(&mut manager, 4_000, 10, 1536); // 30.0 m
+        assert_eq!(count(&manager), 1);
+    }
+
+    /// A shore-based radar has no own ship around it, so an echo close in is
+    /// a target like any other.
+    #[test]
+    fn a_shore_radar_acquires_close_in() {
+        let mut manager = make_test_manager(false);
+        manager.process_blob(BlobMessage {
+            radar_key: "test".to_string(),
+            blob: make_blob(0, 5, 10.0), // 9.8 m
+            context: SpokeContext {
+                stationary: true,
+                ..make_context(1_000, 0)
+            },
+        });
+        assert_eq!(manager.per_radar_trackers["test"].active_count(), 1);
+    }
+
+    /// A target still acquiring is not settled by an echo that may be own
+    /// ship's: that is how tracks on moored boats ended on it in #848.
+    #[test]
+    fn own_ships_echo_does_not_settle_an_acquiring_target() {
+        let mut manager = make_test_manager(false);
+        feed_blob(&mut manager, 1_000, 20, 1000); // 39 m
+        let id = first_target_id(&manager, "test");
+
+        feed_blob(&mut manager, 3_500, 12, 1000); // 23 m, inside its gate
+        let tracker = &manager.per_radar_trackers["test"];
+        assert_eq!(tracker.get_target(id).unwrap().update_count, 1);
+        assert_eq!(tracker.active_count(), 1);
+    }
+
+    /// A confirmed boat lying still 39 m off is not pulled onto own ship's
+    /// echo 6 m off on the same bearing, though that is inside the 50 m a
+    /// slow track's gate otherwise allows, nor after a missed sweep, when the
+    /// speed it might have gained would otherwise widen its gate.
+    #[test]
+    fn own_ships_echo_does_not_pull_a_still_target_in() {
+        for missed in [0, 1] {
+            let mut manager = make_test_manager(false);
+            for i in 0..PROMOTING_HITS {
+                feed_blob(&mut manager, 1_000 + i * 2_500, 20, 1000); // 39 m
+            }
+            let id = first_target_id(&manager, "test");
+
+            let time = 1_000 + (PROMOTING_HITS + missed) * 2_500;
+            feed_blob(&mut manager, time, 3, 1000); // 5.9 m
+            let target = manager.per_radar_trackers["test"].get_target(id).unwrap();
+            assert_eq!(
+                u64::from(target.update_count),
+                PROMOTING_HITS,
+                "{missed} missed"
+            );
+        }
+    }
+
+    /// A confirmed vessel coming in towards own ship is still followed inside
+    /// 30 m, so it keeps its track and its guard zone alarm.
+    #[test]
+    fn a_vessel_coming_alongside_is_followed_close_in() {
+        let mut manager = make_test_manager(false);
+        // 3.9 m/s straight in: 5 pixels of 1.95 m a sweep, from 117 m to 29 m.
+        let pixels: Vec<usize> = (15..=60).rev().step_by(5).collect();
+        for (i, pixel) in pixels.iter().enumerate() {
+            feed_blob(&mut manager, 1_000 + i as u64 * 2_500, *pixel, 1000);
+        }
+        let id = first_target_id(&manager, "test");
+        let target = manager.per_radar_trackers["test"].get_target(id).unwrap();
+        assert_eq!(target.update_count as usize, pixels.len());
     }
 
     /// A track that stops being seen is lost when enough sweeps have passed,
@@ -2256,8 +2372,11 @@ mod tests {
             });
         }
 
-        // One badly noisy measurement: ~80m east of the true track.
-        let lon_noise = 80.0 / super::super::meters_per_degree_longitude(&52.0);
+        // One badly noisy measurement: ~65m east of the true track. It stays
+        // inside the gate of a confirmed 10 m/s target, which is sized by its
+        // own speed: 80 m sideways in one sweep would be a different echo,
+        // not noise on this one.
+        let lon_noise = 65.0 / super::super::meters_per_degree_longitude(&52.0);
         let noisy_true_lat = start_lat - lat_step * 6.0;
         let noisy_true_lon = 4.0 + lon_noise;
         tracker.process_candidate(TargetCandidate {
@@ -2279,7 +2398,7 @@ mod tests {
         assert!(smoothed.tcpa > 0.0, "expected closing geometry");
 
         // Raw CPA: same math but fed with target.position (the raw
-        // 80m-east last measurement) instead of the filtered estimate.
+        // 65m-east last measurement) instead of the filtered estimate.
         let raw = calculate_cpa_from_motion(
             radar_pos,
             0.0,
@@ -2292,7 +2411,7 @@ mod tests {
 
         // The smoothed Kalman position barely moved (it weights the noisy
         // measurement against many clean priors), while the raw position is
-        // exactly the 80m-east noise. So the raw CPA should be materially
+        // exactly the 65m-east noise. So the raw CPA should be materially
         // larger than the smoothed CPA.
         assert!(
             raw.cpa > smoothed.cpa + 30.0,
