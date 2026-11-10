@@ -815,6 +815,26 @@ mod tests {
         assert!(parse_file(&path).is_err());
     }
 
+    /// An NND file is told from a pcap by its first bytes and then read
+    /// whole. Its `Time:` line runs past those first bytes, and the record
+    /// after it keeps both its timestamp and its payload.
+    #[test]
+    fn an_nnd_file_is_read_whole_after_its_first_bytes() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("capture.nnd");
+        fs::write(
+            &path,
+            b"Time: 42 2019/8/29 12:36:15\n16    LAN3:\x02\x00\x00\x00\x05\x06\x07",
+        )
+        .expect("write");
+
+        let (packets, anchor) = parse_file_anchored(&path).expect("parse");
+        assert_eq!(anchor, Duration::ZERO);
+        let record = packets.last().expect("the record");
+        assert_eq!(record.timestamp, Duration::from_millis(42));
+        assert_eq!(record.payload, [0x02, 0x00, 0x00, 0x00, 0x05, 0x06, 0x07]);
+    }
+
     /// A capture can hold the same fragment twice; the second copy must not be
     /// appended a second time.
     #[test]
