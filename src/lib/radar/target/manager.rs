@@ -1179,6 +1179,22 @@ mod tests {
         assert_eq!(tracker.active_count(), 1);
     }
 
+    /// A confirmed boat lying still 39 m off is not pulled onto own ship's
+    /// echo 6 m off on the same bearing, though that is inside the 50 m a
+    /// slow track's gate otherwise allows.
+    #[test]
+    fn own_ships_echo_does_not_pull_a_still_target_in() {
+        let mut manager = make_test_manager(false);
+        for i in 0..PROMOTING_HITS {
+            feed_blob(&mut manager, 1_000 + i * 2_500, 20, 1000); // 39 m
+        }
+        let id = first_target_id(&manager, "test");
+
+        feed_blob(&mut manager, 1_000 + PROMOTING_HITS * 2_500, 3, 1000); // 5.9 m
+        let target = manager.per_radar_trackers["test"].get_target(id).unwrap();
+        assert_eq!(u64::from(target.update_count), PROMOTING_HITS);
+    }
+
     /// A confirmed target that comes within 30 m is still followed there, so
     /// a vessel coming alongside keeps its track and its guard zone alarm.
     #[test]

@@ -72,7 +72,9 @@ const MATCH_DISTANCE_SPEED_MULTIPLIER: f64 = 1.5;
 /// planing boat gains in a sweep. Sized for ARPA Max Speed instead, the gate
 /// of a track settled on a moored boat reaches 77 m a sweep at Medium, and
 /// in an anchorage that is the next boat: tracks hopped from boat to boat
-/// onto the echo beside own ship (#848).
+/// onto the echo beside own ship (#848). It does not grow with a coast: one
+/// that did let tracks hop again after a missed sweep, and a boat that pulls
+/// away hard while unseen getting a new track is the lesser failure.
 const MAX_SPEED_GAIN_MS: f64 = 5.0;
 
 /// How many standard deviations of measurement error the match gate allows
@@ -783,6 +785,14 @@ impl TargetTracker {
                 }
                 _ => candidate.max_target_speed_ms,
             };
+            // An echo that may be own ship's must fit the target's own motion.
+            // The floor that lets a slow track's echo wander would let it pull
+            // a boat moored 40 m off onto own ship.
+            let floor = if candidate.source == CandidateSource::OwnShip {
+                0.0
+            } else {
+                MIN_MATCH_DISTANCE_M
+            };
             let travel = speed * delta_time_s * MATCH_DISTANCE_SPEED_MULTIPLIER;
 
             let normalized = match sight {
@@ -809,8 +819,8 @@ impl TargetTracker {
                     ellipse_position(
                         offset_radial,
                         offset_cross,
-                        radial.max(MIN_MATCH_DISTANCE_M),
-                        cross.max(MIN_MATCH_DISTANCE_M),
+                        radial.max(floor),
+                        cross.max(floor),
                     )
                 }
                 None => {
@@ -822,7 +832,7 @@ impl TargetTracker {
                         .nn
                         .max(candidate.position_covariance.ee)
                         .sqrt();
-                    let radius = (travel + GATE_SIGMAS * sigma).max(MIN_MATCH_DISTANCE_M);
+                    let radius = (travel + GATE_SIGMAS * sigma).max(floor);
                     let distance = calculate_distance(&predicted_pos, &candidate.position);
                     (distance / radius).powi(2)
                 }
