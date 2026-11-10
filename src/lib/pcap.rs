@@ -73,6 +73,9 @@ const IP_PROTO_UDP: u8 = 17;
 const PCAP_HEADER_LEN: usize = 24;
 /// Pcap record header: ts_sec(4) + ts_frac(4) + incl_len(4) + orig_len(4).
 const RECORD_HEADER_LEN: usize = 16;
+/// The most of a record the parser reads: an Ethernet header and the largest
+/// IPv4 datagram.
+const MAX_FRAME_LEN: usize = ETH_HEADER_LEN + u16::MAX as usize;
 
 /// Open a file, decompressing it as it is read when it is gzipped.
 fn open_maybe_gzip(path: &Path) -> io::Result<Box<dyn Read>> {
@@ -198,13 +201,16 @@ fn parse_anchored(mut input: impl Read) -> io::Result<(Vec<PcapPacket>, Duration
         let ts_frac = read_u32(&record, 4);
         let incl_len = read_u32(&record, 8) as usize;
 
-        // Read through `take`, so a corrupt length allocates no more than the
-        // file still holds.
+        // Keep no more of a record than a frame can hold, so a corrupt length
+        // cannot make the parser buffer the rest of the capture.
+        let kept = incl_len.min(MAX_FRAME_LEN);
         pkt_data.clear();
-        (&mut input)
-            .take(incl_len as u64)
-            .read_to_end(&mut pkt_data)?;
-        if pkt_data.len() < incl_len {
+        (&mut input).take(kept as u64).read_to_end(&mut pkt_data)?;
+        let skipped = io::copy(
+            &mut (&mut input).take((incl_len - kept) as u64),
+            &mut io::sink(),
+        )?;
+        if pkt_data.len() < kept || skipped < (incl_len - kept) as u64 {
             break; // truncated
         }
 
@@ -795,6 +801,24 @@ mod tests {
         corrupt.extend_from_slice(&u32::MAX.to_le_bytes()); // orig_len
         corrupt.extend_from_slice(&[0x00; 64]);
         assert_eq!(parse_bytes(&corrupt).expect("parse").len(), 1);
+    }
+
+    /// A record longer than any frame, as a corrupt length makes one, is
+    /// passed over without being held, and the record after it is read.
+    #[test]
+    fn a_record_longer_than_a_frame_is_passed_over() {
+        let datagram = udp_datagram(10024, 10024, &[0x5A; 100]);
+        let mut data = pcap_of(&[]);
+        let junk = vec![0xEE; MAX_FRAME_LEN + 1000];
+        data.extend_from_slice(&[0x00; 8]); // ts_sec, ts_usec
+        data.extend_from_slice(&(junk.len() as u32).to_le_bytes()); // incl_len
+        data.extend_from_slice(&(junk.len() as u32).to_le_bytes()); // orig_len
+        data.extend_from_slice(&junk);
+        data.extend_from_slice(&pcap_of(&[frame(1, 0, false, &datagram)])[PCAP_HEADER_LEN..]);
+
+        let packets = parse_bytes(&data).expect("parse");
+        assert_eq!(packets.len(), 1);
+        assert_eq!(packets[0].payload, vec![0x5A; 100]);
     }
 
     /// A gzipped capture whose stream breaks off is an error, not a capture
