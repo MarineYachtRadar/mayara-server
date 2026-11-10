@@ -123,3 +123,16 @@ test("A setting from a slider counts as the number it shows", () => {
   view.adjust(data, 3 * NM, PIXEL_COLORS);
   assert.ok(data.every((v) => v === 0));
 });
+
+test("Until the radar reports a setting, setting it here changes nothing", () => {
+  const view = new LocalView();
+  view.activate();
+  view.set({ id: "gain", value: 0, auto: false });
+  const data = spoke(9);
+  view.adjust(data, 3 * NM, PIXEL_COLORS);
+  assert.deepEqual(data, spoke(9));
+
+  view.radarReported({ id: "gain", value: 50, auto: false });
+  view.adjust(data, 3 * NM, PIXEL_COLORS);
+  assert.ok(data.every((v) => v < 9));
+});

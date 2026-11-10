@@ -133,9 +133,10 @@ class LocalView {
 
   #delta(id, effect) {
     const local = this.local.get(id);
-    // Auto here leaves the setting to the radar
-    if (!local || local.auto) return 0;
     const radar = this.radar.get(id);
+    // Auto here leaves the setting to the radar, and a setting the radar has
+    // not reported yet gives nothing to count from
+    if (!local || local.auto || !radar) return 0;
     return effect(local) - effect(radar);
   }
 }
