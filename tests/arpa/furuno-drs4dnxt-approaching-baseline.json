@@ -10,6 +10,7 @@
   "ohana_ii.settled_sog_error_ms": 0.16235925640326254,
   "ohana_ii.sog_error_at_promotion_ms": 1.0946203062476576,
   "ohana_ii.track_ids": 3.0,
+  "own_ship.track_ids": 0.0,
   "wild_thing_2.coverage": 0.9583333333333334,
   "wild_thing_2.position_error_m": 26.37802064392932,
   "wild_thing_2.settled_sog_error_ms": 0.13019379009181214,
