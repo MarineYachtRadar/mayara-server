@@ -2519,6 +2519,7 @@ impl CommonRadar {
                             angle: spoke.angle as u16,
                             max_target_speed_ms,
                             doppler_auto_track: self.info.controls.doppler_auto_track(),
+                            stationary: self.info.stationary,
                         };
                         let msg = BlobMessage {
                             radar_key: self.key.clone(),

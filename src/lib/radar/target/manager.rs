@@ -66,6 +66,8 @@ pub struct SpokeContext {
     /// Whether DopplerAutoTrack is enabled (track approaching and receding
     /// Doppler targets everywhere)
     pub doppler_auto_track: bool,
+    /// Whether the radar is shore-based, with no own ship around it
+    pub stationary: bool,
 }
 
 impl SpokeContext {
@@ -335,10 +337,6 @@ impl TrackerManager {
     pub fn process_blob(&mut self, msg: BlobMessage) {
         let ctx = &msg.context;
 
-        if blob_to_polar(&msg.blob, ctx).is_some_and(|(_, distance)| distance < OWN_SHIP_ECHO_M) {
-            return;
-        }
-
         // Convert blob to geo position
         let Some(position) = blob_to_position(&msg.blob, ctx) else {
             log::trace!("Cannot convert blob to position (missing lat/lon/bearing)");
@@ -351,10 +349,15 @@ impl TrackerManager {
             _ => None,
         };
 
-        // Determine candidate source: guard zone takes priority, then Doppler
-        // auto-track of anything approaching or receding, then Anywhere
-        // (matches existing targets only, no new acquisition).
-        let source = if let Some(&zone_id) = msg.blob.in_guard_zones.first() {
+        // Determine candidate source: an echo that may be own ship's takes
+        // priority, then guard zone, then Doppler auto-track of anything
+        // approaching or receding, then Anywhere (matches existing targets
+        // only, no new acquisition).
+        let near_own_ship = !ctx.stationary
+            && blob_to_polar(&msg.blob, ctx).is_some_and(|(_, d)| d < OWN_SHIP_ECHO_M);
+        let source = if near_own_ship {
+            CandidateSource::OwnShip
+        } else if let Some(&zone_id) = msg.blob.in_guard_zones.first() {
             CandidateSource::GuardZone(zone_id)
         } else if msg.blob.has_doppler && msg.context.doppler_auto_track {
             CandidateSource::Doppler
@@ -857,10 +860,11 @@ impl TrackerManager {
     }
 }
 
-/// An echo whose centre is closer than this to the antenna (meters) is own
-/// ship, or a boat made fast alongside, and never a target. On a DRS4D-NXT
-/// at anchor one sat 9 to 10 m off in every sweep, drew the tracks of moored
-/// boats nearby onto it and raised CPA 0 alarms (#848).
+/// An echo whose centre is closer than this to the antenna (meters) may be
+/// own ship, or a boat made fast alongside: it starts no target and settles
+/// none still acquiring, though it still follows a confirmed target that came
+/// this close. On a DRS4D-NXT at anchor such an echo sat 9 to 10 m off in
+/// every sweep and drew tracks of moored boats onto it (#848).
 const OWN_SHIP_ECHO_M: f64 = 30.0;
 
 /// True bearing (radians, 0 = north) and range (meters) of a blob's centre
@@ -1109,32 +1113,92 @@ mod tests {
             angle: bearing,
             max_target_speed_ms: SpokeContext::max_speed_from_mode(0), // Normal mode
             doppler_auto_track: false,
+            stationary: false,
         }
     }
 
-    /// An echo a few metres from the antenna is own ship, or a boat made fast
-    /// alongside. It is there every sweep, so it must not become a target
-    /// or take one over (#848); an echo further out still does.
-    #[test]
-    fn own_ships_echo_is_never_a_target() {
-        let mut manager = make_test_manager(false);
-        let key = "test";
-        let blob_at = |pixel: usize| BlobMessage {
-            radar_key: key.to_string(),
+    /// Feeds a 10 m blob `pixel` pixels out on a spoke of 512 pixels over
+    /// `range` metres, due north, in guard zone 1.
+    fn feed_blob(manager: &mut TrackerManager, time: u64, pixel: usize, range: u32) {
+        manager.process_blob(BlobMessage {
+            radar_key: "test".to_string(),
             blob: make_blob(0, pixel, 10.0),
-            context: make_context(1000, 0),
+            context: SpokeContext {
+                range,
+                ..make_context(time, 0)
+            },
+        });
+    }
+
+    /// An echo a few metres from the antenna may be own ship, or a boat made
+    /// fast alongside, and is there every sweep: it starts no target, even in
+    /// a guard zone (#848). An echo 30 m off is already outside that range.
+    #[test]
+    fn own_ships_echo_starts_no_target() {
+        let mut manager = make_test_manager(false);
+        let count = |m: &TrackerManager| {
+            m.per_radar_trackers
+                .get("test")
+                .map_or(0, |t| t.active_count())
         };
 
-        manager.process_blob(blob_at(5)); // 10 m: 5 of 512 pixels over 1,000 m
-        assert!(
-            manager
-                .per_radar_trackers
-                .get(key)
-                .is_none_or(|t| t.active_count() == 0)
+        feed_blob(&mut manager, 1_000, 5, 1000); // 9.8 m
+        assert_eq!(count(&manager), 0);
+
+        feed_blob(&mut manager, 4_000, 10, 1536); // 30.0 m
+        assert_eq!(count(&manager), 1);
+    }
+
+    /// A shore-based radar has no own ship around it, so an echo close in is
+    /// a target like any other.
+    #[test]
+    fn a_shore_radar_acquires_close_in() {
+        let mut manager = make_test_manager(false);
+        manager.process_blob(BlobMessage {
+            radar_key: "test".to_string(),
+            blob: make_blob(0, 5, 10.0), // 9.8 m
+            context: SpokeContext {
+                stationary: true,
+                ..make_context(1_000, 0)
+            },
+        });
+        assert_eq!(manager.per_radar_trackers["test"].active_count(), 1);
+    }
+
+    /// A target still acquiring is not settled by an echo that may be own
+    /// ship's: that is how tracks on moored boats ended on it in #848.
+    #[test]
+    fn own_ships_echo_does_not_settle_an_acquiring_target() {
+        let mut manager = make_test_manager(false);
+        feed_blob(&mut manager, 1_000, 20, 1000); // 39 m
+        let id = first_target_id(&manager, "test");
+
+        feed_blob(&mut manager, 3_500, 12, 1000); // 23 m, inside its gate
+        let tracker = &manager.per_radar_trackers["test"];
+        assert_eq!(tracker.get_target(id).unwrap().update_count, 1);
+        assert_eq!(tracker.active_count(), 1);
+    }
+
+    /// A confirmed target that comes within 30 m is still followed there, so
+    /// a vessel coming alongside keeps its track and its guard zone alarm.
+    #[test]
+    fn a_confirmed_target_is_followed_close_in() {
+        let mut manager = make_test_manager(false);
+        for i in 0..PROMOTING_HITS {
+            feed_blob(&mut manager, 1_000 + i * 2_500, 20, 1000); // 39 m
+        }
+        let id = first_target_id(&manager, "test");
+        assert_eq!(
+            manager.per_radar_trackers["test"]
+                .get_target(id)
+                .unwrap()
+                .status,
+            TargetStatus::Tracking
         );
 
-        manager.process_blob(blob_at(100)); // 195 m
-        assert_eq!(manager.per_radar_trackers[key].active_count(), 1);
+        feed_blob(&mut manager, 1_000 + PROMOTING_HITS * 2_500, 12, 1000); // 23 m
+        let target = manager.per_radar_trackers["test"].get_target(id).unwrap();
+        assert_eq!(u64::from(target.update_count), PROMOTING_HITS + 1);
     }
 
     /// A track that stops being seen is lost when enough sweeps have passed,

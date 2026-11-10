@@ -151,6 +151,10 @@ pub enum CandidateSource {
     Doppler,
     /// Candidate detected anywhere (only matches existing targets)
     Anywhere,
+    /// Candidate so close to the antenna that it may be own ship's echo, or
+    /// a boat alongside: it follows a confirmed target that came this close,
+    /// but never starts a target or settles one still acquiring
+    OwnShip,
 }
 
 /// A target candidate from blob detection
@@ -729,7 +733,7 @@ impl TargetTracker {
                 self.stats.new_acquiring += 1;
                 ProcessResult::NewAcquiring(target_id)
             }
-            CandidateSource::Anywhere => {
+            CandidateSource::Anywhere | CandidateSource::OwnShip => {
                 // Don't create target - candidate didn't match any existing target
                 ProcessResult::Ignored
             }
@@ -748,6 +752,9 @@ impl TargetTracker {
             .map(|radar| calculate_bearing(&radar, &candidate.position));
 
         for (id, target) in &self.active_targets {
+            if candidate.source == CandidateSource::OwnShip && !target.confirmed {
+                continue;
+            }
             // Stop coasting the association at MAX_MATCH_COAST_S: both the
             // dead-reckoned position the gate is centred on and the gate's
             // own radius. Capping only the radius would leave a mature
