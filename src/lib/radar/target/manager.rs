@@ -335,6 +335,10 @@ impl TrackerManager {
     pub fn process_blob(&mut self, msg: BlobMessage) {
         let ctx = &msg.context;
 
+        if blob_to_polar(&msg.blob, ctx).is_some_and(|(_, distance)| distance < OWN_SHIP_ECHO_M) {
+            return;
+        }
+
         // Convert blob to geo position
         let Some(position) = blob_to_position(&msg.blob, ctx) else {
             log::trace!("Cannot convert blob to position (missing lat/lon/bearing)");
@@ -853,6 +857,12 @@ impl TrackerManager {
     }
 }
 
+/// An echo whose centre is closer than this to the antenna (meters) is own
+/// ship, or a boat made fast alongside, and never a target. On a DRS4D-NXT
+/// at anchor one sat 9 to 10 m off in every sweep, drew the tracks of moored
+/// boats nearby onto it and raised CPA 0 alarms (#848).
+const OWN_SHIP_ECHO_M: f64 = 30.0;
+
 /// True bearing (radians, 0 = north) and range (meters) of a blob's centre
 /// as seen from the radar. `None` when the spoke carried no heading.
 fn blob_to_polar(blob: &CompletedBlob, ctx: &SpokeContext) -> Option<(f64, f64)> {
@@ -1100,6 +1110,31 @@ mod tests {
             max_target_speed_ms: SpokeContext::max_speed_from_mode(0), // Normal mode
             doppler_auto_track: false,
         }
+    }
+
+    /// An echo a few metres from the antenna is own ship, or a boat made fast
+    /// alongside. It is there every sweep, so it must not become a target
+    /// or take one over (#848); an echo further out still does.
+    #[test]
+    fn own_ships_echo_is_never_a_target() {
+        let mut manager = make_test_manager(false);
+        let key = "test";
+        let blob_at = |pixel: usize| BlobMessage {
+            radar_key: key.to_string(),
+            blob: make_blob(0, pixel, 10.0),
+            context: make_context(1000, 0),
+        };
+
+        manager.process_blob(blob_at(5)); // 10 m: 5 of 512 pixels over 1,000 m
+        assert!(
+            manager
+                .per_radar_trackers
+                .get(key)
+                .is_none_or(|t| t.active_count() == 0)
+        );
+
+        manager.process_blob(blob_at(100)); // 195 m
+        assert_eq!(manager.per_radar_trackers[key].active_count(), 1);
     }
 
     /// A track that stops being seen is lost when enough sweeps have passed,
