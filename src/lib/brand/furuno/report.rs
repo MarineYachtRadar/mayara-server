@@ -2145,6 +2145,12 @@ impl FurunoReportReceiver {
                 continue; // separator bytes 0x3D..=0x3F stay 0 (transparent)
             }
             let sub = (b >> 2) as u8; // 0..=15 intensity within band
+            // Level 0 of a band is no echo: TimeZero reads it as 0 and draws
+            // nothing. Drawn as the weakest approaching echo, it painted
+            // still water and reef as approaching (#832).
+            if sub == 0 {
+                continue;
+            }
             // The stationary band's 16 levels span the whole TA-off ramp, as
             // TimeZero stretches each band over its own palette. Read as the
             // same raw byte instead, they would reach only the lower half of
@@ -3610,7 +3616,7 @@ mod tests {
         assert_eq!(lut[0x7C], off[PIXEL_VALUES as usize]);
 
         // Approaching band
-        assert_eq!(lut[0x80], appr_start);
+        assert_eq!(lut[0x84], appr_start);
         assert_eq!(lut[0xBC], appr_start);
     }
 
@@ -3647,12 +3653,29 @@ mod tests {
         };
         let lut = FurunoReportReceiver::wire_to_legend(&legend, DopplerWireMode::On, false);
         // Each step of 4 in the raw byte moves one slot in the legend.
-        assert_eq!(lut[0x80], 120, "approaching lowest intensity");
-        assert_eq!(lut[0x84], 121);
+        assert_eq!(lut[0x84], 121, "approaching lowest intensity");
         assert_eq!(lut[0xBC], 135, "approaching highest intensity");
         assert_eq!(lut[0x00], 0, "raw byte 0 is transparent");
         assert_eq!(lut[0x04], 153, "rain second-lowest intensity");
         assert_eq!(lut[0x3C], 167, "rain highest intensity");
+    }
+
+    /// Level 0 of every band is no echo, as TimeZero draws it, whether the
+    /// legend has Doppler slots or falls back to the intensity ramp. A
+    /// DRS4D-NXT sends `0x80` over still reef, and painted as approaching
+    /// it made over a third of the approaching pixels there (#832).
+    #[test]
+    fn wire_to_legend_on_draws_no_band_at_level_zero() {
+        let mut fallback = nxt_ta_legend();
+        fallback.doppler_rain = None;
+        fallback.doppler_approaching = None;
+        for legend in [nxt_ta_legend(), fallback] {
+            let lut = FurunoReportReceiver::wire_to_legend(&legend, DopplerWireMode::On, false);
+            for byte in [0x00, 0x40, 0x80] {
+                assert_eq!(lut[byte], 0, "byte {byte:#04x}");
+                assert_ne!(lut[byte + 4], 0, "byte {:#04x}", byte + 4);
+            }
+        }
     }
 
     #[test]
