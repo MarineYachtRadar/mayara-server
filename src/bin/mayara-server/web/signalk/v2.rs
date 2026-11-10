@@ -494,12 +494,20 @@ async fn get_status(State(state): State<Web>) -> Response {
         (status = 200, description = "The route, as the Signal K server returned it"),
         (status = 400, description = "Not a route id"),
         (status = 502, description = "The Signal K server could not be reached"),
-        (status = 503, description = "No Signal K server with a REST API is known")
+        (status = 503, description = "No Signal K server with a REST API is known, or mayara \
+                                      followed another one while the route was read")
     ),
     tag = "Configuration"
 )]
 async fn get_route(Path(id): Path<String>, State(state): State<Web>) -> Response {
-    let response = match mayara::course::fetch_route(&id, state.args.accept_invalid_certs).await {
+    route_response(
+        &id,
+        mayara::course::fetch_route(&id, state.args.accept_invalid_certs).await,
+    )
+}
+
+fn route_response(id: &str, route: Result<serde_json::Value, RouteFetchError>) -> Response {
+    let response = match route {
         Ok(route) => Json(route).into_response(),
         Err(RouteFetchError::BadId) => {
             SignalKResponse::failed(StatusCode::BAD_REQUEST, format!("'{id}' is not a route id"))
@@ -513,6 +521,11 @@ async fn get_route(Path(id): Path<String>, State(state): State<Web>) -> Response
             format!("The Signal K server answered {status}"),
         ),
         Err(RouteFetchError::Unreachable(e)) => SignalKResponse::failed(StatusCode::BAD_GATEWAY, e),
+        // The GUI reads again, from the server now followed.
+        Err(RouteFetchError::Switched) => SignalKResponse::failed(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "mayara followed another Signal K server while the route was read",
+        ),
     };
     // The GUI reads the route again to pick up edits, and a route missing now
     // may be created a moment later; a stored answer would hide either.
@@ -2380,6 +2393,38 @@ mod tests {
             model: None,
             radar_ip_address: Ipv4Addr::new(10, 56, 0, 24),
             replay: false,
+        }
+    }
+
+    /// Every answer of the route endpoint, the route or why there is none,
+    /// says not to store it: the GUI reads the route again to pick up edits,
+    /// and a stored failure would hide the route once it can be read.
+    #[test]
+    fn no_route_answer_is_stored() {
+        for (route, status) in [
+            (Ok(serde_json::json!({ "name": "r1" })), StatusCode::OK),
+            (Err(RouteFetchError::BadId), StatusCode::BAD_REQUEST),
+            (
+                Err(RouteFetchError::NoUpstream),
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
+            (Err(RouteFetchError::Upstream(404)), StatusCode::NOT_FOUND),
+            (
+                Err(RouteFetchError::Unreachable("refused".into())),
+                StatusCode::BAD_GATEWAY,
+            ),
+            (
+                Err(RouteFetchError::Switched),
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
+        ] {
+            let response = route_response("r1", route);
+            assert_eq!(response.status(), status);
+            assert_eq!(
+                response.headers()[axum::http::header::CACHE_CONTROL],
+                "no-store",
+                "{status}"
+            );
         }
     }
 
