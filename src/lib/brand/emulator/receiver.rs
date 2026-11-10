@@ -5,6 +5,7 @@
 
 use super::coast_echo::lattice;
 use super::world::Echo;
+use crate::radar::settings::{ControlError, ControlId};
 
 /// The strongest echo a pixel can show
 const MAX_INTENSITY: f64 = 15.0;
@@ -112,6 +113,20 @@ impl Receiver {
     pub(crate) fn set_rain(&mut self, value: Option<f64>, auto: Option<bool>) {
         self.rain = value.unwrap_or(self.rain);
         self.rain_auto = auto.unwrap_or(self.rain_auto);
+    }
+
+    /// A gain, sea or rain request as a setting from 0 to 100, refused when
+    /// outside it: the controls would not report such a value, and the
+    /// picture would then run on a setting no client shows
+    pub(crate) fn requested(
+        id: ControlId,
+        value: Option<f64>,
+    ) -> Result<Option<f64>, ControlError> {
+        match value {
+            Some(v) if v < 0.0 => Err(ControlError::TooLow(id, v, 0.0)),
+            Some(v) if v > FULL_SCALE => Err(ControlError::TooHigh(id, v, FULL_SCALE)),
+            _ => Ok(value),
+        }
     }
 
     /// Gain as the radar's controls report it: the wire value and the auto flag
@@ -492,6 +507,25 @@ mod tests {
 
     /// Rain control, by hand or on auto, clears the noise of full gain as sea
     /// control does.
+    /// A setting outside 0 to 100 is refused, so the receiver never runs
+    /// on a value its controls cannot report.
+    #[test]
+    fn requests_outside_the_scale_are_refused() {
+        assert!(matches!(
+            Receiver::requested(ControlId::Rain, Some(101.0)),
+            Err(ControlError::TooHigh(ControlId::Rain, ..))
+        ));
+        assert!(matches!(
+            Receiver::requested(ControlId::Gain, Some(-1.0)),
+            Err(ControlError::TooLow(ControlId::Gain, ..))
+        ));
+        assert_eq!(
+            Receiver::requested(ControlId::Sea, Some(100.0)).unwrap(),
+            Some(100.0)
+        );
+        assert_eq!(Receiver::requested(ControlId::Rain, None).unwrap(), None);
+    }
+
     #[test]
     fn rain_control_clears_the_noise_of_full_gain() {
         let far_lit = |rain: f64, rain_auto: bool| {

@@ -261,17 +261,29 @@ impl EmulatorReportReceiver {
                         .set_value(&ControlId::DopplerSpeedThreshold, threshold * CM_PER_M);
                 }
             }
-            ControlId::Gain => {
-                self.receiver.set_gain(cv.as_f64().ok(), cv.auto);
-                self.report_receiver();
-            }
-            ControlId::Sea => {
-                self.receiver.set_sea(cv.as_f64().ok(), cv.auto);
-                self.report_receiver();
-            }
-            ControlId::Rain => {
-                self.receiver.set_rain(cv.as_f64().ok(), cv.auto);
-                self.report_receiver();
+            ControlId::Gain | ControlId::Sea | ControlId::Rain => {
+                match Receiver::requested(cv.id, cv.as_f64().ok()) {
+                    Ok(value) => {
+                        match cv.id {
+                            ControlId::Gain => self.receiver.set_gain(value, cv.auto),
+                            ControlId::Sea => self.receiver.set_sea(value, cv.auto),
+                            _ => self.receiver.set_rain(value, cv.auto),
+                        }
+                        self.report_receiver();
+                    }
+                    Err(e) => {
+                        let e = RadarError::ControlError(e);
+                        if let Err(e) = self
+                            .common
+                            .info
+                            .controls
+                            .send_error_to_client(control_update.reply_tx.clone(), cv, &e)
+                            .await
+                        {
+                            log::warn!("{}: {}", self.common.key, e);
+                        }
+                    }
+                }
             }
             _ => {
                 // Forward other control updates to command sender
