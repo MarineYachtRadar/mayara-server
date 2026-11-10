@@ -151,12 +151,12 @@ jobs:
         git init -q ../radar-recordings
         cd ../radar-recordings
         git remote add origin https://github.com/keesverruijt/radar-recordings.git
-        git sparse-checkout set --no-cone 'navico/halo/halo20plus-722*' 'furuno/moin/drs4dnxt-anchor-approaching*'
+        git sparse-checkout set --no-cone 'navico/halo/halo20plus-722*' 'furuno/moin/drs4dnxt-anchor-approaching*' 'furuno/moin/drs4dnxt-anchor-guard-zone*'
         git fetch -q --depth 1 --filter=blob:none origin "$RECORDINGS_REF"
         git checkout -q FETCH_HEAD
       env:
         GIT_LFS_SKIP_SMUDGE: "1"
-        RECORDINGS_REF: 3c13e26952a41061280fcd7473c761d07ef0b3a9
+        RECORDINGS_REF: 3445bafceb8f48094c27946d7a1a644debb2f45f
     - name: Run tests
       run: cargo nextest run --features pcap-replay
       env:
