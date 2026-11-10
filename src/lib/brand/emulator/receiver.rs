@@ -46,6 +46,9 @@ const SEA_CONTROL_AT_BOAT: f64 = 24.0;
 /// What sea control auto settles on: enough to clear most of the clutter
 const AUTO_SEA: f64 = 45.0;
 
+/// Gain and sea travel as 0 to 255 on the wire, and are set as 0 to 100
+const PERCENT_TO_WIRE: f64 = 2.55;
+
 const CLUTTER_SEED: u64 = 0xc1a7_0001;
 const NOISE_SEED: u64 = 0xc1a7_0002;
 const NOISE_LEVEL_SEED: u64 = 0xc1a7_0003;
@@ -81,6 +84,28 @@ impl Receiver {
             sea_state: 0.0,
             ..Receiver::default()
         }
+    }
+
+    /// A gain update: a value or auto flag the update leaves out stays as it was
+    pub(crate) fn set_gain(&mut self, value: Option<f64>, auto: Option<bool>) {
+        self.gain = value.unwrap_or(self.gain);
+        self.gain_auto = auto.unwrap_or(self.gain_auto);
+    }
+
+    /// A sea update: a value or auto flag the update leaves out stays as it was
+    pub(crate) fn set_sea(&mut self, value: Option<f64>, auto: Option<bool>) {
+        self.sea = value.unwrap_or(self.sea);
+        self.sea_auto = auto.unwrap_or(self.sea_auto);
+    }
+
+    /// Gain as the radar's controls report it: the wire value and the auto flag
+    pub(crate) fn gain_on_wire(&self) -> (f64, u8) {
+        (self.gain * PERCENT_TO_WIRE, u8::from(self.gain_auto))
+    }
+
+    /// Sea as the radar's controls report it: the wire value and the auto flag
+    pub(crate) fn sea_on_wire(&self) -> (f64, u8) {
+        (self.sea * PERCENT_TO_WIRE, u8::from(self.sea_auto))
     }
 
     fn gain_level(&self) -> f64 {
@@ -399,6 +424,24 @@ mod tests {
             .collect();
         assert!(!shown.is_empty(), "noise shows");
         assert!(shown.iter().all(|e| e.closing_speed == 0.0));
+    }
+
+    /// An update sets what it carries and leaves the rest; the controls
+    /// report the setting on the radar's 0 to 255 scale with its auto flag.
+    #[test]
+    fn updates_keep_what_they_leave_out_and_report_on_the_wire_scale() {
+        let wire = |(value, auto): (f64, u8)| (value.round(), auto);
+        let mut receiver = Receiver::default();
+        receiver.set_gain(Some(100.0), Some(false));
+        receiver.set_gain(None, None);
+        assert_eq!(wire(receiver.gain_on_wire()), (255.0, 0));
+        receiver.set_gain(None, Some(true));
+        assert_eq!(wire(receiver.gain_on_wire()), (255.0, 1));
+
+        receiver.set_sea(Some(20.0), None);
+        assert_eq!(wire(receiver.sea_on_wire()), (51.0, 1));
+        receiver.set_sea(None, Some(false));
+        assert_eq!(wire(receiver.sea_on_wire()), (51.0, 0));
     }
 
     /// Auto gain is the neutral gain whatever the manual value was.

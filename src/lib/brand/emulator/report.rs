@@ -43,8 +43,6 @@ const DEG_TO_RAD: f64 = PI / 180.0;
 const HALF_BEAM_WIDTH: f64 = 1.0 * DEG_TO_RAD;
 /// Land's strongest patches return strongly, but less than a ship's steel
 const LAND_INTENSITY: u8 = 14;
-/// Gain and sea travel as 0 to 255 on the wire, and are set as 0 to 100
-const PERCENT_TO_WIRE: f64 = 2.55;
 /// An echo is never shorter than this many pixels along a spoke, as a
 /// radar pulse has a length of its own.
 const MIN_ECHO_PIXELS: f64 = 2.0;
@@ -264,21 +262,11 @@ impl EmulatorReportReceiver {
                 }
             }
             ControlId::Gain => {
-                if let Ok(gain) = cv.as_f64() {
-                    self.receiver.gain = gain;
-                }
-                if let Some(auto) = cv.auto {
-                    self.receiver.gain_auto = auto;
-                }
+                self.receiver.set_gain(cv.as_f64().ok(), cv.auto);
                 self.report_receiver();
             }
             ControlId::Sea => {
-                if let Ok(sea) = cv.as_f64() {
-                    self.receiver.sea = sea;
-                }
-                if let Some(auto) = cv.auto {
-                    self.receiver.sea_auto = auto;
-                }
+                self.receiver.set_sea(cv.as_f64().ok(), cv.auto);
                 self.report_receiver();
             }
             _ => {
@@ -545,17 +533,11 @@ impl EmulatorReportReceiver {
 
     /// Report the gain and sea settings the picture is drawn with
     fn report_receiver(&mut self) {
-        let receiver = self.receiver;
-        self.common.set_value_auto(
-            &ControlId::Gain,
-            receiver.gain * PERCENT_TO_WIRE,
-            u8::from(receiver.gain_auto),
-        );
-        self.common.set_value_auto(
-            &ControlId::Sea,
-            receiver.sea * PERCENT_TO_WIRE,
-            u8::from(receiver.sea_auto),
-        );
+        let (gain, gain_auto) = self.receiver.gain_on_wire();
+        self.common
+            .set_value_auto(&ControlId::Gain, gain, gain_auto);
+        let (sea, sea_auto) = self.receiver.sea_on_wire();
+        self.common.set_value_auto(&ControlId::Sea, sea, sea_auto);
     }
 
     /// Take the AIS vessels the navigation source reported since the last
