@@ -67,6 +67,14 @@ const MIN_MATCH_DISTANCE_M: f64 = 50.0;
 /// within max_speed * delta_time. We use 1.5x to account for prediction error.
 const MATCH_DISTANCE_SPEED_MULTIPLIER: f64 = 1.5;
 
+/// How much faster than its own estimate a confirmed target may have gone
+/// since it was last seen, for sizing its match gate (m/s): about what a fast
+/// planing boat gains in a sweep. Sized for ARPA Max Speed instead, the gate
+/// of a track settled on a moored boat reaches 77 m a sweep at Medium, and
+/// in an anchorage that is the next boat: tracks hopped from boat to boat
+/// onto the echo beside own ship (#848).
+const MAX_SPEED_GAIN_MS: f64 = 5.0;
+
 /// How many standard deviations of measurement error the match gate allows
 /// on each axis, on top of how far the target could have travelled.
 ///
@@ -765,10 +773,17 @@ impl TargetTracker {
             let delta_time_s = (match_time.saturating_sub(target.last_update)) as f64 / 1000.0;
 
             // How far the target itself could have travelled since it was
-            // last seen. The 1.5 multiplier covers prediction error while it
-            // manoeuvres. This term is the same in every direction.
-            let travel =
-                candidate.max_target_speed_ms * delta_time_s * MATCH_DISTANCE_SPEED_MULTIPLIER;
+            // last seen: a confirmed target not much faster than its own
+            // estimate, one still acquiring at up to ARPA Max Speed. The 1.5
+            // multiplier covers prediction error while it manoeuvres. This
+            // term is the same in every direction.
+            let speed = match target.sog {
+                Some(sog) if target.confirmed => {
+                    (sog + MAX_SPEED_GAIN_MS).min(candidate.max_target_speed_ms)
+                }
+                _ => candidate.max_target_speed_ms,
+            };
+            let travel = speed * delta_time_s * MATCH_DISTANCE_SPEED_MULTIPLIER;
 
             let normalized = match sight {
                 Some(bearing) => {
@@ -1135,6 +1150,32 @@ mod tests {
 
         // Should have two separate active targets (both in Acquiring status)
         assert_eq!(tracker.active_count(), 2);
+    }
+
+    /// A confirmed target that has stood still cannot have gone far by the
+    /// next sweep. Its gate used to be sized for ARPA Max Speed whatever its
+    /// own speed, 96 m a sweep at 50 kn, so the next boat in an anchorage,
+    /// 80 m on, became the same target (#848).
+    #[test]
+    fn a_still_target_does_not_take_the_next_boat() {
+        let mut tracker = TargetTracker::new_merged();
+        for i in 0..8u64 {
+            tracker.process_candidate(make_candidate_at(400.0, 300.0, i * 2_500));
+        }
+        let id = tracker.get_active_targets().next().unwrap().id;
+        assert_eq!(
+            tracker.get_target(id).unwrap().status,
+            TargetStatus::Tracking
+        );
+
+        tracker.process_candidate(make_candidate_at(320.0, 300.0, 8 * 2_500));
+
+        assert_eq!(
+            tracker.active_count(),
+            2,
+            "the next boat is a target of its own"
+        );
+        assert_eq!(tracker.get_target(id).unwrap().update_count, 8);
     }
 
     /// A candidate `range_m` away on true bearing `bearing_deg`, measured

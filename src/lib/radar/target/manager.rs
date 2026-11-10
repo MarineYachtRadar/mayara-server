@@ -2355,8 +2355,11 @@ mod tests {
             });
         }
 
-        // One badly noisy measurement: ~80m east of the true track.
-        let lon_noise = 80.0 / super::super::meters_per_degree_longitude(&52.0);
+        // One badly noisy measurement: ~65m east of the true track. It stays
+        // inside the gate of a confirmed 10 m/s target, which is sized by its
+        // own speed: 80 m sideways in one sweep would be a different echo,
+        // not noise on this one.
+        let lon_noise = 65.0 / super::super::meters_per_degree_longitude(&52.0);
         let noisy_true_lat = start_lat - lat_step * 6.0;
         let noisy_true_lon = 4.0 + lon_noise;
         tracker.process_candidate(TargetCandidate {
@@ -2378,7 +2381,7 @@ mod tests {
         assert!(smoothed.tcpa > 0.0, "expected closing geometry");
 
         // Raw CPA: same math but fed with target.position (the raw
-        // 80m-east last measurement) instead of the filtered estimate.
+        // 65m-east last measurement) instead of the filtered estimate.
         let raw = calculate_cpa_from_motion(
             radar_pos,
             0.0,
@@ -2391,7 +2394,7 @@ mod tests {
 
         // The smoothed Kalman position barely moved (it weights the noisy
         // measurement against many clean priors), while the raw position is
-        // exactly the 80m-east noise. So the raw CPA should be materially
+        // exactly the 65m-east noise. So the raw CPA should be materially
         // larger than the smoothed CPA.
         assert!(
             raw.cpa > smoothed.cpa + 30.0,
