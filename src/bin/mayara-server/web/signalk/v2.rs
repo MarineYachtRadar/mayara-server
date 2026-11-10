@@ -500,7 +500,14 @@ async fn get_status(State(state): State<Web>) -> Response {
     tag = "Configuration"
 )]
 async fn get_route(Path(id): Path<String>, State(state): State<Web>) -> Response {
-    let response = match mayara::course::fetch_route(&id, state.args.accept_invalid_certs).await {
+    route_response(
+        &id,
+        mayara::course::fetch_route(&id, state.args.accept_invalid_certs).await,
+    )
+}
+
+fn route_response(id: &str, route: Result<serde_json::Value, RouteFetchError>) -> Response {
+    let response = match route {
         Ok(route) => Json(route).into_response(),
         Err(RouteFetchError::BadId) => {
             SignalKResponse::failed(StatusCode::BAD_REQUEST, format!("'{id}' is not a route id"))
@@ -2386,6 +2393,38 @@ mod tests {
             model: None,
             radar_ip_address: Ipv4Addr::new(10, 56, 0, 24),
             replay: false,
+        }
+    }
+
+    /// Every answer of the route endpoint, the route or why there is none,
+    /// says not to store it: the GUI reads the route again to pick up edits,
+    /// and a stored failure would hide the route once it can be read.
+    #[test]
+    fn no_route_answer_is_stored() {
+        for (route, status) in [
+            (Ok(serde_json::json!({ "name": "r1" })), StatusCode::OK),
+            (Err(RouteFetchError::BadId), StatusCode::BAD_REQUEST),
+            (
+                Err(RouteFetchError::NoUpstream),
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
+            (Err(RouteFetchError::Upstream(404)), StatusCode::NOT_FOUND),
+            (
+                Err(RouteFetchError::Unreachable("refused".into())),
+                StatusCode::BAD_GATEWAY,
+            ),
+            (
+                Err(RouteFetchError::Switched),
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
+        ] {
+            let response = route_response("r1", route);
+            assert_eq!(response.status(), status);
+            assert_eq!(
+                response.headers()[axum::http::header::CACHE_CONTROL],
+                "no-store",
+                "{status}"
+            );
         }
     }
 

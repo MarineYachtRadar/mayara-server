@@ -114,11 +114,10 @@ pub async fn fetch_route(id: &str, accept_invalid_certs: bool) -> Result<Value, 
     if !is_route_id(id) {
         return Err(RouteFetchError::BadId);
     }
-    // Taken before the base, so a base stored meanwhile counts as a change.
-    let generation = crate::signalk::upstream_generation();
-    let base = crate::signalk::get_upstream_http_base().ok_or(RouteFetchError::NoUpstream)?;
+    let upstream = crate::signalk::upstream_http_base();
+    let base = upstream.url.ok_or(RouteFetchError::NoUpstream)?;
     fetch_route_from(&base, id, accept_invalid_certs, || {
-        crate::signalk::upstream_generation() == generation
+        crate::signalk::upstream_http_base().generation == upstream.generation
     })
     .await
 }

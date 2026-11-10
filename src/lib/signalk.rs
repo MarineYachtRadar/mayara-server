@@ -138,22 +138,29 @@ pub(crate) enum Connection {
 /// `http://192.168.0.122:4400/signalk/v1/api/`). Captured during discovery
 /// so the AIS snapshot seeder can issue one-shot REST reads without
 /// re-running discovery itself.
-static UPSTREAM_HTTP_BASE: std::sync::OnceLock<std::sync::RwLock<Option<String>>> =
+///
+/// It is kept with a generation that moves each time the base is stored or
+/// cleared, so a read can tell whether the server it asked is still the one
+/// mayara follows. One lock holds both, so they are always read as a pair.
+static UPSTREAM_HTTP_BASE: std::sync::OnceLock<std::sync::RwLock<UpstreamBase>> =
     std::sync::OnceLock::new();
 
-/// Moves on each time the REST base is stored or cleared, so a read can tell
-/// whether the server it asked is still the one mayara follows.
-static UPSTREAM_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-pub(crate) fn upstream_generation() -> u64 {
-    UPSTREAM_GENERATION.load(std::sync::atomic::Ordering::SeqCst)
+#[derive(Clone, Default)]
+pub(crate) struct UpstreamBase {
+    pub(crate) url: Option<String>,
+    pub(crate) generation: u64,
 }
 
-pub(crate) fn get_upstream_http_base() -> Option<String> {
+pub(crate) fn upstream_http_base() -> UpstreamBase {
     UPSTREAM_HTTP_BASE
         .get()
         .and_then(|lock| lock.read().ok())
-        .and_then(|guard| guard.clone())
+        .map(|guard| guard.clone())
+        .unwrap_or_default()
+}
+
+pub(crate) fn get_upstream_http_base() -> Option<String> {
+    upstream_http_base().url
 }
 
 /// Forget the REST base once the connection it was discovered for has ended.
@@ -162,12 +169,10 @@ pub(crate) fn clear_upstream_http_base() {
 }
 
 fn store_upstream_http_base(url: Option<String>) {
-    let lock = UPSTREAM_HTTP_BASE.get_or_init(|| std::sync::RwLock::new(None));
+    let lock = UPSTREAM_HTTP_BASE.get_or_init(Default::default);
     if let Ok(mut guard) = lock.write() {
-        *guard = url;
-        // Under the lock: a reader that sees the new base sees the new
-        // generation too.
-        UPSTREAM_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        guard.url = url;
+        guard.generation += 1;
     }
 }
 
@@ -893,10 +898,10 @@ mod tests {
             "a plain tcp: stream has no REST API"
         );
 
-        let generation = upstream_generation();
+        let generation = upstream_http_base().generation;
         clear_upstream_http_base();
         assert_ne!(
-            upstream_generation(),
+            upstream_http_base().generation,
             generation,
             "a read begun before the base changed can tell"
         );
