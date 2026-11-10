@@ -45,6 +45,9 @@ const SEA_CLUTTER_RANGE: f64 = 500.0;
 const SEA_CONTROL_AT_BOAT: f64 = 24.0;
 /// What sea control auto settles on: enough to clear most of the clutter
 const AUTO_SEA: f64 = 45.0;
+/// The emulated sea: a light chop, so turning sea control down shows
+/// clutter to clear, while auto sea leaves the water by the boat clean
+const SEA_STATE: f64 = 0.35;
 
 /// Gain and sea travel as 0 to 255 on the wire, and are set as 0 to 100
 const PERCENT_TO_WIRE: f64 = 2.55;
@@ -71,7 +74,7 @@ impl Default for Receiver {
             gain_auto: true,
             sea: AUTO_SEA,
             sea_auto: true,
-            sea_state: 1.0,
+            sea_state: SEA_STATE,
         }
     }
 }
@@ -282,7 +285,16 @@ mod tests {
         assert!(cleared < near / 10, "sea control: {cleared} vs {near}");
 
         let (auto, _) = lit(&Receiver::default(), 1);
-        assert!(auto < near / 3, "auto sea clears most: {auto} vs {near}");
+        assert!(auto < near / 10, "auto sea clears most: {auto} vs {near}");
+    }
+
+    /// With every control on auto the water close in is all but empty, so
+    /// a chart overlay at harbour zoom shows no speckle round the boat.
+    #[test]
+    fn auto_sea_leaves_the_water_by_the_boat_clean() {
+        let near_pixels = SPOKES as usize * (500.0 / STEP) as usize;
+        let (auto, _) = lit(&Receiver::default(), 1);
+        assert!(auto < near_pixels / 100, "{auto} of {near_pixels}");
     }
 
     /// The clutter changes from one sweep to the next, as waves do.
