@@ -779,20 +779,25 @@ impl TargetTracker {
             // estimate, one still acquiring at up to ARPA Max Speed. The 1.5
             // multiplier covers prediction error while it manoeuvres. This
             // term is the same in every direction.
-            let speed = match target.sog {
-                Some(sog) if target.confirmed => {
-                    (sog + MAX_SPEED_GAIN_MS).min(candidate.max_target_speed_ms)
-                }
-                _ => candidate.max_target_speed_ms,
-            };
-            // An echo that may be own ship's must fit the target's own motion.
-            // The floor that lets a slow track's echo wander would let it pull
-            // a boat moored 40 m off onto own ship.
-            let floor = if candidate.source == CandidateSource::OwnShip {
-                0.0
+            //
+            // An echo that may be own ship's must fit the target's own motion
+            // as it is: with no speed it might have gained, and without the
+            // floor that lets a slow track's echo wander. Either would let it
+            // pull a boat moored 40 m off onto own ship, the gain only after
+            // a missed sweep. A vessel coming alongside carries its own speed
+            // and still fits.
+            let own_ship = candidate.source == CandidateSource::OwnShip;
+            let speed = if own_ship {
+                target.sog.unwrap_or(0.0).min(candidate.max_target_speed_ms)
             } else {
-                MIN_MATCH_DISTANCE_M
+                match target.sog {
+                    Some(sog) if target.confirmed => {
+                        (sog + MAX_SPEED_GAIN_MS).min(candidate.max_target_speed_ms)
+                    }
+                    _ => candidate.max_target_speed_ms,
+                }
             };
+            let floor = if own_ship { 0.0 } else { MIN_MATCH_DISTANCE_M };
             let travel = speed * delta_time_s * MATCH_DISTANCE_SPEED_MULTIPLIER;
 
             let normalized = match sight {

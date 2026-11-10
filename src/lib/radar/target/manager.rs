@@ -1181,40 +1181,41 @@ mod tests {
 
     /// A confirmed boat lying still 39 m off is not pulled onto own ship's
     /// echo 6 m off on the same bearing, though that is inside the 50 m a
-    /// slow track's gate otherwise allows.
+    /// slow track's gate otherwise allows, nor after a missed sweep, when the
+    /// speed it might have gained would otherwise widen its gate.
     #[test]
     fn own_ships_echo_does_not_pull_a_still_target_in() {
-        let mut manager = make_test_manager(false);
-        for i in 0..PROMOTING_HITS {
-            feed_blob(&mut manager, 1_000 + i * 2_500, 20, 1000); // 39 m
-        }
-        let id = first_target_id(&manager, "test");
+        for missed in [0, 1] {
+            let mut manager = make_test_manager(false);
+            for i in 0..PROMOTING_HITS {
+                feed_blob(&mut manager, 1_000 + i * 2_500, 20, 1000); // 39 m
+            }
+            let id = first_target_id(&manager, "test");
 
-        feed_blob(&mut manager, 1_000 + PROMOTING_HITS * 2_500, 3, 1000); // 5.9 m
-        let target = manager.per_radar_trackers["test"].get_target(id).unwrap();
-        assert_eq!(u64::from(target.update_count), PROMOTING_HITS);
+            let time = 1_000 + (PROMOTING_HITS + missed) * 2_500;
+            feed_blob(&mut manager, time, 3, 1000); // 5.9 m
+            let target = manager.per_radar_trackers["test"].get_target(id).unwrap();
+            assert_eq!(
+                u64::from(target.update_count),
+                PROMOTING_HITS,
+                "{missed} missed"
+            );
+        }
     }
 
-    /// A confirmed target that comes within 30 m is still followed there, so
-    /// a vessel coming alongside keeps its track and its guard zone alarm.
+    /// A confirmed vessel coming in towards own ship is still followed inside
+    /// 30 m, so it keeps its track and its guard zone alarm.
     #[test]
-    fn a_confirmed_target_is_followed_close_in() {
+    fn a_vessel_coming_alongside_is_followed_close_in() {
         let mut manager = make_test_manager(false);
-        for i in 0..PROMOTING_HITS {
-            feed_blob(&mut manager, 1_000 + i * 2_500, 20, 1000); // 39 m
+        // 3.9 m/s straight in: 5 pixels of 1.95 m a sweep, from 117 m to 29 m.
+        let pixels: Vec<usize> = (15..=60).rev().step_by(5).collect();
+        for (i, pixel) in pixels.iter().enumerate() {
+            feed_blob(&mut manager, 1_000 + i as u64 * 2_500, *pixel, 1000);
         }
         let id = first_target_id(&manager, "test");
-        assert_eq!(
-            manager.per_radar_trackers["test"]
-                .get_target(id)
-                .unwrap()
-                .status,
-            TargetStatus::Tracking
-        );
-
-        feed_blob(&mut manager, 1_000 + PROMOTING_HITS * 2_500, 12, 1000); // 23 m
         let target = manager.per_radar_trackers["test"].get_target(id).unwrap();
-        assert_eq!(u64::from(target.update_count), PROMOTING_HITS + 1);
+        assert_eq!(target.update_count as usize, pixels.len());
     }
 
     /// A track that stops being seen is lost when enough sweeps have passed,
