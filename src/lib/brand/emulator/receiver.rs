@@ -124,7 +124,7 @@ impl Receiver {
         // around its mean, as the waves move
         let clutter =
             self.sea_state * SEA_CLUTTER_AT_BOAT * close_in * -(1.0 - speckle(CLUTTER_SEED)).ln();
-        let (mut strength, closing_speed) = if clutter > echo.intensity as f64 {
+        let (mut strength, mut closing_speed) = if clutter > echo.intensity as f64 {
             (clutter, 0.0)
         } else {
             (echo.intensity as f64, echo.closing_speed)
@@ -148,6 +148,8 @@ impl Receiver {
                 NOISE_LEVEL_SEED ^ rotation as u64,
             );
             strength = NOISE_INTENSITY * -(1.0 - blotch).ln();
+            // Noise does not move, whatever echo sea control cleared here
+            closing_speed = 0.0;
         }
         if strength <= 0.0 {
             return Echo {
@@ -377,6 +379,26 @@ mod tests {
             ..manual(FULL_SCALE, 0.0)
         };
         assert_eq!(receiver.pixel(echo(1), 3000.0, 0, 300, 0).intensity, 7);
+    }
+
+    /// Where sea control clears a moving ship close in and noise shows in
+    /// its place, the noise carries no Doppler of the ship's.
+    #[test]
+    fn noise_where_sea_control_cleared_a_ship_does_not_move() {
+        let receiver = Receiver {
+            sea_state: 0.0,
+            ..manual(FULL_SCALE, 40.0)
+        };
+        let ship = Echo {
+            intensity: 2,
+            closing_speed: 3.0,
+        };
+        let shown: Vec<Echo> = (0..SPOKES)
+            .map(|spoke| receiver.pixel(ship, 0.0, spoke, 0, 1))
+            .filter(|e| e.intensity > 0)
+            .collect();
+        assert!(!shown.is_empty(), "noise shows");
+        assert!(shown.iter().all(|e| e.closing_speed == 0.0));
     }
 
     /// Auto gain is the neutral gain whatever the manual value was.
