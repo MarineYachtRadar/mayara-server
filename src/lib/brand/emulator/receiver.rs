@@ -19,12 +19,22 @@ const NEUTRAL_GAIN: f64 = 50.0;
 /// turned down, even a ship fades
 const GAIN_LIFT: f64 = 6.0;
 const GAIN_CUT: f64 = 12.0;
-/// Above this gain the receiver's own noise starts to speckle the picture
+/// Above this gain the receiver's own noise starts to speckle the picture,
+/// unless sea control holds it down
 const NOISE_FROM_GAIN: f64 = 65.0;
-/// The share of pixels noise lights at full gain
-const NOISE_SHARE_AT_FULL_GAIN: f64 = 0.02;
-/// How strong noise shows before gain lifts it
-const NOISE_INTENSITY: f64 = 2.0;
+/// The share of pixels noise lights at full gain without sea control: as on
+/// a Furuno DRS4D-NXT at gain 100 with sea and rain off, nearly all of them
+const NOISE_SHARE_AT_FULL_GAIN: f64 = 0.97;
+/// Sea control at this setting or above, or on auto, clears the noise; a
+/// real radar at gain 100 with auto sea shows hardly any beyond a mile
+const SEA_CLEARING_NOISE: f64 = 50.0;
+/// How strong noise is on average before gain lifts it; it varies from
+/// pixel to pixel, so the noise shows mottled over the whole scale
+const NOISE_INTENSITY: f64 = 5.0;
+/// Noise comes in blotches about this many spokes wide and pixels deep,
+/// not pixel by pixel
+const NOISE_BLOTCH_SPOKES: u16 = 6;
+const NOISE_BLOTCH_PIXELS: usize = 3;
 
 /// How strong the sea's return is right by the boat, in a moderate sea
 const SEA_CLUTTER_AT_BOAT: f64 = 7.0;
@@ -38,6 +48,7 @@ const AUTO_SEA: f64 = 45.0;
 
 const CLUTTER_SEED: u64 = 0xc1a7_0001;
 const NOISE_SEED: u64 = 0xc1a7_0002;
+const NOISE_LEVEL_SEED: u64 = 0xc1a7_0003;
 
 /// The gain and sea settings, as the radar's controls report them
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -84,6 +95,18 @@ impl Receiver {
         if self.sea_auto { AUTO_SEA } else { self.sea }
     }
 
+    /// The share of empty pixels the receiver's own noise lights
+    fn noise_share(&self) -> f64 {
+        let gain =
+            ((self.gain_level() - NOISE_FROM_GAIN) / (FULL_SCALE - NOISE_FROM_GAIN)).max(0.0);
+        let unsuppressed = if self.sea_auto {
+            0.0
+        } else {
+            (1.0 - self.sea / SEA_CLEARING_NOISE).max(0.0)
+        };
+        gain * unsuppressed * NOISE_SHARE_AT_FULL_GAIN
+    }
+
     /// The echo shown at pixel `pixel` of spoke `spoke`, `distance` meters
     /// out, in rotation `rotation`, for what came back there.
     pub(crate) fn pixel(
@@ -112,16 +135,19 @@ impl Receiver {
             strength -= (self.sea_level() / FULL_SCALE * SEA_CONTROL_AT_BOAT * close_in).floor();
         }
         // Clutter too weak to stand out stays in the background, which gain
-        // brings up only as the receiver's sparse noise
+        // brings up only as the receiver's noise
         if echo.intensity == 0 && strength < DETECTION {
             strength = 0.0;
         }
 
         let gain = self.gain_level();
-        let noise_share = ((gain - NOISE_FROM_GAIN) / (FULL_SCALE - NOISE_FROM_GAIN)).max(0.0)
-            * NOISE_SHARE_AT_FULL_GAIN;
-        if strength <= 0.0 && speckle(NOISE_SEED) < noise_share {
-            strength = NOISE_INTENSITY;
+        if strength <= 0.0 && speckle(NOISE_SEED) < self.noise_share() {
+            let blotch = lattice(
+                (spoke / NOISE_BLOTCH_SPOKES) as i64,
+                (pixel / NOISE_BLOTCH_PIXELS) as i64,
+                NOISE_LEVEL_SEED ^ rotation as u64,
+            );
+            strength = NOISE_INTENSITY * -(1.0 - blotch).ln();
         }
         if strength <= 0.0 {
             return Echo {
@@ -308,17 +334,39 @@ mod tests {
         assert!(loud_near > 50, "{loud_near}");
     }
 
-    /// Full gain over a moderate sea lights only a speckle far out, not
-    /// every pixel the faint clutter reaches.
+    fn far_pixels() -> usize {
+        SPOKES as usize * (PIXELS - (1500.0 / STEP) as usize)
+    }
+
+    /// With auto sea, full gain leaves the water far out nearly dark, as a
+    /// real radar's auto clutter control does: faint clutter is not lifted
+    /// into an even sheet.
     #[test]
-    fn full_gain_leaves_the_far_sea_mostly_dark() {
+    fn full_gain_with_auto_sea_leaves_the_far_sea_dark() {
         let receiver = Receiver {
             sea_auto: true,
             ..manual(FULL_SCALE, 0.0)
         };
         let (_, far) = lit(&receiver, 1);
-        let far_pixels = SPOKES as usize * (PIXELS - (1500.0 / STEP) as usize);
-        assert!(far < far_pixels / 20, "{far} of {far_pixels}");
+        assert!(far < far_pixels() / 100, "{far} of {}", far_pixels());
+    }
+
+    /// With sea control off, full gain fills the screen with noise of every
+    /// strength, mottled rather than one flat colour; sea control clears it.
+    #[test]
+    fn full_gain_without_sea_control_fills_the_screen() {
+        let open = manual(FULL_SCALE, 0.0);
+        let (_, far) = lit(&open, 1);
+        assert!(far > far_pixels() * 9 / 10, "{far} of {}", far_pixels());
+
+        let mut strengths = std::collections::BTreeSet::new();
+        for spoke in 0..SPOKES {
+            strengths.insert(open.pixel(echo(0), 1800.0, spoke, 180, 1).intensity);
+        }
+        assert!(strengths.len() >= 6, "{strengths:?}");
+
+        let (_, cleared) = lit(&manual(FULL_SCALE, SEA_CLEARING_NOISE), 1);
+        assert!(cleared < far_pixels() / 100, "{cleared}");
     }
 
     /// A faint echo is lifted by gain like any other.
