@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 3.17.4 (2026-11-10)
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### 🚀 Features
+* perf(replay): parse a capture as it is read by @dirkwa in https://github.com/MarineYachtRadar/mayara-server/pull/897
+* feat(emulator): make gain and sea control change the picture by @dirkwa in https://github.com/MarineYachtRadar/mayara-server/pull/892
+* feat(gui): let view-only viewers of the emulator set gain, sea and range locally by @dirkwa in https://github.com/MarineYachtRadar/mayara-server/pull/893
+### 🐛 Fixes
+* fix(furuno): acquire ordinary echoes with Target Analyzer on by @dirkwa in https://github.com/MarineYachtRadar/mayara-server/pull/894
+* fix(gui): don't draw the route of a server mayara has left by @dirkwa in https://github.com/MarineYachtRadar/mayara-server/pull/895
+* fix(furuno): paint fewer still echoes as approaching by @dirkwa in https://github.com/MarineYachtRadar/mayara-server/pull/898
+* fix(arpa): keep moored boats' tracks off own ship's echo by @dirkwa in https://github.com/MarineYachtRadar/mayara-server/pull/899
+
+
+**Full Changelog**: https://github.com/MarineYachtRadar/mayara-server/compare/v3.17.3...v3.17.4
+
 ## 3.17.3 (2026-11-09)
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
