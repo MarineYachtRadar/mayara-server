@@ -269,6 +269,10 @@ impl EmulatorReportReceiver {
                 self.receiver.set_sea(cv.as_f64().ok(), cv.auto);
                 self.report_receiver();
             }
+            ControlId::Rain => {
+                self.receiver.set_rain(cv.as_f64().ok(), cv.auto);
+                self.report_receiver();
+            }
             _ => {
                 // Forward other control updates to command sender
                 let _ = self
@@ -531,13 +535,16 @@ impl EmulatorReportReceiver {
         .spoke(spoke_angle, world_bearing_rad)
     }
 
-    /// Report the gain and sea settings the picture is drawn with
+    /// Report the gain, sea and rain settings the picture is drawn with
     fn report_receiver(&mut self) {
         let (gain, gain_auto) = self.receiver.gain_on_wire();
         self.common
             .set_value_auto(&ControlId::Gain, gain, gain_auto);
         let (sea, sea_auto) = self.receiver.sea_on_wire();
         self.common.set_value_auto(&ControlId::Sea, sea, sea_auto);
+        let (rain, rain_auto) = self.receiver.rain_on_wire();
+        self.common
+            .set_value_auto(&ControlId::Rain, rain, rain_auto);
     }
 
     /// Take the AIS vessels the navigation source reported since the last
