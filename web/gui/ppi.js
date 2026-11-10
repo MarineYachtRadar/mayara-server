@@ -422,6 +422,18 @@ class PPI {
     this.onTrackedChange?.();
   }
 
+  // Shows the picture the radar sends out to a shorter range, without the
+  // radar changing range: the image stays valid, so it is only rescaled.
+  setViewRange(range) {
+    if (range === this.range) return;
+    this.range = range;
+    if (this.renderer && this.renderer.setRangeScale) {
+      this.renderer.setRangeScale(this.range, this.#imageRange() || this.range);
+    }
+    this.redrawCanvas();
+    this.onTrackedChange?.();
+  }
+
   // The distance at the outer edge of the image. A spoke's range is that of
   // its last sample, but each image row is maxspokelength samples wide, so
   // a shorter spoke ends before the row does.

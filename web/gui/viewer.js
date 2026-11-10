@@ -37,6 +37,7 @@ import "./vendor/protobuf.min.js";
 import { WebGPURenderer } from "./render_webgpu.js";
 import { WebGLRenderer } from "./render_webgl.js";
 import { PPI } from "./ppi.js";
+import { localView } from "./local-view.js";
 import { TargetDataBoxes } from "./data-boxes.js";
 import { COURSE_PATHS, routeId, routePoints, coursePlot } from "./route.js";
 import { startTourIfFirstVisit } from "./tour.js";
@@ -2050,6 +2051,7 @@ function radarLoaded(r) {
         let lastSpoke = null;
         for (let i = 0; i < message.spokes.length; i++) {
           let spoke = message.spokes[i];
+          localView.adjust(spoke.data, spoke.range, capabilities.legend.pixelColors);
           ppi.drawSpoke(spoke);
           prev_angle = spoke.angle;
           lastSpoke = spoke;
@@ -2162,7 +2164,11 @@ function controlUpdate(controlId, value) {
     const control = getControl(controlId);
     if (control?.name === "Range") {
       const range = typeof value === "object" ? value.value : value;
-      ppi.setRange(range);
+      if (localView.active) {
+        ppi.setViewRange(range);
+      } else {
+        ppi.setRange(range);
+      }
       updateRangeDisplay();
     }
   }
