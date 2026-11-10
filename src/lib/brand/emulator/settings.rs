@@ -59,7 +59,6 @@ pub(crate) fn new(
         .wire_scale_factor(2.55, false)
         .build(&mut controls);
 
-    // Rain clutter with auto
     new_auto(ControlId::Rain, 0., 100., HAS_AUTO_NOT_ADJUSTABLE)
         .wire_scale_factor(2.55, false)
         .build(&mut controls);
