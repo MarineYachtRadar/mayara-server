@@ -18,7 +18,13 @@ still answers. Operators report this as "the radar responds on `/radars/xxxx` bu
 the list."
 
 The cure is not to special-case the vanish but to **report the radar with a status that
-explains why it isn't fully usable yet.** (The internals README's lifecycle note — "the radar
+explains why it isn't fully usable yet.**
+
+A radar that is **gone** is a different case. One silent for `RADAR_FORGET_TIMEOUT` (5 min)
+is switched off or unplugged, and is forgotten so that discovery finds it anew
+(`SharedRadars::remove_silent_radars`, #852). A standby radar keeps reporting, so it is never
+caught; after 30 s of silence a radar only shows power Off. A Raymarine is kept, because a
+silent one may be asleep and only its Power control can wake it. (The internals README's lifecycle note — "the radar
 becomes visible in the API once ranges are set" — describes the behavior this model changes.)
 
 ## Two orthogonal axes — do not conflate them
