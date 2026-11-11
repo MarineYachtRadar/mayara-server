@@ -170,7 +170,7 @@ impl Locator {
             .await;
 
         loop {
-            self.forget_radars_without_address();
+            self.forget_lost_radars();
 
             let mut set = JoinSet::new();
             let cancellation_token = cancellation_token.clone();
@@ -286,9 +286,10 @@ impl Locator {
                                         }
 
                                         // An address can vanish without the change
-                                        // being signalled; searching resumes only
-                                        // from the top of the loop.
-                                        if self.forget_radars_without_address() {
+                                        // being signalled, and a radar falls silent
+                                        // without any signal at all; searching
+                                        // resumes only from the top of the loop.
+                                        if self.forget_lost_radars() {
                                             break;
                                         }
 
@@ -313,27 +314,37 @@ impl Locator {
         }
     }
 
-    /// Forget the radars found via an interface address this host no longer
-    /// has, so that discovery looks for them again. True when any was
-    /// forgotten.
-    fn forget_radars_without_address(&self) -> bool {
-        // A replay's interface is made up, so it is never on the host.
+    /// Forget the radars that are gone, so that discovery looks for them
+    /// again: those found via an interface address this host no longer has,
+    /// and those silent for too long. True when any was forgotten.
+    fn forget_lost_radars(&self) -> bool {
+        // A replay's interface is made up, so it is never on the host, and
+        // its radar is silent whenever the recording is.
         if self.args.is_replay() {
             return false;
         }
-        let Some(addresses) = network::host_ipv4_addresses() else {
-            return false;
-        };
-        let lost = self
-            .radars
-            .remove_radars_without_address(|addr| addresses.contains(addr));
-        for key in &lost {
-            log::warn!(
-                "{}: this host lost the address the radar was found on; searching for it again",
-                key
-            );
+        let mut forgotten = false;
+        if let Some(addresses) = network::host_ipv4_addresses() {
+            for key in self
+                .radars
+                .remove_radars_without_address(|addr| addresses.contains(addr))
+            {
+                log::warn!(
+                    "{}: this host lost the address the radar was found on; searching for it again",
+                    key
+                );
+                forgotten = true;
+            }
         }
-        !lost.is_empty()
+        for key in self.radars.remove_silent_radars() {
+            log::warn!(
+                "{}: nothing received for {} minutes, so the radar is switched off or unplugged; forgetting it",
+                key,
+                SharedRadars::RADAR_FORGET_TIMEOUT.as_secs() / 60
+            );
+            forgotten = true;
+        }
+        forgotten
     }
 
     async fn reply_with_interface_state(

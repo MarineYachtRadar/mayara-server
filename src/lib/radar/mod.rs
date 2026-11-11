@@ -730,7 +730,11 @@ impl RadarInfo {
 
     /// How long it has been since the last packet was received from this radar.
     pub(crate) fn input_silence(&self) -> Duration {
-        Duration::from_millis(now_millis().saturating_sub(self.last_input.load(Ordering::Relaxed)))
+        self.input_silence_at(now_millis())
+    }
+
+    fn input_silence_at(&self, now: u64) -> Duration {
+        Duration::from_millis(now.saturating_sub(self.last_input.load(Ordering::Relaxed)))
     }
 
     /// Tie a subsystem serving this radar to the radar's lifetime: removing
@@ -1217,6 +1221,12 @@ impl SharedRadars {
     /// [`Power::Off`]. See issue #432.
     pub(crate) const RADAR_SILENCE_TIMEOUT: Duration = Duration::from_secs(30);
 
+    /// A radar silent this long is taken to be switched off or unplugged, and
+    /// is forgotten so that discovery finds it anew if it comes back. A
+    /// standby radar keeps reporting, so this only catches one that is really
+    /// gone. See issue #852.
+    pub(crate) const RADAR_FORGET_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+
     /// Decay the power state of any radar gone silent to [`Power::Off`], so the
     /// GUI reflects a powered-off radar instead of holding its last reported
     /// state. Called on a fixed cadence by the radar watchdog. The next report
@@ -1441,6 +1451,42 @@ impl SharedRadars {
             .collect()
     }
 
+    /// Forget every antenna that has been silent for
+    /// [`RADAR_FORGET_TIMEOUT`](Self::RADAR_FORGET_TIMEOUT) on all its ranges,
+    /// returning the keys of the ranges forgotten.
+    pub(crate) fn remove_silent_radars(&self) -> Vec<String> {
+        self.remove_silent_radars_at(now_millis())
+    }
+
+    fn remove_silent_radars_at(&self, now: u64) -> Vec<String> {
+        let gone: Vec<RadarInfo> = {
+            let mut radars = self.radars.write().unwrap();
+            let mut antennas: HashMap<&str, Vec<&RadarInfo>> = HashMap::new();
+            for info in radars.info.values() {
+                antennas.entry(info.antenna_key()).or_default().push(info);
+            }
+            let keys: Vec<String> = antennas
+                .values()
+                .filter(|ranges| {
+                    let silences: Vec<Duration> =
+                        ranges.iter().map(|r| r.input_silence_at(now)).collect();
+                    should_forget(&ranges[0].brand, &silences)
+                })
+                .flatten()
+                .map(|info| info.key.clone())
+                .collect();
+            keys.iter()
+                .filter_map(|key| radars.info.remove(key))
+                .collect()
+        };
+        gone.into_iter()
+            .map(|info| {
+                info.stop_tasks();
+                info.key
+            })
+            .collect()
+    }
+
     ///
     /// Update radar info in radars container
     ///
@@ -1641,6 +1687,19 @@ pub(crate) fn should_idle(power: Option<i32>, spoke_receiver_count: usize) -> bo
 /// is powered off from the operator's point of view.
 fn should_power_off(silence: Duration, current_power: Option<i32>) -> bool {
     silence >= SharedRadars::RADAR_SILENCE_TIMEOUT && current_power != Some(Power::Off as i32)
+}
+
+/// Decide whether an antenna whose ranges have been silent for `silences`
+/// should be forgotten: once every range has been silent for
+/// [`SharedRadars::RADAR_FORGET_TIMEOUT`]. A Raymarine radar is kept: a
+/// silent one may be asleep, and only its Power control can wake it. The
+/// search for radars that a forgotten one restarts would instead wake it
+/// unasked, undoing an MFD's Off.
+fn should_forget(brand: &Brand, silences: &[Duration]) -> bool {
+    *brand != Brand::Raymarine
+        && silences
+            .iter()
+            .all(|s| *s >= SharedRadars::RADAR_FORGET_TIMEOUT)
 }
 
 /// The dual-range ids a transmit claim is keyed on: the primary range and,
@@ -3143,6 +3202,69 @@ mod tests {
         assert_eq!(forgotten, vec![lost.key()]);
         assert!(radars.get_by_key(&kept.key()).is_some());
         assert!(radars.get_by_key(&lost.key()).is_none());
+    }
+
+    const NOW: u64 = 10 * 60 * 60 * 1000;
+
+    /// Make `info` last heard from `silence` before [`NOW`].
+    fn heard_before_now(info: &RadarInfo, silence: Duration) {
+        info.last_input
+            .store(NOW - silence.as_millis() as u64, Ordering::Relaxed);
+    }
+
+    const GONE: Duration = Duration::from_secs(SharedRadars::RADAR_FORGET_TIMEOUT.as_secs() + 1);
+    const STANDBY: Duration = Duration::from_secs(1);
+
+    /// A radar that went silent is forgotten, one still reporting is kept.
+    #[test]
+    fn a_radar_silent_too_long_is_forgotten() {
+        let radars = SharedRadars::new();
+        let on = radars
+            .add(test_helpers::radar_info(&radars, "0001", None))
+            .unwrap();
+        let off = radars
+            .add(test_helpers::radar_info(&radars, "0002", None))
+            .unwrap();
+        heard_before_now(&on, STANDBY);
+        heard_before_now(&off, GONE);
+
+        assert_eq!(radars.remove_silent_radars_at(NOW), vec![off.key()]);
+        assert!(radars.get_by_key(&on.key()).is_some());
+        assert!(radars.get_by_key(&off.key()).is_none());
+    }
+
+    /// Both ranges of an antenna go together, and only once both are silent.
+    #[test]
+    fn a_dual_range_antenna_is_forgotten_whole() {
+        let radars = SharedRadars::new();
+        let a = radars
+            .add(test_helpers::radar_info(&radars, "852A", Some("A")))
+            .unwrap();
+        let b = radars
+            .add(test_helpers::radar_info(&radars, "852A", Some("B")))
+            .unwrap();
+        heard_before_now(&a, GONE);
+        heard_before_now(&b, STANDBY);
+        assert!(radars.remove_silent_radars_at(NOW).is_empty());
+
+        heard_before_now(&b, GONE);
+        let mut forgotten = radars.remove_silent_radars_at(NOW);
+        forgotten.sort();
+        assert_eq!(forgotten, vec![a.key(), b.key()]);
+    }
+
+    /// A silent Raymarine may be asleep, and its Power control is the only
+    /// way to wake it, so it stays listed.
+    #[test]
+    fn a_silent_raymarine_is_kept() {
+        let radars = SharedRadars::new();
+        let mut asleep = test_helpers::radar_info(&radars, "0003", None);
+        asleep.brand = Brand::Raymarine;
+        let asleep = radars.add(asleep).unwrap();
+        heard_before_now(&asleep, GONE);
+
+        assert!(radars.remove_silent_radars_at(NOW).is_empty());
+        assert!(radars.get_by_key(&asleep.key()).is_some());
     }
 
     #[test]
