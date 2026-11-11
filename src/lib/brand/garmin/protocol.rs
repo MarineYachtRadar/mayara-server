@@ -197,9 +197,8 @@ pub(crate) const CDM_OFFSET_SIMULATOR_MODE: usize = 4;
 /// Offset of the `product_subtype` byte within the heartbeat payload.
 pub(crate) const CDM_OFFSET_PRODUCT_SUBTYPE: usize = 5;
 
-/// Offset of the `syc_group_id` byte within the heartbeat payload. Devices
-/// on the same boat share this value; the radar broadcasts the value the
-/// MFD configured, and the MFD reads it from gmcfg `"syc.group_id"`.
+/// Offset of the `syc_group_id` byte within the heartbeat payload: the
+/// class of device, `2` for a radar and `6` (the default) for an MFD.
 pub(crate) const CDM_OFFSET_SYC_GROUP_ID: usize = 6;
 
 // CDM heartbeat body layout. Derived from `cdm_build_and_send_v2_heartbeat`

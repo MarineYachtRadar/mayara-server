@@ -20,7 +20,7 @@
 //!   +02 64 10         product_id = 0x1064 (LE)
 //!   +04 00            simulator_mode
 //!   +05 05            product_subtype
-//!   +06 02            syc_group_id (mirrors the observed radar's value)
+//!   +06 06            syc_group_id = 6, a display
 //!   +07 01            constant
 //!   +08 00            service_count = 0
 //!   +09 00 00 00      pad
@@ -42,8 +42,6 @@
 //!   advertise a service if the Fantom turns out to filter on it.
 
 use std::net::{Ipv4Addr, SocketAddrV4};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
 
 use network_interface::{NetworkInterface, NetworkInterfaceConfig};
@@ -64,12 +62,13 @@ const MAYARA_PRODUCT_ID: u16 = 0x1064;
 /// index is out of range — i.e. a benign fallback value.
 const MAYARA_PRODUCT_SUBTYPE: u8 = 5;
 
-/// Default SYC group ID. The firmware reads this from gmcfg
-/// `"syc.group_id"` with default `6`. The pcap-captured radar used
-/// `2`. We start with `2` (lowest common observed value) and switch to
-/// whatever value we observe in an incoming radar heartbeat, so
-/// mayara joins the same boat-local group.
-pub(super) const DEFAULT_SYC_GROUP_ID: u8 = 2;
+/// SYC group ID: the class of device, not a boat-wide group. An MFD reads
+/// it from gmcfg `"syc.group_id"` with default `6` (`cdm_get_syc_group_id`
+/// @ `0x04a4cc50`); a radar hard-codes `2`. mayara claims a display's
+/// product id, so it claims a display's group too. A display pushes its
+/// simulator mode (`0x38f`) to every peer outside group 6, which a
+/// group-2 mayara would receive as though it were a sensor.
+const MAYARA_SYC_GROUP_ID: u8 = 6;
 
 /// CDM multicast destination — `239.254.2.2:50050`.
 fn cdm_dest() -> SocketAddrV4 {
@@ -114,7 +113,7 @@ struct HeartbeatPacket {
 }
 
 /// Build the full 30-byte GMN packet (8-byte header + 22-byte payload).
-pub(crate) fn build(syc_group_id: u8, seq: u32) -> [u8; PACKET_LEN] {
+pub(crate) fn build(seq: u32) -> [u8; PACKET_LEN] {
     let packet = HeartbeatPacket {
         packet_type: MSG_CDM_HEARTBEAT,
         payload_len: PAYLOAD_LEN as u32,
@@ -123,7 +122,7 @@ pub(crate) fn build(syc_group_id: u8, seq: u32) -> [u8; PACKET_LEN] {
         product_id: MAYARA_PRODUCT_ID,
         _simulator_mode: 0,
         product_subtype: MAYARA_PRODUCT_SUBTYPE,
-        syc_group_id,
+        syc_group_id: MAYARA_SYC_GROUP_ID,
         _constant: 1,
         _service_count: 0,
         _padding_2: [0; 3],
@@ -148,7 +147,7 @@ pub(crate) fn build(syc_group_id: u8, seq: u32) -> [u8; PACKET_LEN] {
 ///
 /// Cadence: 1 s for the first 30 sends (matches the MFD's "fast
 /// startup" phase), then 5 s steady-state.
-pub(crate) async fn run(syc_group_id: Arc<AtomicU8>) {
+pub(crate) async fn run() {
     const FAST_TICKS: u32 = 30;
     const FAST_INTERVAL: Duration = Duration::from_secs(1);
     const STEADY_INTERVAL: Duration = Duration::from_secs(5);
@@ -161,7 +160,7 @@ pub(crate) async fn run(syc_group_id: Arc<AtomicU8>) {
         if nics.is_empty() {
             log::trace!("CDM heartbeat: no Garmin-eligible NIC (172.16/12); skipping tick");
         } else {
-            let packet = build(syc_group_id.load(Ordering::Relaxed), seq);
+            let packet = build(seq);
             for nic in &nics {
                 send_one(&packet, &dest, nic).await;
             }
@@ -236,7 +235,7 @@ mod tests {
 
     #[test]
     fn build_packet_has_correct_header_and_length() {
-        let p = build(2, 0);
+        let p = build(0);
         // GMN header: msg_id = 0x038e, payload_len = 22
         assert_eq!(
             u32::from_le_bytes(p[0..4].try_into().unwrap()),
@@ -248,7 +247,7 @@ mod tests {
 
     #[test]
     fn build_payload_layout_matches_documented_v2() {
-        let p = build(2, 0x12345678);
+        let p = build(0x12345678);
         // Payload starts at p[8].
         assert_eq!(p[8], 2, "version_marker");
         assert_eq!(p[9], 0, "pad");
@@ -258,7 +257,7 @@ mod tests {
         );
         assert_eq!(p[12], 0, "simulator_mode");
         assert_eq!(p[13], MAYARA_PRODUCT_SUBTYPE);
-        assert_eq!(p[14], 2, "syc_group_id");
+        assert_eq!(p[14], 6, "syc_group_id: a display");
         assert_eq!(p[15], 1, "constant");
         assert_eq!(p[16], 0, "service_count");
         assert_eq!(&p[17..20], &[0, 0, 0], "pad after service_count");
@@ -275,13 +274,13 @@ mod tests {
 
     #[test]
     fn built_heartbeat_round_trips_through_parse() {
-        let p = build(7, 42);
+        let p = build(42);
         // discovery::parse expects the payload only (after GMN header).
         let hb = discovery::parse(&p[GMN_HEADER_LEN..]).expect("must parse");
         assert_eq!(hb.version, 2);
         assert_eq!(hb.product_id, MAYARA_PRODUCT_ID);
         assert_eq!(hb.simulator_mode, 0);
         assert_eq!(hb.product_subtype, MAYARA_PRODUCT_SUBTYPE);
-        assert_eq!(hb.syc_group_id, 7);
+        assert_eq!(hb.syc_group_id, MAYARA_SYC_GROUP_ID);
     }
 }
