@@ -505,8 +505,6 @@ mod tests {
         assert_eq!(wire(receiver.rain_on_wire()), (51.0, 0));
     }
 
-    /// Rain control, by hand or on auto, clears the noise of full gain as sea
-    /// control does.
     /// A setting outside 0 to 100 is refused, so the receiver never runs
     /// on a value its controls cannot report.
     #[test]
@@ -526,6 +524,8 @@ mod tests {
         assert_eq!(Receiver::requested(ControlId::Rain, None).unwrap(), None);
     }
 
+    /// Rain control, by hand or on auto, clears the noise of full gain as sea
+    /// control does.
     #[test]
     fn rain_control_clears_the_noise_of_full_gain() {
         let far_lit = |rain: f64, rain_auto: bool| {
