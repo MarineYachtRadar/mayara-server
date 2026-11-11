@@ -86,9 +86,8 @@ pub(crate) struct CdmHeartbeat {
     pub simulator_mode: u8,
     /// `product_subtype` byte (e.g. 5 for the captured GMR xHD).
     pub product_subtype: u8,
-    /// SYC ("Synchronised Yacht Control") group ID — the boat-local
-    /// network group. Devices on the same boat share the same value.
-    /// Read from gmcfg `"syc.group_id"` in the firmware; default 6.
+    /// SYC group ID: the class of device, `2` for a radar (hard-coded in
+    /// its firmware) and `6` for an MFD (gmcfg `"syc.group_id"`, default 6).
     pub syc_group_id: u8,
     /// Per-device identifier, the word following the service id array.
     /// Stable across power cycles and independent of the address, so it

@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::fmt::{self, Display};
 use std::io;
 use std::net::{Ipv4Addr, SocketAddrV4};
-use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio_graceful_shutdown::{SubsystemBuilder, SubsystemHandle};
 
@@ -171,18 +170,13 @@ struct LocatorShared {
 struct GarminLocator {
     args: Cli,
     state: Arc<Mutex<LocatorShared>>,
-    /// `syc_group_id` mayara puts in its outbound CDM heartbeats.
-    /// Updated on first observation of a real radar's heartbeat so we
-    /// join the same boat-local CDM group.
-    syc_group_id: Arc<AtomicU8>,
 }
 
 impl GarminLocator {
-    fn new(args: Cli, syc_group_id: Arc<AtomicU8>) -> Self {
+    fn new(args: Cli) -> Self {
         GarminLocator {
             args,
             state: Arc::new(Mutex::new(LocatorShared::default())),
-            syc_group_id,
         }
     }
 
@@ -369,19 +363,6 @@ impl GarminLocator {
             Some(h) => h,
             None => return false,
         };
-
-        // Mirror the boat's SYC group so mayara's outbound heartbeat
-        // joins the same CDM peer set the radar already belongs to.
-        // We skip heartbeats that report our own outbound value to
-        // avoid feedback loops with packets we sent.
-        let prev = self.syc_group_id.swap(hb.syc_group_id, Ordering::Relaxed);
-        if prev != hb.syc_group_id {
-            log::info!(
-                "{}: adopting SYC group_id={} from radar heartbeat",
-                from,
-                hb.syc_group_id
-            );
-        }
 
         let mut state = self.state.lock().unwrap();
         let already = state.product_ids.get(from.ip()).copied();
@@ -757,14 +738,7 @@ pub(super) fn new(args: &Cli, addresses: &mut Vec<LocatorAddress>) {
     // entries so the CDM listener and the report listener share the same
     // backing maps (radars + product_ids). The Arc<Mutex<...>> inside
     // makes the clones cheap and gives them a single source of truth.
-    //
-    // The locator also holds an Arc<AtomicU8> that the CDM heartbeat
-    // sender (spawned below) reads to decide which SYC group_id to
-    // advertise. The receive path updates the atomic when it sees a
-    // real radar heartbeat, so within ~5 s of any radar broadcasting
-    // we are sending heartbeats in its boat-local group.
-    let syc_group_id = Arc::new(AtomicU8::new(cdm_heartbeat::DEFAULT_SYC_GROUP_ID));
-    let locator = GarminLocator::new(args.clone(), syc_group_id.clone());
+    let locator = GarminLocator::new(args.clone());
 
     addresses.push(LocatorAddress::new(
         LocatorId::Garmin,
@@ -793,7 +767,7 @@ pub(super) fn new(args: &Cli, addresses: &mut Vec<LocatorAddress>) {
         if args.emulator {
             return;
         }
-        tokio::spawn(cdm_heartbeat::run(syc_group_id));
+        tokio::spawn(cdm_heartbeat::run());
         tokio::spawn(wake::run());
     }
 }
@@ -807,7 +781,7 @@ mod tests {
 
     /// A locator that registered the radar at [`RADAR`] earlier on.
     fn locator_with_registered_radar(args: &Cli) -> GarminLocator {
-        let locator = GarminLocator::new(args.clone(), Arc::new(AtomicU8::new(0)));
+        let locator = GarminLocator::new(args.clone());
         locator
             .state
             .lock()
@@ -866,15 +840,14 @@ mod tests {
     }
 
     /// The heartbeat mayara itself sends must not be taken for a device: it
-    /// would be asked for its name, and its SYC group adopted as the boat's.
+    /// would be asked for its name.
     #[test]
     fn our_own_cdm_heartbeat_is_ignored() {
         let args = Cli::parse_from(["mayara-server"]);
-        let locator = GarminLocator::new(args, Arc::new(AtomicU8::new(0)));
+        let locator = GarminLocator::new(args);
         let own = SocketAddrV4::new(Ipv4Addr::LOCALHOST, CDM_HEARTBEAT_PORT);
 
-        assert!(!locator.handle_cdm_heartbeat(&cdm_heartbeat::build(5, 0), &own));
-        assert_eq!(locator.syc_group_id.load(Ordering::Relaxed), 0);
+        assert!(!locator.handle_cdm_heartbeat(&cdm_heartbeat::build(0), &own));
         assert!(locator.state.lock().unwrap().product_ids.is_empty());
     }
 
