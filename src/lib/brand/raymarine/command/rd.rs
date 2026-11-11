@@ -60,13 +60,25 @@ fn level_byte(controls: &SharedControls, control_id: &ControlId, value: f64) -> 
         .unwrap_or_else(|| Command::scale_100_to_byte(value))
 }
 
+/// A sleeping radome ignores the mode command, so a power request has to wake
+/// it first. A radar that went silent has decayed to [`Power::Off`]; one that
+/// reports any other state is awake, and is spared the delay of the burst.
+fn power_request_must_wake(cv: &ControlValue, reported: Option<Power>) -> bool {
+    cv.id == ControlId::Power && matches!(reported, None | Some(Power::Off))
+}
+
 pub async fn set_control(
     command: &mut Command,
     cv: &ControlValue,
     value: f64,
     controls: &SharedControls,
 ) -> Result<(), RadarError> {
-    for cmd in control_frames(&command.info.ranges, cv, value, controls)? {
+    let frames = control_frames(&command.info.ranges, cv, value, controls)?;
+    if power_request_must_wake(cv, controls.get_status()) {
+        super::super::send_wake_burst(&command.info.nic_addr, &super::super::rd_wake_packets())
+            .await;
+    }
+    for cmd in frames {
         log::info!("{}: Send command {:02X?}", command.info.key(), cmd);
         command.send(&cmd).await?;
     }
@@ -198,11 +210,12 @@ mod tests {
 
     use super::{
         RdOnOffCommand, RdValueCommand, control_frames, level_byte, on_off_command,
-        standard_command,
+        power_request_must_wake, standard_command,
     };
     use crate::Cli;
     use crate::brand::raymarine::BaseModel;
     use crate::brand::raymarine::settings;
+    use crate::radar::Power;
     use crate::radar::range::Ranges;
     use crate::radar::settings::{ControlId, ControlValue, SharedControls};
     use crate::util::encode;
@@ -211,6 +224,19 @@ mod tests {
         let args = Cli::parse_from(["mayara-server"]);
         let tx = tokio::sync::broadcast::Sender::new(1);
         settings::new("ray1234".to_string(), tx, &args, BaseModel::RD)
+    }
+
+    #[test]
+    fn only_a_power_request_to_a_silent_radome_wakes_it() {
+        let power = ControlValue::new(ControlId::Power, json!(Power::Transmit as i32));
+        let gain = ControlValue::new(ControlId::Gain, json!(50));
+
+        assert!(power_request_must_wake(&power, Some(Power::Off)));
+        assert!(power_request_must_wake(&power, None));
+        assert!(!power_request_must_wake(&gain, Some(Power::Off)));
+        for awake in [Power::Standby, Power::Transmit, Power::Preparing] {
+            assert!(!power_request_must_wake(&power, Some(awake)));
+        }
     }
 
     /// The level sent for gain, sea, rain and FTC sits in the range the radar
