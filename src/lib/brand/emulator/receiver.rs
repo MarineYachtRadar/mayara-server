@@ -5,6 +5,7 @@
 
 use super::coast_echo::lattice;
 use super::world::Echo;
+use crate::radar::settings::{ControlError, ControlId};
 
 /// The strongest echo a pixel can show
 const MAX_INTENSITY: f64 = 15.0;
@@ -20,7 +21,7 @@ const NEUTRAL_GAIN: f64 = 50.0;
 const GAIN_LIFT: f64 = 6.0;
 const GAIN_CUT: f64 = 12.0;
 /// Above this gain the receiver's own noise starts to speckle the picture,
-/// unless sea control holds it down
+/// unless sea or rain control holds it down
 const NOISE_FROM_GAIN: f64 = 65.0;
 /// The share of pixels noise lights at full gain without sea control: as on
 /// a Furuno DRS4D-NXT at gain 100 with sea and rain off, nearly all of them
@@ -28,6 +29,9 @@ const NOISE_SHARE_AT_FULL_GAIN: f64 = 0.97;
 /// Sea control at this setting or above, or on auto, clears the noise; a
 /// real radar at gain 100 with auto sea shows hardly any beyond a mile
 const SEA_CLEARING_NOISE: f64 = 50.0;
+/// Rain control clears the noise the same way: on a Furuno DRS4D-NXT at gain
+/// 100 with sea off, rain 100 left almost none beyond a quarter mile
+const RAIN_CLEARING_NOISE: f64 = 50.0;
 /// How strong noise is on average before gain lifts it; it varies from
 /// pixel to pixel, so the noise shows mottled over the whole scale
 const NOISE_INTENSITY: f64 = 5.0;
@@ -56,13 +60,15 @@ const CLUTTER_SEED: u64 = 0xc1a7_0001;
 const NOISE_SEED: u64 = 0xc1a7_0002;
 const NOISE_LEVEL_SEED: u64 = 0xc1a7_0003;
 
-/// The gain and sea settings, as the radar's controls report them
+/// The gain, sea and rain settings, as the radar's controls report them
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Receiver {
     pub gain: f64,
     pub gain_auto: bool,
     pub sea: f64,
     pub sea_auto: bool,
+    pub rain: f64,
+    pub rain_auto: bool,
     /// How much the sea around the boat returns, 0 for a flat calm
     sea_state: f64,
 }
@@ -74,6 +80,8 @@ impl Default for Receiver {
             gain_auto: true,
             sea: AUTO_SEA,
             sea_auto: true,
+            rain: 0.0,
+            rain_auto: true,
             sea_state: SEA_STATE,
         }
     }
@@ -101,6 +109,26 @@ impl Receiver {
         self.sea_auto = auto.unwrap_or(self.sea_auto);
     }
 
+    /// A rain update: a value or auto flag the update leaves out stays as it was
+    pub(crate) fn set_rain(&mut self, value: Option<f64>, auto: Option<bool>) {
+        self.rain = value.unwrap_or(self.rain);
+        self.rain_auto = auto.unwrap_or(self.rain_auto);
+    }
+
+    /// A gain, sea or rain request as a setting from 0 to 100, refused when
+    /// outside it: the controls would not report such a value, and the
+    /// picture would then run on a setting no client shows
+    pub(crate) fn requested(
+        id: ControlId,
+        value: Option<f64>,
+    ) -> Result<Option<f64>, ControlError> {
+        match value {
+            Some(v) if v < 0.0 => Err(ControlError::TooLow(id, v, 0.0)),
+            Some(v) if v > FULL_SCALE => Err(ControlError::TooHigh(id, v, FULL_SCALE)),
+            _ => Ok(value),
+        }
+    }
+
     /// Gain as the radar's controls report it: the wire value and the auto flag
     pub(crate) fn gain_on_wire(&self) -> (f64, u8) {
         (self.gain * PERCENT_TO_WIRE, u8::from(self.gain_auto))
@@ -109,6 +137,11 @@ impl Receiver {
     /// Sea as the radar's controls report it: the wire value and the auto flag
     pub(crate) fn sea_on_wire(&self) -> (f64, u8) {
         (self.sea * PERCENT_TO_WIRE, u8::from(self.sea_auto))
+    }
+
+    /// Rain as the radar's controls report it: the wire value and the auto flag
+    pub(crate) fn rain_on_wire(&self) -> (f64, u8) {
+        (self.rain * PERCENT_TO_WIRE, u8::from(self.rain_auto))
     }
 
     fn gain_level(&self) -> f64 {
@@ -127,12 +160,16 @@ impl Receiver {
     fn noise_share(&self) -> f64 {
         let gain =
             ((self.gain_level() - NOISE_FROM_GAIN) / (FULL_SCALE - NOISE_FROM_GAIN)).max(0.0);
-        let unsuppressed = if self.sea_auto {
-            0.0
-        } else {
-            (1.0 - self.sea / SEA_CLEARING_NOISE).max(0.0)
+        let left_by = |auto: bool, setting: f64, clearing: f64| {
+            if auto {
+                0.0
+            } else {
+                (1.0 - setting / clearing).max(0.0)
+            }
         };
-        gain * unsuppressed * NOISE_SHARE_AT_FULL_GAIN
+        gain * left_by(self.sea_auto, self.sea, SEA_CLEARING_NOISE)
+            * left_by(self.rain_auto, self.rain, RAIN_CLEARING_NOISE)
+            * NOISE_SHARE_AT_FULL_GAIN
     }
 
     /// The echo shown at pixel `pixel` of spoke `spoke`, `distance` meters
@@ -246,12 +283,15 @@ mod tests {
         (near, far)
     }
 
+    /// Gain and sea set by hand, rain off
     fn manual(gain: f64, sea: f64) -> Receiver {
         Receiver {
             gain,
             gain_auto: false,
             sea,
             sea_auto: false,
+            rain: 0.0,
+            rain_auto: false,
             ..Receiver::default()
         }
     }
@@ -454,6 +494,54 @@ mod tests {
         assert_eq!(wire(receiver.sea_on_wire()), (51.0, 1));
         receiver.set_sea(None, Some(false));
         assert_eq!(wire(receiver.sea_on_wire()), (51.0, 0));
+
+        assert_eq!(
+            wire(receiver.rain_on_wire()),
+            (0.0, 1),
+            "rain starts on auto"
+        );
+        receiver.set_rain(Some(20.0), Some(false));
+        receiver.set_rain(None, None);
+        assert_eq!(wire(receiver.rain_on_wire()), (51.0, 0));
+    }
+
+    /// A setting outside 0 to 100 is refused, so the receiver never runs
+    /// on a value its controls cannot report.
+    #[test]
+    fn requests_outside_the_scale_are_refused() {
+        assert!(matches!(
+            Receiver::requested(ControlId::Rain, Some(101.0)),
+            Err(ControlError::TooHigh(ControlId::Rain, ..))
+        ));
+        assert!(matches!(
+            Receiver::requested(ControlId::Gain, Some(-1.0)),
+            Err(ControlError::TooLow(ControlId::Gain, ..))
+        ));
+        assert_eq!(
+            Receiver::requested(ControlId::Sea, Some(100.0)).unwrap(),
+            Some(100.0)
+        );
+        assert_eq!(Receiver::requested(ControlId::Rain, None).unwrap(), None);
+    }
+
+    /// Rain control, by hand or on auto, clears the noise of full gain as sea
+    /// control does.
+    #[test]
+    fn rain_control_clears_the_noise_of_full_gain() {
+        let far_lit = |rain: f64, rain_auto: bool| {
+            lit(
+                &Receiver {
+                    rain,
+                    rain_auto,
+                    ..manual(FULL_SCALE, 0.0)
+                },
+                1,
+            )
+            .1
+        };
+        assert!(far_lit(0.0, false) > far_pixels() * 9 / 10);
+        assert!(far_lit(RAIN_CLEARING_NOISE, false) < far_pixels() / 100);
+        assert!(far_lit(0.0, true) < far_pixels() / 100);
     }
 
     /// Auto gain is the neutral gain whatever the manual value was.

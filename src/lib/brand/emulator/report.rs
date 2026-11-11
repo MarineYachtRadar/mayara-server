@@ -261,13 +261,29 @@ impl EmulatorReportReceiver {
                         .set_value(&ControlId::DopplerSpeedThreshold, threshold * CM_PER_M);
                 }
             }
-            ControlId::Gain => {
-                self.receiver.set_gain(cv.as_f64().ok(), cv.auto);
-                self.report_receiver();
-            }
-            ControlId::Sea => {
-                self.receiver.set_sea(cv.as_f64().ok(), cv.auto);
-                self.report_receiver();
+            ControlId::Gain | ControlId::Sea | ControlId::Rain => {
+                match Receiver::requested(cv.id, cv.as_f64().ok()) {
+                    Ok(value) => {
+                        match cv.id {
+                            ControlId::Gain => self.receiver.set_gain(value, cv.auto),
+                            ControlId::Sea => self.receiver.set_sea(value, cv.auto),
+                            _ => self.receiver.set_rain(value, cv.auto),
+                        }
+                        self.report_receiver();
+                    }
+                    Err(e) => {
+                        let e = RadarError::ControlError(e);
+                        if let Err(e) = self
+                            .common
+                            .info
+                            .controls
+                            .send_error_to_client(control_update.reply_tx.clone(), cv, &e)
+                            .await
+                        {
+                            log::warn!("{}: {}", self.common.key, e);
+                        }
+                    }
+                }
             }
             _ => {
                 // Forward other control updates to command sender
@@ -531,13 +547,16 @@ impl EmulatorReportReceiver {
         .spoke(spoke_angle, world_bearing_rad)
     }
 
-    /// Report the gain and sea settings the picture is drawn with
+    /// Report the gain, sea and rain settings the picture is drawn with
     fn report_receiver(&mut self) {
         let (gain, gain_auto) = self.receiver.gain_on_wire();
         self.common
             .set_value_auto(&ControlId::Gain, gain, gain_auto);
         let (sea, sea_auto) = self.receiver.sea_on_wire();
         self.common.set_value_auto(&ControlId::Sea, sea, sea_auto);
+        let (rain, rain_auto) = self.receiver.rain_on_wire();
+        self.common
+            .set_value_auto(&ControlId::Rain, rain, rain_auto);
     }
 
     /// Take the AIS vessels the navigation source reported since the last
