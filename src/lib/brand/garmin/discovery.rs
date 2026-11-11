@@ -62,15 +62,28 @@ struct CdmHeartbeatPrefix {
     _padding_2: [u8; 3], // +09..0c
 }
 
-/// The prefix, the services the device publishes, and the identifier that
-/// follows them. A device publishing fewer services carries its identifier
-/// closer to the front, so the offset is not fixed.
+/// The prefix and the services the device publishes: the least of a
+/// heartbeat that is acted on. A body cut off inside the service array is
+/// garbled, not merely short.
 #[derive(DekuRead, Debug)]
-#[deku(endian = "little")]
-struct CdmHeartbeatWithId {
+#[deku(
+    ctx = "endian: deku::ctx::Endian",
+    endian = "endian",
+    ctx_default = "deku::ctx::Endian::Little"
+)]
+struct CdmHeartbeatServices {
     prefix: CdmHeartbeatPrefix,
     #[deku(count = "prefix.service_count")]
     _service_ids: Vec<u32>,
+}
+
+/// The services and the identifier that follows them. A device publishing
+/// fewer services carries its identifier closer to the front, so the offset
+/// is not fixed.
+#[derive(DekuRead, Debug)]
+#[deku(endian = "little")]
+struct CdmHeartbeatWithId {
+    _services: CdmHeartbeatServices,
     unique_id: u32,
 }
 
@@ -98,10 +111,10 @@ pub(crate) struct CdmHeartbeat {
 }
 
 /// Parse the body of a `0x038e` heartbeat. `payload` must be the slice
-/// **after** the 8-byte GMN header. Returns `None` if the body is too
-/// short or has the wrong version marker.
+/// **after** the 8-byte GMN header. Returns `None` if the body ends before
+/// the end of its service array or has the wrong version marker.
 pub(crate) fn parse(payload: &[u8]) -> Option<CdmHeartbeat> {
-    let prefix: CdmHeartbeatPrefix = decode_head(payload).ok()?;
+    let CdmHeartbeatServices { prefix, .. } = decode_head(payload).ok()?;
 
     // Garmin only emits version 2 heartbeats. We accept it
     // strictly so a stray packet with the same multicast address but
@@ -110,8 +123,8 @@ pub(crate) fn parse(payload: &[u8]) -> Option<CdmHeartbeat> {
         return None;
     }
 
-    // A body that stops before the identifier still says who the device is,
-    // so the identifier is read separately and may be missing.
+    // A body that stops right after its services still says who the device
+    // is, so the identifier is read separately and may be missing.
     let unique_id = decode_head::<CdmHeartbeatWithId>(payload)
         .ok()
         .map(|body| body.unique_id);
@@ -342,6 +355,25 @@ pub(super) mod tests {
     fn unique_id_is_absent_when_the_body_is_truncated() {
         let short = &SAMPLE_BODY[..18];
         assert_eq!(parse(short).and_then(|hb| hb.unique_id), None);
+    }
+
+    /// A body cut off inside its service array is garbled rather than short,
+    /// so none of it is trusted: not even the group or the product it claims.
+    #[test]
+    fn a_body_truncated_inside_the_service_array_is_rejected() {
+        // The Fantom publishes two services; stop inside the second.
+        assert!(parse(&FANTOM_BODY[..18]).is_none());
+        // Stop after the prefix, before any service at all.
+        assert!(parse(&SAMPLE_BODY[..12]).is_none());
+    }
+
+    /// The services complete but nothing after them: identity unknown, yet
+    /// the heartbeat itself is accepted.
+    #[test]
+    fn a_body_ending_after_its_services_is_accepted_without_an_identity() {
+        let hb = parse(&FANTOM_BODY[..20]).expect("services are complete");
+        assert_eq!(hb.product_id, 0x0f2c);
+        assert_eq!(hb.unique_id, None);
     }
 
     /// CDM heartbeat body captured from a GMR xHD radar in
