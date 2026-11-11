@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 3.17.5 (2026-11-11)
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### 🚀 Features
+* feat(emulator): give rain control an auto mode that clears noise by @dirkwa in https://github.com/MarineYachtRadar/mayara-server/pull/902
+### 🐛 Fixes
+* fix(emulator): calm the sea so auto sea leaves no speckle by @dirkwa in https://github.com/MarineYachtRadar/mayara-server/pull/903
+
+
+**Full Changelog**: https://github.com/MarineYachtRadar/mayara-server/compare/v3.17.4...v3.17.5
+
 ## 3.17.4 (2026-11-10)
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
