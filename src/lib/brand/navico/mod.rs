@@ -361,7 +361,7 @@ impl NavicoLocator {
             &[""]
         };
 
-        log::info!(
+        log::debug!(
             "{} via {}: Gen3+ beacon serial {} with {} scanner(s)",
             from,
             via,
