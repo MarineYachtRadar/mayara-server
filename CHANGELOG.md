@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 3.17.6 (2026-11-12)
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### 🐛 Fixes
+* fix(raymarine): wake a sleeping RD radome by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/879
+* fix(garmin): reject a garbled CDM heartbeat by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/907
+* fix(garmin): announce mayara as a display by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/909
+* fix(radar): forget a radar that has gone silent by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/910
+* fix(navico): log each discovery beacon at debug level by @keesverruijt in https://github.com/MarineYachtRadar/mayara-server/pull/911
+
+
+**Full Changelog**: https://github.com/MarineYachtRadar/mayara-server/compare/v3.17.5...v3.17.6
+
 ## 3.17.5 (2026-11-11)
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
