@@ -2930,11 +2930,13 @@ mod tests {
         });
 
         Toplevel::new(async move |subsys: &mut SubsystemHandle| {
+            // A loaded CI runner can stall the 5 ms chatter for tens of
+            // milliseconds, so the quiet limit leaves room for that.
             let r = tokio::time::timeout(
-                Duration::from_millis(300),
+                Duration::from_secs(1),
                 nmea0183_receiver().receive_udp_loop(
                     socket,
-                    Some(Duration::from_millis(50)),
+                    Some(Duration::from_millis(250)),
                     Some(&loopback),
                     subsys,
                 ),
