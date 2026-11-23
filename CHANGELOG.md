@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 3.17.7 (2026-11-23)
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### 🐛 Fixes
+* fix(ci): stop cross-building the windows-gnu target by @dirkwa in https://github.com/MarineYachtRadar/mayara-server/pull/916
+### 📦 Dependencies
+* build(deps): bump the cargo-minor-patch group with 2 updates by @dependabot[bot] in https://github.com/MarineYachtRadar/mayara-server/pull/913
+* build(deps): bump nix from 0.31.3 to 0.32.0 by @dependabot[bot] in https://github.com/MarineYachtRadar/mayara-server/pull/921
+* build(deps): bump mdns-sd from 0.21.7 to 0.22.0 by @dependabot[bot] in https://github.com/MarineYachtRadar/mayara-server/pull/920
+* build(deps): bump the cargo-minor-patch group across 1 directory with 4 updates by @dependabot[bot] in https://github.com/MarineYachtRadar/mayara-server/pull/919
+### Other
+* build: remove unused dependencies by @emsruderer in https://github.com/MarineYachtRadar/mayara-server/pull/915
+
+## New Contributors
+* @emsruderer made their first contribution in https://github.com/MarineYachtRadar/mayara-server/pull/915
+
+**Full Changelog**: https://github.com/MarineYachtRadar/mayara-server/compare/v3.17.6...v3.17.7
+
 ## 3.17.6 (2026-11-12)
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
