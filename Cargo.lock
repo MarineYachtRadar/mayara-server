@@ -1466,7 +1466,7 @@ dependencies = [
 
 [[package]]
 name = "mayara"
-version = "3.17.6"
+version = "3.17.7"
 dependencies = [
  "anyhow",
  "async-trait",
