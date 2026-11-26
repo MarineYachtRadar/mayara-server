@@ -931,6 +931,12 @@ fn carries_navigation(datagram: &[u8]) -> bool {
                         && gll.longitude.is_some()
                         && check_nmea_position(gll.latitude, gll.longitude).is_ok()
                 }
+                Ok(ParsedMessage::Gga(gga)) => {
+                    gga.quality != gnss::GgaQualityIndicator::Invalid
+                        && gga.latitude.is_some()
+                        && gga.longitude.is_some()
+                        && check_nmea_position(gga.latitude, gga.longitude).is_ok()
+                }
                 Ok(ParsedMessage::Hdt(hdt)) => {
                     matches!(nmea_angle(hdt.heading_true, "heading"), Ok(Some(_)))
                 }
@@ -2094,7 +2100,7 @@ impl NavigationData {
         }
     }
 
-    /// Take the position an RMC or GLL fix gives the boat. A void fix carries
+    /// Take the position an RMC, GLL or GGA fix gives the boat. A void fix carries
     /// stale coordinates, if any, so it is never used, and a fix without
     /// coordinates is no better: the last good position stands until
     /// [`FIX_STALE_AFTER`] has passed without a new one.
@@ -2229,6 +2235,16 @@ impl NavigationData {
             Ok(ParsedMessage::Gll(gll)) => {
                 self.take_position(sender, gll.data_valid, gll.latitude, gll.longitude, now)
                     .map_err(sentence_error)?;
+            }
+            Ok(ParsedMessage::Gga(gga)) => {
+                self.take_position(
+                    sender,
+                    Some(gga.quality != gnss::GgaQualityIndicator::Invalid),
+                    gga.latitude,
+                    gga.longitude,
+                    now,
+                )
+                .map_err(sentence_error)?;
             }
             Ok(ParsedMessage::Hdt(hdt)) => {
                 let heading = nmea_angle(hdt.heading_true, "heading").map_err(sentence_error)?;
@@ -2752,6 +2768,12 @@ mod tests {
         assert!(carries_navigation(
             b"$GPGLL,4807.038,N,01131.000,E,123519,A*25"
         ));
+        assert!(carries_navigation(
+            b"$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47"
+        ));
+        assert!(carries_navigation(
+            b"$PHGGA,123519,4807.038,N,01131.000,E,4,08,0.9,545.4,M,46.9,M,,*4D"
+        ));
         // A fix's motion is used even without its position.
         assert!(carries_navigation(
             b"$GPRMC,123519,A,,,,,022.4,084.4,230394,003.1,W*53"
@@ -2768,6 +2790,10 @@ mod tests {
             "$GPRMC,123519,V,,,,,,,230394,,,N*51",
             "$GPRMC,123519,A,,,,,,,230394,,*24",
             "$GPGLL,,,,,123519,V,N*69",
+            "$GPGGA,123519,,,,,0,00,,,M,,M,,*59",
+            "$GPGGA,123519,,,,,1,00,,,M,,M,,*58",
+            "$GPGGA,123519,4907.038,N,01131.000,E,0,08,0.9,545.4,M,46.9,M,,*47",
+            "$GPGGA,123519,9507.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47",
             "$GPRMC,123519,A,9507.038,N,01131.000,E,022.4,084.4,230394,003.1,W*6A",
             "$GPGLL,4807.038,N,18131.000,E,123519,A*2D",
             "$GPRMC,123519,V,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W*7D",
@@ -3418,6 +3444,34 @@ mod tests {
         assert_eq!(get_radar_position(), None);
     }
 
+    #[test]
+    fn a_gga_fix_sets_position() {
+        let _globals = nav_globals();
+        let mut receiver = nmea0183_receiver();
+        receiver
+            .parse_nmea0183("$PHGGA,123519,4807.038,N,01131.000,E,4,08,0.9,545.4,M,46.9,M,,*4D")
+            .unwrap();
+
+        let pos = get_radar_position().unwrap();
+        assert!((pos.lat() - (48.0 + 7.038 / 60.0)).abs() < 1e-8);
+        assert!((pos.lon() - (11.0 + 31.0 / 60.0)).abs() < 1e-8);
+    }
+
+    /// A GGA with quality 0 (invalid) carries no usable fix, so the last good
+    /// position stands as for a void RMC or GLL.
+    #[test]
+    fn an_invalid_gga_fix_keeps_the_last_position() {
+        let _globals = nav_globals();
+        let mut receiver = nmea0183_receiver();
+        receiver.parse_nmea0183(ACTIVE_RMC).unwrap();
+        let position = get_radar_position();
+        receiver
+            .parse_nmea0183("$GPGGA,123519,4907.038,N,01131.000,E,0,08,0.9,545.4,M,46.9,M,,*47")
+            .unwrap();
+
+        assert_eq!(get_radar_position(), position);
+    }
+
     /// A void GLL is no more a position than a void RMC.
     #[test]
     fn a_void_gll_fix_keeps_the_last_position() {
@@ -3495,6 +3549,7 @@ mod tests {
         for sentence in [
             "$GPRMC,123519,A,9507.038,N,01131.000,E,022.4,084.4,230394,003.1,W*6A",
             "$GPGLL,4807.038,N,18131.000,E,123519,A*2D",
+            "$GPGGA,123519,9507.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47",
         ] {
             let r = receiver.parse_nmea0183(sentence);
             assert!(
